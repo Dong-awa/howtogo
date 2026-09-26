@@ -1,0 +1,58 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+version = project.mod_version
+group = project.maven_group
+base.archivesName = project.archives_name
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neoforge_version
+
+    runs {
+        client {
+            client()
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+        }
+    }
+
+    mods {
+        howtogo {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+repositories {
+    flatDir { dirs 'libs' }
+}
+
+dependencies {
+    // Xaero's World Map is closed-source and not published to any Maven repo.
+    // We compile against the actual shipped jar (official Mojang mappings, no reobf needed).
+    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version: project.minecraft_version,
+            neoforge_version : project.neoforge_version,
+            mod_version      : project.mod_version,
+    ]
+    inputs.properties replaceProperties
+    // The licence goes into the jar as well as the repository. MIT requires the notice to travel
+    // with every copy, and the copy people actually receive is the jar, not the checkout.
+    from(rootProject.file('LICENSE')) {
+        into 'META-INF'
+    }
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
