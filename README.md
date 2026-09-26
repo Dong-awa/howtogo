@@ -1,8 +1,11 @@
 # HowToGo | 问道
 
 **我的世界道路标记与实时导航**
+**Road marking and real-time navigation for Minecraft**
 
 在 Xaero's World Map 上绘制道路，然后按类似于Google地图的方式导航：选目的地、选交通方式、选路线偏好，先看路线再出发，可选语音播报。
+
+Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a destination, pick a travel mode, pick a route preference, look at the route before you set off — with optional voice announcements.
 
 - 模组 ID：`howtogo`
 - 支持版本：Minecraft **1.21.1** / NeoForge **21.1.x**
