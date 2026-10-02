@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.route;
 
+import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -45,8 +46,13 @@ public final class RoadRouter {
      * <p>Picking only the single nearest node looks right and is wrong in a very common case: the
      * player standing next to a short dead-end stub gets routed from that stub, which cannot reach
      * anything, and the trip silently reports "no route" even though the roads are connected.
-     * Trying a handful of candidates and keeping the cheapest route fixes that, and as a bonus
+     * Trying a handful of candidates and keeping the cheapest whole trip fixes that, and as a bonus
      * prefers a slightly further but better-connected road.
+     *
+     * <p>The two lists are not a grid of pairs to be searched one by one: {@link
+     * #searchBetweenCandidates} makes every start a source of one search and every goal a target of
+     * it, so the cost of the candidates is the cost of the frontier they share rather than the
+     * product of the two counts.
      */
     private static final int START_CANDIDATES = 12;
     private static final int GOAL_CANDIDATES = 12;
@@ -65,6 +71,113 @@ public final class RoadRouter {
     }
 
     private RoadRouter() {
+    }
+
+    /**
+     * A network the router may repair and split, shared by a batch of queries.
+     *
+     * <p>Anchoring turns the point on a road nearest the player into a node, which means breaking the
+     * segment there, and that cannot be done to the caller's network. The copy that protects it used
+     * to be made on every single query -- and a public transport plan is a batch of dozens of them,
+     * so the same few thousand segments were being copied dozens of times to place a handful of
+     * endpoints.
+     *
+     * <p>Here the copy is made once, on the batch's first query. Every split after that lands on the
+     * same copy: splitting is additive, subdividing one segment and adding one node while leaving the
+     * rest of the graph exactly as it was, so a batch sharing a workspace always reads a refinement of
+     * the network it started from and no query can be invalidated by an earlier one.
+     *
+     * <p>The copy is also where {@link RoadConflation} does its work, and that has to happen before
+     * the first query rather than lazily on the first split: a join the player's drawing left out is
+     * missing from every route through it, whether or not that particular query needed to anchor
+     * anything.
+     *
+     * <p>One workspace belongs to one batch, and the network inside it must not be edited between the
+     * queries made through it.
+     */
+    public static final class Workspace {
+
+        private final RoadNetwork source;
+        private final boolean repair;
+        private RoadNetwork work;
+        private RoadEditor editor;
+        private boolean repaired;
+        private RoadChains.Grouping grouping;
+        private int groupingSegments = -1;
+
+        public Workspace(RoadNetwork source) {
+            this(source, true);
+        }
+
+        private Workspace(RoadNetwork source, boolean repair) {
+            this.source = source;
+            this.repair = repair;
+        }
+
+        /** The network to read: a repaired copy of the caller's, made on first use. */
+        RoadNetwork routingNetwork() {
+            if (work == null) {
+                work = source.deepCopy();
+                // Without undo: every split would otherwise copy the whole network again, which is the
+                // cost this class was rewritten to stop paying.
+                editor = RoadEditor.withoutUndo(work);
+                if (repair && RoadConfig.repairRoadJoins()) {
+                    // A repair that throws must cost the player nothing but the repair. The road they
+                    // drew is still a road, and the route over it is what they asked for; losing the
+                    // exception entirely would hide a real bug, so it is reported and the un-repaired
+                    // network is used.
+                    try {
+                        repaired = RoadConflation.conflate(work, editor) > 0;
+                    } catch (RuntimeException failed) {
+                        repaired = false;
+                        HowToGo.LOGGER.warn("[HowToGo] could not repair the road network; routing on "
+                                + "the roads as drawn", failed);
+                    }
+                }
+            }
+            return work;
+        }
+
+        /** The same network, for a caller that is about to split it. */
+        RoadNetwork mutable() {
+            return routingNetwork();
+        }
+
+        /** The editor for the working copy, which is made with it. */
+        RoadEditor editor() {
+            routingNetwork();
+            return editor;
+        }
+
+        /**
+         * A second workspace over the same network with the repair left out, or null when there is
+         * nothing to leave out.
+         *
+         * <p>For the caller that found no route at all on the repaired network. The repair only ever
+         * adds a node and a join, so a route that existed before it existed must still be there
+         * afterwards -- and asking the roads as they were drawn is how that is guaranteed rather than
+         * argued. Null when the repair changed nothing, in which case the answer would be identical.
+         */
+        Workspace asDrawn() {
+            routingNetwork();
+            return repaired ? new Workspace(source, false) : null;
+        }
+
+        /**
+         * The road grouping for the network as it stands, rebuilt only after a split has changed it.
+         *
+         * <p>A split always removes one segment and adds two, so the segment count is a version
+         * number here: it changes on exactly the operations that invalidate the grouping, and on
+         * nothing else that matters to it.
+         */
+        RoadChains.Grouping grouping() {
+            RoadNetwork network = routingNetwork();
+            if (grouping == null || groupingSegments != network.segmentCount()) {
+                grouping = RoadChains.group(network);
+                groupingSegments = network.segmentCount();
+            }
+            return grouping;
+        }
     }
 
     /**
@@ -94,13 +207,58 @@ public final class RoadRouter {
     public static Route findRoute(RoadNetwork network, double startX, double startZ,
                                   double goalX, double goalZ, String destinationName,
                                   TravelMode mode, RoutePreferences preferences) {
-        Route anchored = findAnchoredRoute(network, startX, startZ, goalX, goalZ, destinationName,
+        return findRoute(new Workspace(network), startX, startZ, goalX, goalZ, destinationName,
+                mode, preferences);
+    }
+
+    /**
+     * Plans on a workspace the caller owns, so a batch of queries pays for the anchoring splits once.
+     *
+     * <p>Same answer as {@link #findRoute(RoadNetwork, double, double, double, double, String,
+     * TravelMode, RoutePreferences)}, with the per-query state hoisted out: a caller planning many
+     * trips over one network should make one workspace and use it for all of them.
+     *
+     * @return the route for the given mode and routing policy, or {@link Route#empty()} when that
+     *         mode has no usable road path to the destination
+     */
+    public static Route findRoute(Workspace workspace, double startX, double startZ,
+                                  double goalX, double goalZ, String destinationName,
+                                  TravelMode mode, RoutePreferences preferences) {
+        Route found = plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode,
+                preferences);
+        if (found.isPresent()) {
+            return found;
+        }
+        // Nothing at all on the repaired network. The repair only ever adds a node and a join, so it
+        // cannot have taken a route away -- but that is an argument, and this is the guarantee: the
+        // roads as the player drew them are asked as well, and the best of the two answers is what
+        // comes back. A repair that loses a route would be worse than no repair, so it is not allowed
+        // to be able to.
+        Workspace asDrawn = workspace.asDrawn();
+        if (asDrawn == null) {
+            return found;
+        }
+        Route unrepaired = plan(asDrawn, startX, startZ, goalX, goalZ, destinationName, mode,
+                preferences);
+        if (unrepaired.isPresent()) {
+            HowToGo.LOGGER.info("[HowToGo] the repaired road network found no route from ({}, {}) to "
+                            + "({}, {}); the roads as drawn do, so those are used",
+                    Math.round(startX), Math.round(startZ), Math.round(goalX), Math.round(goalZ));
+        }
+        return unrepaired;
+    }
+
+    /** One attempt: anchored if it can be, between the nearest nodes if it cannot. */
+    private static Route plan(Workspace workspace, double startX, double startZ, double goalX,
+                              double goalZ, String destinationName, TravelMode mode,
+                              RoutePreferences preferences) {
+        Route anchored = findAnchoredRoute(workspace, startX, startZ, goalX, goalZ, destinationName,
                 mode, preferences);
         if (anchored != null) {
             return anchored;
         }
-        return findNodeRoute(network, startX, startZ, goalX, goalZ, destinationName, mode,
-                preferences);
+        return findNodeRoute(workspace.routingNetwork(), startX, startZ, goalX, goalZ,
+                destinationName, mode, preferences);
     }
 
     /**
@@ -116,47 +274,84 @@ public final class RoadRouter {
      * difference between a route and a beeline: past the cap the straight hop is no longer a hop
      * onto the network but a line across open country that no vehicle in this mod can travel.
      *
-     * <p>The split happens on a throwaway copy, so routing never mutates the saved network.
+     * <p>The split happens on the workspace's own copy, so routing never mutates the saved network:
+     * see {@link Workspace}, which makes that copy once for a whole batch of queries and repairs the
+     * joins the drawing left out before the first of them.
      *
      * @return null when there is nothing to anchor to, the anchors are too far away, or they are
      *         not connected
      */
-    private static Route findAnchoredRoute(RoadNetwork network, double startX, double startZ,
+    private static Route findAnchoredRoute(Workspace workspace, double startX, double startZ,
                                            double goalX, double goalZ, String destinationName,
                                            TravelMode mode, RoutePreferences preferences) {
+        RoadNetwork network = workspace.mutable();
+        RoadEditor editor = workspace.editor();
         RoadPoint startRoad = nearestRoadPoint(network, startX, startZ, mode, preferences);
         RoadPoint goalRoad = nearestRoadPoint(network, goalX, goalZ, mode, preferences);
         if (startRoad == null || goalRoad == null) {
             return null;
         }
 
-        RoadNetwork work = network.deepCopy();
-        RoadEditor editor = new RoadEditor(work);
-
-        int startNode = anchorNode(work, editor, startRoad);
-        int goalNode = anchorNode(work, editor, goalRoad);
-        if (startNode < 0 || goalNode < 0) {
+        int startNode = anchorNode(network, editor, startRoad);
+        // Splitting the start removes the segment it was on, and the goal is very often on that very
+        // segment -- the two ends of one road is the commonest journey there is. Failing here drops
+        // the whole anchored attempt into the fallback search, which is slower and free to choose a
+        // worse pair of endpoints, so the goal is re-projected onto what is left of the network
+        // instead. It can only ever be reached when a split really happened, so the editor is there.
+        RoadPoint goalOnWork = network.segment(goalRoad.segmentId()) == null
+                ? nearestRoadPoint(network, goalX, goalZ, mode, preferences)
+                : goalRoad;
+        if (startNode < 0 || goalOnWork == null) {
+            return null;
+        }
+        int goalNode = anchorNode(network, editor, goalOnWork);
+        if (goalNode < 0) {
             return null;
         }
         // Measured on the nodes, which is exactly what the connectors will be drawn from, rather
         // than on the raw road points, so the cap cannot be exceeded by the rounding of the anchor.
         double maxConnector = mode.maxConnectorDistance();
-        if (anchorDistance(work, startNode, startX, startZ) > maxConnector
-                || anchorDistance(work, goalNode, goalX, goalZ) > maxConnector) {
+        if (anchorDistance(network, startNode, startX, startZ) > maxConnector
+                || anchorDistance(network, goalNode, goalX, goalZ) > maxConnector) {
             return null;
         }
         if (startNode == goalNode) {
-            return buildRoute(work, startNode, goalNode, List.of(),
+            return buildRoute(network, workspace.grouping(), startNode, goalNode, List.of(),
                     startX, startZ, goalX, goalZ, destinationName, mode, preferences);
         }
 
-        Map<Integer, List<Edge>> graph = buildGraph(work, mode, preferences);
-        List<RoadSegment> path = search(graph, work, startNode, goalNode, mode, preferences);
+        Map<Integer, List<Edge>> graph = buildGraph(network, mode, preferences);
+        List<RoadSegment> path = search(graph, network, startNode, goalNode, mode, preferences);
         if (path == null) {
             return null;
         }
-        return buildRoute(work, startNode, goalNode, path,
+        return buildRoute(network, workspace.grouping(), startNode, goalNode, path,
                 startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+    }
+
+    /**
+     * Whether the point is one of the two ends of the segment, which are its only nodes.
+     *
+     * <p>A {@link RoadPoint} is on the edge running from vertex {@code edgeIndex - 1} to vertex
+     * {@code edgeIndex}, so a t of zero is the earlier of those vertices and a t of one the later.
+     * Only vertex zero and the last vertex of the polyline are nodes; every vertex in between is a
+     * bend inside one piece of road, and a point that lands exactly on a bend still needs a node of
+     * its own.
+     *
+     * <p>Reading "t is one" as "the segment's end" is what this used to do, and it made standing on a
+     * bend the worst place to be: the anchor came back as the far end of the road, the connector was
+     * then however long the whole road was, that is past the mode's cap, and the anchored attempt was
+     * thrown away in favour of the node fallback -- so a player standing on a corner with a road under
+     * both feet could be told there was no road near them at all.
+     */
+    private static boolean atSegmentEnd(RoadSegment segment, RoadPoint road) {
+        if (road.t() <= 1.0E-3) {
+            return road.edgeIndex() == 1;
+        }
+        if (road.t() >= 1.0 - 1.0E-3) {
+            return road.edgeIndex() == segment.vertexCount() - 1;
+        }
+        return false;
     }
 
     /** Distance from a position to the node a connector would run to, in blocks. */
@@ -168,17 +363,21 @@ public final class RoadRouter {
     /**
      * Turns a point on a road into a node, splitting the segment there unless it already lands on
      * an endpoint.
+     *
+     * <p>The editor is the workspace's, which exists from the moment the workspace's copy does; the
+     * guard is there so that a point arriving without one is a refused anchor rather than a null
+     * dereference.
      */
     private static int anchorNode(RoadNetwork network, RoadEditor editor, RoadPoint road) {
         RoadSegment segment = network.segment(road.segmentId());
         if (segment == null) {
             return -1;
         }
-        if (road.t() <= 1.0E-3) {
-            return segment.fromNode();
+        if (atSegmentEnd(segment, road)) {
+            return road.t() <= 1.0E-3 ? segment.fromNode() : segment.toNode();
         }
-        if (road.t() >= 1.0 - 1.0E-3) {
-            return segment.toNode();
+        if (editor == null) {
+            return -1;
         }
         return editor.splitSegment(road.segmentId(), road.edgeIndex(),
                 (int) Math.round(road.x()), segment.y(), (int) Math.round(road.z()));
@@ -251,32 +450,158 @@ public final class RoadRouter {
             return Route.empty();
         }
 
-        Route best = null;
-        double bestCost = Double.MAX_VALUE;
+        Best best = searchBetweenCandidates(graph, network, starts, goals, startX, startZ, goalX,
+                goalZ, mode, preferences);
+        if (best == null) {
+            return Route.empty();
+        }
+        return buildRoute(network, RoadChains.group(network), best.source(), best.goal(), best.path(),
+                startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+    }
 
+    /** The whole fallback trip: which candidate it leaves from, which it arrives at, and the road. */
+    private record Best(int source, int goal, List<RoadSegment> path) {
+    }
+
+    /** A predecessor chain walked back to the source it started from. */
+    private record Chain(int source, List<RoadSegment> path) {
+    }
+
+    /**
+     * One multi-source, multi-target A* over the candidate endpoints.
+     *
+     * <p>Every candidate start is a source, seeded with the connector it costs to walk to; every
+     * candidate goal is a target; the answer is the cheapest whole trip, both connectors included.
+     *
+     * <p>This replaces a loop that ran a separate A* for each of the twelve by twelve pairs: up to a
+     * hundred and forty-four full searches, every one of which explored its whole component when the
+     * answer was "no", and none of which could see that a different pair of endpoints would have been
+     * cheaper once the connectors at each end were counted -- it compared whole trips only after
+     * picking the twelve pairs, so a candidate that lost on road distance alone was never given the
+     * chance its short connector would have given it.
+     *
+     * <p>The heuristic is the distance to the nearest goal, which is an admissible estimate of
+     * reaching one of them from wherever the search is. It is computed over every goal rather than
+     * only the ones still outstanding, because a heuristic that changes as the search proceeds is no
+     * longer a heuristic. The search stops as soon as the cheapest arrival already found cannot be
+     * beaten: every frontier entry still to come is bounded below by its own estimate, and the
+     * connectors only add to what is left, so an estimate that has reached the best total means the
+     * rest of the frontier can be abandoned.
+     */
+    private static Best searchBetweenCandidates(Map<Integer, List<Edge>> graph, RoadNetwork network,
+                                                List<Integer> starts, List<Integer> goals,
+                                                double startX, double startZ, double goalX,
+                                                double goalZ, TravelMode mode,
+                                                RoutePreferences preferences) {
+        Map<Integer, Double> gScore = new HashMap<>();
+        Map<Integer, Integer> cameFromNode = new HashMap<>();
+        Map<Integer, RoadSegment> cameFromSegment = new HashMap<>();
+        Set<Integer> closed = new HashSet<>();
+        Set<Integer> settledGoals = new HashSet<>();
+
+        PriorityQueue<double[]> frontier = new PriorityQueue<>(Comparator.comparingDouble(a -> a[0]));
         for (int start : starts) {
-            for (int goal : goals) {
-                List<RoadSegment> path = start == goal
-                        ? List.of()
-                        : search(graph, network, start, goal, mode, preferences);
-                if (path == null) {
+            double connector = connectorCost(network, start, startX, startZ, mode, preferences);
+            if (connector < gScore.getOrDefault(start, Double.MAX_VALUE)) {
+                gScore.put(start, connector);
+                frontier.add(new double[]{
+                        connector + nearestGoalEstimate(network, start, goals, mode, preferences),
+                        start});
+            }
+        }
+
+        double bestTotal = Double.MAX_VALUE;
+        while (!frontier.isEmpty() && frontier.peek()[0] < bestTotal) {
+            int current = (int) frontier.poll()[1];
+            if (!closed.add(current)) {
+                continue;
+            }
+            double currentG = gScore.getOrDefault(current, Double.MAX_VALUE);
+            if (currentG >= bestTotal) {
+                continue;
+            }
+            if (goals.contains(current) && settledGoals.add(current)) {
+                double total = currentG
+                        + connectorCost(network, current, goalX, goalZ, mode, preferences);
+                bestTotal = Math.min(bestTotal, total);
+            }
+
+            for (Edge edge : graph.getOrDefault(current, List.of())) {
+                if (closed.contains(edge.toNode())) {
                     continue;
                 }
-                // Compare on the metric in force, connectors included, so the choice is "best whole
-                // trip" rather than "best road path with whatever connectors come with it".
-                double cost = connectorCost(network, start, startX, startZ, mode, preferences)
-                        + connectorCost(network, goal, goalX, goalZ, mode, preferences);
-                for (RoadSegment segment : path) {
-                    cost += edgeCost(segment, mode, preferences);
-                }
-                if (cost < bestCost) {
-                    bestCost = cost;
-                    best = buildRoute(network, start, goal, path,
-                            startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+                double tentative = currentG + edgeCost(edge.segment(), mode, preferences);
+                if (tentative < gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE)) {
+                    gScore.put(edge.toNode(), tentative);
+                    cameFromNode.put(edge.toNode(), current);
+                    cameFromSegment.put(edge.toNode(), edge.segment());
+                    frontier.add(new double[]{
+                            tentative + nearestGoalEstimate(network, edge.toNode(), goals, mode,
+                                    preferences),
+                            edge.toNode()});
                 }
             }
         }
-        return best != null ? best : Route.empty();
+
+        // Settled in non-decreasing order, so the cheapest goal is the first one the search reached
+        // for which the connector still leaves it cheapest overall.
+        int bestGoal = -1;
+        double bestWithConnector = Double.MAX_VALUE;
+        for (int goal : settledGoals) {
+            double total = gScore.getOrDefault(goal, Double.MAX_VALUE)
+                    + connectorCost(network, goal, goalX, goalZ, mode, preferences);
+            if (total < bestWithConnector) {
+                bestWithConnector = total;
+                bestGoal = goal;
+            }
+        }
+        if (bestGoal < 0) {
+            return null;
+        }
+        Chain chain = chain(cameFromNode, cameFromSegment, bestGoal);
+        return new Best(chain.source(), bestGoal, chain.path());
+    }
+
+    /** The lowest estimate of what is left to any of the goals, in the metric in force. */
+    private static double nearestGoalEstimate(RoadNetwork network, int nodeId, List<Integer> goals,
+                                              TravelMode mode, RoutePreferences preferences) {
+        double best = Double.MAX_VALUE;
+        for (int goalId : goals) {
+            RoadNode goal = network.node(goalId);
+            if (goal == null) {
+                continue;
+            }
+            best = Math.min(best, heuristic(network, nodeId, goal, mode, preferences));
+        }
+        return best == Double.MAX_VALUE ? 0 : best;
+    }
+
+    /**
+     * Walks a predecessor chain back to the node it started from.
+     *
+     * <p>A source has no predecessor, which is what ends the walk: with more than one source there is
+     * no single node to stop at, as there was when every search began at one end.
+     */
+    private static Chain chain(Map<Integer, Integer> cameFromNode,
+                               Map<Integer, RoadSegment> cameFromSegment, int from) {
+        List<RoadSegment> reversed = new ArrayList<>();
+        int current = from;
+        // Bounded by the predecessor count: guards against a malformed chain looping forever.
+        int guard = cameFromNode.size() + 2;
+        while (guard-- > 0) {
+            Integer previous = cameFromNode.get(current);
+            RoadSegment segment = cameFromSegment.get(current);
+            if (previous == null || segment == null) {
+                break;
+            }
+            reversed.add(segment);
+            current = previous;
+        }
+        List<RoadSegment> path = new ArrayList<>(reversed.size());
+        for (int i = reversed.size() - 1; i >= 0; i--) {
+            path.add(reversed.get(i));
+        }
+        return new Chain(current, path);
     }
 
     // ------------------------------------------------------------------ graph
@@ -327,6 +652,22 @@ public final class RoadRouter {
      * borrow a class the mode may use and the policy has not excluded, since a link is a junction
      * rather than a road and must not be the loophole that smuggles a footpath into a drive -- or an
      * avoided class back into a trip that banned it.
+     *
+     * <p>The bucket a node is filed under and the bucket that is then looked up have to be the same
+     * bucket, which means both have to be the <em>cell</em> the node falls in and not the node's own
+     * coordinates. They were the node's coordinates on the way in and the cell on the way out, so the
+     * two only ever agreed within three blocks of the origin and this whole pass silently did nothing
+     * anywhere else on the map: roads that met on screen stayed two fragments to the router, which is
+     * the failure the pass exists to prevent.
+     *
+     * <p>Nothing here is allowed to take a join away, only to add one: a road that routed before must
+     * route after. An earlier version of this pass also required the two nodes to be at roughly the
+     * same height, to keep a road from being joined to the one passing over it, and that was the wrong
+     * trade. The heights in a hand-drawn network are whatever the ground was under each click, so two
+     * nodes a block apart across a slope are routinely several blocks apart vertically, and refusing
+     * those joins disconnected networks that had been routing for as long as they existed. Where a
+     * height check does belong is in {@link RoadConflation}, which invents joins rather than keeping
+     * them: there it can only decline to add one.
      */
     private static void addCoincidentNodeLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
                                                TravelMode mode, RoutePreferences preferences) {
@@ -344,16 +685,17 @@ public final class RoadRouter {
         double cell = COINCIDENT_DISTANCE;
         Map<Long, List<RoadNode>> buckets = new HashMap<>();
         for (RoadNode node : nodes) {
-            buckets.computeIfAbsent(bucketKey(node.x(), node.z(), cell), k -> new ArrayList<>()).add(node);
+            buckets.computeIfAbsent(bucketKey(cellOf(node.x(), cell), cellOf(node.z(), cell)),
+                    k -> new ArrayList<>()).add(node);
         }
 
         double maxSq = COINCIDENT_DISTANCE * COINCIDENT_DISTANCE;
         for (RoadNode a : nodes) {
-            int cx = (int) Math.floor(a.x() / cell);
-            int cz = (int) Math.floor(a.z() / cell);
+            int cx = cellOf(a.x(), cell);
+            int cz = cellOf(a.z(), cell);
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    List<RoadNode> bucket = buckets.get(bucketKey(cx + dx, cz + dz, cell));
+                    List<RoadNode> bucket = buckets.get(bucketKey(cx + dx, cz + dz));
                     if (bucket == null) {
                         continue;
                     }
@@ -370,7 +712,12 @@ public final class RoadRouter {
         }
     }
 
-    private static long bucketKey(int cellX, int cellZ, double cell) {
+    /** Which bucket a coordinate falls in, which is the only thing a bucket key may be built from. */
+    private static int cellOf(double coordinate, double cell) {
+        return (int) Math.floor(coordinate / cell);
+    }
+
+    private static long bucketKey(int cellX, int cellZ) {
         // Pack two signed cell coordinates into one key; 24 bits each is far beyond any real map.
         return ((long) (cellX & 0xFFFFFF) << 24) | (cellZ & 0xFFFFFF);
     }
@@ -714,8 +1061,8 @@ public final class RoadRouter {
 
     // ------------------------------------------------------------------ output
 
-    private static Route buildRoute(RoadNetwork network, int startNode, int goalNode,
-                                    List<RoadSegment> path, double startX, double startZ,
+    private static Route buildRoute(RoadNetwork network, RoadChains.Grouping grouping, int startNode,
+                                    int goalNode, List<RoadSegment> path, double startX, double startZ,
                                     double goalX, double goalZ, String destinationName,
                                     TravelMode mode, RoutePreferences preferences) {
         Route.Builder builder = new Route.Builder();
@@ -729,20 +1076,19 @@ public final class RoadRouter {
         double exitTolerance = path.isEmpty()
                 ? RoadConfig.onRoadTolerance(RoadClass.ROAD)
                 : RoadConfig.onRoadTolerance(path.get(0).roadClass());
-        int exitRoadKey = path.isEmpty() ? 0 : roadKey(network, path.get(0));
-        String exitRoadName = path.isEmpty() ? null : roadName(network, path.get(0));
+        int exitRoadKey = path.isEmpty() ? 0 : grouping.keyOf(path.get(0));
+        String exitRoadName = path.isEmpty() ? null : grouping.nameOf(path.get(0));
 
         builder.addPoint(startX, startZ, exitTolerance, exitRoadKey, exitRoadName, false);
         double startConnector = start == null ? 0 : Math.hypot(start.x() - startX, start.z() - startZ);
         builder.setStartConnector(startConnector);
 
         int previousNode = startNode;
-        // One pass over the network for the node degrees, so marking the junctions costs nothing per
+        // The junctions come from the same grouping the keys do, so marking them costs nothing per
         // segment: the route needs to know where the road really forks, and that is a property of the
         // whole network rather than of any one segment.
-        Map<Integer, Integer> degrees = RoadChains.degrees(network);
         for (RoadSegment segment : path) {
-            appendSegment(builder, network, segment, previousNode, degrees);
+            appendSegment(builder, grouping, segment, previousNode);
             builder.addRoadLeg(segment.length(),
                     effectiveSpeed(mode, preferences, segment.roadClass()));
             previousNode = other(segment, previousNode);
@@ -752,8 +1098,8 @@ public final class RoadRouter {
         double arrivalTolerance = lastSegment == null
                 ? RoadConfig.onRoadTolerance(RoadClass.ROAD)
                 : RoadConfig.onRoadTolerance(lastSegment.roadClass());
-        int arrivalRoadKey = lastSegment == null ? 0 : roadKey(network, lastSegment);
-        String arrivalRoadName = lastSegment == null ? null : roadName(network, lastSegment);
+        int arrivalRoadKey = lastSegment == null ? 0 : grouping.keyOf(lastSegment);
+        String arrivalRoadName = lastSegment == null ? null : grouping.nameOf(lastSegment);
 
         double goalConnector = goal == null ? 0 : Math.hypot(goalX - goal.x(), goalZ - goal.z());
         builder.setGoalConnector(goalConnector);
@@ -764,72 +1110,24 @@ public final class RoadRouter {
         return builder.build();
     }
 
-    /**
-     * Identifies which road a segment belongs to.
-     *
-     * <p>The first segment of the chain, which is the same value for every segment of that road
-     * because the chain walk always runs end to end. Manoeuvres are announced where this changes.
-     */
-    private static int roadKey(RoadNetwork network, RoadSegment segment) {
-        List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-        return chain.isEmpty() ? segment.id() : chain.get(0);
-    }
-
-    /**
-     * Name of the road a segment belongs to, or null when it has none.
-     *
-     * <p>Naming applies to a whole road, so every segment of the chain carries the same name and
-     * the first one found is the answer.
-     */
-    private static String roadName(RoadNetwork network, RoadSegment segment) {
-        for (int id : RoadChains.chainContaining(network, segment.id())) {
-            RoadSegment part = network.segment(id);
-            if (part != null && part.name() != null) {
-                return part.name();
-            }
-        }
-        return null;
-    }
-
     /** Appends a segment's polyline oriented away from {@code fromNode}. */
-    private static void appendSegment(Route.Builder builder, RoadNetwork network,
-                                      RoadSegment segment, int fromNode,
-                                      Map<Integer, Integer> degrees) {
+    private static void appendSegment(Route.Builder builder, RoadChains.Grouping grouping,
+                                      RoadSegment segment, int fromNode) {
         double tolerance = RoadConfig.onRoadTolerance(segment.roadClass());
-        int key = roadKey(network, segment);
-        String name = roadName(network, segment);
+        int key = grouping.keyOf(segment);
+        String name = grouping.nameOf(segment);
         boolean forward = segment.fromNode() == fromNode;
         if (forward) {
             for (int i = 0; i < segment.vertexCount(); i++) {
                 builder.addPoint(segment.x(i), segment.z(i), tolerance, key, name,
-                        isBranch(segment, i, degrees));
+                        grouping.isBranch(segment, i));
             }
         } else {
             for (int i = segment.vertexCount() - 1; i >= 0; i--) {
                 builder.addPoint(segment.x(i), segment.z(i), tolerance, key, name,
-                        isBranch(segment, i, degrees));
+                        grouping.isBranch(segment, i));
             }
         }
-    }
-
-    /**
-     * Whether the vertex at this index is a junction the road forks at.
-     *
-     * <p>Only the two ends of a segment are nodes at all -- everything between is the polyline of one
-     * piece of road -- and a node counts as a junction only when three or more segment ends meet
-     * there. Two is a road carrying on, and one is a road stopping.
-     */
-    private static boolean isBranch(RoadSegment segment, int vertexIndex,
-                                    Map<Integer, Integer> degrees) {
-        int nodeId;
-        if (vertexIndex == 0) {
-            nodeId = segment.fromNode();
-        } else if (vertexIndex == segment.vertexCount() - 1) {
-            nodeId = segment.toNode();
-        } else {
-            return false;
-        }
-        return nodeId != RoadSegment.NO_NODE && degrees.getOrDefault(nodeId, 0) >= 3;
     }
 
     private static int other(RoadSegment segment, int nodeId) {

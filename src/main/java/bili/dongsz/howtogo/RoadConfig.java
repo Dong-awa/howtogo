@@ -32,6 +32,8 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
     private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
     private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
+    private static final ModConfigSpec.BooleanValue REPAIR_ROAD_JOINS;
+    private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
     private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
@@ -84,8 +86,33 @@ public final class RoadConfig {
 
         FALL_BACK_TO_WALKING_WHEN_SLOWER = builder.comment(
                         "Whether a trip whose chosen mode comes out slower than walking, or finds no",
-                        "route at all, is planned on foot instead, with the readout saying so.")
+                        "route at all, is planned on foot instead, with the readout saying so.",
+                        "A public transport journey that exists is never replaced this way: the walk",
+                        "is offered as an alternative, not as a substitution.")
                 .define("fall_back_to_walking_when_slower", true);
+
+        REPAIR_ROAD_JOINS = builder.comment(
+                        "Whether roads that only look joined are joined up for routing.",
+                        "Two roads drawn through the same node are one road; two drawn across each",
+                        "other, or stopped a block short of each other, are two, and the router will",
+                        "not go from one to the other. With this on, the routing network is repaired",
+                        "first: a node that sits on a segment breaks it, two roads that cross break",
+                        "each other, and the near-coincident nodes at each join are then one junction.",
+                        "Only roads some one vehicle can travel on both of are joined, and only at",
+                        "roughly the same height, so a bridge stays a bridge.",
+                        "Turn this off to route on the roads exactly as drawn.")
+                .define("repair_road_joins", true);
+
+        TRANSIT_WAIT_SECONDS = builder.comment(
+                        "Seconds spent waiting for a service, charged once at every boarding -- the",
+                        "first one included -- and again at every change of lines.",
+                        "A line here has no timetable to read, so this is the average wait rather than",
+                        "a departure time: a service that comes every two minutes is sixty. It is part",
+                        "of the estimate as well as of the search, because a journey chosen for saving",
+                        "forty seconds of walking and losing two minutes of waiting is not a journey",
+                        "anyone would take. Zero is a valid answer for a network where the vehicles are",
+                        "always there.")
+                .defineInRange("transit_wait_seconds", 60.0, 0.0, 3600.0);
 
         VOICE_ANNOUNCEMENTS = builder.comment(
                         "Whether navigation events -- the turn ahead, the turn now, arrival and going",
@@ -238,6 +265,30 @@ public final class RoadConfig {
             return FALL_BACK_TO_WALKING_WHEN_SLOWER.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
+        }
+    }
+
+    /**
+     * Whether the routing network is repaired where the drawing left two roads looking joined but not
+     * actually joined, on before the config loads since that is the declared default.
+     */
+    public static boolean repairRoadJoins() {
+        try {
+            return REPAIR_ROAD_JOINS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * Seconds of waiting one boarding of a service costs, or the declared default before the config
+     * has been read.
+     */
+    public static double transitWaitSeconds() {
+        try {
+            return TRANSIT_WAIT_SECONDS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 60.0;
         }
     }
 

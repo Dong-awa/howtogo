@@ -51,6 +51,21 @@ public final class Route {
     /** Off-road speed as a fraction of the mode's pace, applied to the connectors. */
     private final double offRoadSpeedFactor;
     /**
+     * Time on this route that is not distance: waiting for a service, in seconds.
+     *
+     * <p>Everything else a route is timed by comes from its legs -- a length at a pace -- which is the
+     * right shape for anything travelled and cannot express standing still. A public transport leg
+     * begins with a wait for the vehicle, and without a term for it the estimate of a journey that
+     * changes lines was short by exactly the waiting it was asking the player to do, while the search
+     * that chose the journey had paid for that waiting all along. The two now agree, which is what
+     * makes the reported estimate the number the route was actually chosen by.
+     *
+     * <p>Deliberately outside {@link #totalLength()} and outside {@link #secondsPerBlock()}: waiting
+     * covers no ground, and the pace underfoot that the readout projects onto the distance left is
+     * about the ground.
+     */
+    private final double fixedSeconds;
+    /**
      * The mode this route was planned for.
      *
      * <p>Kept on the route rather than only on the navigation session, because the ETA is a
@@ -68,7 +83,7 @@ public final class Route {
     Route(List<double[]> points, double[] tolerances, int[] roadKeys, String[] roadNames,
           boolean[] branchAt, double startConnector, double goalConnector,
           List<double[]> legs, String destinationName, double offRoadSpeedFactor,
-          TravelMode travelMode) {
+          TravelMode travelMode, double fixedSeconds) {
         this.points = points;
         this.tolerances = tolerances;
         this.roadKeys = roadKeys;
@@ -80,11 +95,28 @@ public final class Route {
         this.destinationName = destinationName;
         this.offRoadSpeedFactor = offRoadSpeedFactor <= 0 ? 1.0 : offRoadSpeedFactor;
         this.travelMode = travelMode == null ? TravelMode.WALK : travelMode;
+        this.fixedSeconds = Math.max(0, fixedSeconds);
     }
 
     public static Route empty() {
         return new Route(List.of(), new double[0], new int[0], new String[0], new boolean[0], 0, 0,
-                List.of(), null, 1.0, TravelMode.WALK);
+                List.of(), null, 1.0, TravelMode.WALK, 0);
+    }
+
+    /**
+     * The same route, plus time that is not distance.
+     *
+     * <p>For the waiting a public transport leg begins with: the geometry, the legs and the pace are
+     * all unchanged, and only the estimate grows. The arrays are shared rather than copied -- a route
+     * is never written to after it is built.
+     */
+    Route plusFixedSeconds(double seconds) {
+        if (seconds <= 0) {
+            return this;
+        }
+        return new Route(points, tolerances, roadKeys, roadNames, branchAt, startConnector,
+                goalConnector, legs, destinationName, offRoadSpeedFactor, travelMode,
+                fixedSeconds + seconds);
     }
 
     /**
@@ -100,12 +132,14 @@ public final class Route {
      * all: every parallel array is appended in the same loop, from the same index, or not at all.
      *
      * <h2>What is kept from which part</h2>
-     * The two connectors come from the ends -- the first part's start, the last part's goal -- because
-     * those are the only two that describe getting on and off the network at the ends of the whole
-     * journey. The off-road speed factor comes from the first part, which is the one whose connector
-     * it is timing. The pace of each stretch is not taken from anywhere: each part already recorded
-     * it in its own {@code legs}, and those are appended as they are, so a walked stretch keeps the
-     * walking pace and a ridden one keeps the line's.
+     * The two connectors of the whole journey are the first part's start and the last part's goal:
+     * those, and only those, describe getting on and off the network at the ends. Every connector
+     * between them is travelled too, so it is recorded as a piece of the whole route at the pace it is
+     * walked -- see the comment in the loop for what dropping them used to cost. The off-road speed
+     * factor comes from the first part, which is the one whose connector it is timing. The pace of
+     * each ridden stretch is not taken from anywhere: each part already recorded it in its own
+     * {@code legs}, and those are appended as they are, so a walked stretch keeps the walking pace and
+     * a ridden one keeps the line's.
      *
      * @param parts routes in the order they are travelled; a part that is not present is skipped
      */
@@ -119,12 +153,16 @@ public final class Route {
         double startConnector = 0;
         double goalConnector = 0;
         double offRoadSpeedFactor = 1.0;
-        boolean first = true;
 
+        List<Route> present = new ArrayList<>(parts.size());
         for (Route part : parts) {
-            if (!part.isPresent()) {
-                continue;
+            if (part.isPresent()) {
+                present.add(part);
             }
+        }
+
+        for (int p = 0; p < present.size(); p++) {
+            Route part = present.get(p);
             for (int i = 0; i < part.points.size(); i++) {
                 double[] point = part.points.get(i);
                 // The join is one coordinate written twice: a leg ends at the station and the next
@@ -140,12 +178,32 @@ public final class Route {
                 branchAt.add(part.branchAt[i]);
             }
             legs.addAll(part.legs);
-            if (first) {
-                startConnector = part.startConnector;
-                offRoadSpeedFactor = part.offRoadSpeedFactor;
-                first = false;
+            // Only the first part's start and the last part's goal describe getting on and off the
+            // whole journey; every other connector belongs to the middle of it and is travelled all
+            // the same. Leaving them out -- which is what taking only the two ends did -- made a
+            // public transport journey's time and length short by every station-side hop in it, and
+            // the walking comparison was then made against that short number.
+            if (p > 0) {
+                legs.add(new double[]{part.startConnector, part.connectorPace()});
             }
-            goalConnector = part.goalConnector;
+            if (p < present.size() - 1) {
+                legs.add(new double[]{part.goalConnector, part.connectorPace()});
+            }
+        }
+
+        double waitingSeconds = 0;
+        if (!present.isEmpty()) {
+            Route first = present.get(0);
+            Route last = present.get(present.size() - 1);
+            startConnector = first.startConnector;
+            goalConnector = last.goalConnector;
+            offRoadSpeedFactor = first.offRoadSpeedFactor;
+            // Waiting does not cover ground, so it is carried as itself rather than folded into the
+            // legs: every leg's time is its length over its pace, and a zero-length leg would add
+            // nothing however long the wait was.
+            for (Route part : present) {
+                waitingSeconds += part.fixedSeconds;
+            }
         }
 
         double[] toleranceArray = new double[tolerances.size()];
@@ -159,7 +217,8 @@ public final class Route {
             branchArray[i] = branchAt.get(i);
         }
         return new Route(points, toleranceArray, keyArray, nameArray, branchArray, startConnector,
-                goalConnector, legs, destinationName, offRoadSpeedFactor, travelMode);
+                goalConnector, legs, destinationName, offRoadSpeedFactor, travelMode,
+                waitingSeconds);
     }
 
     private static boolean samePoint(double[] a, double[] b) {
@@ -500,10 +559,11 @@ public final class Route {
      *
      * <p>Each road piece is timed at the pace its own class allows that mode, so a highway really
      * does come out faster than a footpath over the same distance, and a boat on ice comes out
-     * faster still. The off-road connectors are walked, whatever the mode.
+     * faster still. The off-road connectors are walked, whatever the mode. Waiting is added as
+     * itself, because it is time nobody spends moving.
      */
     public double estimatedSeconds() {
-        double seconds = (startConnector + goalConnector) / connectorPace();
+        double seconds = fixedSeconds + (startConnector + goalConnector) / connectorPace();
         for (double[] leg : legs) {
             seconds += leg[0] / Math.max(0.05, leg[1]);
         }
@@ -627,7 +687,7 @@ public final class Route {
             }
             return new Route(points, toleranceArray, roadKeyArray, roadNameArray, branchArray,
                     startConnector, goalConnector, legs, destinationName, offRoadSpeedFactor,
-                    travelMode);
+                    travelMode, 0);
         }
     }
 }

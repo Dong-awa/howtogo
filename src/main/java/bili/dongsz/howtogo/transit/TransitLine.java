@@ -118,6 +118,24 @@ public final class TransitLine {
     }
 
     /**
+     * Renames a stop, keeping everything else about it.
+     *
+     * <p>Two different things depending on where the stop came from, which is why the name lives here at
+     * all. For a place this is only how the line remembers the name -- the place's own name is what the
+     * map and the place editor use, and is renamed there. For a station Create's track graph reports
+     * there is nowhere else to put a name: Create owns the station, so what is stored here is the
+     * player's own name for it, remembered by position and never written back to Create.
+     */
+    public boolean renameStop(int index, String name) {
+        if (index < 0 || index >= stops.size()) {
+            return false;
+        }
+        LineStop stop = stops.get(index);
+        stops.set(index, new LineStop(stop.nodeId(), name, stop.x(), stop.z()));
+        return true;
+    }
+
+    /**
      * Moves a stop one place earlier or later in the calling order.
      *
      * <p>Clamped rather than refused: dragging the first stop up is the same gesture as asking for it

@@ -62,11 +62,25 @@ public final class RoadEditHandler {
             GLFW.GLFW_KEY_R,
             KEY_CATEGORY);
 
+    /**
+     * Opens the line editor.
+     *
+     * <p>A registered mapping rather than a key code compared in the handler, so that it appears in
+     * the controls list and can be rebound. A key that exists only in the code is a key nobody can
+     * find, which is what the first version of this was.
+     */
+    public static final KeyMapping LINES = new KeyMapping(
+            "key.howtogo.lines",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_L,
+            KEY_CATEGORY);
+
     private RoadEditHandler() {
     }
 
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(TOGGLE_EDIT);
+        event.register(LINES);
     }
 
     // ------------------------------------------------------------------ mouse
@@ -196,6 +210,12 @@ public final class RoadEditHandler {
             safely("name road", RoadEditSession::nameSelectedRoad);
         } else if (key == GLFW.GLFW_KEY_P) {
             safely("place landmark", RoadEditSession::placePoi);
+        } else if (LINES.matches(key, scanCode)) {
+            // The lines are a property of the network rather than of whatever is selected, so this
+            // opens on the map itself and needs no selection first. Deferred to the next tick, like
+            // every other screen here: opening one from the input handler is what makes a key look
+            // dead.
+            safely("edit lines", RoadEditSession::promptLineEditor);
         } else {
             return false;
         }

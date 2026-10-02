@@ -1,5 +1,8 @@
 package bili.dongsz.howtogo.transit;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * One stop of a {@link TransitLine}: where it is, what it is called, and who owns it.
  *
@@ -61,5 +64,31 @@ public record LineStop(int nodeId, String name, int x, int z) {
     /** Whether two stops are at the same block, which is what makes them the same stop. */
     public boolean samePlace(LineStop other) {
         return other != null && other.x == x && other.z == z;
+    }
+
+    /**
+     * The given stops with duplicates removed, so one stop at one block holds one slot.
+     *
+     * <p>Asked of a list rather than of a line, because this is for lists assembled from both of the
+     * world's sources at once -- the places the player marked and the stations Create reports -- which
+     * overlap whenever a station was both marked and built. The first of a pair is kept, so a caller
+     * that puts the player's own places first keeps the editable one and the read-only duplicate is
+     * the one that goes.
+     */
+    public static List<LineStop> distinct(List<LineStop> stops) {
+        List<LineStop> result = new ArrayList<>(stops.size());
+        for (LineStop stop : stops) {
+            boolean seen = false;
+            for (LineStop kept : result) {
+                if (kept.samePlace(stop)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                result.add(stop);
+            }
+        }
+        return result;
     }
 }

@@ -289,6 +289,11 @@ public final class RoadEditSession {
         if (RoadStore.get().node(nodeId) == null) {
             return;
         }
+        // The station rule has two halves and this class can only see one of them: the editor knows the
+        // saved roads, and the client knows the railway layer, which is not in the saved file. The
+        // missing half is handed to the editor rather than checked alongside it, so that the screen and
+        // the save ask the same question and cannot disagree.
+        places.setStationOverride(RoadEditSession::nearTrack);
         double anchorX = mouseScreenX();
         double anchorY = mouseScreenZ();
         pendingAction = () -> {
@@ -412,6 +417,96 @@ public final class RoadEditSession {
                         apply.accept(value);
                         RoadStore.markDirty();
                     }));
+        };
+    }
+
+    /** How far beside a railway a station may stand and still count as being on it, in blocks. */
+    private static final double STATION_TRACK_TOLERANCE = 8.0;
+
+    /**
+     * Whether a station may stand at this place.
+     *
+     * <p>On a road of the saved network, or on one of the railways the track layer reports. The second
+     * half is the whole reason the rail layer is a layer: a player who lays track and builds a station
+     * beside it is putting a station on a road of the highest class there is, and asking the saved
+     * network about it refuses -- the rail is not in the saved file, so as far as that file is
+     * concerned there is nothing there at all. That refusal is what "it will not let me build a stop"
+     * was.
+     *
+     * <p>The tolerance is a few blocks rather than zero because a station is built beside the track,
+     * not on it: the platform is where the player can stand, and the track is a block away with a
+     * train on it.
+     */
+    private static boolean nearTrack(int nodeId) {
+        RoadNode node = RoadStore.get().node(nodeId);
+        if (node == null) {
+            return false;
+        }
+        // Any road of the saved network, not only a node of one. A place dropped onto a road is on that
+        // road as far as the player is concerned, and refusing it because the road passes between two
+        // nodes rather than through one is a rule about the data structure rather than about the world:
+        // the node is free-standing, so the degree test says zero, and the player is told their station
+        // is not on a road while looking straight at one.
+        for (RoadSegment segment : RoadStore.get().segments()) {
+            if (distanceToSegment(segment, node.x(), node.z()) <= STATION_TRACK_TOLERANCE) {
+                return true;
+            }
+        }
+        for (RoadSegment segment : RailTrackStore.network().segments()) {
+            if (distanceToSegment(segment, node.x(), node.z()) <= STATION_TRACK_TOLERANCE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Distance from a point to the nearest point of a segment's polyline, in blocks. */
+    private static double distanceToSegment(RoadSegment segment, double x, double z) {
+        double best = Double.MAX_VALUE;
+        for (int i = 1; i < segment.vertexCount(); i++) {
+            best = Math.min(best, distanceToLine(segment.x(i - 1), segment.z(i - 1), segment.x(i),
+                    segment.z(i), x, z));
+        }
+        return best;
+    }
+
+    /** Distance from a point to a line segment. */
+    private static double distanceToLine(double ax, double az, double bx, double bz, double px,
+                                         double pz) {
+        double dx = bx - ax;
+        double dz = bz - az;
+        double lengthSq = dx * dx + dz * dz;
+        double t = lengthSq <= 1.0E-9 ? 0.0 : ((px - ax) * dx + (pz - az) * dz) / lengthSq;
+        t = Math.max(0.0, Math.min(1.0, t));
+        return Math.hypot(px - (ax + t * dx), pz - (az + t * dz));
+    }
+
+    /**
+     * Renames a place, for callers that are not the map.
+     *
+     * <p>Goes through the session's own editor so that a rename made from the line editor lands on the
+     * same undo history as one made on the map: two editors over one network would be two histories,
+     * and pressing undo once would then take back the wrong change.
+     */
+    public static void renamePlace(int nodeId, String name) {
+        if (editor().setNodeName(nodeId, name)) {
+            RoadStore.markDirty();
+        }
+    }
+
+    /**
+     * Opens the line editor on the next tick.
+     *
+     * <p>Deferred for the same reason every other screen this mod opens is: this is called from the key
+     * handler, and a screen set from inside an input handler is replaced again before it is ever drawn
+     * -- which is what a key that appears to do nothing looks like from the outside. The parent is read
+     * inside the deferred action for the same reason the place editor reads its node there: by the time
+     * it runs, the screen underneath is whatever the map left behind.
+     */
+    public static void promptLineEditor() {
+        pendingAction = () -> {
+            Screen parent = Minecraft.getInstance().screen;
+            Minecraft.getInstance().setScreen(new TransitLineScreen(parent));
         };
     }
 

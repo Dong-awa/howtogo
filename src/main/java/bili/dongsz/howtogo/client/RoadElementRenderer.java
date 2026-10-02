@@ -2,6 +2,8 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.transit.LineStop;
+import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -103,6 +105,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             "hud.howtogo.edit.name",
             "hud.howtogo.edit.poi",
             "hud.howtogo.edit.navigate",
+            "hud.howtogo.edit.lines",
             "hud.howtogo.edit.delete",
             "hud.howtogo.edit.undo");
 
@@ -217,7 +220,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (element.kind() == RoadElement.Kind.LABELS) {
             // Reached once per frame, from the trailing element. Previously the names were drawn in
             // the edit branch, so turning editing off made every label vanish.
-            renderLabels(graphics, pose, info, vc);
+            //
+            // Not while one of this mod's own panels is up. The names are drawn here rather than by the
+            // map, so an opaque panel is not enough to keep them out of it: a road name lands across a
+            // list of stops and reads as part of the list. The map itself still shows through, which is
+            // the context these panels want.
+            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (!(minecraft.screen instanceof TransitLineScreen)
+                    && !(minecraft.screen instanceof RoadNameScreen)) {
+                // Shapes before text, and the lines before the names: a line name drawn under a stop
+                // marker is a name nobody can read. The line names go last of all, after the place
+                // markers renderLabels emits, for the same reason.
+                int lineMargin = 64;
+                drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
+                        graphics.guiHeight() + lineMargin);
+                renderLabels(graphics, pose, info, vc);
+            }
             return true;
         }
 
@@ -587,6 +605,200 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      *
      * <p>Shapes before text: see the warning on HudDraw.
      */
+    private static final double LINE_STROKE_PX = 2.5;
+    private static final double LINE_STOP_PX = 5.0;
+    private static final int COLOR_LINE_TRANSFER = 0xFFFF7A3C;
+    /**
+     * The dark backing under a stop marker.
+     *
+     * <p>A stop is drawn in its own line's colour so that which line it belongs to can be read off the
+     * map, and a coloured square on pale ground is otherwise invisible. This was the place marker's
+     * yellow to begin with, which made a stop and an ordinary place look like the same thing.
+     */
+    private static final int COLOR_LINE_STOP_EDGE = 0xFF10141A;
+
+    /**
+     * The public transport lines, drawn over everything else and at every zoom.
+     *
+     * <p>Straight from stop to stop, which is the service rather than the track: the rails and roads a
+     * line runs along are already drawn underneath by the layer that owns them, and a line that
+     * redrew them would be claiming to know the route better than the rails do. What this adds is the
+     * thing nothing else on the map can say -- which stops belong to which line, in which order, and
+     * where two lines meet.
+     *
+     * <p>An interchange is marked by counting, not by comparing: a stop two lines call at is something
+     * the player cannot see from either line alone, so it gets its own colour and is drawn after the
+     * ordinary stops so that it is never hidden by one.
+     */
+    /** The path each line actually runs along, one shape per line, and the lines it was built for. */
+    private static String lineShapeSignature = "";
+    private static List<List<double[]>> lineShapes = List.of();
+
+    /**
+     * Works out the path each line runs along, by planning each pair of neighbouring stops exactly as
+     * the router will.
+     *
+     * <p>A straight hop between two stops is not the line: a railway between two stations may run a long
+     * way round, and drawing the chord instead of the track hides the one thing the map is for -- where
+     * the line actually goes. Planning the pairs costs a route each, so the result is cached and rebuilt
+     * only when a line's kind or its stops change.
+     *
+     * <p>A pair that cannot be planned still gets its straight hop, so a mis-typed line is visible as a
+     * line rather than as a gap.
+     */
+    private static void refreshLineShapes(List<TransitLine> lines) {
+        StringBuilder signature = new StringBuilder();
+        for (TransitLine line : lines) {
+            signature.append(line.id()).append(line.kind().name());
+            for (LineStop stop : line.stops()) {
+                signature.append('|').append(stop.x()).append(',').append(stop.z());
+            }
+        }
+        if (signature.toString().equals(lineShapeSignature)) {
+            return;
+        }
+        lineShapeSignature = signature.toString();
+
+        List<List<double[]>> shapes = new java.util.ArrayList<>(lines.size());
+        // One workspace per kind of line rather than per line: a workspace copies the network and
+        // repairs its joins before the first query through it, and every line of one kind routes on
+        // exactly the same network.
+        java.util.Map<RoadClass, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
+                new java.util.HashMap<>();
+        for (TransitLine line : lines) {
+            List<double[]> points = new java.util.ArrayList<>();
+            RoadClass kind = line.kind();
+            bili.dongsz.howtogo.route.TravelMode mode =
+                    bili.dongsz.howtogo.route.LinePlanner.rideMode(kind);
+            bili.dongsz.howtogo.route.RoutePreferences policy =
+                    bili.dongsz.howtogo.route.LinePlanner.ridePreferences(kind,
+                            bili.dongsz.howtogo.store.RoutePreferenceStore.preferences());
+            bili.dongsz.howtogo.route.RoadRouter.Workspace workspace = workspaces.get(kind);
+            if (workspace == null) {
+                workspace = new bili.dongsz.howtogo.route.RoadRouter.Workspace(
+                        RailTrackStore.forRouting(mode, policy));
+                workspaces.put(kind, workspace);
+            }
+            for (int i = 1; i < line.stopCount(); i++) {
+                LineStop from = line.stops().get(i - 1);
+                LineStop to = line.stops().get(i);
+                bili.dongsz.howtogo.route.Route ride = bili.dongsz.howtogo.route.RoadRouter.findRoute(
+                        workspace, from.x(), from.z(), to.x(), to.z(), "", mode, policy);
+                if (ride.isPresent()) {
+                    points.addAll(ride.points());
+                } else {
+                    points.add(new double[]{from.x(), from.z()});
+                    points.add(new double[]{to.x(), to.z()});
+                }
+            }
+            shapes.add(points);
+        }
+        lineShapes = shapes;
+    }
+
+    private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
+                                             int viewRight, int viewBottom) {
+        List<LineLabel> labels = new java.util.ArrayList<>();
+        List<TransitLine> lines = TransitLineStore.get();
+        if (lines.isEmpty()) {
+            return labels;
+        }
+        // The screen-space transform, taken exactly as renderLabels takes it: the coordinates below come
+        // from MapViewState, which is already screen space, so they may only be emitted under an identity
+        // pose. Emitting them under the map's own transform applies that transform a second time, and a
+        // line that floats away from its own stops is what that looks like.
+        pose.pushPose();
+        pose.last().pose().identity();
+        pose.last().normal().identity();
+        PoseStack.Pose screenPose = pose.last();
+
+        java.util.Map<String, Integer> calls = new java.util.HashMap<>();
+        for (TransitLine line : lines) {
+            for (LineStop stop : line.stops()) {
+                calls.merge(stop.x() + "," + stop.z(), 1, Integer::sum);
+            }
+        }
+
+        refreshLineShapes(lines);
+        for (int index = 0; index < lines.size(); index++) {
+            TransitLine line = lines.get(index);
+            List<double[]> shape = lineShapes.get(index);
+            for (int i = 1; i < shape.size(); i++) {
+                double x1 = MapViewState.toScreenX(shape.get(i - 1)[0]);
+                double y1 = MapViewState.toScreenZ(shape.get(i - 1)[1]);
+                double x2 = MapViewState.toScreenX(shape.get(i)[0]);
+                double y2 = MapViewState.toScreenZ(shape.get(i)[1]);
+                if (Math.max(x1, x2) < -margin || Math.min(x1, x2) > viewRight
+                        || Math.max(y1, y2) < -margin || Math.min(y1, y2) > viewBottom) {
+                    continue;
+                }
+                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, LINE_STROKE_PX, lineColour(line),
+                        0xFF);
+            }
+            if (shape.size() >= 2) {
+                // No name on the map. It was tried at the middle stop and at the middle of the path and
+                // was wrong in both places -- on a line that curves or loops, no single point along it is
+                // the middle a reader means, and a name written over the stroke or beside a station
+                // marker is worse than no name. Read off the line editor instead, which lists a line's
+                // stops in order and has room to say what it is called.
+            }
+        }
+
+        for (TransitLine line : lines) {
+            for (LineStop stop : line.stops()) {
+                double x = MapViewState.toScreenX(stop.x());
+                double y = MapViewState.toScreenZ(stop.z());
+                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                    continue;
+                }
+                boolean transfer = calls.getOrDefault(stop.x() + "," + stop.z(), 0) > 1;
+                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX + 1.0,
+                        COLOR_LINE_STOP_EDGE);
+                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX,
+                        transfer ? COLOR_LINE_TRANSFER : lineColour(line));
+            }
+        }
+        pose.popPose();
+        return labels;
+    }
+
+    /** A line's name and where to write it, kept until every shape has been emitted. */
+    private record LineLabel(String name, double x, double y, int colour) {
+    }
+
+    /**
+     * The line names, written after the shapes.
+     *
+     * <p>Last because drawing text flushes the vertex batch: a name written before the polyline and the
+     * stop markers would leave them being emitted into a buffer that had already been sent, which is
+     * how a map ends up with no shapes on it and an exception in the log.
+     */
+    private void drawLineNames(GuiGraphics graphics, List<LineLabel> labels) {
+        net.minecraft.client.gui.Font font = net.minecraft.client.Minecraft.getInstance().font;
+        int margin = 64;
+        int viewRight = graphics.guiWidth() + margin;
+        int viewBottom = graphics.guiHeight() + margin;
+        for (LineLabel label : labels) {
+            if (label.x() < -margin || label.x() > viewRight || label.y() < -margin
+                    || label.y() > viewBottom) {
+                continue;
+            }
+            graphics.drawString(font, label.name(),
+                    (int) Math.round(label.x()) - font.width(label.name()) / 2,
+                    (int) Math.round(label.y()), label.colour(), true);
+        }
+    }
+
+    /** A line's colour, from the kind of road it runs on. */
+    private static int lineColour(TransitLine line) {
+        return switch (line.kind()) {
+            case RAIL -> 0xFF8AB4FF;
+            case WATER -> 0xFF3FA9F5;
+            case ICE -> 0xFF9FE8FF;
+            default -> 0xFFB8E986;
+        };
+    }
+
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom) {
         double half = HudDraw.PLACE_MARKER_PX * 0.5;

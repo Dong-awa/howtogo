@@ -2,6 +2,7 @@
 .gradle/
 build/
 run/
+logs/
 .idea/
 *.iml
 .eclipse/
@@ -10,6 +11,9 @@ run/
 # The Xaero World Map jar is a compileOnly dependency and is NOT redistributed: it is closed-source
 # commercial software. Put your own copy in libs/ before building -- see libs/README.md.
 libs/*.jar
+
+# The routing harness's own output: compiled classes and the classpath gradle printed for it.
+tools/routing-harness/build/
 
 # Local reconnaissance scratch.
 #

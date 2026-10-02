@@ -28,7 +28,7 @@ public enum TravelMode {
      * <p>A made road is fast on foot because a player can sprint along it without watching every
      * step, which a footpath does not allow.
      */
-    WALK("walk", 64.0, 4.0, Map.of(
+    WALK("walk", 64.0, 2.0, Map.of(
             RoadClass.HIGHWAY, 5.612,
             RoadClass.ROAD, 5.612,
             RoadClass.PATH, 4.0,

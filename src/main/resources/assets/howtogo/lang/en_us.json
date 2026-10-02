@@ -105,5 +105,18 @@
   "hud.howtogo.source.create.short": " (Create)",
   "hud.howtogo.station.name": "Station %s, %s",
   "hud.howtogo.source.xaero": "Xaero waypoints",
-  "hud.howtogo.source.xaero.short": " (From XMM)"
+  "hud.howtogo.source.xaero.short": " (From XMM)",
+  "screen.howtogo.lines": "Transit lines",
+  "screen.howtogo.line_list": "Line",
+  "screen.howtogo.line_new": "New",
+  "screen.howtogo.line_delete": "Delete",
+  "screen.howtogo.line_stops": "Stops (in order)",
+  "screen.howtogo.line_candidates": "Stops to add",
+  "screen.howtogo.line_none": "No lines yet",
+  "screen.howtogo.line_empty": "No stops",
+  "screen.howtogo.line_no_candidates": "Nothing to add",
+  "screen.howtogo.line_readonly": "read-only",
+  "key.howtogo.lines": "Transit lines",
+  "screen.howtogo.line_broken": "Red stops do not connect to the one above (wrong line type?)",
+  "hud.howtogo.edit.lines": "L transit lines"
 }

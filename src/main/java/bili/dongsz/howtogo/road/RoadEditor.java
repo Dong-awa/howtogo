@@ -7,12 +7,10 @@ import java.util.Map;
 
 /**
  * Editing session over a {@link RoadNetwork}.
- *
- * <p>Undo is snapshot based. Road networks are small (hundreds of segments at most) and snapshot
+ * Undo is snapshot based. Road networks are small (hundreds of segments at most) and snapshot
  * copies are far harder to get wrong than hand-written inverse operations, which matters more here
  * than the memory.
- *
- * <p>The editor owns no geometry maths beyond the network itself; snapping lives in the client
+ * The editor owns no geometry maths beyond the network itself; snapping lives in the client
  * layer because it needs the map viewport.
  */
 public final class RoadEditor {
@@ -23,6 +21,16 @@ public final class RoadEditor {
     private final Deque<RoadNetwork> undoStack = new ArrayDeque<>();
     private final Deque<RoadNetwork> redoStack = new ArrayDeque<>();
 
+    /**
+     * Whether what happens here is the player's editing, and so worth a history entry.
+     * False for the router's workspace, where a split is only how a stop gets a node of its own.
+     * That network is a throwaway copy that nobody can undo anything on, and the history is not free:
+     * every {@link #pushUndo()} copies the whole network, so a plan anchoring fifty stops would
+     * allocate fifty further copies of a network that may hold an entire railway, and the reconciliation
+     * pass below would walk the whole network once per stop as well.
+     */
+    private final boolean undoable;
+
     private RoadClass activeClass = RoadClass.ROAD;
 
     /** Last node of the polyline currently being drawn, or {@link RoadSegment#NO_NODE}. */
@@ -32,14 +40,28 @@ public final class RoadEditor {
 
     /**
      * Every segment of the road the player has selected.
-     *
-     * <p>A road with bends is stored as several segments, so selecting only the clicked one would
+     * A road with bends is stored as several segments, so selecting only the clicked one would
      * highlight and rename a single straight piece of it.
      */
     private final java.util.Set<Integer> selectedChain = new java.util.LinkedHashSet<>();
 
     public RoadEditor(RoadNetwork network) {
+        this(network, true);
+    }
+
+    private RoadEditor(RoadNetwork network, boolean undoable) {
         this.network = network;
+        this.undoable = undoable;
+    }
+
+    /**
+     * An editor for topology rather than for editing: it splits segments and keeps no history.
+     * For the router, which needs a node exactly where a stop is, on a working copy it owns, and
+     * has nothing to undo. Nothing else about the operations changes -- the split itself is the same
+     * topological one.
+     */
+    public static RoadEditor withoutUndo(RoadNetwork network) {
+        return new RoadEditor(network, false);
     }
 
     public RoadNetwork network() {
@@ -91,19 +113,37 @@ public final class RoadEditor {
 
     /**
      * Whether a node may be a transit station.
-     *
-     * <h2>Why degree is the whole test</h2>
+     * Why degree is the whole test
      * The rule is that a station stands on a road or at one of its ends. In this model a node is
      * always a segment's endpoint -- there is no such thing as a node in the middle of a segment;
      * landing one there splits the segment and creates a node, which is exactly what makes those two
      * cases the same case. So "on a road, or at either end of one" is precisely "at least one segment
      * touches this node", and no distance test is involved or needed.
-     *
-     * <p>A free-standing place fails it, and that is the point: a boarding point that no route passes
+     * A free-standing place fails it, and that is the point: a boarding point that no route passes
      * through is a boarding point nothing can reach.
      */
     public boolean stationAllowed(int nodeId) {
-        return segmentDegrees().getOrDefault(nodeId, 0) > 0;
+        if (segmentDegrees().getOrDefault(nodeId, 0) > 0) {
+            return true;
+        }
+        return stationOverride != null && stationOverride.test(nodeId);
+    }
+
+    /** The client's half of the station rule, or null when there is none. */
+    private java.util.function.IntPredicate stationOverride;
+
+    /**
+     * Adds a second rule to the station test, for the roads this class cannot see.
+     *
+     * <p>A station stands on a road, and the roads this class knows are the saved ones. The railway
+     * layer is not saved -- it is read out of the world by the client, and changes whenever the player
+     * lays track -- so only the client can say whether a place stands beside one. Handing that half in
+     * keeps the station rule in one place; the version that asked a wrapper and then let this method
+     * ask its own made the screen say yes and the save silently refuse, which the player sees as "the
+     * name was not saved".
+     */
+    public void setStationOverride(java.util.function.IntPredicate stationOverride) {
+        this.stationOverride = stationOverride;
     }
 
     /**
@@ -305,6 +345,15 @@ public final class RoadEditor {
     }
 
     /**
+     * A split's two halves and the node between them.
+     *
+     * <p>{@code firstSegment} is the piece from the original's from-node up to the new junction, and
+     * {@code secondSegment} the piece from the junction on to the original's to-node.
+     */
+    public record Split(int firstSegment, int secondSegment, int junctionNode) {
+    }
+
+    /**
      * Splits a segment at {@code vertexIndex}, returning the new junction node's id, or -1.
      *
      * <p>This is a <b>topological</b> split, not just a geometric one: the original segment is
@@ -314,9 +363,24 @@ public final class RoadEditor {
      * saw two unrelated fragments.
      */
     public int splitSegment(int segmentId, int vertexIndex, int x, int y, int z) {
+        Split split = splitSegmentInto(segmentId, vertexIndex, x, y, z);
+        return split == null ? -1 : split.junctionNode();
+    }
+
+    /**
+     * The same split, handing back both halves as well as the junction.
+     *
+     * <p>For a caller that has to break one road at several places: applying the points from the far
+     * end inwards always lands on {@code firstSegment}, and that half keeps the original's vertex
+     * numbering, so the indices the caller computed its points from stay valid for every split after
+     * the first.
+     *
+     * @return the two halves and the junction, or null when the index names no interior vertex
+     */
+    public Split splitSegmentInto(int segmentId, int vertexIndex, int x, int y, int z) {
         RoadSegment original = network.segment(segmentId);
         if (original == null || vertexIndex <= 0 || vertexIndex >= original.vertexCount()) {
-            return -1;
+            return null;
         }
         pushUndo();
 
@@ -350,8 +414,13 @@ public final class RoadEditor {
         if (selectedSegmentId == segmentId) {
             selectedSegmentId = first.id();
         }
-        reclassifyNodes();
-        return junction.id();
+        if (undoable) {
+            // Derived state that only the player's editing needs: the node types the editor draws and
+            // the orphan stations it refuses to lose. On a routing copy there is one new node, it was
+            // created as a junction, and nobody is looking.
+            reclassifyNodes();
+        }
+        return new Split(first.id(), second.id(), junction.id());
     }
 
     /** Deletes the current selection, removing any segments left dangling. */
@@ -509,6 +578,9 @@ public final class RoadEditor {
     }
 
     private void pushUndo() {
+        if (!undoable) {
+            return;
+        }
         undoStack.push(network.deepCopy());
         while (undoStack.size() > MAX_UNDO) {
             undoStack.removeLast();

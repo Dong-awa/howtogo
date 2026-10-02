@@ -8,6 +8,7 @@ import bili.dongsz.howtogo.client.RoadEditHandler;
 import bili.dongsz.howtogo.client.RoadEditSession;
 import bili.dongsz.howtogo.client.RoadLayer;
 import bili.dongsz.howtogo.client.RoadStore;
+import bili.dongsz.howtogo.client.TransitLineStore;
 import bili.dongsz.howtogo.item.ModItems;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.logging.LogUtils;
@@ -38,6 +39,7 @@ public final class HowToGo {
         // handler, so we poll from the client tick instead of doing it here.
         NeoForge.EVENT_BUS.addListener(RoadLayer::onClientTick);
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadStore.tick());
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Navigation.tick());
