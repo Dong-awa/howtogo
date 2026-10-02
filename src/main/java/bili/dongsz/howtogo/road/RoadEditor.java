@@ -89,6 +89,48 @@ public final class RoadEditor {
         return true;
     }
 
+    /**
+     * Whether a node may be a transit station.
+     *
+     * <h2>Why degree is the whole test</h2>
+     * The rule is that a station stands on a road or at one of its ends. In this model a node is
+     * always a segment's endpoint -- there is no such thing as a node in the middle of a segment;
+     * landing one there splits the segment and creates a node, which is exactly what makes those two
+     * cases the same case. So "on a road, or at either end of one" is precisely "at least one segment
+     * touches this node", and no distance test is involved or needed.
+     *
+     * <p>A free-standing place fails it, and that is the point: a boarding point that no route passes
+     * through is a boarding point nothing can reach.
+     */
+    public boolean stationAllowed(int nodeId) {
+        return segmentDegrees().getOrDefault(nodeId, 0) > 0;
+    }
+
+    /**
+     * Applies a place's name and kind together, refusing a station that is not on a road.
+     *
+     * <p>One method rather than two calls so that one edit is one undo step: naming a place and
+     * setting its type are a single thing the player did in a single screen, and having to press undo
+     * twice to take it back would be a lie about how many changes were made.
+     *
+     * @return whether the change was made, so a caller can say why it was not
+     */
+    public boolean setPlace(int nodeId, String name, PlaceKind kind) {
+        RoadNode node = network.node(nodeId);
+        if (node == null || node.type() != RoadNode.Type.POI) {
+            return false;
+        }
+        // Checked before the undo snapshot: a refused change must leave nothing behind, not an undo
+        // entry for a change that did not happen.
+        if (kind == PlaceKind.STATION && !stationAllowed(nodeId)) {
+            return false;
+        }
+        pushUndo();
+        node.setName(name);
+        node.setPlaceKind(kind);
+        return true;
+    }
+
     public boolean setSegmentName(int segmentId, String name) {
         RoadSegment segment = network.segment(segmentId);
         if (segment == null) {
@@ -382,6 +424,11 @@ public final class RoadEditor {
      */
     public void pruneOrphanNodes() {
         Map<Integer, Integer> usage = segmentDegrees();
+        // The demotion runs first so that the state the pruning sees is already the settled one: a
+        // station here is always a place node, and places are exempt from the loop below, so the
+        // landmark survives its road either way -- but demoting after a deletion would be demoting
+        // something that had already gone.
+        demoteOrphanStations(usage);
         for (RoadNode node : network.nodesSnapshot()) {
             if (node.type() == RoadNode.Type.POI) {
                 continue;
@@ -392,9 +439,46 @@ public final class RoadEditor {
         }
     }
 
-    /** Recomputes node types from how many segments touch them. */
+    /**
+     * Turns a station that has lost its road into an ordinary place.
+     *
+     * <p>A station is a boarding point on a road, so when the road is deleted the point stops being
+     * one. It is demoted rather than removed because the position and the name are the player's work:
+     * deleting a road is not a reason to throw away a landmark somebody put down and named.
+     *
+     * <p>Only the kind changes. The node stays a {@link RoadNode.Type#POI}, which is both what makes
+     * it survive pruning -- a place is exempt from it -- and what keeps it a place rather than a bare
+     * road vertex.
+     */
+    private void demoteOrphanStations(Map<Integer, Integer> degree) {
+        for (RoadNode node : network.nodesSnapshot()) {
+            if (node.placeKind() == PlaceKind.STATION && degree.getOrDefault(node.id(), 0) == 0) {
+                node.setPlaceKind(PlaceKind.PLACE);
+            }
+        }
+    }
+
+    /**
+     * Recomputes node types from how many segments touch them, and demotes a station that has lost
+     * its road.
+     *
+     * <h2>Why the station rule is re-checked here</h2>
+     * A station is a boarding point <em>on a road</em>, and a point stops being one the moment the
+     * road under it is deleted. Its name and position are still the player's work, so it becomes an
+     * ordinary place rather than being removed: deleting a road is not a reason to throw away a
+     * landmark somebody put down and named.
+     *
+     * <p>This is the pass that reconciles everything derived from the topology, and "is this node
+     * still on a road" is exactly that kind of state. Doing it here rather than at each call site also
+     * means every deletion path gets it for free -- segment deletion, node deletion, pruning and
+     * finishing a chain all end up in this method already.
+     */
     public void reclassifyNodes() {
         Map<Integer, Integer> degree = segmentDegrees();
+        // Also here, not only in the pruning pass: deleting a segment runs this and does not prune, so
+        // a station orphaned that way would otherwise sit there as an invalid station until the next
+        // road was finished.
+        demoteOrphanStations(degree);
         for (RoadNode node : network.nodes()) {
             if (node.type() == RoadNode.Type.POI) {
                 continue;

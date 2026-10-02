@@ -40,8 +40,21 @@ public enum TravelMode {
     /**
      * Public transport: the rail, water and ice lines, which are no use to anyone not riding them.
      *
-     * <p>Ice is in the set because that is how a boat travels fast: a frozen line is public
-     * transport in the same sense a canal is, not open country.
+     * <p>Ice is in the set because that is how a boat travels fast: a frozen line is public transport
+     * in the same sense a canal is, not open country.
+     *
+     * <h2>The table is only the riding half</h2>
+     * Walking to and from a station is not in this table and must not be: a mode is one pace per
+     * class, so a route containing a walkable class can be satisfied by walking the whole way, and
+     * the result is labelled public transport while being nothing of the sort. It also cannot say
+     * where the riding begins, which is the actual requirement -- a transit trip is entered and left
+     * at a station.
+     *
+     * <p>That is why a transit trip is planned as a journey of legs instead of as one path. The walk
+     * legs are planned in {@link #WALK} over the same network, the riding legs here, and the two are
+     * joined at stations, so the walking that is genuinely unavoidable is walked at walking pace and
+     * is visible as walking. {@code TransitPlanner} is where that happens; the station data it needs
+     * is {@code PlaceKind.STATION}.
      */
     TRANSIT("transit", 64.0, 12.0, Map.of(
             RoadClass.RAIL, 8.0,

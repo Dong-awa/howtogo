@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadEditor;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -235,13 +236,14 @@ public final class RoadEditSession {
         }
         // 2. A selected place.
         if (isPlaceNode(ed.selectedNodeId())) {
-            promptPlaceName(ed.selectedNodeId());
+            promptPlaceEditor(ed.selectedNodeId());
             return;
         }
-        // 3. A place under the cursor.
+        // 3. A place under the cursor. Only an existing place, not any vertex: merely pointing at a
+        //    road's corner and pressing N still means "name this road".
         if (lastSnap.kind() == RoadSnapper.Kind.NODE && isPlaceNode(lastSnap.nodeId())) {
             ed.selectNode(lastSnap.nodeId());
-            promptPlaceName(lastSnap.nodeId());
+            promptPlaceEditor(lastSnap.nodeId());
             return;
         }
         // 4. A road under the cursor.
@@ -274,17 +276,38 @@ public final class RoadEditSession {
                 name -> editor().setRoadName(segmentId, name));
     }
 
-    /** Opens the naming prompt for a hand-placed place, addressed by node. */
-    private static void promptPlaceName(int nodeId) {
-        RoadNode node = RoadStore.get().node(nodeId);
-        if (node == null) {
+    /**
+     * Opens the place editor for a hand-placed place.
+     *
+     * <p>Name and kind together, rather than the rename prompt this used to be: a place's kind is as
+     * much a part of it as its name, and asking for one without the other meant the kind could only
+     * ever be set at the moment of creation. Everything is read inside the deferred action, because
+     * the editor opens a tick later and the place may have moved or gone by then.
+     */
+    private static void promptPlaceEditor(int nodeId) {
+        RoadEditor places = editor();
+        if (RoadStore.get().node(nodeId) == null) {
             return;
         }
-        promptName(RoadNameScreen.TITLE_POI, node.name(), mouseScreenX(), mouseScreenZ(),
-                name -> {
-                    editor().setNodeName(nodeId, name);
-                    RoadStore.markDirty();
-                });
+        double anchorX = mouseScreenX();
+        double anchorY = mouseScreenZ();
+        pendingAction = () -> {
+            RoadNode node = RoadStore.get().node(nodeId);
+            if (node == null) {
+                return;
+            }
+            Screen parent = Minecraft.getInstance().screen;
+            Minecraft.getInstance().setScreen(new RoadNameScreen(parent,
+                    RoadNameScreen.TITLE_PLACE_EDIT, node.name(), node.placeKind(),
+                    // The station rule is asked here, where the node is known, so the screen can keep
+                    // itself open and say why rather than closing on a change that was refused.
+                    kind -> kind != PlaceKind.STATION || places.stationAllowed(nodeId),
+                    anchorX, anchorY,
+                    (name, kind) -> {
+                        places.setPlace(nodeId, name, kind);
+                        RoadStore.markDirty();
+                    }));
+        };
     }
 
     /** Opens the naming prompt for a railway, addressed by shape key. */
@@ -353,13 +376,6 @@ public final class RoadEditSession {
                 }
             }
         }
-        // TEMPORARY rail diagnostic: the whole decision, so "the prompt did not open" can be read
-        // as one of its causes rather than guessed at.
-        HowToGo.LOGGER.info("[HowToGo] rail name | editing={} cursorKnown={} viewValid={} layerSegments={} "
-                        + "cursor={},{} snap={} snapSegment={} found={}",
-                isActive(), mouseValid, MapViewState.isValid(), layer.segmentCount(),
-                Math.round(mouseWorldX), Math.round(mouseWorldZ), hit.kind(), hit.segmentId(),
-                found != null);
         return found;
     }
 
@@ -374,7 +390,7 @@ public final class RoadEditSession {
         RoadStore.markDirty();
         // The same prompt an existing place is renamed through, so a place made now and one renamed
         // later cannot end up with different titles or different storage.
-        promptPlaceName(nodeId);
+        promptPlaceEditor(nodeId);
     }
 
     /**

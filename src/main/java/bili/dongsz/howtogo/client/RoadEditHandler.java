@@ -73,11 +73,7 @@ public final class RoadEditHandler {
 
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
         Screen screen = Minecraft.getInstance().screen;
-        logScreenOnce(screen);
         boolean gate = isMapOpen(screen);
-        // No decision line for the mouse: this path was never the broken one, and whether the editor
-        // used the click is only known after the switch below, so logging it here could only report
-        // a constant -- which is worse than reporting nothing.
         if (!gate) {
             return;
         }
@@ -136,20 +132,11 @@ public final class RoadEditHandler {
      */
     public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
         Screen screen = event.getScreen();
-        logScreenOnce(screen);
         boolean gate = isMapOpen(screen);
-        boolean was = RoadEditSession.isActive();
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_PRESS);
         if (consumed) {
             event.setCanceled(true);
-        }
-        // Logged for every key press with a screen open and no field focused, including the ones the
-        // gate refuses: a press that never reaches the editor has to be visible as such, or the log
-        // cannot tell "the key did not arrive" from "the key arrived and was refused".
-        if (screen != null && !isTyping(screen)) {
-            logInputDecision(event.getKeyCode(), event.getScanCode(), GLFW.GLFW_PRESS, gate, consumed,
-                    was);
         }
     }
 
@@ -157,14 +144,10 @@ public final class RoadEditHandler {
     public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
-        boolean was = RoadEditSession.isActive();
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_RELEASE);
         if (consumed) {
             event.setCanceled(true);
-        }
-        if (gate && consumed) {
-            logInputDecision(event.getKeyCode(), event.getScanCode(), GLFW.GLFW_RELEASE, true, true, was);
         }
     }
 
@@ -292,55 +275,4 @@ public final class RoadEditHandler {
         return screen.getFocused() instanceof EditBox;
     }
 
-    // ------------------------------------------------- TEMPORARY screen diagnostic
-    // One line per screen the first time an input event arrives while it is open, and one line per
-    // input event the editor's own gate accepts. Written to answer two questions from the log rather
-    // than by guessing: what the screen in front of the player is and which part of isMapOpen accepted
-    // or refused it, and what a key press actually looked like by the time it reached the editor -- its
-    // code, its scan code, what the mapping is bound to, whether they agree, whether the editor used
-    // it, and what the editor's state became. It runs in the input path, so it costs nothing per
-    // frame. Delete this block, logInputDecision, and the logScreenOnce/logInputDecision calls.
-
-    private static Class<?> lastLoggedScreen;
-
-    private static void logScreenOnce(Screen screen) {
-        if (screen == null || screen.getClass() == lastLoggedScreen) {
-            return;
-        }
-        lastLoggedScreen = screen.getClass();
-        if (!HowToGo.LOGGER.isInfoEnabled()) {
-            return;
-        }
-        StringBuilder chain = new StringBuilder();
-        for (Class<?> c = screen.getClass(); c != null; c = c.getSuperclass()) {
-            if (chain.length() > 0) {
-                chain.append(" < ");
-            }
-            chain.append(c.getName());
-        }
-        HowToGo.LOGGER.info("[HowToGo] screen | {} | chain={} | map={} worldMapPackage={} xaero={} "
-                        + "typing={} mapFresh={} editing={}",
-                screen.getClass().getName(), chain, isMapOpen(screen),
-                isInPackage(screen, "xaero.map."), isInPackage(screen, "xaero."), isTyping(screen),
-                MapViewState.isFresh(), RoadEditSession.isActive());
-    }
-
-    /**
-     * One line per input event with a screen open, with the whole decision in it.
-     *
-     * @param editingBefore the editor's state before the event was handled, so a toggle shows as
-     *                      {@code false>true} rather than as a state that merely happens to be set
-     */
-    private static void logInputDecision(int key, int scanCode, int action, boolean gate,
-                                         boolean consumed, boolean editingBefore) {
-        if (!HowToGo.LOGGER.isInfoEnabled()) {
-            return;
-        }
-        HowToGo.LOGGER.info("[HowToGo] key | key={} scan={} action={} bound={} unbound={} "
-                        + "matches={} gate={} consumed={} editing={}>{}",
-                key, scanCode, action, TOGGLE_EDIT.getKey(), TOGGLE_EDIT.isUnbound(),
-                key >= 0 && TOGGLE_EDIT.matches(key, scanCode), gate, consumed, editingBefore,
-                RoadEditSession.isActive());
-    }
-    // --------------------------------------------- end TEMPORARY screen diagnostic
 }

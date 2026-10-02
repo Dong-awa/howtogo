@@ -88,6 +88,85 @@ public final class Route {
     }
 
     /**
+     * Joins several routes end to end into one, keeping each part's own pace.
+     *
+     * <h2>Why this lives here and not in the planner</h2>
+     * Every field of a route is private and five of them are parallel arrays. A merge written outside
+     * this class would have to expose all five to be able to do anything, and the first time one of
+     * them was concatenated a line out of step with the others the damage would be silent and
+     * strange: a tolerance read from the wrong point makes a player "off route" while standing on it,
+     * and a road key read from the wrong point invents a turn where there is none. Keeping the merge
+     * inside the class that owns the invariant is what makes it possible to state the invariant at
+     * all: every parallel array is appended in the same loop, from the same index, or not at all.
+     *
+     * <h2>What is kept from which part</h2>
+     * The two connectors come from the ends -- the first part's start, the last part's goal -- because
+     * those are the only two that describe getting on and off the network at the ends of the whole
+     * journey. The off-road speed factor comes from the first part, which is the one whose connector
+     * it is timing. The pace of each stretch is not taken from anywhere: each part already recorded
+     * it in its own {@code legs}, and those are appended as they are, so a walked stretch keeps the
+     * walking pace and a ridden one keeps the line's.
+     *
+     * @param parts routes in the order they are travelled; a part that is not present is skipped
+     */
+    static Route concat(List<Route> parts, TravelMode travelMode, String destinationName) {
+        List<double[]> points = new ArrayList<>();
+        List<Double> tolerances = new ArrayList<>();
+        List<Integer> roadKeys = new ArrayList<>();
+        List<String> roadNames = new ArrayList<>();
+        List<Boolean> branchAt = new ArrayList<>();
+        List<double[]> legs = new ArrayList<>();
+        double startConnector = 0;
+        double goalConnector = 0;
+        double offRoadSpeedFactor = 1.0;
+        boolean first = true;
+
+        for (Route part : parts) {
+            if (!part.isPresent()) {
+                continue;
+            }
+            for (int i = 0; i < part.points.size(); i++) {
+                double[] point = part.points.get(i);
+                // The join is one coordinate written twice: a leg ends at the station and the next
+                // begins there. Its second copy is dropped from every array at once, in this same
+                // index-guarded step, which is the only way the arrays stay parallel.
+                if (i == 0 && !points.isEmpty() && samePoint(points.get(points.size() - 1), point)) {
+                    continue;
+                }
+                points.add(point);
+                tolerances.add(part.tolerances[i]);
+                roadKeys.add(part.roadKeys[i]);
+                roadNames.add(part.roadNames[i]);
+                branchAt.add(part.branchAt[i]);
+            }
+            legs.addAll(part.legs);
+            if (first) {
+                startConnector = part.startConnector;
+                offRoadSpeedFactor = part.offRoadSpeedFactor;
+                first = false;
+            }
+            goalConnector = part.goalConnector;
+        }
+
+        double[] toleranceArray = new double[tolerances.size()];
+        int[] keyArray = new int[roadKeys.size()];
+        String[] nameArray = new String[roadNames.size()];
+        boolean[] branchArray = new boolean[branchAt.size()];
+        for (int i = 0; i < toleranceArray.length; i++) {
+            toleranceArray[i] = tolerances.get(i);
+            keyArray[i] = roadKeys.get(i);
+            nameArray[i] = roadNames.get(i);
+            branchArray[i] = branchAt.get(i);
+        }
+        return new Route(points, toleranceArray, keyArray, nameArray, branchArray, startConnector,
+                goalConnector, legs, destinationName, offRoadSpeedFactor, travelMode);
+    }
+
+    private static boolean samePoint(double[] a, double[] b) {
+        return Math.abs(a[0] - b[0]) < 1.0E-6 && Math.abs(a[1] - b[1]) < 1.0E-6;
+    }
+
+    /**
      * One announced turn.
      *
      * @param distanceFromStart how far along the route the junction is

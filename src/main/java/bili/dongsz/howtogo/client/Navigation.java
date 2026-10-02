@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RoutePreferences;
+import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.client.Minecraft;
@@ -18,6 +19,8 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -1375,8 +1378,7 @@ public final class Navigation {
         // refused for something the network it was refused on did not contain.
         RoadNetwork network = RailTrackStore.forRouting(active, policy);
 
-        Route planned = RoadRouter.findRoute(network, x, z, destination.x(), destination.z(),
-                destination.name(), active, policy);
+        Route planned = planRoute(network, active, policy, x, z, destination);
         if (!planned.isPresent()) {
             return new RoutePreview(planned, x, z, destination,
                     RoadRouter.explainFailure(network, x, z, destination.x(), destination.z(),
@@ -1406,8 +1408,12 @@ public final class Navigation {
         // plans, and a re-plan made after such a change has to see the new one.
         RoutePreferences preferences = RoutePreferenceStore.preferences();
         TravelMode active = mode();
-        Route planned = RoadRouter.findRoute(RailTrackStore.forRouting(active, preferences),
-                x, z, target.x(), target.z(), target.name(), active, preferences);
+        RoadNetwork usable = RailTrackStore.forRouting(active, preferences);
+        // Public transport first, as a journey of legs: a single route in one mode cannot say where the
+        // riding begins, and the requirement is that it begins and ends at a station. The plain route
+        // is still the fallback, so a world with no station near either end behaves as it did before
+        // rather than reporting that there is no way to go.
+        Route planned = planRoute(usable, active, preferences, x, z, target);
         clearFallback();
 
         // Walking is the comparison every mode has to beat, so it is planned whenever the player
@@ -1427,6 +1433,59 @@ public final class Navigation {
         }
         route = planned;
         logRoute(preferences);
+    }
+
+    /**
+     * Plans a route in one mode, as a public transport journey when that is the mode.
+     *
+     * <p>One place, because the preview and the live route must agree. The picker draws this plan and
+     * the HUD then guides along the line the player accepted; a preview planned by a different rule
+     * would show a route that is abandoned the moment the button is pressed. That is exactly what
+     * happened while the picker called the router directly: public transport was previewed as a line
+     * entered at the nearest point of track, then navigated as a journey through stations.
+     *
+     * <p>The plain route stays as the fallback rather than as an error, so a world whose stations are
+     * unreachable, or which has none, behaves as it did before instead of reporting that there is no
+     * way to go.
+     */
+    private static Route planRoute(RoadNetwork network, TravelMode mode, RoutePreferences preferences,
+                                   double x, double z, Destination target) {
+        if (mode == TravelMode.TRANSIT) {
+            List<TransitPlanner.Stop> stops = transitStops(network);
+            Route byTransit = TransitPlanner.planRoute(network, stops, x, z, target.x(), target.z(),
+                    target.name(), preferences);
+            if (byTransit.isPresent()) {
+                return byTransit;
+            }
+            // Worth a line, because "it went to the nearest point of the line instead of a station"
+            // and "it fell back to the plain route" look identical from outside; the stop count is
+            // what tells them apart, and it decides what to look at next.
+            HowToGo.LOGGER.info("[HowToGo] public transport: {} stop(s), no complete trip; using the "
+                    + "plain route", stops.size());
+        }
+        return RoadRouter.findRoute(network, x, z, target.x(), target.z(), target.name(), mode,
+                preferences);
+    }
+
+    /**
+     * Every place a public transport journey may be boarded or left.
+     *
+     * <p>Two sources, because the world holds two kinds of station. A place the player marked as a
+     * station is a node of the road network and is found by walking it. A station Create's track graph
+     * reports is not: it arrives as an ordinary rail vertex with a name attached, so nothing in the
+     * network tells it apart from any other point of track and no search over that network could pick
+     * it out. Only the track layer knows, which is why it is added here rather than found there.
+     *
+     * <p>Both are needed even when only one is populated. A player who built stations and marked none
+     * is the ordinary case; one who marked a stop on a road, with no station block in sight, is the
+     * case the marks exist for.
+     */
+    private static List<TransitPlanner.Stop> transitStops(RoadNetwork network) {
+        List<TransitPlanner.Stop> stops = new ArrayList<>(TransitPlanner.markedStations(network));
+        for (RailTrackStore.Station station : RailTrackStore.stations()) {
+            stops.add(new TransitPlanner.Stop(station.name(), station.x(), station.z()));
+        }
+        return stops;
     }
 
     /**

@@ -18,6 +18,15 @@ public final class RoadNode {
     private Type type;
     private String name;
 
+    /**
+     * What kind of place this is, for a {@link Type#POI} node.
+     *
+     * <p>Initialised rather than required, so the constructor every existing caller uses keeps working
+     * and a node read from a file that predates this field is an ordinary place. Only ever read for a
+     * {@code POI} node: whether a node is a place at all is its {@link #type()}.
+     */
+    private PlaceKind placeKind = PlaceKind.PLACE;
+
     public RoadNode(int id, int x, int y, int z, Type type, String name) {
         this.id = id;
         this.x = x;
@@ -59,6 +68,15 @@ public final class RoadNode {
         this.name = name;
     }
 
+    /** What kind of place this is. Meaningful only for a {@link Type#POI} node. */
+    public PlaceKind placeKind() {
+        return placeKind;
+    }
+
+    public void setPlaceKind(PlaceKind placeKind) {
+        this.placeKind = placeKind == null ? PlaceKind.PLACE : placeKind;
+    }
+
     public void moveTo(int x, int y, int z) {
         this.x = x;
         this.y = y;
@@ -67,7 +85,9 @@ public final class RoadNode {
 
     /** Deep copy, used by the editor's snapshot-based undo. */
     public RoadNode copy() {
-        return new RoadNode(id, x, y, z, type, name);
+        RoadNode copy = new RoadNode(id, x, y, z, type, name);
+        copy.setPlaceKind(placeKind);
+        return copy;
     }
 
     /** Squared horizontal distance to a point. Cheaper than {@link Math#sqrt} for snapping. */

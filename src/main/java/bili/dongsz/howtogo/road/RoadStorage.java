@@ -45,7 +45,13 @@ public final class RoadStorage {
             }
             if (dto.nodes != null) {
                 for (NodeDto n : dto.nodes) {
-                    network.putNode(new RoadNode(n.id, n.x, n.y, n.z, parseType(n.type), n.name));
+                    RoadNode node = new RoadNode(n.id, n.x, n.y, n.z, parseType(n.type), n.name);
+                    // Absent in any file written before place kinds existed, and it reads back as
+                    // PLACE -- so every place a player had already put down is still an ordinary place
+                    // and no road vertex becomes one, because whether a node is a place at all is its
+                    // type, not this field.
+                    node.setPlaceKind(PlaceKind.byId(n.placeKind));
+                    network.putNode(node);
                 }
             }
             if (dto.segments != null) {
@@ -80,6 +86,7 @@ public final class RoadStorage {
                 n.z = node.z();
                 n.type = node.type().name();
                 n.name = node.name();
+                n.placeKind = node.placeKind().name();
                 dto.nodes.add(n);
             }
             for (RoadSegment segment : network.segments()) {
@@ -163,6 +170,13 @@ public final class RoadStorage {
         int z;
         String type;
         String name;
+        /**
+         * Added after the first release; written always, read tolerantly.
+         *
+         * <p>Left absent in every file written before it existed, and {@code Gson} leaves the field
+         * null rather than complaining, which is what makes the addition one that older saves survive.
+         */
+        String placeKind;
     }
 
     private static final class SegmentDto {
