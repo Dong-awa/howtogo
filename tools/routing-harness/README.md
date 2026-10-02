@@ -73,6 +73,17 @@ rather than by a chord; a boat's rail becoming water and an aeroplane's becoming
 imported segment identifiable as read rather than drawn by its id alone; and the `mtr_auto_route_marks`
 switch, which must change the rails and nothing else.
 
+It also covers the **per-line marks switch** the line editor draws beside each imported line: that a
+line nobody has answered for takes the configured default, that an answer is kept by MTR's own line id
+(an imported line is rebuilt from every reading, so a field on it would not survive the player walking
+to the next station), that switching a line on is on its own reason to build MTR's tracks, and that a
+mode which cannot reach a mark's class is not offered it -- the rule that had to ask about water as well
+as rail, or a boat line's switch would have done nothing.
+
+`RideRoadsCheck.java` is in the `route` package for the same reason, and checks the seam the switch
+rests on: a line whose marks are off is handed a network that never had them, because MTR's marks are
+one shared layer and "do not add them for this line" is not something the planner could act on.
+
 It cannot check whether MTR hands back the shapes the reader looks for -- unless an MTR jar is on the
 classpath, which is what the handshake check is for: with `run/mods/MTR-*.jar` present, every class,
 field and method the reader looks up is looked up for real, with no game running. That check is what

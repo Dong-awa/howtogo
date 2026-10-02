@@ -122,5 +122,8 @@
   "screen.howtogo.line_copy_suffix": "（副本）",
   "screen.howtogo.line_from_mtr": "[MTR]",
   "screen.howtogo.line_from_mtr_note": "来自 MTR：只读，可复制为自己的线路",
+  "screen.howtogo.line_marks_on": "自动标记：开",
+  "screen.howtogo.line_marks_off": "自动标记：关",
+  "screen.howtogo.line_marks_hint": "把这趟 MTR 线路自己的轨道（船线路则是水路）当作可行驶道路来算路。关掉则只走你画的道路。\n只有 MTR 的线路能各选各的，自己的线路跟随配置里的默认值。",
   "hud.howtogo.edit.lines": "L 线路配置"
 }

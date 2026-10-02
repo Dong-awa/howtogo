@@ -138,17 +138,20 @@ public final class MtrTransit {
     /**
      * Turns a reading into this mod's stops, lines and rail layer.
      *
-     * <p>A function of the reading and the one setting that shapes it, and of nothing else, so that
-     * everything about the conversion can be checked with no MTR installed -- which is the only way it
-     * can be checked at all here. The state above is a cache of this, not the other way round.
+     * <p>A function of the reading and one flag, and of nothing else, so that everything about the
+     * conversion can be checked with no MTR installed -- which is the only way it can be checked at all
+     * here. The state above is a cache of this, not the other way round.
+     *
+     * @param withRails whether MTR's tracks are turned into a layer of route marks at all; whether any
+     *                  particular line rides them is decided per line, later
      */
-    static Built build(MtrClientData.Snapshot reading, boolean autoRouteMarks) {
+    static Built build(MtrClientData.Snapshot reading, boolean withRails) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
         Counts counts = new Counts();
         List<TransitLine> builtLines = buildLines(reading, counts);
-        RoadNetwork builtRails = autoRouteMarks ? buildRailLayer(reading) : new RoadNetwork();
+        RoadNetwork builtRails = withRails ? buildRailLayer(reading) : new RoadNetwork();
         return new Built(buildStops(reading), builtLines, builtRails, builtLines.size(),
                 counts.skipped, counts.unplaced);
     }
@@ -163,7 +166,11 @@ public final class MtrTransit {
      */
     private static void refresh() {
         MtrClientData.Snapshot reading = MtrClientData.snapshot();
-        boolean autoMarks = RoadConfig.mtrAutoRouteMarks();
+        // Built when MTR's marks are wanted at all: the configured default, or any single line the
+        // player has switched on by hand. A line's own answer cannot be asked of the layer, because the
+        // layer is shared -- but a reading that dropped the tracks whenever the setting said off would
+        // leave that per-line switch with nothing to turn on.
+        boolean autoMarks = RoadConfig.mtrAutoRouteMarks() || MtrMarks.anyOn();
         boolean enabled = RoadConfig.mtrTransit();
         StringBuilder key = new StringBuilder();
         key.append(autoMarks).append(';').append(enabled).append(';')

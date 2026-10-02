@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -15,6 +16,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -82,6 +84,9 @@ public final class TransitLineScreen extends Screen {
 
     private String selectedId;
     private EditBox nameField;
+    /** The imported line's marks switch, kept so that its label and its enabled state can be updated
+     * without rebuilding the whole screen. Null only before {@code init}. */
+    private Button marksButton;
 
     private int panelX;
     private int panelY;
@@ -170,6 +175,7 @@ public final class TransitLineScreen extends Screen {
         TransitLineStore.markDirty();
         selectedId = copy.id();
         refreshName();
+        refreshMarksButton();
     }
 
     @Override
@@ -199,7 +205,10 @@ public final class TransitLineScreen extends Screen {
         listY = top + Math.max(FIELD_HEIGHT, KIND_HEIGHT) + PAD;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
-        int quarter = (panelW - PAD * 2 - GAP * 3) / 4;
+        // Five equal slots, so that the marks switch sits in the same row as the rest without any of
+        // them being narrower than the others: a button that is a different width from its neighbours
+        // reads as a different kind of thing.
+        int slot = (panelW - PAD * 2 - GAP * 4) / 5;
         int buttonY = panelY + panelH - PAD - BUTTON_HEIGHT;
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_new"), b -> {
             commitName();
@@ -208,7 +217,8 @@ public final class TransitLineScreen extends Screen {
             TransitLineStore.markDirty();
             selectedId = created.id();
             refreshName();
-        }).bounds(panelX + PAD, buttonY, quarter, BUTTON_HEIGHT).build());
+            refreshMarksButton();
+        }).bounds(panelX + PAD, buttonY, slot, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_delete"), b -> {
             TransitLine doomed = selected();
             // A line read out of MTR is not the player's to delete: it would come back on the next
@@ -219,13 +229,71 @@ public final class TransitLineScreen extends Screen {
                 List<TransitLine> left = listed();
                 selectedId = left.isEmpty() ? null : left.get(0).id();
                 refreshName();
+                refreshMarksButton();
             }
-        }).bounds(panelX + PAD + quarter + GAP, buttonY, quarter, BUTTON_HEIGHT).build());
+        }).bounds(buttonX(slot, 1), buttonY, slot, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_copy"), b ->
-                copySelected()).bounds(panelX + PAD + (quarter + GAP) * 2, buttonY, quarter,
-                BUTTON_HEIGHT).build());
+                copySelected()).bounds(buttonX(slot, 2), buttonY, slot, BUTTON_HEIGHT).build());
+        marksButton = Button.builder(Component.empty(), b -> toggleMarks())
+                .bounds(buttonX(slot, 3), buttonY, slot, BUTTON_HEIGHT)
+                .tooltip(Tooltip.create(Component.translatable("screen.howtogo.line_marks_hint")))
+                .build();
+        addRenderableWidget(marksButton);
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(panelX + PAD + (quarter + GAP) * 3, buttonY, quarter, BUTTON_HEIGHT).build());
+                .bounds(buttonX(slot, 4), buttonY, slot, BUTTON_HEIGHT).build());
+        refreshMarksButton();
+    }
+
+    /** The left edge of the button in slot {@code index} of the footer row. */
+    private int buttonX(int slot, int index) {
+        return panelX + PAD + (slot + GAP) * index;
+    }
+
+    /**
+     * Turns the selected imported line's own marks on or off, and says so on the button.
+     *
+     * <p>Per line rather than once for all of them, because the two answers are both wanted at once: a
+     * train's track is worth reading and a boat's water usually is not, and one switch for both would
+     * make the player spoil one to have the other. What the marks are is decided by the line's own
+     * kind, so a rail line's marks are rail and a boat line's are water.
+     *
+     * <p>Only an imported line has an answer to give: the switch is disabled for the player's own
+     * lines, which take the configured default instead of a per-line one.
+     */
+    private void toggleMarks() {
+        TransitLine line = selected();
+        if (line == null || !readOnly(line)) {
+            return;
+        }
+        long id = MtrTransit.mtrLineId(line);
+        if (id < 0) {
+            return;
+        }
+        boolean on = MtrTransit.marksEnabled(line);
+        MtrMarks.toggle(id, on);
+        HowToGo.LOGGER.info("[HowToGo] MTR line '{}' marks {}", line.name(), on ? "off" : "on");
+        refreshMarksButton();
+    }
+
+    /** The marks switch's label and enabled state, from the line on screen. */
+    private void refreshMarksButton() {
+        if (marksButton == null) {
+            return;
+        }
+        TransitLine line = selected();
+        boolean imported = line != null && readOnly(line);
+        // Disabled rather than hidden: a control that appears and disappears as the selection moves is
+        // a control the player has to find twice, and "why can I not press this" is answered by the
+        // tooltip, which is drawn for a disabled button as well.
+        marksButton.active = imported;
+        // What it says is what applies to the line on screen, which for one of the player's own is the
+        // configured default: a switch that read "off" beside a line that will be ridden over the marks
+        // anyway would be the screen telling the player something untrue.
+        boolean on = line != null
+                ? MtrTransit.marksEnabled(line)
+                : RoadConfig.mtrAutoRouteMarks();
+        marksButton.setMessage(Component.translatable(
+                on ? "screen.howtogo.line_marks_on" : "screen.howtogo.line_marks_off"));
     }
 
     private void refreshName() {
@@ -518,6 +586,9 @@ public final class TransitLineScreen extends Screen {
         StringBuilder signature = new StringBuilder();
         if (line != null) {
             signature.append(line.id()).append(line.kind().name());
+            // Whether the line rides its own marks decides which roads the pairs are planned on, so a
+            // switch that changed the answer has to re-plan them.
+            signature.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
             for (LineStop stop : line.stops()) {
                 signature.append('|').append(stop.x()).append(',').append(stop.z());
             }
@@ -534,7 +605,10 @@ public final class TransitLineScreen extends Screen {
         TravelMode mode = LinePlanner.rideMode(kind);
         RoutePreferences policy = LinePlanner.ridePreferences(kind,
                 RoutePreferenceStore.preferences());
-        RoadNetwork network = RailTrackStore.forRouting(mode, policy);
+        // On the same roads the router will ride it on, marks switch included: a red "cannot ride this
+        // pair" that the route then manages anyway, or the reverse, would make the one readout on this
+        // screen that says a line is broken say it about a line that is not.
+        RoadNetwork network = RailTrackStore.forRouting(mode, policy, MtrTransit.marksEnabled(line));
         // One workspace for the whole line: every pair is anchored to the same handful of stops, and a
         // shared workspace means the segment splits behind those anchors are paid once rather than
         // once per pair.
@@ -572,6 +646,9 @@ public final class TransitLineScreen extends Screen {
             commitName();
             selectedId = lines.get(lineRow).id();
             refreshName();
+            // The switch follows the selection: it is the selected line's answer that it shows, and
+            // only an imported line has one to give.
+            refreshMarksButton();
             return true;
         }
 

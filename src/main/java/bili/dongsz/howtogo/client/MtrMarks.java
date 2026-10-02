@@ -71,19 +71,40 @@ public final class MtrMarks {
      */
     public static boolean forLine(long mtrLineId) {
         ensureLoaded();
-        if (ON.contains(mtrLineId)) {
-            return true;
-        }
-        if (OFF.contains(mtrLineId)) {
-            return false;
-        }
-        return RoadConfig.mtrAutoRouteMarks();
+        return decide(ON.contains(mtrLineId), OFF.contains(mtrLineId), RoadConfig.mtrAutoRouteMarks());
+    }
+
+    /**
+     * The answer, as a function of the two lists and the configured default.
+     *
+     * <p>A method of its own so that the rule can be stated in one place and checked without a game:
+     * an id on the list of lines switched on is on, an id on the list switched off is off even when the
+     * default is on, and an id on neither takes the default. An id on both lists -- which only a
+     * hand-edited file can produce -- counts as on, because the alternative is an answer that depends on
+     * which list happened to be consulted first.
+     */
+    static boolean decide(boolean listedOn, boolean listedOff, boolean fallback) {
+        return listedOn || (!listedOff && fallback);
     }
 
     /** Whether the player has answered for this line at all, rather than taking the default. */
     public static boolean isChosen(long mtrLineId) {
         ensureLoaded();
         return ON.contains(mtrLineId) || OFF.contains(mtrLineId);
+    }
+
+    /**
+     * Whether any line at all has been switched on by hand.
+     *
+     * <p>Asked before the marks are built rather than after: a player who has the configured default
+     * off and turns one line on has asked for that line's track, and a reading that threw the tracks
+     * away because the setting says off would make the switch do nothing. The set can hold ids of lines
+     * that no longer exist, which only means the layer is built and then not wanted -- cheap, and the
+     * alternative is a switch that sometimes does nothing.
+     */
+    public static boolean anyOn() {
+        ensureLoaded();
+        return !ON.isEmpty();
     }
 
     /** Flips this line's answer, recording it as the player's own either way. */
@@ -115,7 +136,7 @@ public final class MtrMarks {
         }
         loaded = true;
         Path file = file();
-        if (!Files.isRegularFile(file)) {
+        if (file == null || !Files.isRegularFile(file)) {
             return;
         }
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -155,6 +176,11 @@ public final class MtrMarks {
             return;
         }
         Path file = file();
+        if (file == null) {
+            // Nowhere to put it. The answers are still held in memory, so the switch works for this
+            // session, and {@code dirty} stays set in case there is a directory to write to later.
+            return;
+        }
         try {
             Files.createDirectories(file.getParent());
             MarksDto dto = new MarksDto();
@@ -171,9 +197,20 @@ public final class MtrMarks {
         }
     }
 
-    /** Client-wide rather than per world: which of MTR's lines are worth reading is the player's taste. */
+    /**
+     * The answers' file, or null when there is no config directory to keep it in.
+     *
+     * <p>Resolved on demand and allowed not to resolve, because this is read from the client tick and
+     * from planning, both of which can run before the game directory is known -- the harness, which has
+     * no game at all, is one such caller and a loading screen is another. With nowhere to keep the
+     * answers there is nothing to do but take the configured default, which is what a session that
+     * never touches the switch does anyway, and it is not worth a crash to find that out.
+     *
+     * <p>Client-wide rather than per world: which of MTR's lines are worth reading is the player's taste.
+     */
     private static Path file() {
-        return FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID).resolve(FILE_NAME);
+        Path config = FMLPaths.CONFIGDIR.get();
+        return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
     /** Field names are the on-disk contract, so they are deliberately terse and stable. */

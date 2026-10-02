@@ -44,6 +44,9 @@ public final class Harness {
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
         failures += imported[1];
+        int[] rideRoads = bili.dongsz.howtogo.route.RideRoadsCheck.run();
+        checks += rideRoads[0];
+        failures += rideRoads[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");

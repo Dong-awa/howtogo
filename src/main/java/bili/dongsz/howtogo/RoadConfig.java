@@ -196,7 +196,11 @@ public final class RoadConfig {
                         "Off: no track is added, and a line's stops are matched to the roads you drew",
                         "near them by the ordinary rule -- the one this mod used before it knew anything",
                         "about MTR. That is the right answer for a line that runs on roads or water you",
-                        "have already drawn, and the wrong one for a line whose track is its own.")
+                        "have already drawn, and the wrong one for a line whose track is its own.",
+                        "This is the default for a line nobody has answered for: the line editor has a",
+                        "switch beside each line read out of MTR, and an answer given there is kept per",
+                        "line and overrides this one. A line's marks are of the line's own type, so a",
+                        "boat line's marks are its waterway rather than a rail.")
                 .define("mtr_auto_route_marks", true);
 
         SPEC = builder.build();

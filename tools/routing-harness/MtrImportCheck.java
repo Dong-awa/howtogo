@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -93,6 +94,8 @@ public final class MtrImportCheck {
                 !MtrTransit.isImported(new TransitLine("mine", "Mine", RoadClass.RAIL)));
         expect("and neither does nothing", !MtrTransit.isImported(null));
 
+        checkMarksSwitch(imported);
+
         // A boat line: the other kind this mod has a use for.
         MtrClientData.Snapshot boatsOnly = new MtrClientData.Snapshot(
                 reading.stations(), reading.platforms(),
@@ -116,6 +119,61 @@ public final class MtrImportCheck {
         System.out.println(failures == 0 ? "  MTR import ok (" + checks + " checks)"
                 : "  MTR import FAILED: " + failures + " of " + checks);
         return new int[]{checks, failures};
+    }
+
+    /**
+     * The per-line marks switch's own rules.
+     *
+     * <p>What a line says before anyone has touched the switch, what it says once they have, and that
+     * the answer is keyed by MTR's own id rather than by anything the line carries -- an imported line is
+     * rebuilt from every reading, so a field on it would last until the player walked to the next
+     * station. The file itself is not checked here: the harness has no game directory to write to, which
+     * is also why the answers are held in memory for the length of this check.
+     */
+    private static void checkMarksSwitch(TransitLine imported) {
+        long id = MtrTransit.mtrLineId(imported);
+        expect("an imported line carries MTR's own id, which is what an answer is kept by", id == 1);
+        expect("and a line the player made carries none",
+                MtrTransit.mtrLineId(new TransitLine("mine", "Mine", RoadClass.RAIL)) < 0);
+
+        boolean fallback = RoadConfig.mtrAutoRouteMarks();
+        MtrMarks.clear(id);
+        expect("a line nobody has answered for takes the configured default",
+                !MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported) == fallback);
+        expect("and so does a line of the player's own",
+                MtrTransit.marksEnabled(new TransitLine("mine", "Mine", RoadClass.RAIL)) == fallback);
+
+        boolean wasAnyOn = MtrMarks.anyOn();
+        MtrMarks.toggle(id, true);
+        expect("switching a line off is remembered against that line",
+                MtrMarks.isChosen(id) && !MtrTransit.marksEnabled(imported));
+
+        MtrMarks.toggle(id, false);
+        expect("and switching it back on is remembered too",
+                MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported));
+        expect("a line switched on by hand is reason enough to build MTR's tracks",
+                MtrMarks.anyOn());
+
+        MtrMarks.clear(id);
+        expect("forgetting the answer puts the line back on the default",
+                !MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported) == fallback);
+        expect("and takes that reason away again", MtrMarks.anyOn() == wasAnyOn);
+
+        expect("a listed answer beats the default",
+                !MtrMarks.decide(false, true, true) && MtrMarks.decide(true, false, false));
+        expect("an id on both lists counts as on", MtrMarks.decide(true, true, false));
+        expect("and an id on neither takes the default",
+                MtrMarks.decide(false, false, true) && !MtrMarks.decide(false, false, false));
+
+        // The classes a mark can be, and the modes that can reach them. A boat line's mark is water, so
+        // a rule that only asked about the rail would leave its switch doing nothing.
+        expect("a transit ride can reach MTR's marks",
+                RailTrackStore.movesOnMtrMarks(bili.dongsz.howtogo.route.TravelMode.TRANSIT));
+        expect("while walking cannot",
+                !RailTrackStore.movesOnMtrMarks(bili.dongsz.howtogo.route.TravelMode.WALK));
+        expect("and neither can driving",
+                !RailTrackStore.movesOnMtrMarks(bili.dongsz.howtogo.route.TravelMode.DRIVE));
+        expect("and no mode at all cannot either", !RailTrackStore.movesOnMtrMarks(null));
     }
 
     /**

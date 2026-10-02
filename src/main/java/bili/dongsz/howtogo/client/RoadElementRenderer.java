@@ -666,10 +666,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
         lineShapeSignature = signature.toString();
 
-        // One workspace per kind of line rather than per line: a workspace copies the network and
-        // repairs its joins before the first query through it, and every line of one kind routes on
-        // exactly the same network.
-        java.util.Map<RoadClass, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
+        // One workspace per network rather than per line: a workspace copies the network and repairs
+        // its joins before the first query through it, and every line that routes on the same roads --
+        // the same kind, and with or without the imported rails -- reuses one.
+        java.util.Map<String, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
                 new java.util.HashMap<>();
         java.util.Map<String, List<double[]>> rebuilt = new java.util.HashMap<>();
         List<List<double[]>> shapes = new java.util.ArrayList<>(lines.size());
@@ -688,19 +688,28 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         lineShapes = shapes;
     }
 
-    /** What makes a line's shape its own: which line, of which kind, calling where. */
+    /** What makes a line's shape its own: which line, of which kind, calling where, over which roads. */
     private static String shapeKey(TransitLine line) {
         StringBuilder key = new StringBuilder();
         key.append(line.id()).append(line.kind().name());
+        // Whether the line rides its own marks is part of the shape: turning the imported rails off has
+        // to redraw the line along the roads it will now be ridden over, not leave the old drawing up.
+        key.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
         for (LineStop stop : line.stops()) {
             key.append('|').append(stop.x()).append(',').append(stop.z());
         }
         return key.toString();
     }
 
-    /** One line's path: every neighbouring pair planned, and a straight hop where one cannot be. */
+    /**
+     * One line's path: every neighbouring pair planned, and a straight hop where one cannot be.
+     *
+     * <p>The workspaces are keyed by kind <em>and</em> by whether the line brought its own marks,
+     * because those are the two things that decide which network a pair is planned on -- a line whose
+     * marks are off is drawn along the roads it will actually be ridden over, not along the marks.
+     */
     private static List<double[]> planLine(TransitLine line,
-                                           java.util.Map<RoadClass,
+                                           java.util.Map<String,
                                                    bili.dongsz.howtogo.route.RoadRouter.Workspace>
                                                    workspaces) {
         List<double[]> points = new java.util.ArrayList<>();
@@ -710,11 +719,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         bili.dongsz.howtogo.route.RoutePreferences policy =
                 bili.dongsz.howtogo.route.LinePlanner.ridePreferences(kind,
                         bili.dongsz.howtogo.store.RoutePreferenceStore.preferences());
-        bili.dongsz.howtogo.route.RoadRouter.Workspace workspace = workspaces.get(kind);
+        boolean marks = MtrTransit.marksEnabled(line);
+        String workspaceKey = kind.name() + (marks ? "+marks" : "");
+        bili.dongsz.howtogo.route.RoadRouter.Workspace workspace = workspaces.get(workspaceKey);
         if (workspace == null) {
             workspace = new bili.dongsz.howtogo.route.RoadRouter.Workspace(
-                    RailTrackStore.forRouting(mode, policy));
-            workspaces.put(kind, workspace);
+                    RailTrackStore.forRouting(mode, policy, marks));
+            workspaces.put(workspaceKey, workspace);
         }
         for (int i = 1; i < line.stopCount(); i++) {
             LineStop from = line.stops().get(i - 1);

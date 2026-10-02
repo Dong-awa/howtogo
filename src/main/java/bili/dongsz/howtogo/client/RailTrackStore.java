@@ -658,11 +658,18 @@ public final class RailTrackStore {
      * could use.
      *
      * <h2>Why the unchanged network is returned as-is</h2>
-     * A mode that cannot travel on the layer -- walking and driving for rail -- and a policy that
-     * avoids its class both get {@link RoadStore#get()} itself, so there is no rail node and no rail
-     * segment anywhere in the graph they are planned on. Nothing about their routes can change, and
-     * that is a property of this method rather than a claim about the router's filters, which is the
-     * version of the argument that survives the next change to those filters.
+     * A mode that cannot travel on the layer -- walking and driving for rail -- gets
+     * {@link RoadStore#get()} itself, so there is no rail node and no rail segment anywhere in the
+     * graph it is planned on. Nothing about its routes can change, and that is a property of this
+     * method rather than a claim about the router's filters, which is the version of the argument that
+     * survives the next change to those filters.
+     *
+     * <p>Which classes a <em>trip</em> avoids is not asked here. The layers are merged or not by what
+     * the mode can move on, and a ride over them is then restricted by that line's own policy -- see
+     * {@link bili.dongsz.howtogo.route.LinePlanner#ridePreferences}, which ignores the player's
+     * avoidances on purpose so that a line the player declared a railway is still a railway. A layer
+     * this method declined to merge because of a global avoidance could not be put back by that
+     * policy, so the two would disagree about the same journey.
      *
      * <h2>Why the merge is a copy</h2>
      * The saved network is not touched, and neither is any layer: the router splits segments while
@@ -692,14 +699,18 @@ public final class RailTrackStore {
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences,
                                          boolean withMtrMarks) {
         RoadNetwork handDrawn = RoadStore.get();
-        boolean wantsRail = mode != null && mode.allows(RoadClass.RAIL)
-                && (preferences == null || !preferences.avoids(RoadClass.RAIL));
-        RoadNetwork mtr = withMtrMarks && wantsRail ? MtrTransit.railLayer() : new RoadNetwork();
-        if ((!active() || !wantsRail) && mtr.segmentCount() == 0) {
+        // What a mode may travel on, and nothing else. The player's avoidances are deliberately not
+        // consulted here: a ride's own policy decides which class it runs on, and it ignores them on
+        // purpose (see LinePlanner#ridePreferences), so filtering the layer by them would take the
+        // rails away from the one line that declared itself a railway.
+        boolean movesOnRails = mode != null && mode.allows(RoadClass.RAIL);
+        RoadNetwork mtr = withMtrMarks && movesOnMtrMarks(mode) ? MtrTransit.railLayer()
+                : new RoadNetwork();
+        if ((!active() || !movesOnRails) && mtr.segmentCount() == 0) {
             return handDrawn;
         }
         RoadNetwork merged = handDrawn.deepCopy();
-        if (active() && wantsRail) {
+        if (active() && movesOnRails) {
             for (RoadNode node : coarse.nodesSnapshot()) {
                 merged.putNode(node.copy());
             }
@@ -716,6 +727,23 @@ public final class RailTrackStore {
             merged.putSegment(segment.copy());
         }
         return merged;
+    }
+
+    /**
+     * Whether a mode can travel on the marks MTR reports at all.
+     *
+     * <p>Both of the classes a mark can be, and not only the rail: a mark is rail for a train and water
+     * for a boat, so asking about the rail alone would refuse the layer to exactly the lines whose
+     * waterway it holds -- a boat line would have its switch turned on and be planned as if it were
+     * off. There is no third class, because {@link MtrClientData#roadClassFor} answers for a train, a
+     * cable car and a boat and for nothing else.
+     *
+     * <p>Its own method so that the rule can be checked without a world: it is the one thing that
+     * decides whether a boat's marks are reachable, and the bug it replaces was invisible from the
+     * outside.
+     */
+    static boolean movesOnMtrMarks(TravelMode mode) {
+        return mode != null && (mode.allows(RoadClass.RAIL) || mode.allows(RoadClass.WATER));
     }
 
     // ------------------------------------------------------------------ config
