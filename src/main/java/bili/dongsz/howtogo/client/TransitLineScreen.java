@@ -68,6 +68,17 @@ public final class TransitLineScreen extends Screen {
     /** Taken once: the world cannot change while this screen is open, and re-reading it per frame
      * would walk the whole network sixty times a second to draw the same rows. */
     private final List<LineStop> candidates;
+    /**
+     * The lines read out of MTR, taken once when the editor opened.
+     *
+     * <p>Snapshot rather than live, and kept apart from the player's own: a reading from MTR arrives a
+     * window at a time and changes as the player walks, and a list that reshuffled under the cursor
+     * while a stop was being placed would be worse than one a second out of date. Reopening the editor
+     * picks up whatever MTR has sent by then. They are held here only to be shown -- nothing in this
+     * screen ever writes to one, which is what makes an imported line read-only in fact rather than by
+     * good intentions.
+     */
+    private final List<TransitLine> importedLines;
 
     private String selectedId;
     private EditBox nameField;
@@ -90,10 +101,36 @@ public final class TransitLineScreen extends Screen {
         super(Component.translatable(TITLE));
         this.parent = parent;
         this.candidates = TransitStops.all(RoadStore.get());
-        List<TransitLine> lines = TransitLineStore.get();
+        this.importedLines = MtrTransit.lines();
+        List<TransitLine> lines = listed();
         this.selectedId = lines.isEmpty() ? null : lines.get(0).id();
-        HowToGo.LOGGER.info("[HowToGo] line editor: {} line(s), {} stop(s) available", lines.size(),
-                candidates.size());
+        HowToGo.LOGGER.info("[HowToGo] line editor: {} line(s), {} of them read out of MTR, "
+                        + "{} stop(s) available", lines.size() - importedLines.size(),
+                importedLines.size(), candidates.size());
+    }
+
+    /**
+     * Every line the editor shows: the player's own, live, and MTR's, as they were when it opened.
+     *
+     * <p>The player's half is the store's own list rather than a copy of it, because every control on
+     * this screen writes through it: a line created or deleted here has to appear and disappear at
+     * once, and a snapshot would leave the new line selected but unfindable. MTR's half is the
+     * opposite -- it belongs to MTR and is only ever read.
+     */
+    private List<TransitLine> listed() {
+        List<TransitLine> own = TransitLineStore.get();
+        if (importedLines.isEmpty()) {
+            return own;
+        }
+        List<TransitLine> all = new java.util.ArrayList<>(own.size() + importedLines.size());
+        all.addAll(own);
+        all.addAll(importedLines);
+        return all;
+    }
+
+    /** Whether the line on screen belongs to MTR, and so may be looked at and copied but not edited. */
+    private boolean readOnly(TransitLine line) {
+        return MtrTransit.isImported(line);
     }
 
     /** The selected line, or null when there is none. Looked up by id so that adding or removing a
@@ -102,12 +139,37 @@ public final class TransitLineScreen extends Screen {
         if (selectedId == null) {
             return null;
         }
-        for (TransitLine line : TransitLineStore.get()) {
+        for (TransitLine line : listed()) {
             if (line.id().equals(selectedId)) {
                 return line;
             }
         }
         return null;
+    }
+
+    /**
+     * Copies the line on screen into the player's own lines, and selects the copy.
+     *
+     * <p>The one way an imported line can become editable: MTR's own is left exactly as it was and the
+     * copy is the player's, so editing it is editing their line and nothing of MTR's can be written to
+     * by a screen that only knows how to edit. A copy of one of the player's own lines is a duplicate,
+     * which is the same operation and just as useful.
+     */
+    private void copySelected() {
+        TransitLine line = selected();
+        if (line == null) {
+            return;
+        }
+        commitName();
+        String suffix = Component.translatable("screen.howtogo.line_copy_suffix").getString();
+        TransitLine copy = new TransitLine(null, line.name() + suffix, line.kind());
+        for (LineStop stop : line.stops()) {
+            copy.addStop(stop);
+        }
+        TransitLineStore.get().add(copy);
+        TransitLineStore.markDirty();
+        selectedId = copy.id();
+        refreshName();
     }
 
     @Override
@@ -137,7 +199,7 @@ public final class TransitLineScreen extends Screen {
         listY = top + Math.max(FIELD_HEIGHT, KIND_HEIGHT) + PAD;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
-        int quarter = (columnW - GAP) / 2;
+        int quarter = (panelW - PAD * 2 - GAP * 3) / 4;
         int buttonY = panelY + panelH - PAD - BUTTON_HEIGHT;
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_new"), b -> {
             commitName();
@@ -146,19 +208,24 @@ public final class TransitLineScreen extends Screen {
             TransitLineStore.markDirty();
             selectedId = created.id();
             refreshName();
-        }).bounds(linesX, buttonY, quarter, BUTTON_HEIGHT).build());
+        }).bounds(panelX + PAD, buttonY, quarter, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_delete"), b -> {
             TransitLine doomed = selected();
-            if (doomed != null) {
+            // A line read out of MTR is not the player's to delete: it would come back on the next
+            // reading, and the delete would have written to a list that is not the one holding it.
+            if (doomed != null && !readOnly(doomed)) {
                 TransitLineStore.get().remove(doomed);
                 TransitLineStore.markDirty();
-                List<TransitLine> left = TransitLineStore.get();
+                List<TransitLine> left = listed();
                 selectedId = left.isEmpty() ? null : left.get(0).id();
                 refreshName();
             }
-        }).bounds(linesX + quarter + GAP, buttonY, quarter, BUTTON_HEIGHT).build());
+        }).bounds(panelX + PAD + quarter + GAP, buttonY, quarter, BUTTON_HEIGHT).build());
+        addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_copy"), b ->
+                copySelected()).bounds(panelX + PAD + (quarter + GAP) * 2, buttonY, quarter,
+                BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(panelX + panelW - PAD - quarter, buttonY, quarter, BUTTON_HEIGHT).build());
+                .bounds(panelX + PAD + (quarter + GAP) * 3, buttonY, quarter, BUTTON_HEIGHT).build());
     }
 
     private void refreshName() {
@@ -166,10 +233,10 @@ public final class TransitLineScreen extends Screen {
         nameField.setValue(line == null ? "" : line.name());
     }
 
-    /** Writes the typed name onto the selected line, if it changed. */
+    /** Writes the typed name onto the selected line, if it changed, unless the line is MTR's. */
     private void commitName() {
         TransitLine line = selected();
-        if (line == null) {
+        if (line == null || readOnly(line)) {
             return;
         }
         String typed = nameField.getValue();
@@ -236,12 +303,21 @@ public final class TransitLineScreen extends Screen {
         drawLines(graphics, mouseX, mouseY);
         drawStops(graphics, mouseX, mouseY, line);
         drawCandidates(graphics, mouseX, mouseY, line);
+        // Next to the title, because both are about the line on screen as a whole rather than about
+        // one row of it. The read-only note comes first and the broken-pair one is written after it,
+        // so a line that is both says both instead of one covering the other.
+        int noteX = panelX + PAD + 90;
+        if (readOnly(line)) {
+            String note = Component.translatable("screen.howtogo.line_from_mtr_note").getString();
+            graphics.drawString(this.font, note, noteX, panelY + PAD, 0xFF7FB0FF, false);
+            noteX += this.font.width(note) + 6;
+        }
         if (hasBrokenPair()) {
             // Beside the title rather than in a status bar: it is about the line on screen as a whole,
             // and a red stop that says nothing about why would only move the mystery.
             graphics.drawString(this.font,
                     Component.translatable("screen.howtogo.line_broken").getString(),
-                    panelX + PAD + 90, panelY + PAD, 0xFFFF8060, false);
+                    noteX, panelY + PAD, 0xFFFF8060, false);
         }
 
         super.render(graphics, mouseX, mouseY, partialTick);
@@ -252,7 +328,7 @@ public final class TransitLineScreen extends Screen {
         for (int i = 0; i < kinds.size(); i++) {
             int x = kindX + i * (kindW + 3);
             boolean selected = line != null && line.kind() == kinds.get(i);
-            boolean hovered = mouseX >= x && mouseX < x + kindW
+            boolean hovered = !readOnly(line) && mouseX >= x && mouseX < x + kindW
                     && mouseY >= kindY && mouseY < kindY + KIND_HEIGHT;
             int background = selected ? 0xFF1F6FEB : (hovered ? 0xFF3A4450 : 0xFF242A33);
             graphics.fill(x, kindY, x + kindW, kindY + KIND_HEIGHT, background);
@@ -271,7 +347,7 @@ public final class TransitLineScreen extends Screen {
 
     private void drawLines(GuiGraphics graphics, int mouseX, int mouseY) {
         drawColumnHeader(graphics, linesX, "screen.howtogo.line_list");
-        List<TransitLine> lines = TransitLineStore.get();
+        List<TransitLine> lines = listed();
         if (lines.isEmpty()) {
             drawLabel(graphics, linesX, 0, Component.translatable("screen.howtogo.line_none").getString(),
                     0xFF808A96);
@@ -285,7 +361,12 @@ public final class TransitLineScreen extends Screen {
             String kind = Component.translatable(
                             "screen.howtogo.road_class." + candidate.kind().name().toLowerCase(Locale.ROOT))
                     .getString();
-            drawLabel(graphics, linesX, i, candidate.label() + "  (" + kind + ")",
+            // As a prefix rather than a suffix, because the text is cut to the column's width: a marker
+            // at the end would be the first thing lost on a long name, and it is the one thing on this
+            // row that cannot be worked out from the rest of it.
+            String source = readOnly(candidate)
+                    ? Component.translatable("screen.howtogo.line_from_mtr").getString() + " " : "";
+            drawLabel(graphics, linesX, i, source + candidate.label() + "  (" + kind + ")",
                     isSelected ? 0xFFFFFFFF : 0xFFD0D8E0);
         }
     }
@@ -304,7 +385,11 @@ public final class TransitLineScreen extends Screen {
             drawLabel(graphics, stopsX, i, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
             // Four controls at the right edge: rename, earlier, later, remove. Drawn per row rather than
             // as widgets so that a long line does not create four buttons per stop. The rename one is
-            // drawn as N because N is what renames a place on the map.
+            // drawn as N because N is what renames a place on the map. A line read out of MTR has none
+            // of them drawn, because it has none of them: what is not offered cannot be mis-clicked.
+            if (readOnly(line)) {
+                continue;
+            }
             int controlsX = stopsX + columnW - CONTROL_WIDTH * CONTROLS - 2;
             for (int c = 0; c < CONTROLS; c++) {
                 int x = controlsX + c * CONTROL_WIDTH;
@@ -480,7 +565,7 @@ public final class TransitLineScreen extends Screen {
         if (button != 0) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        List<TransitLine> lines = TransitLineStore.get();
+        List<TransitLine> lines = listed();
 
         int lineRow = rowAt(mouseX, mouseY, linesX, lines.size());
         if (lineRow >= 0) {
@@ -491,7 +576,11 @@ public final class TransitLineScreen extends Screen {
         }
 
         TransitLine line = selected();
-        if (line != null) {
+        // A line read out of MTR is shown here so that it can be looked at and copied, and nothing on
+        // it may be changed: the reading is MTR's, it is not in the list this screen writes to, and a
+        // change would be gone by the next reading in any case. Every control below is refused for it
+        // rather than hidden, so that what the screen does is decided in one place.
+        if (line != null && !readOnly(line)) {
             int kindRow = kindAt(mouseX, mouseY);
             if (kindRow >= 0) {
                 line.setKind(TransitLine.kinds().get(kindRow));

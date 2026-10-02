@@ -37,7 +37,8 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | A T junction drawn a block short of the road it meets | No route, however plainly the two meet on screen: nothing but a shared node joins two roads |
 | Two roads drawn across each other | No route across the crossing, for the same reason |
 | Two railways crossing, with a line calling either side | No ride at all, so no journey: the ride between the two stops could not be planned |
-| A road crossing another at a different height | Should stay two roads, and does: the repair declines to invent a junction at a bridge |
+| A road crossing another at a different height | Must stay two roads: a walk over the bridge is a straight hop across the field, not a turn at the crossing, and a drive is refused outright |
+| A destination far from any road | Walked to -- 90 blocks of road and then 300 across the field -- while a drive is refused, because there is no road out there. Walking used to be capped at 64 blocks from the road, so this answered "no route" to a place plainly in sight |
 | Two road ends a block apart but eight blocks apart vertically | Must still join: a hand-drawn network's heights are whatever the ground was under each click, and refusing those joins disconnected networks that had been routing for as long as they existed. This is a repair taking a route away, which is the one thing it must never do |
 | A railway read out of the world: eight parallel polylines, a vertex every block | Was quadratic -- every edge of such a polyline shares cells with thousands of its own neighbours and each was a candidate pair to build and reject. A plan over 4800 such edges is now well under a fifth of a second |
 | A 3120 segment network | Guards the cost of all of the above: the network is copied and repaired once per plan, on the client thread, so a plan must stay well under a fifth of a second |
@@ -56,6 +57,51 @@ The repair is also switchable in game, as `repair_road_joins` in `config/howtogo
 the newest and most invasive part of the router -- it rewrites the network it routes on, though never
 the network the player saved -- so having a way to turn it off without a rebuild is worth its line in
 the config. A route that appears with it off and not with it on is a bug in the repair.
+
+## The MTR checks
+
+`MtrImportCheck.java` runs as part of the harness and checks the MTR integration after the reflection:
+a reading of MTR's own shapes in, this mod's stops, lines and read-only rail layer out. It is in the
+`client` package because what it tests is package-private, so that the conversion stays a function of
+a reading rather than of MTR being installed -- which is the only way it can be checked at all on a
+machine with no MTR.
+
+What it covers: one stop per station, placed at the middle of the station's platforms rather than the
+middle of its area; a line whose type this mod has no kind for (an aeroplane) counted and not imported;
+a stop whose station the client has not been sent counted and not placed; rails joined by position
+rather than by a chord; a boat's rail becoming water and an aeroplane's becoming nothing; every
+imported segment identifiable as read rather than drawn by its id alone; and the `mtr_auto_route_marks`
+switch, which must change the rails and nothing else.
+
+It cannot check whether MTR hands back the shapes the reader looks for -- unless an MTR jar is on the
+classpath, which is what the handshake check is for: with `run/mods/MTR-*.jar` present, every class,
+field and method the reader looks up is looked up for real, with no game running. That check is what
+found that MTR 4.1 moved its own classes from `org.mtr.mod.*` to `org.mtr.*`, and the reader now tries
+both spellings. Without a jar the check prints that it is skipping and nothing fails, so the harness
+still runs on a machine that has never seen MTR.
+
+The mod itself is compiled **without** MTR on its classpath, deliberately: the reader is reflective,
+and compiling against a mod only some users have would be a dependency by another name. The MTR jar is
+added only for the harness, after the mod has been compiled.
+
+## Inspecting a real network
+
+`NetworkInspector` runs the router over a network saved by the game, and is how the harness's
+scenarios were checked against the network they were written for:
+
+```powershell
+# what the network is, and whether the router can cross it
+java -cp "<classes>" bili.dongsz.howtogo.route.NetworkInspector run\config\howtogo\<world>\minecraft_overworld.json
+
+# and then particular trips, as origin and goal coordinates
+java -cp "<classes>" bili.dongsz.howtogo.route.NetworkInspector <same json> 50 -115 41 -88 50 -115 10 62
+```
+
+It reports the network's classes, its connected components before and after the repair, how many
+probe pairs route, and for the trips it is given it says for each mode whether a route came back and
+how far the start and the goal are from a usable road -- which is what a "no route" is usually about.
+It is in the `route` package on purpose, so that it can reach the package-private repair and
+workspace.
 
 ## Adding a case
 

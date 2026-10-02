@@ -633,6 +633,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** The path each line actually runs along, one shape per line, and the lines it was built for. */
     private static String lineShapeSignature = "";
     private static List<List<double[]>> lineShapes = List.of();
+    /**
+     * One line's shape, kept until that line's own stops or kind change.
+     *
+     * <p>Per line rather than for all of them, because the lines are no longer all the player's: the
+     * ones read out of MTR arrive a window at a time and change as the player walks, and rebuilding
+     * every line's shape because one imported line gained a stop would be a hitch in the middle of
+     * walking -- on the render thread, which is the worst place for one.
+     */
+    private static final java.util.Map<String, List<double[]>> lineShapeCache =
+            new java.util.HashMap<>();
 
     /**
      * Works out the path each line runs along, by planning each pair of neighbouring stops exactly as
@@ -649,57 +659,84 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static void refreshLineShapes(List<TransitLine> lines) {
         StringBuilder signature = new StringBuilder();
         for (TransitLine line : lines) {
-            signature.append(line.id()).append(line.kind().name());
-            for (LineStop stop : line.stops()) {
-                signature.append('|').append(stop.x()).append(',').append(stop.z());
-            }
+            signature.append(shapeKey(line));
         }
         if (signature.toString().equals(lineShapeSignature)) {
             return;
         }
         lineShapeSignature = signature.toString();
 
-        List<List<double[]>> shapes = new java.util.ArrayList<>(lines.size());
         // One workspace per kind of line rather than per line: a workspace copies the network and
         // repairs its joins before the first query through it, and every line of one kind routes on
         // exactly the same network.
         java.util.Map<RoadClass, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
                 new java.util.HashMap<>();
+        java.util.Map<String, List<double[]>> rebuilt = new java.util.HashMap<>();
+        List<List<double[]>> shapes = new java.util.ArrayList<>(lines.size());
         for (TransitLine line : lines) {
-            List<double[]> points = new java.util.ArrayList<>();
-            RoadClass kind = line.kind();
-            bili.dongsz.howtogo.route.TravelMode mode =
-                    bili.dongsz.howtogo.route.LinePlanner.rideMode(kind);
-            bili.dongsz.howtogo.route.RoutePreferences policy =
-                    bili.dongsz.howtogo.route.LinePlanner.ridePreferences(kind,
-                            bili.dongsz.howtogo.store.RoutePreferenceStore.preferences());
-            bili.dongsz.howtogo.route.RoadRouter.Workspace workspace = workspaces.get(kind);
-            if (workspace == null) {
-                workspace = new bili.dongsz.howtogo.route.RoadRouter.Workspace(
-                        RailTrackStore.forRouting(mode, policy));
-                workspaces.put(kind, workspace);
+            String key = shapeKey(line);
+            List<double[]> points = lineShapeCache.get(key);
+            if (points == null) {
+                points = planLine(line, workspaces);
             }
-            for (int i = 1; i < line.stopCount(); i++) {
-                LineStop from = line.stops().get(i - 1);
-                LineStop to = line.stops().get(i);
-                bili.dongsz.howtogo.route.Route ride = bili.dongsz.howtogo.route.RoadRouter.findRoute(
-                        workspace, from.x(), from.z(), to.x(), to.z(), "", mode, policy);
-                if (ride.isPresent()) {
-                    points.addAll(ride.points());
-                } else {
-                    points.add(new double[]{from.x(), from.z()});
-                    points.add(new double[]{to.x(), to.z()});
-                }
-            }
+            rebuilt.put(key, points);
             shapes.add(points);
         }
+        // Only what this pass asked for is kept, so a line that is gone does not keep its shape alive.
+        lineShapeCache.clear();
+        lineShapeCache.putAll(rebuilt);
         lineShapes = shapes;
+    }
+
+    /** What makes a line's shape its own: which line, of which kind, calling where. */
+    private static String shapeKey(TransitLine line) {
+        StringBuilder key = new StringBuilder();
+        key.append(line.id()).append(line.kind().name());
+        for (LineStop stop : line.stops()) {
+            key.append('|').append(stop.x()).append(',').append(stop.z());
+        }
+        return key.toString();
+    }
+
+    /** One line's path: every neighbouring pair planned, and a straight hop where one cannot be. */
+    private static List<double[]> planLine(TransitLine line,
+                                           java.util.Map<RoadClass,
+                                                   bili.dongsz.howtogo.route.RoadRouter.Workspace>
+                                                   workspaces) {
+        List<double[]> points = new java.util.ArrayList<>();
+        RoadClass kind = line.kind();
+        bili.dongsz.howtogo.route.TravelMode mode =
+                bili.dongsz.howtogo.route.LinePlanner.rideMode(kind);
+        bili.dongsz.howtogo.route.RoutePreferences policy =
+                bili.dongsz.howtogo.route.LinePlanner.ridePreferences(kind,
+                        bili.dongsz.howtogo.store.RoutePreferenceStore.preferences());
+        bili.dongsz.howtogo.route.RoadRouter.Workspace workspace = workspaces.get(kind);
+        if (workspace == null) {
+            workspace = new bili.dongsz.howtogo.route.RoadRouter.Workspace(
+                    RailTrackStore.forRouting(mode, policy));
+            workspaces.put(kind, workspace);
+        }
+        for (int i = 1; i < line.stopCount(); i++) {
+            LineStop from = line.stops().get(i - 1);
+            LineStop to = line.stops().get(i);
+            bili.dongsz.howtogo.route.Route ride = bili.dongsz.howtogo.route.RoadRouter.findRoute(
+                    workspace, from.x(), from.z(), to.x(), to.z(), "", mode, policy);
+            if (ride.isPresent()) {
+                points.addAll(ride.points());
+            } else {
+                points.add(new double[]{from.x(), from.z()});
+                points.add(new double[]{to.x(), to.z()});
+            }
+        }
+        return points;
     }
 
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
                                              int viewRight, int viewBottom) {
         List<LineLabel> labels = new java.util.ArrayList<>();
-        List<TransitLine> lines = TransitLineStore.get();
+        // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
+        // a line whose route the map should show, whichever of the two it came from.
+        List<TransitLine> lines = Navigation.linesInPlay();
         if (lines.isEmpty()) {
             return labels;
         }

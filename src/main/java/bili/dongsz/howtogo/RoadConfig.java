@@ -40,6 +40,8 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
+    private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
+    private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -172,6 +174,30 @@ public final class RoadConfig {
                         "the name changed because the cadence did, so the old entry in an existing file",
                         "is no longer read.")
                 .defineInRange("create_track_chunks_per_second", 20, 1, 512);
+
+        MTR_TRANSIT = builder.comment(
+                        "Whether MTR's stations and lines are read out and offered as this mod's own.",
+                        "Read reflectively and only on the client, so with MTR absent nothing here does",
+                        "anything at all and no dependency is needed in either direction.",
+                        "MTR keeps its world on its own server and sends a client only what is near it,",
+                        "so what is offered is the part of the network around the player, refreshed as",
+                        "they move -- not the whole railway. Lines are read by type: a train or cable car",
+                        "becomes a rail line and a boat becomes a water line, and anything else -- an",
+                        "aeroplane, or a type a later MTR adds -- is left alone rather than guessed at.")
+                .define("mtr_transit", true);
+
+        MTR_AUTO_ROUTE_MARKS = builder.comment(
+                        "Whether a line read out of MTR brings its own track with it, as a line of this",
+                        "mod's roads.",
+                        "On: the rails MTR reports are merged into the routing network as read-only rail,",
+                        "so a ride along that line is planned along the track MTR actually laid. They",
+                        "are never saved with your roads and never editable, and they are only ever in",
+                        "play for a line of the matching type.",
+                        "Off: no track is added, and a line's stops are matched to the roads you drew",
+                        "near them by the ordinary rule -- the one this mod used before it knew anything",
+                        "about MTR. That is the right answer for a line that runs on roads or water you",
+                        "have already drawn, and the wrong one for a line whose track is its own.")
+                .define("mtr_auto_route_marks", true);
 
         SPEC = builder.build();
     }
@@ -362,6 +388,26 @@ public final class RoadConfig {
             return loaded == null ? List.of() : loaded;
         } catch (IllegalStateException notLoadedYet) {
             return List.of(fallback);
+        }
+    }
+
+    // ------------------------------------------------------------------- MTR
+
+    /** Whether MTR's stations and lines are read out, on before the config loads. */
+    public static boolean mtrTransit() {
+        try {
+            return MTR_TRANSIT.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether a line read out of MTR brings its own rails with it, on before the config loads. */
+    public static boolean mtrAutoRouteMarks() {
+        try {
+            return MTR_AUTO_ROUTE_MARKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
         }
     }
 }

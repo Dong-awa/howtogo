@@ -27,14 +27,33 @@ public enum TravelMode {
      *
      * <p>A made road is fast on foot because a player can sprint along it without watching every
      * step, which a footpath does not allow.
+     *
+     * <h2>Why walking has no connector distance to speak of</h2>
+     * The cap exists to stop the router drawing a straight line across open country and calling it a
+     * road trip. Walking is not that: a straight line across open country is what a person does when
+     * there is no road, and it is walked at the off-road pace, which is what the estimate says. A cap
+     * of sixty-four blocks meant that a destination further than that from any road could not be walked
+     * to at all -- the mode answered "no route" to a place plainly in sight, which is the one answer
+     * that cannot be acted on. The number here is large enough to be no cap in practice and finite only
+     * so that a coordinate nobody meant to type does not become a route to the edge of the world.
      */
-    WALK("walk", 64.0, 2.0, Map.of(
+    WALK("walk", 4096.0, 2.0, Map.of(
             RoadClass.HIGHWAY, 5.612,
             RoadClass.ROAD, 5.612,
             RoadClass.PATH, 4.0,
             RoadClass.ICE, 4.317)),
-    /** By vehicle: proper roads only, and a car cannot start its trip across a field. */
-    DRIVE("drive", 32.0, 12.0, Map.of(
+    /**
+     * By vehicle: proper roads only, and a car cannot start its trip across a field.
+     *
+     * <p>Its connector distance is the walker's, not a tighter one of its own. The first and last hop
+     * of every trip is walked whatever the mode -- that is what the connector is -- so the cap on it is
+     * a statement about how far the player will walk to reach the network, and that does not change
+     * because there happens to be a vehicle waiting at the other end. It used to be thirty-two, which
+     * meant a road network that is thinner than thirty-two blocks of field around wherever the player
+     * stands could not be driven to at all: the mode answered "no route" from a car parked beside a
+     * footpath, with the road itself plainly in sight.
+     */
+    DRIVE("drive", 64.0, 12.0, Map.of(
             RoadClass.HIGHWAY, 9.0,
             RoadClass.ROAD, 9.0)),
     /**

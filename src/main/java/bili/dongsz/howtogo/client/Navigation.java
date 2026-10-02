@@ -1391,9 +1391,16 @@ public final class Navigation {
                     destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
         }
         if (!planned.isPresent()) {
-            return new RoutePreview(planned, x, z, destination,
-                    RoadRouter.explainFailure(network, x, z, destination.x(), destination.z(),
-                            active, policy));
+            // Said out loud, and this is the only place it can be: a preview that finds nothing shows
+            // the reason in the picker and nowhere else, so a mode that cannot route at all leaves no
+            // trace in the log and the only report of it is "it does not work". The reason names the
+            // branch -- no road of that class near an end, the nearest one past the mode's connector
+            // distance, two fragments that do not meet -- and that is what makes it answerable.
+            String why = RoadRouter.explainFailure(network, x, z, destination.x(), destination.z(),
+                    active, policy);
+            HowToGo.LOGGER.info("[HowToGo] no route to {} for {} from ({}, {}): {}",
+                    destination.name(), active.id(), Math.round(x), Math.round(z), why);
+            return new RoutePreview(planned, x, z, destination, why);
         }
         return new RoutePreview(planned, x, z, destination, null);
     }
@@ -1463,6 +1470,25 @@ public final class Navigation {
     }
 
     /**
+     * Every line a journey may be planned over: the player's own, and the ones read out of MTR.
+     *
+     * <p>Two lists joined here rather than one list with two kinds of entry, because they have two
+     * kinds of owner. The player's lines are the editor's, saved and editable; MTR's are rebuilt from
+     * what the client has been sent and must never be written back. Keeping them apart means the
+     * editor cannot reach an imported line at all, which is what makes "read-only" a property of the
+     * arrangement rather than a rule somebody has to remember.
+     */
+    public static List<TransitLine> linesInPlay() {
+        List<TransitLine> imported = MtrTransit.lines();
+        if (imported.isEmpty()) {
+            return TransitLineStore.get();
+        }
+        List<TransitLine> all = new java.util.ArrayList<>(TransitLineStore.get());
+        all.addAll(imported);
+        return all;
+    }
+
+    /**
      * Plans a route in one mode, as a public transport journey when that is the mode.
      *
      * <p>One place, because the preview and the live route must agree. The picker draws this plan and
@@ -1478,11 +1504,12 @@ public final class Navigation {
     private static Route planRoute(RoadNetwork network, TravelMode mode, RoutePreferences preferences,
                                    double x, double z, Destination target) {
         if (mode == TravelMode.TRANSIT) {
-            // No fallback of any kind. Public transport is the lines the player configured, and a
-            // route that boards at the nearest point of a line nobody chose -- which is what the old
-            // fallback did -- is a wrong answer rather than a worse one. When no line can carry the
-            // journey the answer is empty, and the walking comparison below is free to offer the walk.
-            List<TransitLine> lines = TransitLineStore.get();
+            // No fallback of any kind. Public transport is the lines in play -- the player's own and
+            // the ones read out of MTR -- and a route that boards at the nearest point of a line nobody
+            // chose, which is what the old fallback did, is a wrong answer rather than a worse one.
+            // When no line can carry the journey the answer is empty, and the walking comparison below
+            // is free to offer the walk.
+            List<TransitLine> lines = linesInPlay();
             Route byTransit = TransitPlanner.planRoute(network, lines, x, z, target.x(), target.z(),
                     target.name(), preferences);
             if (!byTransit.isPresent()) {

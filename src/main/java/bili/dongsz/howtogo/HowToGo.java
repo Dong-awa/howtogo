@@ -3,6 +3,7 @@ package bili.dongsz.howtogo;
 import bili.dongsz.howtogo.client.Narration;
 import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadEditHandler;
 import bili.dongsz.howtogo.client.RoadEditSession;
@@ -41,6 +42,7 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Navigation.tick());
         // Ticked rather than drawn: the readout is recomputed per frame, so deciding what to say

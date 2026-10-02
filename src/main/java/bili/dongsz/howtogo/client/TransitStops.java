@@ -35,6 +35,9 @@ public final class TransitStops {
         for (RailTrackStore.Station station : RailTrackStore.stations()) {
             stops.add(LineStop.ofStation(station.name(), station.x(), station.z()));
         }
+        // MTR's stations come last, so that a place the player marked at the same block -- and then a
+        // station Create reports there -- keeps the editable one: the first of a pair is the one kept.
+        stops.addAll(MtrTransit.stops());
         return LineStop.distinct(stops);
     }
 }

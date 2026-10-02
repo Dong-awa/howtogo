@@ -118,5 +118,9 @@
   "screen.howtogo.line_readonly": "只读",
   "key.howtogo.lines": "线路配置",
   "screen.howtogo.line_broken": "红色站点与上一站连不通（线路类型不对？）",
+  "screen.howtogo.line_copy": "复制为我的",
+  "screen.howtogo.line_copy_suffix": "（副本）",
+  "screen.howtogo.line_from_mtr": "[MTR]",
+  "screen.howtogo.line_from_mtr_note": "来自 MTR：只读，可复制为自己的线路",
   "hud.howtogo.edit.lines": "L 线路配置"
 }

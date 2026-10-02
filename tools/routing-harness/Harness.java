@@ -1,3 +1,4 @@
+import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -33,11 +34,16 @@ public final class Harness {
         scenarioCrossingRoads();
         scenarioCrossingRailsCarryARide();
         scenarioBridgeIsNotAJunction();
+        scenarioWalkReachesOffNetworkDestinations();
         scenarioJoinSurvivesAHeightDifference();
         scenarioTrackShapedNetworkIsQuick();
         scenarioLargeNetworkIsQuick();
         scenarioTransferBeatsDetour();
         scenarioConcatKeepsConnectors();
+        scenarioMtrTypeMapping();
+        int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
+        checks += imported[0];
+        failures += imported[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");
@@ -180,6 +186,19 @@ public final class Harness {
             expectNear("100 along the main road, a block across, 199 up the side road",
                     route.totalLength(), 300, 10);
         }
+        Route drive = RoadRouter.findRoute(net, 0, 0, 100, 200, "up the side road", TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("and a drive finds it too", drive.isPresent());
+
+        // The same, with the near miss repaired rather than merely linked: the side road's end is
+        // within the join distance of the main road's interior, so the repair breaks the main road
+        // there and the two become one junction.
+        RoadNetwork offByOne = new RoadNetwork();
+        addRoad(offByOne, RoadClass.ROAD, 0, 0, 200, 0);
+        addRoad(offByOne, RoadClass.ROAD, 100, 2, 100, 200);
+        Route repaired = RoadRouter.findRoute(offByOne, 0, 0, 100, 200, "up the side road",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("a side road two blocks short still routes", repaired.isPresent());
     }
 
     /** Two roads drawn across each other, sharing no node: the crossing has to become one. */
@@ -223,8 +242,14 @@ public final class Harness {
     /**
      * A road over another one, at two heights.
      *
-     * <p>The network records the height each road was drawn at, and these two are a bridge and the
-     * road under it rather than a junction. Joining them would let a walker climb.
+     * <p>The network records the height each road was drawn at, and these two are a bridge and the road
+     * under it rather than a junction. What must not happen is a route that turns from one onto the
+     * other at the crossing -- a walker going over the bridge has not found a junction.
+     *
+     * <p>Walking there is a straight hop across the field, which is the honest answer now that walking
+     * has no connector distance to speak of, so the assertion is on the shape rather than on whether a
+     * route exists: through a junction the trip would be 100 blocks along one road and 50 along the
+     * other, and as a hop it is the 112 blocks between the two points.
      */
     private static void scenarioBridgeIsNotAJunction() {
         System.out.println("== a bridge is not a junction ==");
@@ -232,9 +257,42 @@ public final class Harness {
         addRoadAt(net, RoadClass.ROAD, 64, 0, 0, 200, 0);
         addRoadAt(net, RoadClass.ROAD, 100, 100, -50, 100, 50);
 
-        Route route = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.WALK,
+        Route walk = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("no route: the two roads are at two heights", !route.isPresent());
+        expect("a walk is planned", walk.isPresent());
+        if (walk.isPresent()) {
+            System.out.println("   " + round(walk.totalLength()) + " blocks");
+            expect("but it is the straight hop, not a way through the crossing",
+                    walk.totalLength() < 130);
+        }
+        Route drive = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("and a drive is refused: the two roads are at two heights", !drive.isPresent());
+    }
+
+    /**
+     * A destination a long way from any road.
+     *
+     * <p>Walking has no connector distance to speak of, because a straight line across open country is
+     * what a person does when there is no road -- the mode answering "no route" to a place plainly in
+     * sight is the one answer that cannot be acted on. A drive is still refused, because there is no
+     * road there to drive on.
+     */
+    private static void scenarioWalkReachesOffNetworkDestinations() {
+        System.out.println("== a destination off the network ==");
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.ROAD, 0, 0, 200, 0);
+
+        Route walk = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field", TravelMode.WALK,
+                RoutePreferences.DEFAULTS);
+        expect("the walk is planned", walk.isPresent());
+        if (walk.isPresent()) {
+            System.out.println("   " + round(walk.totalLength()) + " blocks");
+            expectNear("90 blocks of road and 300 across the field", walk.totalLength(), 390, 10);
+        }
+        Route drive = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("and the drive is refused: there is no road out there", !drive.isPresent());
     }
 
     /**
@@ -417,14 +475,40 @@ public final class Harness {
                     flat.totalLength(), trip.totalLength(), 0.01);
             expect("and the 200 block off-road hop is in it",
                     flat.estimatedSeconds() > 400 / 8.0 + 200 / 4.317 - 5);
-            // 5 blocks of walk at 5.612, 400 of rail at 8, 200 off-road at 4.317, and one wait at a
-            // boarding: the default sixty seconds, because the harness runs with no config file.
+            // 5 blocks of walk at 5.612, 400 of rail at 8, 200 off-road at the router's off-road pace
+            // (walking pace times 0.7), and one wait at a boarding: the default sixty seconds, because
+            // the harness runs with no config file. The off-road hop used to come from the walk
+            // fallback at full walking pace instead of from the router at the off-road one, which is
+            // the same 200 blocks estimated two different ways depending on which code path answered.
             expectNear("with one boarding's waiting on top of the travelling",
-                    flat.estimatedSeconds(), 5 / 5.612 + 400 / 8.0 + 200 / 4.317 + 60, 2);
+                    flat.estimatedSeconds(), 5 / 5.612 + 60 + 400 / 8.0 + 200 / (4.317 * 0.7), 2);
         }
     }
 
     // ----------------------------------------------------------------- helpers
+
+    /**
+     * The MTR integration, in a session with no MTR in it.
+     *
+     * <p>Reading another mod's internals reflectively is only defensible if the session without that
+     * mod is untouched by it, so that is the first thing to check: nothing bound, nothing read, and no
+     * exception on the way. The rest is the type mapping, which is a table and can be checked here
+     * whatever is installed.
+     */
+    private static void scenarioMtrTypeMapping() {
+        System.out.println("== MTR ==");
+        expect("with no MTR installed it reports itself unavailable", !MtrClientData.available());
+        expect("and a reading comes back empty rather than throwing", MtrClientData.read().isEmpty());
+
+        expect("a train line becomes a rail line", MtrClientData.roadClassFor("TRAIN") == RoadClass.RAIL);
+        expect("a cable car becomes a rail line",
+                MtrClientData.roadClassFor("CABLE_CAR") == RoadClass.RAIL);
+        expect("a boat becomes a water line", MtrClientData.roadClassFor("BOAT") == RoadClass.WATER);
+        expect("an aeroplane becomes no line at all", MtrClientData.roadClassFor("AIRPLANE") == null);
+        expect("a mode this mod has never heard of becomes no line either",
+                MtrClientData.roadClassFor("SOMETHING_A_LATER_MTR_ADDS") == null);
+        expect("and so does no mode at all", MtrClientData.roadClassFor(null) == null);
+    }
 
     private static TransitLine line(String id, RoadClass kind, LineStop... stops) {
         TransitLine line = new TransitLine(id, id, kind);

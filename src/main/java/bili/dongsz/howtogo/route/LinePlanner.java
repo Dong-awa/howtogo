@@ -110,6 +110,14 @@ public final class LinePlanner {
     private static final double STATIONARY_DISTANCE = 1.0E-6;
 
     /**
+     * How long a walk has to be before its falling back to a straight hop is worth a log line.
+     *
+     * <p>Stepping a few blocks off a road is not news. A walk of a hundred blocks that no road could
+     * carry is, and it is the only visible symptom of a road network the router cannot use.
+     */
+    private static final double SHORT_HOP = 8.0;
+
+    /**
      * How much longer than the straight line a walked connector may be before the road's answer is
      * refused, as a multiple.
      *
@@ -416,6 +424,17 @@ public final class LinePlanner {
         // walking away from it first and coming back. Past this factor the road's answer is refused and
         // the walk becomes what it always was at the ends of a trip: a straight connector.
         if (!planned.isPresent() || planned.totalLength() > straight * WALK_DETOUR_LIMIT) {
+            if (!planned.isPresent() && straight > SHORT_HOP) {
+                // Said out loud, because this is the one place a broken road network admits itself.
+                // A public transport journey whose walking legs are straight lines still draws and
+                // still gives a time, so a network the router cannot walk at all looks like a working
+                // journey here -- while the same network in walking mode answers "no route". If the
+                // log is full of these, the roads are what is wrong, not the lines.
+                HowToGo.LOGGER.info("[HowToGo] no road route to walk from ({}, {}) to ({}, {}); the "
+                                + "{} block walk is drawn as a straight hop",
+                        Math.round(startX), Math.round(startZ), Math.round(goalX), Math.round(goalZ),
+                        Math.round(straight));
+            }
             Route hop = straightWalk(startX, startZ, goalX, goalZ, destinationName);
             // Taken only if it is a usable route. A refusal here must never turn a journey that could be
             // ridden into no journey at all, which is the one way this fallback could make things worse.

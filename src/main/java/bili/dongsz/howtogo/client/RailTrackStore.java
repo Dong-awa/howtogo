@@ -654,32 +654,52 @@ public final class RailTrackStore {
     }
 
     /**
-     * The network to plan on: the saved roads, with this layer merged in when the trip can use rail.
+     * The network to plan on: the saved roads, with every machine-read layer merged in that the trip
+     * could use.
      *
      * <h2>Why the unchanged network is returned as-is</h2>
-     * A mode that cannot travel on rail -- walking and driving -- and a policy that avoids it both
-     * get {@link RoadStore#get()} itself, so there is no rail node and no rail segment anywhere in
-     * the graph they are planned on. Nothing about their routes can change, and that is a property of
-     * this method rather than a claim about the router's filters, which is the version of the
-     * argument that survives the next change to those filters.
+     * A mode that cannot travel on the layer -- walking and driving for rail -- and a policy that
+     * avoids its class both get {@link RoadStore#get()} itself, so there is no rail node and no rail
+     * segment anywhere in the graph they are planned on. Nothing about their routes can change, and
+     * that is a property of this method rather than a claim about the router's filters, which is the
+     * version of the argument that survives the next change to those filters.
      *
      * <h2>Why the merge is a copy</h2>
-     * The saved network is not touched, and neither is this layer: the router splits segments while
-     * anchoring, so it needs something it may mutate, and it gets copies of both. The layer is
+     * The saved network is not touched, and neither is any layer: the router splits segments while
+     * anchoring, so it needs something it may mutate, and it gets copies of all of them. The layers are
      * therefore read-only in the strong sense -- nothing downstream holds a reference it could write
-     * through.
+     * through -- and neither is ever saved with the player's roads.
+     *
+     * <h2>What is merged</h2>
+     * Two layers, and both are readings of the world rather than drawings of the player's: this class's
+     * Create rails, and {@link MtrTransit}'s rails read out of MTR. They are merged in one place
+     * because this is the one place that answers "what does a plan run on", and an answer assembled
+     * from two places is an answer that can be half-updated.
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences) {
         RoadNetwork handDrawn = RoadStore.get();
-        if (!active() || mode == null || !mode.allows(RoadClass.RAIL)
-                || (preferences != null && preferences.avoids(RoadClass.RAIL))) {
+        boolean wantsRail = mode != null && mode.allows(RoadClass.RAIL)
+                && (preferences == null || !preferences.avoids(RoadClass.RAIL));
+        RoadNetwork mtr = mode != null && mode.allows(RoadClass.RAIL) ? MtrTransit.railLayer()
+                : new RoadNetwork();
+        if ((!active() || !wantsRail) && mtr.segmentCount() == 0) {
             return handDrawn;
         }
         RoadNetwork merged = handDrawn.deepCopy();
-        for (RoadNode node : coarse.nodesSnapshot()) {
+        if (active() && wantsRail) {
+            for (RoadNode node : coarse.nodesSnapshot()) {
+                merged.putNode(node.copy());
+            }
+            for (RoadSegment segment : coarse.segmentsSnapshot()) {
+                merged.putSegment(segment.copy());
+            }
+        }
+        // MTR's rails are already gated on their own setting inside the layer: an empty one comes back
+        // when the player has asked for no route marks, so there is nothing to check here as well.
+        for (RoadNode node : mtr.nodesSnapshot()) {
             merged.putNode(node.copy());
         }
-        for (RoadSegment segment : coarse.segmentsSnapshot()) {
+        for (RoadSegment segment : mtr.segmentsSnapshot()) {
             merged.putSegment(segment.copy());
         }
         return merged;

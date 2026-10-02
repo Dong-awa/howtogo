@@ -118,5 +118,9 @@
   "screen.howtogo.line_readonly": "read-only",
   "key.howtogo.lines": "Transit lines",
   "screen.howtogo.line_broken": "Red stops do not connect to the one above (wrong line type?)",
+  "screen.howtogo.line_copy": "Copy to mine",
+  "screen.howtogo.line_copy_suffix": " (copy)",
+  "screen.howtogo.line_from_mtr": "[MTR]",
+  "screen.howtogo.line_from_mtr_note": "From MTR: read-only, copy it to edit",
   "hud.howtogo.edit.lines": "L transit lines"
 }

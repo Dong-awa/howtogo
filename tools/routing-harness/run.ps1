@@ -71,14 +71,31 @@ $compilePath = "$runtime;$compileOnly"
 Write-Host 'compiling the mod...'
 $sources = Get-ChildItem (Join-Path $project 'src\main\java') -Recurse -Filter *.java |
     ForEach-Object { $_.FullName }
+# Deliberately without MTR on the classpath: the reader is reflective, and compiling against the mod
+# only its users have would be a dependency by another name. The compiler not seeing MTR is what keeps
+# "no hard dependency" true.
 & javac -encoding UTF-8 -proc:none -nowarn -cp $compilePath -d $modClasses $sources
 if ($LASTEXITCODE -ne 0) { throw "javac failed on the mod with $LASTEXITCODE" }
+
+# MTR itself is added after the mod has been compiled, and only for the harness: with its jar on the
+# classpath the harness checks that every class, field and method the reader looks up is one MTR
+# actually has, which is the one part of the integration no made-up reading can test.
+$mtr = (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.FullName }) -join ';'
+if ($mtr) {
+    Write-Host 'an MTR jar is present: the reflection handshake will be checked'
+    $harnessPath = "$compilePath;$mtr"
+} else {
+    Write-Host 'no MTR jar in run/mods: the handshake check will be skipped'
+    $harnessPath = $compilePath
+}
 
 Write-Host 'compiling the harness...'
 # The freshly compiled classes come before the ones gradle built, so what runs is the working tree
 # rather than the last build.
-& javac -encoding UTF-8 -proc:none -nowarn -cp "$modClasses;$compilePath" -d $harnessClasses `
-    (Join-Path $here 'Harness.java')
+$harnessSources = Get-ChildItem $here -Filter *.java | ForEach-Object { $_.FullName }
+& javac -encoding UTF-8 -proc:none -nowarn -cp "$modClasses;$harnessPath" -d $harnessClasses `
+    $harnessSources
 if ($LASTEXITCODE -ne 0) { throw "javac failed on the harness with $LASTEXITCODE" }
 
 Write-Host 'running the harness...'
@@ -87,7 +104,7 @@ Write-Host ''
 # logs/ folder into the working directory, and it belongs next to the harness's other output rather
 # than at the root of the project.
 Push-Location $work
-& java -cp "$harnessClasses;$modClasses;$compilePath" Harness
+& java -cp "$harnessClasses;$modClasses;$harnessPath" Harness
 $harnessCode = $LASTEXITCODE
 Pop-Location
 exit $harnessCode
