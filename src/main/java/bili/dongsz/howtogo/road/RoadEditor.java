@@ -103,7 +103,27 @@ public final class RoadEditor {
      * through is a boarding point nothing can reach.
      */
     public boolean stationAllowed(int nodeId) {
-        return segmentDegrees().getOrDefault(nodeId, 0) > 0;
+        if (segmentDegrees().getOrDefault(nodeId, 0) > 0) {
+            return true;
+        }
+        return stationOverride != null && stationOverride.test(nodeId);
+    }
+
+    /** The client's half of the station rule, or null when there is none. */
+    private java.util.function.IntPredicate stationOverride;
+
+    /**
+     * Adds a second rule to the station test, for the roads this class cannot see.
+     *
+     * <p>A station stands on a road, and the roads this class knows are the saved ones. The railway
+     * layer is not saved -- it is read out of the world by the client, and changes whenever the player
+     * lays track -- so only the client can say whether a place stands beside one. Handing that half in
+     * keeps the station rule in one place; the version that asked a wrapper and then let this method
+     * ask its own made the screen say yes and the save silently refuse, which the player sees as "the
+     * name was not saved".
+     */
+    public void setStationOverride(java.util.function.IntPredicate stationOverride) {
+        this.stationOverride = stationOverride;
     }
 
     /**

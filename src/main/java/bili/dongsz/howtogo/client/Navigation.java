@@ -13,6 +13,8 @@ import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.transit.LineStop;
+import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -1379,6 +1381,15 @@ public final class Navigation {
         RoadNetwork network = RailTrackStore.forRouting(active, policy);
 
         Route planned = planRoute(network, active, policy, x, z, destination);
+        if (!planned.isPresent() && active != TravelMode.WALK
+                && RoadConfig.fallBackToWalkingWhenSlower()) {
+            // The same comparison the live route makes, so that the line the picker draws is the line
+            // the HUD then guides along. Without it, a public transport preview with no line journey
+            // reported "no usable road connection" while pressing the button produced a walking route:
+            // the picker calling the journey impossible and the navigation doing it anyway.
+            planned = RoadRouter.findRoute(RailTrackStore.forRouting(TravelMode.WALK, policy), x, z,
+                    destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
+        }
         if (!planned.isPresent()) {
             return new RoutePreview(planned, x, z, destination,
                     RoadRouter.explainFailure(network, x, z, destination.x(), destination.z(),
@@ -1451,41 +1462,21 @@ public final class Navigation {
     private static Route planRoute(RoadNetwork network, TravelMode mode, RoutePreferences preferences,
                                    double x, double z, Destination target) {
         if (mode == TravelMode.TRANSIT) {
-            List<TransitPlanner.Stop> stops = transitStops(network);
-            Route byTransit = TransitPlanner.planRoute(network, stops, x, z, target.x(), target.z(),
+            // No fallback of any kind. Public transport is the lines the player configured, and a
+            // route that boards at the nearest point of a line nobody chose -- which is what the old
+            // fallback did -- is a wrong answer rather than a worse one. When no line can carry the
+            // journey the answer is empty, and the walking comparison below is free to offer the walk.
+            List<TransitLine> lines = TransitLineStore.get();
+            Route byTransit = TransitPlanner.planRoute(network, lines, x, z, target.x(), target.z(),
                     target.name(), preferences);
-            if (byTransit.isPresent()) {
-                return byTransit;
+            if (!byTransit.isPresent()) {
+                HowToGo.LOGGER.info("[HowToGo] public transport: no journey over {} line(s)",
+                        lines.size());
             }
-            // Worth a line, because "it went to the nearest point of the line instead of a station"
-            // and "it fell back to the plain route" look identical from outside; the stop count is
-            // what tells them apart, and it decides what to look at next.
-            HowToGo.LOGGER.info("[HowToGo] public transport: {} stop(s), no complete trip; using the "
-                    + "plain route", stops.size());
+            return byTransit;
         }
         return RoadRouter.findRoute(network, x, z, target.x(), target.z(), target.name(), mode,
                 preferences);
-    }
-
-    /**
-     * Every place a public transport journey may be boarded or left.
-     *
-     * <p>Two sources, because the world holds two kinds of station. A place the player marked as a
-     * station is a node of the road network and is found by walking it. A station Create's track graph
-     * reports is not: it arrives as an ordinary rail vertex with a name attached, so nothing in the
-     * network tells it apart from any other point of track and no search over that network could pick
-     * it out. Only the track layer knows, which is why it is added here rather than found there.
-     *
-     * <p>Both are needed even when only one is populated. A player who built stations and marked none
-     * is the ordinary case; one who marked a stop on a road, with no station block in sight, is the
-     * case the marks exist for.
-     */
-    private static List<TransitPlanner.Stop> transitStops(RoadNetwork network) {
-        List<TransitPlanner.Stop> stops = new ArrayList<>(TransitPlanner.markedStations(network));
-        for (RailTrackStore.Station station : RailTrackStore.stations()) {
-            stops.add(new TransitPlanner.Stop(station.name(), station.x(), station.z()));
-        }
-        return stops;
     }
 
     /**

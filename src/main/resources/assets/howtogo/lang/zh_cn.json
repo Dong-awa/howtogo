@@ -105,5 +105,18 @@
   "hud.howtogo.source.create.short": "（机械动力）",
   "hud.howtogo.station.name": "车站 %s, %s",
   "hud.howtogo.source.xaero": "Xaero 路标点",
-  "hud.howtogo.source.xaero.short": "（来自 XMM）"
+  "hud.howtogo.source.xaero.short": "（来自 XMM）",
+  "screen.howtogo.lines": "线路配置",
+  "screen.howtogo.line_list": "线路",
+  "screen.howtogo.line_new": "新建",
+  "screen.howtogo.line_delete": "删除",
+  "screen.howtogo.line_stops": "站点（按顺序）",
+  "screen.howtogo.line_candidates": "可添加站点",
+  "screen.howtogo.line_none": "还没有线路",
+  "screen.howtogo.line_empty": "还没有站点",
+  "screen.howtogo.line_no_candidates": "没有可加的站点",
+  "screen.howtogo.line_readonly": "只读",
+  "key.howtogo.lines": "线路配置",
+  "screen.howtogo.line_broken": "红色站点与上一站连不通（线路类型不对？）",
+  "hud.howtogo.edit.lines": "L 线路配置"
 }
