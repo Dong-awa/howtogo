@@ -363,10 +363,29 @@ public final class RoadEditor {
         return degrees;
     }
 
-    /** Removes nodes that no longer belong to any segment. */
+    /**
+     * Removes nodes that no longer belong to any segment.
+     *
+     * <h2>Places are exempt, and must stay exempt</h2>
+     * A hand-placed place is a node with <b>no segment on purpose</b> -- that is exactly what makes it
+     * a landmark rather than a road vertex. Under this method's test every place is therefore an
+     * orphan, and without the guard below, finishing a road or dragging one of its nodes deleted
+     * every place in the network. That is data loss, not tidying.
+     *
+     * <p>{@link #reclassifyNodes} has always skipped places; this method did not, which is the whole
+     * bug. The two ask the same question -- "does this node still count as part of the roads?" -- and
+     * they have to give the same answer, so the guard is written the same way in both. If a third
+     * caller is ever added, it needs the same one.
+     *
+     * <p>Note that this runs inside operations that do not push their own undo snapshot, so a place
+     * removed here is not necessarily recoverable with Ctrl+Z either.
+     */
     public void pruneOrphanNodes() {
         Map<Integer, Integer> usage = segmentDegrees();
         for (RoadNode node : network.nodesSnapshot()) {
+            if (node.type() == RoadNode.Type.POI) {
+                continue;
+            }
             if (!usage.containsKey(node.id())) {
                 network.removeNode(node.id());
             }

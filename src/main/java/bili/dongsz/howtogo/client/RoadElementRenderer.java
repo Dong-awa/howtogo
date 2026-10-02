@@ -422,16 +422,21 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     // placeholder on every one of them buries the names that do exist.
                     continue;
                 }
-                // One label per road. A road with bends is several segments all carrying the same
-                // name, so without this the label would repeat at every corner.
-                List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-                if (RoadChains.middleSegment(chain) != segment.id()) {
-                    continue;
-                }
+                // Culled before the chain walk, not after. Walking the chain is the expensive part
+                // -- RoadChains finds the continuation through a node by scanning the whole network,
+                // so it is linear in the size of the network per step -- and doing it for a road that
+                // is off screen is work whose result is thrown away one line later. On a large
+                // network this was the label pass's dominant cost.
                 double[] mid = segment.midpoint();
                 int x = (int) Math.round(MapViewState.toScreenX(mid[0]));
                 int y = (int) Math.round(MapViewState.toScreenZ(mid[1]));
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                    continue;
+                }
+                // One label per road. A road with bends is several segments all carrying the same
+                // name, so without this the label would repeat at every corner.
+                List<Integer> chain = RoadChains.chainContaining(network, segment.id());
+                if (RoadChains.middleSegment(chain) != segment.id()) {
                     continue;
                 }
                 // A name longer than the road it belongs to would hang off both its ends and read as
