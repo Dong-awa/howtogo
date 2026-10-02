@@ -80,11 +80,10 @@ public final class MtrClientData {
             "org.mtr.mod.client.MinecraftClientData",
     };
 
+    private static final String STATION = "org.mtr.core.data.Station";
+    private static final String PLATFORM = "org.mtr.core.data.Platform";
     private static final String SIMPLIFIED_ROUTE = "org.mtr.core.data.SimplifiedRoute";
     private static final String SIMPLIFIED_PLATFORM = "org.mtr.core.data.SimplifiedRoutePlatform";
-    private static final String NAME_COLOR = "org.mtr.core.data.NameColorDataBase";
-    private static final String AREA = "org.mtr.core.data.AreaBase";
-    private static final String SAVED_RAIL = "org.mtr.core.data.SavedRailBase";
     private static final String RAIL = "org.mtr.core.data.Rail";
     private static final String RAIL_MATH = "org.mtr.core.data.RailMath";
     private static final String VECTOR = "org.mtr.core.tool.Vector";
@@ -96,6 +95,8 @@ public final class MtrClientData {
     private static final int MAX_TRACK_VERTICES = 64;
     /** How often the client's data is re-read, in client ticks. */
     private static final int REREAD_TICKS = 20;
+    /** How many unreadable elements are named before the rest are only counted. */
+    private static final int MAX_REPORTED_FAILURES = 4;
 
     private static boolean resolved;
     private static boolean available;
@@ -112,6 +113,11 @@ public final class MtrClientData {
     private static Method getNameMethod;
     private static Method getColorMethod;
     private static Method getTransportModeMethod;
+    /** MTR's own names for a line's parts, which do not inherit the four above. */
+    private static Method routeGetIdMethod;
+    private static Method routeGetNameMethod;
+    private static Method routeGetColorMethod;
+    private static Method railGetTransportModeMethod;
     private static Method getCenterMethod;
     private static Method getMinXMethod;
     private static Method getMinYMethod;
@@ -139,6 +145,8 @@ public final class MtrClientData {
     private static long ticks;
     private static String reported = "";
     private static Snapshot latest = Snapshot.EMPTY;
+    /** How many elements this session could not read, so that a wrong shape cannot stay quiet. */
+    private static int unreadable;
 
     private MtrClientData() {
     }
@@ -408,9 +416,10 @@ public final class MtrClientData {
                     mode = modeByStation.get(stationId);
                 }
             }
-            return new Line(number(raw, getIdMethod), text(raw, getNameMethod), mode,
-                    (int) number(raw, getColorMethod), List.copyOf(stops));
+            return new Line(number(raw, routeGetIdMethod), text(raw, routeGetNameMethod), mode,
+                    (int) number(raw, routeGetColorMethod), List.copyOf(stops));
         } catch (ReflectiveOperationException | RuntimeException e) {
+            noteUnreadable("line", e);
             return null;
         }
     }
@@ -444,8 +453,9 @@ public final class MtrClientData {
             }
             Object hexId = railWrapperHexIdField.get(wrapper);
             return new Track(hexId instanceof String text ? text : null,
-                    modeName(getTransportModeMethod.invoke(rail)), (int) Math.round(startY), xs, zs);
+                    modeName(railGetTransportModeMethod.invoke(rail)), (int) Math.round(startY), xs, zs);
         } catch (ReflectiveOperationException | RuntimeException e) {
+            noteUnreadable("rail", e);
             return null;
         }
     }
@@ -473,6 +483,26 @@ public final class MtrClientData {
     /** The name of an enum constant, or null when the value is not one. */
     private static String modeName(Object value) {
         return value instanceof Enum<?> constant ? constant.name() : null;
+    }
+
+    /**
+     * Reports an element that could not be read, and how many have been reported.
+     *
+     * <p>One unreadable station must not cost the reading every other one, so each element is read in
+     * its own guard and a failure returns nothing for that element. Returning nothing <em>quietly</em>
+     * is what made this reader look like it was working while it threw away every line MTR offered:
+     * the stations came through and the lines did not, and there was nothing anywhere saying why. The
+     * first few failures are therefore logged, and the rest counted, so the shape being wrong is
+     * visible in the log rather than only in the absence of lines.
+     */
+    private static void noteUnreadable(String what, Throwable cause) {
+        unreadable++;
+        if (unreadable <= MAX_REPORTED_FAILURES) {
+            HowToGo.LOGGER.warn("[HowToGo] could not read an MTR {} ({}); it is left out of the "
+                    + "reading", what, cause.toString());
+        } else if (unreadable == MAX_REPORTED_FAILURES + 1) {
+            HowToGo.LOGGER.warn("[HowToGo] further unreadable MTR elements will not be reported");
+        }
     }
 
     // ------------------------------------------------------------------- report
@@ -566,11 +596,10 @@ public final class MtrClientData {
             if (clientData == null) {
                 throw new ClassNotFoundException(String.join(" or ", CLIENT_DATA_NAMES));
             }
+            Class<?> station = load(STATION);
+            Class<?> platform = load(PLATFORM);
             Class<?> simplified = load(SIMPLIFIED_ROUTE);
             Class<?> simplifiedPlatform = load(SIMPLIFIED_PLATFORM);
-            Class<?> nameColor = load(NAME_COLOR);
-            Class<?> area = load(AREA);
-            Class<?> savedRail = load(SAVED_RAIL);
             // The rail wrapper is a nested class of the client data, so it moves with it and needs no
             // name of its own to keep in step.
             Class<?> railWrapper = load(boundName + "$RailWrapper");
@@ -581,30 +610,45 @@ public final class MtrClientData {
 
             getInstanceMethod = clientData.getMethod("getInstance");
             // Fields on the class or on whichever of its parents declares them: MTR keeps its stations
-            // on the simulation core's Data and its routes on that class's ClientData parent, and
+            // on the simulation core's Data and its client lines on that class's ClientData parent, and
             // getField walks the chain for us.
             stationsField = clientData.getField("stations");
             platformsField = clientData.getField("platforms");
             simplifiedRoutesField = clientData.getField("simplifiedRoutes");
             railWrapperListField = clientData.getField("railWrapperList");
-            // A saved rail declares its station as an object rather than an id, which is the only link
-            // between the two on the client.
-            savedRailAreaField = savedRail.getField("area");
-            getMidPositionMethod = savedRail.getMethod("getMidPosition");
 
-            getIdMethod = nameColor.getMethod("getId");
-            getNameMethod = nameColor.getMethod("getName");
-            getColorMethod = nameColor.getMethod("getColor");
-            getTransportModeMethod = nameColor.getMethod("getTransportMode");
+            // Every handle below is taken from the class it will actually be invoked on, and never from
+            // a base class it merely shares. getMethod finds inherited methods, so a lookup from the
+            // concrete class either succeeds and is usable, or fails and is reported. Resolving from a
+            // base class instead is what broke this reader once: SimplifiedRoute is not a
+            // NameColorDataBase, so a getName taken from there invoked on a line threw, the throw was
+            // swallowed per element, and every line read out of MTR was silently dropped while the
+            // stations -- which are a NameColorDataBase -- came through perfectly.
+            //
+            // The four name-and-colour accessors are the exception in appearance only: they are declared
+            // once, on NameColorDataBase, and both stations and platforms inherit them, so the one
+            // lookup serves both. A line does not, which is why it has its own three.
+            getIdMethod = station.getMethod("getId");
+            getNameMethod = station.getMethod("getName");
+            getColorMethod = station.getMethod("getColor");
+            getTransportModeMethod = station.getMethod("getTransportMode");
 
-            getCenterMethod = area.getMethod("getCenter");
-            getMinXMethod = area.getMethod("getMinX");
-            getMinYMethod = area.getMethod("getMinY");
-            getMinZMethod = area.getMethod("getMinZ");
-            getMaxXMethod = area.getMethod("getMaxX");
-            getMaxYMethod = area.getMethod("getMaxY");
-            getMaxZMethod = area.getMethod("getMaxZ");
+            getCenterMethod = station.getMethod("getCenter");
+            getMinXMethod = station.getMethod("getMinX");
+            getMinYMethod = station.getMethod("getMinY");
+            getMinZMethod = station.getMethod("getMinZ");
+            getMaxXMethod = station.getMethod("getMaxX");
+            getMaxYMethod = station.getMethod("getMaxY");
+            getMaxZMethod = station.getMethod("getMaxZ");
 
+            // A platform's station, and where it is. Both are inherited from SavedRailBase, and both
+            // are looked up on the platform for the reason above.
+            savedRailAreaField = platform.getField("area");
+            getMidPositionMethod = platform.getMethod("getMidPosition");
+
+            routeGetIdMethod = simplified.getMethod("getId");
+            routeGetNameMethod = simplified.getMethod("getName");
+            routeGetColorMethod = simplified.getMethod("getColor");
             routeGetPlatformsMethod = simplified.getMethod("getPlatforms");
             stopGetPlatformIdMethod = simplifiedPlatform.getMethod("getPlatformId");
             stopGetStationIdMethod = simplifiedPlatform.getMethod("getStationId");
@@ -614,6 +658,8 @@ public final class MtrClientData {
             railWrapperGetRailMethod = railWrapper.getMethod("getRail");
             railWrapperHexIdField = railWrapper.getField("hexId");
             railMathField = rail.getField("railMath");
+            // A rail carries its own transport mode, and is not a NameColorDataBase either.
+            railGetTransportModeMethod = rail.getMethod("getTransportMode");
             railMathGetLengthMethod = railMath.getMethod("getLength");
             railMathGetPositionMethod = railMath.getMethod("getPosition", double.class, boolean.class);
             positionGetXMethod = position.getMethod("getX");
