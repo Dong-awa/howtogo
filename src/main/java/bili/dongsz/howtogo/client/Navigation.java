@@ -1510,8 +1510,16 @@ public final class Navigation {
             // When no line can carry the journey the answer is empty, and the walking comparison below
             // is free to offer the walk.
             List<TransitLine> lines = linesInPlay();
-            Route byTransit = TransitPlanner.planRoute(network, lines, x, z, target.x(), target.z(),
-                    target.name(), preferences);
+            // Which roads a ride runs on depends on the line: MTR's rails are one shared layer, so a
+            // line with its own marks switched off has to be given the network that never had them,
+            // rather than one that merely declined to add them. The second copy of the world is made
+            // only when a line actually wants the difference, which keeps the ordinary case free.
+            RoadNetwork plain = MtrTransit.anyLineRefusesMarks(lines)
+                    ? RailTrackStore.forRouting(mode, preferences, false)
+                    : network;
+            Route byTransit = TransitPlanner.planRoute(
+                    RideRoads.of(network, plain, MtrTransit::marksEnabled), lines, x, z, target.x(),
+                    target.z(), target.name(), preferences);
             if (!byTransit.isPresent()) {
                 HowToGo.LOGGER.info("[HowToGo] public transport: no journey over {} line(s)",
                         lines.size());
