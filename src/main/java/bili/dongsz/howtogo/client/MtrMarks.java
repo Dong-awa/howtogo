@@ -121,8 +121,14 @@ public final class MtrMarks {
         save();
     }
 
-    /** Forgets this line's answer, putting it back on the configured default. */
-    public static void clear(long mtrLineId) {
+    /**
+     * Forgets this line's answer, putting it back on the configured default.
+     *
+     * <p>No screen offers this, and it is not a gap: flipping a switch twice leaves the player with the
+     * answer they can see, so there is nothing a reset would give them. It is here as the way back from
+     * an answer for the harness to check the rule with, and for whatever offers one later.
+     */
+    static void clear(long mtrLineId) {
         ensureLoaded();
         if (ON.remove(mtrLineId) | OFF.remove(mtrLineId)) {
             dirty = true;
