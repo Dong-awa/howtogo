@@ -149,8 +149,15 @@ public final class LinePlanner {
     public static Trip plan(RoadNetwork network, List<TransitLine> lines, double startX, double startZ,
                             double goalX, double goalZ, String destinationName,
                             RoutePreferences preferences) {
-        Trip trip = search(network, lines, startX, startZ, goalX, goalZ, destinationName,
+        return plan(RideRoads.of(network), lines, startX, startZ, goalX, goalZ, destinationName,
                 preferences);
+    }
+
+    /** Plans over roads that depend on the line, which is how a line's own marks are switched off. */
+    public static Trip plan(RideRoads roads, List<TransitLine> lines, double startX, double startZ,
+                            double goalX, double goalZ, String destinationName,
+                            RoutePreferences preferences) {
+        Trip trip = search(roads, lines, startX, startZ, goalX, goalZ, destinationName, preferences);
         if (trip.isPresent()) {
             HowToGo.LOGGER.info("[HowToGo] public transport: {} leg(s)", trip.legs().size());
         } else {
@@ -161,7 +168,7 @@ public final class LinePlanner {
         return trip;
     }
 
-    private static Trip search(RoadNetwork network, List<TransitLine> lines, double startX,
+    private static Trip search(RideRoads roads, List<TransitLine> lines, double startX,
                                double startZ, double goalX, double goalZ, String destinationName,
                                RoutePreferences preferences) {
         List<Node> nodes = buildNodes(lines);
@@ -172,14 +179,18 @@ public final class LinePlanner {
         int count = nodes.size();
         Map<Long, Integer> byPosition = positions(nodes);
         Map<String, Route> cache = new HashMap<>();
-        // One workspace for the whole plan: every ride and every transfer is an endpoint that has to
-        // be anchored onto the network, and the anchoring splits are the same few stops over and over.
-        RoadRouter.Workspace workspace = new RoadRouter.Workspace(network);
+        // One workspace for the whole plan, and one per distinct network the plan runs on: every ride
+        // and every transfer is an endpoint that has to be anchored onto a network, and the anchoring
+        // splits are the same few stops over and over. A line with the marks switched off routes on the
+        // other network, so the two are kept apart rather than sharing a set of splits -- and when no
+        // line wants the difference the two are the same object and there is only ever one.
+        Map<RoadNetwork, RoadRouter.Workspace> workspaces = new java.util.IdentityHashMap<>();
         int[] rideBudget = {MAX_RIDE_PLANS};
         double wait = RoadConfig.transitWaitSeconds();
 
-        List<List<Link>> links = buildLinks(workspace, lines, nodes, byPosition, destinationName,
-                preferences, cache, rideBudget, wait);
+        List<List<Link>> links = buildLinks(roads, workspaces, lines, nodes, byPosition,
+                destinationName, preferences, cache, rideBudget, wait);
+        RoadRouter.Workspace workspace = workspaceOf(workspaces, roads.forWalks());
 
         double[] dist = new double[count];
         int[] fromNode = new int[count];
@@ -290,6 +301,17 @@ public final class LinePlanner {
     // ------------------------------------------------------------------- graph
 
     /**
+     * The workspace for a network, made the first time that network is asked for.
+     *
+     * <p>Keyed by identity, so two networks that are the same object share one and a plan that runs on
+     * only one of them never makes the other.
+     */
+    private static RoadRouter.Workspace workspaceOf(
+            Map<RoadNetwork, RoadRouter.Workspace> workspaces, RoadNetwork network) {
+        return workspaces.computeIfAbsent(network, RoadRouter.Workspace::new);
+    }
+
+    /**
      * Every way out of every stop, planned before the search runs.
      *
      * <p>Rides first, then transfers: the rides are the expensive plans, and if the ride budget is
@@ -297,8 +319,10 @@ public final class LinePlanner {
      * all -- a network whose rides have all been planned but whose transfers have not answers every
      * journey with a single-line detour, which is the failure this class was rewritten to remove.
      */
-    private static List<List<Link>> buildLinks(RoadRouter.Workspace workspace, List<TransitLine> lines,
-                                               List<Node> nodes, Map<Long, Integer> byPosition,
+    private static List<List<Link>> buildLinks(RideRoads roads,
+                                               Map<RoadNetwork, RoadRouter.Workspace> workspaces,
+                                               List<TransitLine> lines, List<Node> nodes,
+                                               Map<Long, Integer> byPosition,
                                                String destinationName, RoutePreferences preferences,
                                                Map<String, Route> cache, int[] rideBudget,
                                                double wait) {
@@ -318,6 +342,9 @@ public final class LinePlanner {
                 // would let a water line's ride come back along a rail; the policy is what makes the
                 // type a player chose for a line mean something.
                 RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
+                // And the network the line asked for: this is where a line with its marks switched off
+                // is kept off them, rather than merely not adding a layer another line has added.
+                RoadRouter.Workspace workspace = workspaceOf(workspaces, roads.forLine(line));
                 for (int step = -1; step <= 1; step += 2) {
                     int next = at + step;
                     if (next < 0 || next >= line.stopCount()) {
@@ -366,6 +393,9 @@ public final class LinePlanner {
                     MAX_RIDE_PLANS, unplanned);
         }
 
+        // Transfers are walks, so they use the walking network whatever the lines asked for: a change
+        // of lines is not a ride and must not depend on whether either line brought its marks.
+        RoadRouter.Workspace walkWorkspace = workspaceOf(workspaces, roads.forWalks());
         for (int index = 0; index < count; index++) {
             Node node = nodes.get(index);
             for (int other = 0; other < count; other++) {
@@ -385,7 +415,7 @@ public final class LinePlanner {
                 // router would answer with a straight hop is not refused here for want of a road --
                 // which is how a perfectly good interchange used to disappear from the graph and
                 // leave every journey through it unroutable.
-                Route walk = walk(workspace, node.at().x(), node.at().z(), target.at().x(),
+                Route walk = walk(walkWorkspace, node.at().x(), node.at().z(), target.at().x(),
                         target.at().z(), destinationName, preferences, cache);
                 if (!walk.isPresent()) {
                     continue;

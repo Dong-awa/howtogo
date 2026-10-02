@@ -677,11 +677,24 @@ public final class RailTrackStore {
      * from two places is an answer that can be half-updated.
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences) {
+        return forRouting(mode, preferences, true);
+    }
+
+    /**
+     * The same, with MTR's route marks left out on request.
+     *
+     * <p>For a line that has them switched off: the marks are MTR's, one layer serves every line of a
+     * kind, and so a line that does not want them cannot be given a network that merely fails to add
+     * them -- it has to be given the network that never had them. See {@link RideRoads}.
+     *
+     * @param withMtrMarks whether the rails read out of MTR are merged in as well
+     */
+    public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences,
+                                         boolean withMtrMarks) {
         RoadNetwork handDrawn = RoadStore.get();
         boolean wantsRail = mode != null && mode.allows(RoadClass.RAIL)
                 && (preferences == null || !preferences.avoids(RoadClass.RAIL));
-        RoadNetwork mtr = mode != null && mode.allows(RoadClass.RAIL) ? MtrTransit.railLayer()
-                : new RoadNetwork();
+        RoadNetwork mtr = withMtrMarks && wantsRail ? MtrTransit.railLayer() : new RoadNetwork();
         if ((!active() || !wantsRail) && mtr.segmentCount() == 0) {
             return handDrawn;
         }

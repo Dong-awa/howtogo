@@ -225,6 +225,55 @@ public final class MtrTransit {
     }
 
     /**
+     * Whether a line brings MTR's own track with it.
+     *
+     * <p>A line the player built takes the configured default: the marks are MTR's, and a line of the
+     * player's own has no answer of its own to give about them. A line read out of MTR has whatever the
+     * player chose for it, falling back to the same default -- see {@link MtrMarks}.
+     */
+    public static boolean marksEnabled(TransitLine line) {
+        if (!RoadConfig.mtrTransit()) {
+            // Nothing is read from MTR, so there is nothing of MTR's to bring in.
+            return false;
+        }
+        return isImported(line) ? MtrMarks.forLine(lineId(line)) : RoadConfig.mtrAutoRouteMarks();
+    }
+
+    /**
+     * Whether any line has them switched off, and so needs the network without them built.
+     *
+     * <p>Asked before a plan rather than during it: a plan over lines that all agree runs on one
+     * network, and the second copy of the world is only worth making when a line actually wants the
+     * difference.
+     */
+    public static boolean anyLineRefusesMarks(List<TransitLine> lines) {
+        for (TransitLine line : lines) {
+            if (!marksEnabled(line)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** MTR's own id for a line this mod imported, or -1 when the line is not one of MTR's. */
+    private static long lineId(TransitLine line) {
+        if (!isImported(line)) {
+            return -1;
+        }
+        try {
+            return Long.parseLong(line.id().substring(LINE_ID_PREFIX.length()), 16);
+        } catch (NumberFormatException notOurs) {
+            // An id this class did not write, which means something else is using the prefix.
+            return -1;
+        }
+    }
+
+    /** MTR's own id for a line this mod imported. */
+    public static long mtrLineId(TransitLine line) {
+        return lineId(line);
+    }
+
+    /**
      * Whether a line came from MTR rather than from the player.
      *
      * <p>By its id, which is where the distinction is made: an imported line's id is prefixed, so

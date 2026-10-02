@@ -44,11 +44,19 @@ public final class TransitPlanner {
     public static Trip plan(RoadNetwork network, List<TransitLine> lines, double startX, double startZ,
                             double goalX, double goalZ, String destinationName,
                             RoutePreferences preferences) {
+        return plan(RideRoads.of(network), lines, startX, startZ, goalX, goalZ, destinationName,
+                preferences);
+    }
+
+    /** Plans over roads that depend on the line, which is how a line's own marks are switched off. */
+    public static Trip plan(RideRoads roads, List<TransitLine> lines, double startX, double startZ,
+                            double goalX, double goalZ, String destinationName,
+                            RoutePreferences preferences) {
         if (lines.isEmpty()) {
             HowToGo.LOGGER.info("[HowToGo] public transport: no lines configured");
             return Trip.empty();
         }
-        return LinePlanner.plan(network, lines, startX, startZ, goalX, goalZ, destinationName,
+        return LinePlanner.plan(roads, lines, startX, startZ, goalX, goalZ, destinationName,
                 preferences);
     }
 
@@ -71,7 +79,15 @@ public final class TransitPlanner {
     public static Route planRoute(RoadNetwork network, List<TransitLine> lines, double startX,
                                   double startZ, double goalX, double goalZ, String destinationName,
                                   RoutePreferences preferences) {
-        Trip trip = plan(network, lines, startX, startZ, goalX, goalZ, destinationName, preferences);
+        return planRoute(RideRoads.of(network), lines, startX, startZ, goalX, goalZ, destinationName,
+                preferences);
+    }
+
+    /** The same, over roads that depend on the line. See {@link RideRoads}. */
+    public static Route planRoute(RideRoads roads, List<TransitLine> lines, double startX,
+                                  double startZ, double goalX, double goalZ, String destinationName,
+                                  RoutePreferences preferences) {
+        Trip trip = plan(roads, lines, startX, startZ, goalX, goalZ, destinationName, preferences);
         if (!trip.isPresent()) {
             return Route.empty();
         }
