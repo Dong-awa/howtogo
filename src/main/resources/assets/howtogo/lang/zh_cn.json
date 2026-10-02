@@ -11,6 +11,8 @@
   "app.howtogo.navigator.desc": "选择一个地点，开始导航。",
   "screen.howtogo.destinations": "选择目的地",
   "screen.howtogo.stop": "停止导航",
+  "screen.howtogo.start_nav": "开始导航",
+  "screen.howtogo.phone_incomplete": "适配较不完整，建议使用本模组工具",
   "screen.howtogo.go_here": "导航到这里",
   "screen.howtogo.no_destinations": "还没有地点。在世界地图上按 P 添加，或按住 Ctrl 点击地图选点。",
   "screen.howtogo.search": "搜索…",

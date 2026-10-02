@@ -11,6 +11,8 @@
   "app.howtogo.navigator.desc": "Pick a place and start navigating.",
   "screen.howtogo.destinations": "Choose a destination",
   "screen.howtogo.stop": "Stop navigating",
+  "screen.howtogo.start_nav": "Start navigating",
+  "screen.howtogo.phone_incomplete": "Phone integration is incomplete - prefer this mod's own screen",
   "screen.howtogo.go_here": "Go here",
   "screen.howtogo.no_destinations": "No places yet. Press P on the world map, or Ctrl+click the map to pick a point.",
   "screen.howtogo.search": "Search...",
