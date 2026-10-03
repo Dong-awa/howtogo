@@ -113,6 +113,21 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             RailTrackStore.noteElementOffered();
         }
 
+        // MTR's rails, drawn as the same kind of line and for the same reason: a line read out of MTR
+        // brings its track with it as rail or water roads, and a road nobody can see is a road the
+        // player cannot account for. Appended as its own pass rather than folded into the one above,
+        // because that one counts what it hands over and the layer's diagnostic is read against those
+        // counters -- MTR's segments are not that layer's and must not be counted as it.
+        //
+        // Empty while the marks are switched off everywhere, so a player who wants MTR's track left
+        // alone sees the map they had before: nothing here needs to ask the switch.
+        for (RoadSegment segment : MtrTransit.railLayer().segmentsSnapshot()) {
+            if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
+                continue;
+            }
+            buffer.add(RoadElement.of(segment));
+        }
+
         if (Navigation.target() != null) {
             // Added whenever a destination is set, not just when a route was found, so the HUD can
             // report that routing failed instead of staying silent.

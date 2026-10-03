@@ -718,8 +718,8 @@ public final class RailTrackStore {
                 merged.putSegment(segment.copy());
             }
         }
-        // MTR's rails are already gated on their own setting inside the layer: an empty one comes back
-        // when the player has asked for no route marks, so there is nothing to check here as well.
+        // MTR's marks are gated inside the layer: only the lines whose switch is on are in it, so there
+        // is nothing to check here as well.
         for (RoadNode node : mtr.nodesSnapshot()) {
             merged.putNode(node.copy());
         }

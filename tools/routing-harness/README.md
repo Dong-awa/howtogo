@@ -10,6 +10,14 @@ unaffected and nothing in `src/` depends on it.
 .\tools\routing-harness\run.ps1
 ```
 
+While working on the code, `run-fast.ps1` runs the same two steps with the classpath kept from the last
+full run, which skips Gradle's configuration phase:
+
+```powershell
+.\tools\routing-harness\run-fast.ps1            # seconds
+.\tools\routing-harness\run-fast.ps1 -Refresh   # re-read the classpath, after a build.gradle change
+```
+
 If the machine's execution policy refuses to run scripts, which is the default on Windows:
 
 ```powershell
@@ -68,21 +76,35 @@ machine with no MTR.
 
 What it covers: one stop per station, placed at the middle of the station's platforms rather than the
 middle of its area; a line whose type this mod has no kind for (an aeroplane) counted and not imported;
-a stop whose station the client has not been sent counted and not placed; rails joined by position
-rather than by a chord; a boat's rail becoming water and an aeroplane's becoming nothing; every
-imported segment identifiable as read rather than drawn by its id alone; and the `mtr_auto_route_marks`
-switch, which must change the rails and nothing else.
+a stop whose station the client has not been sent counted and not placed; a boat line becoming a water
+line; every marked segment identifiable as read rather than drawn by its id alone; and the
+`mtr_auto_route_marks` switch, which must change what is marked and nothing else.
 
 It also covers the **per-line marks switch** the line editor draws beside each imported line: that a
 line nobody has answered for takes the configured default, that an answer is kept by MTR's own line id
 (an imported line is rebuilt from every reading, so a field on it would not survive the player walking
-to the next station), that switching a line on is on its own reason to build MTR's tracks, and that a
+to the next station), that one line's answer marks its track and leaves another line's alone, and that a
 mode which cannot reach a mark's class is not offered it -- the rule that had to ask about water as well
 as rail, or a boat line's switch would have done nothing.
 
+And it covers **what a mark is**, through `MtrLineTracks` directly, because that is the part no view can
+show: that a line's track is marked rather than MTR's rails as a whole (MTR's data does not say which
+rails belong to which line, so the ride between each pair of neighbouring stops is planned and its path
+is what is marked), that the mark follows the rails rather than joining the two stops with a chord, that
+its ends are the two stops and the hops from a stop onto the track are not marked as track, that a line
+whose stops are nowhere near its rails is marked nowhere rather than joined up across open country, and
+that two lines over one stretch of rail get marks of their own with ids that cannot collide.
+
+And it covers the **interchange rule** the map draws its orange markers from, through
+`TransitInterchanges`: that two lines calling a few blocks apart are an interchange (the platform and
+the stop beside it are one place to travel through), that the radius is the planner's own and inclusive
+at its edge, that one line's own stops standing close are *not* an interchange, and that with one of the
+two lines gone the place stops being one. That last pair is what the rule is for: a marker that stayed
+orange after a line was cancelled, because the marker had never been about two lines.
+
 `RideRoadsCheck.java` is in the `route` package for the same reason, and checks the seam the switch
 rests on: a line whose marks are off is handed a network that never had them, because MTR's marks are
-one shared layer and "do not add them for this line" is not something the planner could act on.
+one layer and "do not add them for this line" is not something the planner could act on.
 
 It cannot check whether MTR hands back the shapes the reader looks for -- unless an MTR jar is on the
 classpath, which is what the handshake check is for: with `run/mods/MTR-*.jar` present, every class,

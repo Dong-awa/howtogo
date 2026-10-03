@@ -232,9 +232,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // marker is a name nobody can read. The line names go last of all, after the place
                 // markers renderLabels emits, for the same reason.
                 int lineMargin = 64;
+                // Worked out once and handed to both passes: the stop markers draw the interchange in
+                // orange, and the place markers stand aside where one is drawn, since a station that is
+                // also an interchange is a place whose whole point is that colour. Two passes each
+                // working it out would be two answers that could disagree.
+                java.util.Set<Long> interchanges =
+                        TransitInterchanges.shared(Navigation.linesInPlay());
                 drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
-                        graphics.guiHeight() + lineMargin);
-                renderLabels(graphics, pose, info, vc);
+                        graphics.guiHeight() + lineMargin, interchanges);
+                renderLabels(graphics, pose, info, vc, interchanges);
             }
             return true;
         }
@@ -408,7 +414,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * unreadable smear.
      */
     private void renderLabels(GuiGraphics graphics, PoseStack pose, ElementRenderInfo info,
-                              VertexConsumer vc) {
+                              VertexConsumer vc, java.util.Set<Long> interchanges) {
         Minecraft mc = Minecraft.getInstance();
         Font font = mc.font;
         RoadNetwork network = RoadStore.get();
@@ -428,7 +434,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // findable when the map is zoomed out, which is exactly when the names below are suppressed
         // for being unreadable -- so gating the two together would remove the marker exactly when it
         // is needed. Shapes before text: see the warning on HudDraw.
-        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom);
+        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges);
 
         // Names need a zoom at which they can be read at all; at lower zoom they overlap into a
         // smear. Only the text is gated, never the markers above.
@@ -743,7 +749,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
-                                             int viewRight, int viewBottom) {
+                                             int viewRight, int viewBottom,
+                                             java.util.Set<Long> interchanges) {
         List<LineLabel> labels = new java.util.ArrayList<>();
         // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
         // a line whose route the map should show, whichever of the two it came from.
@@ -760,13 +767,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.last().normal().identity();
         PoseStack.Pose screenPose = pose.last();
 
-        java.util.Map<String, Integer> calls = new java.util.HashMap<>();
-        for (TransitLine line : lines) {
-            for (LineStop stop : line.stops()) {
-                calls.merge(stop.x() + "," + stop.z(), 1, Integer::sum);
-            }
-        }
-
+        // Which of these stops are places two lines meet at, handed in rather than worked out here:
+        // the place markers stand aside for exactly the same set, so the two passes have to be looking
+        // at one answer. See TransitInterchanges, which carries the rule itself.
         refreshLineShapes(lines);
         for (int index = 0; index < lines.size(); index++) {
             TransitLine line = lines.get(index);
@@ -799,7 +802,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                boolean transfer = calls.getOrDefault(stop.x() + "," + stop.z(), 0) > 1;
+                boolean transfer = interchanges.contains(TransitInterchanges.pack(stop.x(), stop.z()));
                 HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX + 1.0,
                         COLOR_LINE_STOP_EDGE);
                 HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX,
@@ -848,9 +851,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
-                                  int margin, int viewRight, int viewBottom) {
+                                  int margin, int viewRight, int viewBottom,
+                                  java.util.Set<Long> interchanges) {
         double half = HudDraw.PLACE_MARKER_PX * 0.5;
         for (Destination place : Destinations.places()) {
+            // A place a line stops at is drawn twice -- once as a place, once as the stop -- and the two
+            // markers are the same size in the same spot, so the later one hides the earlier. That is the
+            // wrong way round for an interchange, whose whole point is its colour: the place marker
+            // stands aside there and lets the orange stop marker be the one that is seen.
+            if (interchanges.contains(TransitInterchanges.pack(place.x(), place.z()))) {
+                continue;
+            }
             double x = MapViewState.toScreenX(place.x());
             double y = MapViewState.toScreenZ(place.z());
             if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {

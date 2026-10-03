@@ -78,6 +78,18 @@ public final class LinePlanner {
     private static final double TRANSFER_RADIUS = 24.0;
 
     /**
+     * The same number, for the map.
+     *
+     * <p>Exposed so that the map cannot mark a different set of places from the ones a journey may
+     * change lines at: a stop the planner will transfer at and the map calls two separate stations is
+     * the map arguing with the route, and the marker that outlives the line it belonged to is what that
+     * looks like from the player's side.
+     */
+    public static double transferRadius() {
+        return TRANSFER_RADIUS;
+    }
+
+    /**
      * Ceiling on the number of ride legs planned in one search.
      *
      * <p>A safety valve, not a design: each leg is an A* over the road network, so a pathological

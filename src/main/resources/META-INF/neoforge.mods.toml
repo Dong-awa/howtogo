@@ -7,7 +7,7 @@ modId = "howtogo"
 version = "${mod_version}"
 displayName = "HowToGo | 问道"
 description = '''
-我的世界道路标记与实时导航
+我的世界道路标记与实时导航。
 Road marking and real-time navigation for Minecraft
 '''
 authors = "DongSZ"

@@ -222,10 +222,11 @@ public final class NavHudRenderer {
             }
         }
 
-        // Create's tracks, drawn in with the roads and culled by the same reach: the map is a view of
-        // the ground, and a rail the player can see on the world map belongs on this one too. The
-        // layer is bounded by its own scan radius, so this pass is a handful of polylines.
-        for (RoadSegment segment : RailTrackStore.segments()) {
+        // The machine-read rails -- Create's tracks and MTR's -- drawn in with the roads and culled by
+        // the same reach: the map is a view of the ground, and a rail the player can see on the world
+        // map belongs on this one too. Both layers are bounded by their own read radius, so this pass
+        // is a handful of polylines.
+        for (RoadSegment segment : RailLayers.all()) {
             for (int i = 1; i < segment.vertexCount(); i++) {
                 double ax = segment.x(i - 1);
                 double az = segment.z(i - 1);

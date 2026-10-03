@@ -25,8 +25,7 @@ import org.slf4j.Logger;
 
 /**
  * Entry point.
- *
- * <p>This mod is deliberately client-only: roads are stored on the client and every feature
+ * This mod is deliberately client-only: roads are stored on the client and every feature
  * (rendering, editing, routing) is a pure client concern for now.
  */
 @Mod(value = HowToGo.MODID, dist = Dist.CLIENT)

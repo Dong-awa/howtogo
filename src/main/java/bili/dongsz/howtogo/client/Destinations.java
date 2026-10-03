@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
+import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,6 +15,7 @@ public final class Destinations {
     private static final List<DestinationSource> SOURCES = List.of(
             new PoiDestinationSource(),
             new CreateStationSource(),
+            new MtrStationSource(),
             new XaeroWaypointSource());
 
     private Destinations() {
@@ -57,6 +59,26 @@ public final class Destinations {
 
     /** Whether a source's entries are places, and so get a marker wherever a map is drawn. */
     public static boolean isPlaceSource(String sourceId) {
-        return PoiDestinationSource.ID.equals(sourceId) || CreateStationSource.ID.equals(sourceId);
+        return PoiDestinationSource.ID.equals(sourceId)
+                || CreateStationSource.ID.equals(sourceId)
+                || MtrStationSource.ID.equals(sourceId);
+    }
+
+    /**
+     * What to call a station that has no name of its own: where it is.
+     *
+     * <p>The name is the one string the route, the spoken announcement, the HUD and the search all
+     * share, so the fallback is a whole translated sentence rather than a prefix glued on wherever a
+     * source happens to build it. Shared by the two station sources because a station read from Create
+     * and one read from MTR are nameless for the same reason -- the name lives in the other mod's data,
+     * not in the world -- and two independently written fallbacks is exactly how the same nameless
+     * station ends up listed two different ways.
+     */
+    public static String stationName(String name, int x, int z) {
+        if (name != null && !name.isBlank()) {
+            return name.trim();
+        }
+        return Component.translatable("hud.howtogo.station.name",
+                String.valueOf(x), String.valueOf(z)).getString();
     }
 }

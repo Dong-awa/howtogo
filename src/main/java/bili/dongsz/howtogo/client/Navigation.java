@@ -1126,15 +1126,20 @@ public final class Navigation {
             underfootSegmentId = segment.id();
         }
 
-        // Nothing drawn underfoot: Create's tracks count too, so riding one is called at the pace a
-        // train makes instead of at the pace the mode can do its best on. Read only as a fallback,
-        // which is what keeps a drawn road beside a track deciding the underfoot reading exactly as
-        // it always did, and only TRANSIT reaches this at all -- rail has no pace on foot or behind
-        // the wheel, the same filter the loop above applies.
-        if (nearest == null && active.speedOn(RoadClass.RAIL) > 0) {
-            for (RoadSegment segment : RailTrackStore.segments()) {
+        // Nothing drawn underfoot: the machine-read rails count too, so riding one is called at the pace
+        // a train -- or a boat -- makes instead of at the pace the mode can do its best on. Read only as
+        // a fallback, which is what keeps a drawn road beside a track deciding the underfoot reading
+        // exactly as it always did. Both of a mark's classes are read, and each with its own tolerance,
+        // because MTR's marks are rail for a train and water for a boat: asking only about rail would
+        // leave a boat ride reading as though the player were walking on nothing.
+        if (nearest == null && (active.speedOn(RoadClass.RAIL) > 0
+                || active.speedOn(RoadClass.WATER) > 0)) {
+            for (RoadSegment segment : RailLayers.all()) {
+                if (active.speedOn(segment.roadClass()) <= 0) {
+                    continue;
+                }
                 double distance = distanceToRoad(segment, x, z);
-                if (distance > RoadConfig.onRoadTolerance(RoadClass.RAIL)
+                if (distance > RoadConfig.onRoadTolerance(segment.roadClass())
                         || distance >= nearestDistance) {
                     continue;
                 }

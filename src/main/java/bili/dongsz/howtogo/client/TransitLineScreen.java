@@ -1,7 +1,6 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
-import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -16,7 +15,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -65,6 +63,8 @@ public final class TransitLineScreen extends Screen {
     private static final int PANEL_MAX_HEIGHT = 200;
     /** Rename, earlier, later, remove: the controls each stop row carries. */
     private static final int CONTROLS = 4;
+    /** The marks switch at the right end of an imported line's row. */
+    private static final int TOGGLE_WIDTH = 12;
 
     private final Screen parent;
     /** Taken once: the world cannot change while this screen is open, and re-reading it per frame
@@ -84,9 +84,19 @@ public final class TransitLineScreen extends Screen {
 
     private String selectedId;
     private EditBox nameField;
-    /** The imported line's marks switch, kept so that its label and its enabled state can be updated
-     * without rebuilding the whole screen. Null only before {@code init}. */
-    private Button marksButton;
+
+    /**
+     * How far each column is scrolled, in rows.
+     *
+     * <p>One per column rather than one for the screen: the three hold different things -- the lines, the
+     * selected line's stops, and every stop that could be added -- and a wheel over the candidates should
+     * not move the line the player is looking at. An MTR network is what makes this necessary: the lines
+     * read out of it are as many as the world holds, and a list that simply ran off the panel was both
+     * unreachable and drawn on top of the buttons.
+     */
+    private int lineScroll;
+    private int stopsScroll;
+    private int candidatesScroll;
 
     private int panelX;
     private int panelY;
@@ -175,7 +185,6 @@ public final class TransitLineScreen extends Screen {
         TransitLineStore.markDirty();
         selectedId = copy.id();
         refreshName();
-        refreshMarksButton();
     }
 
     @Override
@@ -190,25 +199,41 @@ public final class TransitLineScreen extends Screen {
         stopsX = linesX + columnW + GAP;
         candidatesX = stopsX + columnW + GAP;
 
-        int top = panelY + PAD + 10;
+        // The title sits on its own line, and the controls row below it carries the kinds on the left
+        // and the name field on the right. At a small panel width those two would be drawn through each
+        // other -- which is what "the words and the boxes are all crammed together" was -- so the field
+        // is given a line of its own when it does not fit, rather than being drawn over the kinds.
+        int headerY = panelY + PAD;
+        int top = headerY + 12;
         kindX = panelX + PAD;
         kindY = top + 1;
         kindW = (columnW * 2 - (TransitLine.kinds().size() - 1) * 3) / TransitLine.kinds().size();
+        int kindsRight = kindX + kindW * TransitLine.kinds().size()
+                + 3 * (TransitLine.kinds().size() - 1);
 
-        nameField = new EditBox(this.font, panelX + panelW - PAD - FIELD_WIDTH, top, FIELD_WIDTH,
-                FIELD_HEIGHT, Component.translatable(TITLE));
+        int fieldW = FIELD_WIDTH;
+        int fieldX = panelX + panelW - PAD - FIELD_WIDTH;
+        int fieldY = top;
+        if (fieldX - 4 < kindsRight) {
+            fieldW = Math.min(FIELD_WIDTH, panelW - PAD * 2);
+            fieldX = panelX + PAD;
+            fieldY = kindY + KIND_HEIGHT + 3;
+        }
+
+        nameField = new EditBox(this.font, fieldX, fieldY, fieldW, FIELD_HEIGHT,
+                Component.translatable(TITLE));
         nameField.setMaxLength(48);
         TransitLine line = selected();
         nameField.setValue(line == null ? "" : line.name());
         addRenderableWidget(nameField);
 
-        listY = top + Math.max(FIELD_HEIGHT, KIND_HEIGHT) + PAD;
+        listY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + PAD;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
-        // Five equal slots, so that the marks switch sits in the same row as the rest without any of
-        // them being narrower than the others: a button that is a different width from its neighbours
-        // reads as a different kind of thing.
-        int slot = (panelW - PAD * 2 - GAP * 4) / 5;
+        // Back to four slots: five footer buttons at a small panel width leave too little room for the
+        // labels, which is what "the words are all crammed together" was. The marks switch is not here
+        // any more either -- it sits on the line it belongs to, in the list.
+        int quarter = (panelW - PAD * 2 - GAP * 3) / 4;
         int buttonY = panelY + panelH - PAD - BUTTON_HEIGHT;
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_new"), b -> {
             commitName();
@@ -217,8 +242,7 @@ public final class TransitLineScreen extends Screen {
             TransitLineStore.markDirty();
             selectedId = created.id();
             refreshName();
-            refreshMarksButton();
-        }).bounds(panelX + PAD, buttonY, slot, BUTTON_HEIGHT).build());
+        }).bounds(panelX + PAD, buttonY, quarter, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_delete"), b -> {
             TransitLine doomed = selected();
             // A line read out of MTR is not the player's to delete: it would come back on the next
@@ -229,19 +253,13 @@ public final class TransitLineScreen extends Screen {
                 List<TransitLine> left = listed();
                 selectedId = left.isEmpty() ? null : left.get(0).id();
                 refreshName();
-                refreshMarksButton();
             }
-        }).bounds(buttonX(slot, 1), buttonY, slot, BUTTON_HEIGHT).build());
+        }).bounds(buttonX(quarter, 1), buttonY, quarter, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_copy"), b ->
-                copySelected()).bounds(buttonX(slot, 2), buttonY, slot, BUTTON_HEIGHT).build());
-        marksButton = Button.builder(Component.empty(), b -> toggleMarks())
-                .bounds(buttonX(slot, 3), buttonY, slot, BUTTON_HEIGHT)
-                .tooltip(Tooltip.create(Component.translatable("screen.howtogo.line_marks_hint")))
-                .build();
-        addRenderableWidget(marksButton);
+                copySelected()).bounds(buttonX(quarter, 2), buttonY, quarter,
+                BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(buttonX(slot, 4), buttonY, slot, BUTTON_HEIGHT).build());
-        refreshMarksButton();
+                .bounds(buttonX(quarter, 3), buttonY, quarter, BUTTON_HEIGHT).build());
     }
 
     /** The left edge of the button in slot {@code index} of the footer row. */
@@ -250,18 +268,20 @@ public final class TransitLineScreen extends Screen {
     }
 
     /**
-     * Turns the selected imported line's own marks on or off, and says so on the button.
+     * Turns one imported line's own marks on or off.
      *
      * <p>Per line rather than once for all of them, because the two answers are both wanted at once: a
-     * train's track is worth reading and a boat's water usually is not, and one switch for both would
-     * make the player spoil one to have the other. What the marks are is decided by the line's own
-     * kind, so a rail line's marks are rail and a boat line's are water.
+     * train's track is worth marking and a boat's water usually is not, and one switch for both would
+     * make the player spoil one to have the other. What the marks are is decided by the line's own kind,
+     * so a rail line's are rail and a boat line's are water.
      *
-     * <p>Only an imported line has an answer to give: the switch is disabled for the player's own
-     * lines, which take the configured default instead of a per-line one.
+     * <p>Asked from the row the switch is drawn on rather than from the selection. The switch used to be
+     * a footer button acting on whichever line happened to be selected, disabled for the player's own
+     * lines -- which meant it was dead whenever the selection was not an MTR line, with nothing on
+     * screen saying why. A switch on the row cannot be about the wrong line and has no state in which it
+     * does nothing.
      */
-    private void toggleMarks() {
-        TransitLine line = selected();
+    private void toggleMarks(TransitLine line) {
         if (line == null || !readOnly(line)) {
             return;
         }
@@ -272,28 +292,6 @@ public final class TransitLineScreen extends Screen {
         boolean on = MtrTransit.marksEnabled(line);
         MtrMarks.toggle(id, on);
         HowToGo.LOGGER.info("[HowToGo] MTR line '{}' marks {}", line.name(), on ? "off" : "on");
-        refreshMarksButton();
-    }
-
-    /** The marks switch's label and enabled state, from the line on screen. */
-    private void refreshMarksButton() {
-        if (marksButton == null) {
-            return;
-        }
-        TransitLine line = selected();
-        boolean imported = line != null && readOnly(line);
-        // Disabled rather than hidden: a control that appears and disappears as the selection moves is
-        // a control the player has to find twice, and "why can I not press this" is answered by the
-        // tooltip, which is drawn for a disabled button as well.
-        marksButton.active = imported;
-        // What it says is what applies to the line on screen, which for one of the player's own is the
-        // configured default: a switch that read "off" beside a line that will be ridden over the marks
-        // anyway would be the screen telling the player something untrue.
-        boolean on = line != null
-                ? MtrTransit.marksEnabled(line)
-                : RoadConfig.mtrAutoRouteMarks();
-        marksButton.setMessage(Component.translatable(
-                on ? "screen.howtogo.line_marks_on" : "screen.howtogo.line_marks_off"));
     }
 
     private void refreshName() {
@@ -316,14 +314,20 @@ public final class TransitLineScreen extends Screen {
 
     // --------------------------------------------------------------- columns
 
-    /** Row index under the mouse, or -1 when the pointer is not over a row of that column. */
-    private int rowAt(double mouseX, double mouseY, int columnX, int rows) {
+    /**
+     * Row index under the mouse, or -1 when the pointer is not over a row of that column.
+     *
+     * <p>The index is the row's own, not the one on screen: the two differ by the column's scroll, and
+     * a caller that wants the stop or the line the player is pointing at wants the former.
+     */
+    private int rowAt(double mouseX, double mouseY, int columnX, int rows, int scroll) {
         if (mouseX < columnX || mouseX >= columnX + columnW
                 || mouseY < listY || mouseY >= listY + listH) {
             return -1;
         }
-        int index = (int) ((mouseY - listY) / ROW_HEIGHT);
-        return index >= 0 && index < rows ? index : -1;
+        int row = (int) ((mouseY - listY) / ROW_HEIGHT);
+        int index = scroll + row;
+        return row >= 0 && row < visibleRows() && index >= 0 && index < rows ? index : -1;
     }
 
     private void drawRow(GuiGraphics graphics, int columnX, int index, boolean highlighted) {
@@ -334,14 +338,34 @@ public final class TransitLineScreen extends Screen {
     }
 
     private void drawLabel(GuiGraphics graphics, int columnX, int index, String text, int colour) {
+        drawLabel(graphics, columnX, index, text, colour, columnW - 4);
+    }
+
+    /** The same, cut to a given room, for a row that has to leave space for a control of its own. */
+    private void drawLabel(GuiGraphics graphics, int columnX, int index, String text, int colour,
+                           int room) {
         int y = listY + index * ROW_HEIGHT;
-        String shown = this.font.plainSubstrByWidth(text, columnW - 4);
+        String shown = this.font.plainSubstrByWidth(text, Math.max(8, room));
         graphics.drawString(this.font, shown, columnX + 2, y + 2, colour, false);
     }
 
-    private void drawColumnHeader(GuiGraphics graphics, int columnX, String key) {
+    /**
+     * A column's header, with how much of the column is on screen when it does not all fit.
+     *
+     * <p>The count is the only thing that says a list continues past its own edge. Without it a column
+     * scrolled to the top of a long list looks like the whole list, and the lines below the fold are
+     * lines the player has no reason to think exist.
+     */
+    private void drawColumnHeader(GuiGraphics graphics, int columnX, String key, int count,
+                                  int scroll) {
         graphics.drawString(this.font, Component.translatable(key).getString(), columnX,
                 listY - HEADER_HEIGHT, 0xFFA8B4C0, false);
+        if (count <= visibleRows()) {
+            return;
+        }
+        String shown = Math.min(count, scroll + visibleRows()) + "/" + count;
+        graphics.drawString(this.font, shown, columnX + columnW - 2 - this.font.width(shown),
+                listY - HEADER_HEIGHT, 0xFF808A96, false);
     }
 
     // ---------------------------------------------------------------- render
@@ -374,17 +398,24 @@ public final class TransitLineScreen extends Screen {
         // Next to the title, because both are about the line on screen as a whole rather than about
         // one row of it. The read-only note comes first and the broken-pair one is written after it,
         // so a line that is both says both instead of one covering the other.
-        int noteX = panelX + PAD + 90;
+        //
+        // Cut to the room before the name field, and each note to what is left after the one before it:
+        // a note that runs under the field is a note nobody can read, and at a small window this is
+        // exactly where the two used to collide.
+        int noteX = panelX + PAD + 80;
+        int noteRoom = Math.max(24, panelX + panelW - PAD - noteX);
         if (readOnly(line)) {
             String note = Component.translatable("screen.howtogo.line_from_mtr_note").getString();
-            graphics.drawString(this.font, note, noteX, panelY + PAD, 0xFF7FB0FF, false);
-            noteX += this.font.width(note) + 6;
+            String shown = this.font.plainSubstrByWidth(note, noteRoom);
+            graphics.drawString(this.font, shown, noteX, panelY + PAD, 0xFF7FB0FF, false);
+            noteX += this.font.width(shown) + 6;
+            noteRoom = Math.max(12, noteRoom - this.font.width(shown) - 6);
         }
         if (hasBrokenPair()) {
             // Beside the title rather than in a status bar: it is about the line on screen as a whole,
             // and a red stop that says nothing about why would only move the mystery.
-            graphics.drawString(this.font,
-                    Component.translatable("screen.howtogo.line_broken").getString(),
+            graphics.drawString(this.font, this.font.plainSubstrByWidth(
+                            Component.translatable("screen.howtogo.line_broken").getString(), noteRoom),
                     noteX, panelY + PAD, 0xFFFF8060, false);
         }
 
@@ -414,18 +445,22 @@ public final class TransitLineScreen extends Screen {
     }
 
     private void drawLines(GuiGraphics graphics, int mouseX, int mouseY) {
-        drawColumnHeader(graphics, linesX, "screen.howtogo.line_list");
         List<TransitLine> lines = listed();
+        drawColumnHeader(graphics, linesX, "screen.howtogo.line_list", lines.size(), lineScroll);
         if (lines.isEmpty()) {
+            lineScroll = 0;
             drawLabel(graphics, linesX, 0, Component.translatable("screen.howtogo.line_none").getString(),
                     0xFF808A96);
             return;
         }
-        int hovered = rowAt(mouseX, mouseY, linesX, lines.size());
-        for (int i = 0; i < lines.size(); i++) {
-            TransitLine candidate = lines.get(i);
+        lineScroll = clampScroll(lineScroll, lines.size());
+        int visible = visibleRows();
+        int hovered = rowAt(mouseX, mouseY, linesX, lines.size(), lineScroll);
+        for (int row = 0; row < visible && lineScroll + row < lines.size(); row++) {
+            int index = lineScroll + row;
+            TransitLine candidate = lines.get(index);
             boolean isSelected = candidate.id().equals(selectedId);
-            drawRow(graphics, linesX, i, isSelected || i == hovered);
+            drawRow(graphics, linesX, row, isSelected || index == hovered);
             String kind = Component.translatable(
                             "screen.howtogo.road_class." + candidate.kind().name().toLowerCase(Locale.ROOT))
                     .getString();
@@ -434,23 +469,58 @@ public final class TransitLineScreen extends Screen {
             // row that cannot be worked out from the rest of it.
             String source = readOnly(candidate)
                     ? Component.translatable("screen.howtogo.line_from_mtr").getString() + " " : "";
-            drawLabel(graphics, linesX, i, source + candidate.label() + "  (" + kind + ")",
-                    isSelected ? 0xFFFFFFFF : 0xFFD0D8E0);
+            // The row's own marks switch takes the right-hand end of the row, so the name is cut to
+            // leave it: a control drawn over the text it belongs to is worse than a shorter name.
+            boolean marked = readOnly(candidate);
+            int room = columnW - 4 - (marked ? TOGGLE_WIDTH + 2 : 0);
+            drawLabel(graphics, linesX, row, source + candidate.label() + "  (" + kind + ")",
+                    isSelected ? 0xFFFFFFFF : 0xFFD0D8E0, room);
+            if (marked) {
+                drawMarksToggle(graphics, mouseX, mouseY, candidate,
+                        linesX + columnW - TOGGLE_WIDTH - 1, listY + row * ROW_HEIGHT);
+            }
         }
     }
 
+    /**
+     * The marks switch on one imported line's row: a filled dot when the line's track is marked, a
+     * hollow one when it is not.
+     *
+     * <p>Drawn rather than a widget, like the stop controls, so that a window full of MTR lines does not
+     * become a window full of buttons. It is on the row because that is the only place the answer can be
+     * about the right line: a switch in the footer acts on whatever is selected, and a player who has
+     * not selected an MTR line finds it doing nothing at all.
+     */
+    private void drawMarksToggle(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line,
+                                 int x, int y) {
+        boolean on = MtrTransit.marksEnabled(line);
+        boolean hovered = mouseX >= x && mouseX < x + TOGGLE_WIDTH
+                && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
+        graphics.fill(x, y, x + TOGGLE_WIDTH - 1, y + ROW_HEIGHT - 1,
+                hovered ? 0xFF3A4450 : 0xFF242A33);
+        // A dot rather than a tick: the two glyphs are the same width in every font the game ships, so
+        // the state reads the same whether the line is on or off.
+        graphics.drawString(this.font, on ? "\u25CF" : "\u25CB", x + 2, y + 2,
+                on ? 0xFF000000 | (line.kind().color() & 0xFFFFFF) : 0xFF6A7480, false);
+    }
+
     private void drawStops(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
-        drawColumnHeader(graphics, stopsX, "screen.howtogo.line_stops");
+        drawColumnHeader(graphics, stopsX, "screen.howtogo.line_stops", line == null ? 0 : line.stopCount(),
+                stopsScroll);
         if (line == null || line.stopCount() == 0) {
+            stopsScroll = 0;
             drawLabel(graphics, stopsX, 0, Component.translatable("screen.howtogo.line_empty").getString(),
                     0xFF808A96);
             return;
         }
-        for (int i = 0; i < line.stopCount(); i++) {
-            int y = listY + i * ROW_HEIGHT;
+        stopsScroll = clampScroll(stopsScroll, line.stopCount());
+        int visible = visibleRows();
+        for (int row = 0; row < visible && stopsScroll + row < line.stopCount(); row++) {
+            int i = stopsScroll + row;
+            int y = listY + row * ROW_HEIGHT;
             int nameColour = i > 0 && i - 1 < rideable.length && !rideable[i - 1] ? 0xFFFF8060
                     : 0xFFD0D8E0;
-            drawLabel(graphics, stopsX, i, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
+            drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
             // Four controls at the right edge: rename, earlier, later, remove. Drawn per row rather than
             // as widgets so that a long line does not create four buttons per stop. The rename one is
             // drawn as N because N is what renames a place on the map. A line read out of MTR has none
@@ -473,19 +543,24 @@ public final class TransitLineScreen extends Screen {
     }
 
     private void drawCandidates(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
-        drawColumnHeader(graphics, candidatesX, "screen.howtogo.line_candidates");
         List<LineStop> offered = offered();
+        drawColumnHeader(graphics, candidatesX, "screen.howtogo.line_candidates", offered.size(),
+                candidatesScroll);
         if (offered.isEmpty()) {
+            candidatesScroll = 0;
             drawLabel(graphics, candidatesX, 0,
                     Component.translatable("screen.howtogo.line_no_candidates").getString(), 0xFF808A96);
             return;
         }
-        int hovered = rowAt(mouseX, mouseY, candidatesX, offered.size());
-        for (int i = 0; i < offered.size(); i++) {
+        candidatesScroll = clampScroll(candidatesScroll, offered.size());
+        int visible = visibleRows();
+        int hovered = rowAt(mouseX, mouseY, candidatesX, offered.size(), candidatesScroll);
+        for (int row = 0; row < visible && candidatesScroll + row < offered.size(); row++) {
+            int i = candidatesScroll + row;
             LineStop stop = offered.get(i);
             boolean already = line != null && line.callsAt(stop.x(), stop.z());
             if (i == hovered) {
-                drawRow(graphics, candidatesX, i, true);
+                drawRow(graphics, candidatesX, row, true);
             }
             // A stop that cannot be renamed here says so, and one the line already calls at is dimmed
             // rather than hidden: seeing that it is already on the line is the answer to "why is it
@@ -493,8 +568,26 @@ public final class TransitLineScreen extends Screen {
             String suffix = stop.editable() ? ""
                     : " " + Component.translatable("screen.howtogo.line_readonly").getString();
             int colour = already ? 0xFF808A96 : (stop.editable() ? 0xFFD0D8E0 : 0xFF9FB4C8);
-            drawLabel(graphics, candidatesX, i, stop.label() + suffix, colour);
+            drawLabel(graphics, candidatesX, row, stop.label() + suffix, colour);
         }
+    }
+
+    /**
+     * The rows that fit in the list area.
+     *
+     * <p>Rows past this are not drawn at all. They used to be, which put a long list of MTR lines on top
+     * of the footer buttons and read as everything being crammed together: a row that is drawn where it
+     * cannot be clicked is a row the player is being lied to about.
+     */
+    private int visibleRows() {
+        // Zero is a real answer in a window small enough that the header and the buttons meet: nothing
+        // is drawn and nothing is clickable, which is better than a row in the footer.
+        return Math.max(0, listH / ROW_HEIGHT);
+    }
+
+    /** A column's scroll, kept within what that column actually holds. */
+    private int clampScroll(int scroll, int count) {
+        return Math.max(0, Math.min(scroll, Math.max(0, count - visibleRows())));
     }
 
     /**
@@ -632,6 +725,55 @@ public final class TransitLineScreen extends Screen {
         return false;
     }
 
+    /**
+     * Whether the pointer is on the marks switch at the right end of the given row.
+     *
+     * @param row the row's index within the column, not the one on screen
+     */
+    private boolean marksToggleAt(double mouseX, double mouseY, TransitLine line, int row) {
+        if (!readOnly(line)) {
+            return false;
+        }
+        int x = linesX + columnW - TOGGLE_WIDTH - 1;
+        int y = listY + (row - lineScroll) * ROW_HEIGHT;
+        return mouseX >= x && mouseX < x + TOGGLE_WIDTH
+                && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
+    }
+
+    /**
+     * The wheel scrolls whichever column the pointer is over.
+     *
+     * <p>Per column, and only for the column under the cursor: a wheel that moved all three at once would
+     * take the line the player is reading out from under them while they looked for a stop to add.
+     */
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        int step = (int) Math.signum(scrollY);
+        if (step == 0) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
+        if (inColumn(mouseX, mouseY, linesX)) {
+            lineScroll = clampScroll(lineScroll - step, listed().size());
+            return true;
+        }
+        if (inColumn(mouseX, mouseY, stopsX)) {
+            TransitLine line = selected();
+            stopsScroll = clampScroll(stopsScroll - step, line == null ? 0 : line.stopCount());
+            return true;
+        }
+        if (inColumn(mouseX, mouseY, candidatesX)) {
+            candidatesScroll = clampScroll(candidatesScroll - step, offered().size());
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    /** Whether the pointer is anywhere in one column, list area and header alike. */
+    private boolean inColumn(double mouseX, double mouseY, int columnX) {
+        return mouseX >= columnX && mouseX < columnX + columnW
+                && mouseY >= listY - HEADER_HEIGHT && mouseY < listY + listH;
+    }
+
     // ----------------------------------------------------------------- input
 
     @Override
@@ -641,14 +783,19 @@ public final class TransitLineScreen extends Screen {
         }
         List<TransitLine> lines = listed();
 
-        int lineRow = rowAt(mouseX, mouseY, linesX, lines.size());
+        int lineRow = rowAt(mouseX, mouseY, linesX, lines.size(), lineScroll);
         if (lineRow >= 0) {
+            TransitLine clicked = lines.get(lineRow);
+            // The switch at the row's right end, before the row itself: a press on it is about that
+            // line's track, and a press anywhere else on the row is about which line is on screen. The
+            // two are told apart by position, exactly as the stop controls are.
+            if (readOnly(clicked) && marksToggleAt(mouseX, mouseY, clicked, lineRow)) {
+                toggleMarks(clicked);
+                return true;
+            }
             commitName();
-            selectedId = lines.get(lineRow).id();
+            selectedId = clicked.id();
             refreshName();
-            // The switch follows the selection: it is the selected line's answer that it shows, and
-            // only an imported line has one to give.
-            refreshMarksButton();
             return true;
         }
 
@@ -665,7 +812,7 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
 
-            int stopRow = rowAt(mouseX, mouseY, stopsX, line.stopCount());
+            int stopRow = rowAt(mouseX, mouseY, stopsX, line.stopCount(), stopsScroll);
             if (stopRow >= 0) {
                 int controlsX = stopsX + columnW - CONTROL_WIDTH * CONTROLS - 2;
                 int control = (int) ((mouseX - controlsX) / CONTROL_WIDTH);
@@ -683,7 +830,7 @@ public final class TransitLineScreen extends Screen {
             }
 
             List<LineStop> offered = offered();
-            int candidateRow = rowAt(mouseX, mouseY, candidatesX, offered.size());
+            int candidateRow = rowAt(mouseX, mouseY, candidatesX, offered.size(), candidatesScroll);
             if (candidateRow >= 0) {
                 if (line.addStop(offered.get(candidateRow))) {
                     TransitLineStore.markDirty();

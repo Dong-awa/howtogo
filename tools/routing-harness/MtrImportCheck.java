@@ -3,12 +3,14 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
+import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Checks the MTR import against a reading that was made up here.
@@ -42,48 +44,59 @@ public final class MtrImportCheck {
 
         MtrClientData.Snapshot reading = syntheticReading();
 
-        MtrTransit.Built built = MtrTransit.build(reading, true);
-        expect("one stop per station", built.stops().size() == 3);
+        MtrTransit.Built built = MtrTransit.build(reading, id -> true);
+        expect("one stop per station", built.stops().size() == 4);
         expect("a stop sits at the middle of its station's platforms, not the middle of the station",
                 stopAt(built.stops(), 5, 0));
         expect("a station with no platform falls back to the middle of its area",
                 stopAt(built.stops(), 100, 0));
         expect("and a station with one platform sits on it", stopAt(built.stops(), 200, 4));
+        expect("a station is also offered with the height a stop has no room for",
+                stationAt(built.stations(), 300, 64, 0));
 
-        expect("only the line whose type this mod has a kind for is imported",
-                built.lines().size() == 1);
+        expect("only the lines whose type this mod has a kind for are imported",
+                built.lines().size() == 2);
         TransitLine imported = built.lines().get(0);
         expect("as a rail line", imported.kind() == RoadClass.RAIL);
         expect("with its stops in order", imported.stopCount() == 3);
         expect("and an id of its own that cannot collide with the player's",
                 imported.id().startsWith("mtr:"));
+        expect("the boat line is imported as a water line",
+                built.lines().get(1).kind() == RoadClass.WATER);
         expect("the aeroplane line is counted rather than imported", built.skipped() == 1);
         expect("and a stop whose station the client was never sent is counted",
                 built.unplaced() == 1);
         System.out.println("   " + built.stops().size() + " stops, " + built.lines().size()
-                + " lines, " + built.rails().segmentCount() + " rail segments, "
-                + built.rails().nodeCount() + " rail nodes");
+                + " lines, " + built.rails().segmentCount() + " marked segments, "
+                + built.rails().nodeCount() + " marked nodes");
 
-        // Rails: three usable ones (two rail, one water) and an aeroplane's, which has no class here.
-        expect("the usable rails become segments", built.rails().segmentCount() == 3);
-        expect("two rails that meet share their node rather than being joined by a chord",
-                built.rails().nodeCount() == 5);
-        expect("a boat's rail becomes water", hasClass(built.rails(), RoadClass.WATER));
-        expect("a train's rail becomes rail", hasClass(built.rails(), RoadClass.RAIL));
-        expect("and an aeroplane's rail becomes nothing at all",
-                !hasClass(built.rails(), RoadClass.ICE));
-        expect("every segment is marked as read rather than drawn, by its id alone",
+        // What is marked is the track the lines run along: one road per pair that could be planned, of
+        // the line's own class, and never MTR's rails as a whole.
+        expect("a mark is made for each ride that could be planned", built.rails().segmentCount() == 2);
+        expect("a train line's mark is rail", hasClass(built.rails(), RoadClass.RAIL));
+        expect("and a boat line's is water", hasClass(built.rails(), RoadClass.WATER));
+        expect("the mark reaches the station the ride reaches", hasVertexNear(built.rails(), 100, 0));
+        expect("and stops where the ride runs out of track",
+                !hasVertexNear(built.rails(), 110, 0) && !hasVertexNear(built.rails(), 105, 0));
+        expect("every mark is marked as read rather than drawn, by its id alone",
                 built.rails().segmentsSnapshot().stream().allMatch(RailTrackStore::isOurs));
 
-        // The switch the player is offered: no route marks means no rails, and nothing else changes.
-        MtrTransit.Built withoutMarks = MtrTransit.build(reading, false);
-        expect("with route marks off no rails are imported",
+        // The switch: nothing marked means nothing added, and the stops and lines are untouched.
+        MtrTransit.Built withoutMarks = MtrTransit.build(reading, id -> false);
+        expect("with every line's marks off nothing is marked at all",
                 withoutMarks.rails().segmentCount() == 0);
-        expect("and the stops and lines are the same ones", withoutMarks.lines().size() == 1
-                && withoutMarks.stops().size() == 3);
+        expect("and the stops and lines are the same ones", withoutMarks.lines().size() == 2
+                && withoutMarks.stops().size() == 4);
+
+        // One line's answer is that line's own: the boat line's mark exists and the train line's does
+        // not, which is the whole point of asking per line rather than once for the layer.
+        MtrTransit.Built onlyTheBoat = MtrTransit.build(reading, id -> id == 4);
+        expect("one line's answer marks its track and leaves the other line's alone",
+                hasClass(onlyTheBoat.rails(), RoadClass.WATER)
+                        && !hasClass(onlyTheBoat.rails(), RoadClass.RAIL));
 
         expect("an empty reading becomes nothing at all",
-                MtrTransit.build(MtrClientData.Snapshot.EMPTY, true).lines().isEmpty());
+                MtrTransit.build(MtrClientData.Snapshot.EMPTY, id -> true).lines().isEmpty());
 
         checkHandshake();
 
@@ -95,14 +108,17 @@ public final class MtrImportCheck {
         expect("and neither does nothing", !MtrTransit.isImported(null));
 
         checkMarksSwitch(imported);
+        checkLineTracks();
+        checkInterchanges();
 
         // A boat line: the other kind this mod has a use for.
         MtrClientData.Snapshot boatsOnly = new MtrClientData.Snapshot(
                 reading.stations(), reading.platforms(),
                 reading.lines().stream().filter(line -> "BOAT".equals(line.mode())).toList(),
                 List.of());
-        expect("a boat line becomes a water line", MtrTransit.build(boatsOnly, true).lines().stream()
-                .allMatch(line -> line.kind() == RoadClass.WATER));
+        expect("a boat line becomes a water line",
+                MtrTransit.build(boatsOnly, id -> true).lines().stream()
+                        .allMatch(line -> line.kind() == RoadClass.WATER));
 
         // A line all of whose stations are outside what the client was sent has no ride in it.
         MtrClientData.Snapshot nothingPlaced = new MtrClientData.Snapshot(
@@ -110,7 +126,7 @@ public final class MtrImportCheck {
                 List.of(new MtrClientData.Line(9, "Far away", "TRAIN", 0, List.of(
                         stop(11, 1, "Alpha"), stop(21, 2, "Beta")))),
                 List.of());
-        MtrTransit.Built unplaced = MtrTransit.build(nothingPlaced, true);
+        MtrTransit.Built unplaced = MtrTransit.build(nothingPlaced, id -> true);
         expect("a line whose stops the client has not been sent is not offered",
                 unplaced.lines().isEmpty());
         expect("and its stops are counted", unplaced.unplaced() == 2);
@@ -143,7 +159,6 @@ public final class MtrImportCheck {
         expect("and so does a line of the player's own",
                 MtrTransit.marksEnabled(new TransitLine("mine", "Mine", RoadClass.RAIL)) == fallback);
 
-        boolean wasAnyOn = MtrMarks.anyOn();
         MtrMarks.toggle(id, true);
         expect("switching a line off is remembered against that line",
                 MtrMarks.isChosen(id) && !MtrTransit.marksEnabled(imported));
@@ -151,13 +166,10 @@ public final class MtrImportCheck {
         MtrMarks.toggle(id, false);
         expect("and switching it back on is remembered too",
                 MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported));
-        expect("a line switched on by hand is reason enough to build MTR's tracks",
-                MtrMarks.anyOn());
 
         MtrMarks.clear(id);
         expect("forgetting the answer puts the line back on the default",
                 !MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported) == fallback);
-        expect("and takes that reason away again", MtrMarks.anyOn() == wasAnyOn);
 
         expect("a listed answer beats the default",
                 !MtrMarks.decide(false, true, true) && MtrMarks.decide(true, false, false));
@@ -174,6 +186,173 @@ public final class MtrImportCheck {
         expect("and neither can driving",
                 !RailTrackStore.movesOnMtrMarks(bili.dongsz.howtogo.route.TravelMode.DRIVE));
         expect("and no mode at all cannot either", !RailTrackStore.movesOnMtrMarks(null));
+    }
+
+    /**
+     * The marking itself: which stretch of MTR's rails a line's marks are.
+     *
+     * <p>{@link MtrLineTracks} is package-private and takes a rail network and a line, so the rules can
+     * be checked directly rather than through a reading: what the marks follow, where they start and
+     * end, which class they are, and what a line whose stops are nowhere near its rails gets. This is
+     * the part of the integration that replaced "MTR's rails are the roads" with "the ride is the road",
+     * and it cannot be seen from the outside at all.
+     */
+    private static void checkLineTracks() {
+        System.out.println("   marking the track a line runs along");
+
+        // A rail that bends, so a mark that follows it can be told from a straight chord between the
+        // line's two stops -- which is what a mark built from the stops alone would be.
+        RoadNetwork rails = new RoadNetwork();
+        addRail(rails, 0, 0, 50, 0);
+        addRail(rails, 50, 0, 50, 50);
+        addRail(rails, 50, 50, 100, 50);
+
+        TransitLine bent = line("mtr:1", RoadClass.RAIL, 0, 0, 100, 50);
+        RoadNetwork marks = MtrLineTracks.of(rails, bent, new int[]{1_500_000_000});
+        expect("a line's track is marked", marks.segmentCount() == 1);
+        expect("and the mark follows the rails rather than joining the two stops straight",
+                hasVertexNear(marks, 50, 0) && hasVertexNear(marks, 50, 50));
+        expect("with the class of the line it belongs to", hasClass(marks, RoadClass.RAIL));
+        expect("and its ends where the two stops are", hasVertexNear(marks, 0, 0)
+                && hasVertexNear(marks, 100, 50));
+        expect("drawn from the id space it was handed, so it cannot collide with a drawn road",
+                marks.segmentsSnapshot().stream().allMatch(
+                        segment -> segment.id() >= 1_500_000_000));
+
+        // A boat line over a waterway: the same rule, and the other class.
+        RoadNetwork water = new RoadNetwork();
+        addWater(water, 0, 0, 40, 0);
+        RoadNetwork boatMarks = MtrLineTracks.of(water,
+                line("mtr:2", RoadClass.WATER, 0, 0, 40, 0), new int[]{1_500_000_000});
+        expect("a boat line's track is water", hasClass(boatMarks, RoadClass.WATER));
+
+        // A stop a few blocks off the rail: the hop onto the track is not track, so it is not marked.
+        RoadNetwork offset = new RoadNetwork();
+        addRail(offset, 0, 0, 100, 0);
+        RoadNetwork trimmed = MtrLineTracks.of(offset,
+                line("mtr:3", RoadClass.RAIL, 0, 18, 100, 18), new int[]{1_500_000_000});
+        expect("a stop beside the track is still ridden from", trimmed.segmentCount() == 1);
+        expect("and the hop from the stop onto the track is not marked as track",
+                !hasVertexNear(trimmed, 0, 18) && hasVertexNear(trimmed, 0, 0)
+                        && hasVertexNear(trimmed, 100, 0));
+
+        // A pair with no way between them over the rails this class may use: nothing is invented.
+        RoadNetwork far = new RoadNetwork();
+        addRail(far, 0, 0, 10, 0);
+        RoadNetwork nothing = MtrLineTracks.of(far,
+                line("mtr:4", RoadClass.RAIL, 0, 0, 900, 900), new int[]{1_500_000_000});
+        expect("a pair the rails cannot join contributes no mark", nothing.segmentCount() == 0);
+
+        // Two lines over one stretch of rail: each is marked, and neither mark reuses the other's ids.
+        int[] counter = {1_500_000_000};
+        RoadNetwork first = MtrLineTracks.of(rails, bent, counter);
+        RoadNetwork second = MtrLineTracks.of(rails, bent, counter);
+        expect("a second line over the same rails is marked as well",
+                first.segmentCount() == 1 && second.segmentCount() == 1);
+        expect("and the two marks do not share an id",
+                first.segmentsSnapshot().get(0).id() != second.segmentsSnapshot().get(0).id());
+
+        // What marking costs, over a rail network the size of the window MTR sends around a player and
+        // a line long enough to matter: it plans one ride per neighbouring pair, and it runs wherever a
+        // reading is first asked for -- which can be the render thread, in the middle of a map draw.
+        RoadNetwork longRail = new RoadNetwork();
+        for (int i = 0; i < 300; i++) {
+            addRail(longRail, i * 4, 0, (i + 1) * 4, 0);
+        }
+        TransitLine longLine = new TransitLine("mtr:5", "Long", RoadClass.RAIL);
+        for (int i = 0; i <= 12; i++) {
+            longLine.addStop(LineStop.ofStation("stop " + i, i * 100, 0));
+        }
+        long startedAt = System.nanoTime();
+        RoadNetwork longMarks = MtrLineTracks.of(longRail, longLine, new int[]{1_500_000_000});
+        long millis = Math.round((System.nanoTime() - startedAt) / 1_000_000.0);
+        System.out.println("   " + longRail.segmentCount() + " rails, 12 pairs marked in " + millis
+                + " ms");
+        expect("every pair along it is marked", longMarks.segmentCount() == 12);
+        expect("and marking a line over a network this size stays quick (under 1000 ms)",
+                millis < 1000);
+    }
+
+    /**
+     * The interchange rule the map draws from.
+     *
+     * <p>Two lines, standing within the planner's own transfer radius -- and the two things that have
+     * each been wrong here: exact positions, which missed the platform-and-stop-beside-it interchange
+     * that is the commonest one there is, and counting stops rather than lines, which marked a place
+     * orange for one line's own stops and so could not be cleared by cancelling any line, because no
+     * second line was ever involved.
+     */
+    private static void checkInterchanges() {
+        System.out.println("   where two lines meet");
+        double radius = bili.dongsz.howtogo.route.LinePlanner.transferRadius();
+
+        // A rail line and a boat line calling at the two sides of one station.
+        TransitLine rail = line("mtr:1", RoadClass.RAIL, 0, 0, 100, 0);
+        TransitLine beside = line("mtr:2", RoadClass.WATER, 5, 0, 200, 0);
+        Set<Long> shared = TransitInterchanges.shared(List.of(rail, beside));
+        expect("two lines calling a few blocks apart make an interchange",
+                shared.contains(TransitInterchanges.pack(0, 0))
+                        && shared.contains(TransitInterchanges.pack(5, 0)));
+        expect("and a stop of theirs nowhere near another line is not one",
+                !shared.contains(TransitInterchanges.pack(100, 0))
+                        && !shared.contains(TransitInterchanges.pack(200, 0)));
+
+        // The radius is the planner's, inclusive at its own edge: the map must not call two stations
+        // separate that a journey will change lines at.
+        TransitLine atTheEdge = line("mtr:3", RoadClass.WATER, (int) radius, 0, 300, 0);
+        TransitLine pastIt = line("mtr:4", RoadClass.WATER, (int) radius + 1, 0, 300, 0);
+        expect("a stop exactly the radius away still counts",
+                TransitInterchanges.shared(List.of(rail, atTheEdge))
+                        .contains(TransitInterchanges.pack(0, 0)));
+        expect("and one a block further out does not",
+                TransitInterchanges.shared(List.of(rail, pastIt)).isEmpty());
+
+        // One line's own stops, standing close: not a change of lines, and so not an interchange. This
+        // is the case that left an orange marker on a place no second line ever called at.
+        expect("one line's own stops standing close are not an interchange",
+                TransitInterchanges.shared(List.of(line("mtr:5", RoadClass.RAIL, 0, 0, 5, 0))).isEmpty());
+
+        // Worked out from the lines handed in, every call: with one of the two gone the place is not an
+        // interchange, which is what "the marker stayed after I cancelled the line" was about.
+        expect("with one of the two lines gone the place is not an interchange any more",
+                TransitInterchanges.shared(List.of(rail)).isEmpty());
+        expect("and no lines at all is no interchanges", TransitInterchanges.shared(List.of()).isEmpty());
+    }
+
+    /** A rail of this mod's rail class, as the raw layer a line's ride is planned over. */
+    private static void addRail(RoadNetwork network, int fromX, int fromZ, int toX, int toZ) {
+        addTrack(network, RoadClass.RAIL, fromX, fromZ, toX, toZ);
+    }
+
+    /** The same, as a waterway. */
+    private static void addWater(RoadNetwork network, int fromX, int fromZ, int toX, int toZ) {
+        addTrack(network, RoadClass.WATER, fromX, fromZ, toX, toZ);
+    }
+
+    private static void addTrack(RoadNetwork network, RoadClass kind, int fromX, int fromZ, int toX,
+                                 int toZ) {
+        RoadSegment segment = network.newSegment(kind, 64, 2);
+        segment.addVertex(fromX, fromZ);
+        segment.addVertex(toX, toZ);
+        // Joined by position, as the track layers join their own rails: two stretches that meet in the
+        // world are one line to ride along, and without this every one of them would be an island.
+        segment.setFromNode(endpoint(network, fromX, fromZ).id());
+        segment.setToNode(endpoint(network, toX, toZ).id());
+        network.addSegment(segment);
+    }
+
+    private static RoadNode endpoint(RoadNetwork network, int x, int z) {
+        RoadNode existing = network.nearestNode(x, z, 0.5);
+        return existing != null ? existing
+                : network.addNode(x, 64, z, RoadNode.Type.JUNCTION, null);
+    }
+
+    /** A line of the given kind calling at the two given places. */
+    private static TransitLine line(String id, RoadClass kind, int fromX, int fromZ, int toX, int toZ) {
+        TransitLine made = new TransitLine(id, id, kind);
+        made.addStop(LineStop.ofStation("from", fromX, fromZ));
+        made.addStop(LineStop.ofStation("to", toX, toZ));
+        return made;
     }
 
     /**
@@ -202,14 +381,17 @@ public final class MtrImportCheck {
         List<MtrClientData.Station> stations = List.of(
                 station(1, "Alpha", "TRAIN", 0, 0),
                 station(2, "Beta", "TRAIN", 100, 0),
-                station(3, "Gamma", "BOAT", 200, 0));
+                station(3, "Gamma", "BOAT", 200, 0),
+                station(4, "Delta", "BOAT", 300, 0));
         List<MtrClientData.Platform> platforms = List.of(
                 platform(11, 1, "1", "TRAIN", 0, 0),
                 platform(12, 1, "2", "TRAIN", 10, 0),
-                platform(31, 3, "1", "BOAT", 200, 4));
+                platform(31, 3, "1", "BOAT", 200, 4),
+                platform(41, 4, "1", "BOAT", 300, 0));
 
         List<MtrClientData.Line> lines = new ArrayList<>();
-        // Three stops, all of whose stations the client knows.
+        // Three stops, all of whose stations the client knows. The first two face a rail that reaches
+        // both of them; the third does not, which is the case the marking has to survive.
         lines.add(new MtrClientData.Line(1, "Line 1", "TRAIN", 0xFF0000, List.of(
                 stop(11, 1, "Alpha"), stop(21, 2, "Beta"), stop(31, 3, "Gamma"))));
         // An aeroplane: a line this mod has no kind for.
@@ -218,12 +400,16 @@ public final class MtrImportCheck {
         // A line with one stop the client has never been sent, which leaves it with one placed stop.
         lines.add(new MtrClientData.Line(3, "Line 3", "TRAIN", 0x0000FF, List.of(
                 stop(11, 1, "Alpha"), stop(99, 999, "Somewhere else"))));
+        // A boat line whose two stops are both on its own waterway, so its marks can be told from a
+        // train's.
+        lines.add(new MtrClientData.Line(4, "Boat 1", "BOAT", 0x00FFFF, List.of(
+                stop(31, 3, "Gamma"), stop(41, 4, "Delta"))));
 
         List<MtrClientData.Track> tracks = List.of(
                 track("a", "TRAIN", 0, 0, 10, 0),
-                track("b", "TRAIN", 10, 0, 20, 0),
+                track("b", "TRAIN", 10, 0, 100, 0),
                 track("c", "AIRPLANE", 100, 0, 110, 0),
-                track("d", "BOAT", 200, 0, 210, 0));
+                track("d", "BOAT", 200, 4, 300, 0));
         return new MtrClientData.Snapshot(stations, platforms, lines, tracks);
     }
 
@@ -259,6 +445,28 @@ public final class MtrImportCheck {
     private static boolean hasClass(RoadNetwork network, RoadClass roadClass) {
         for (RoadSegment segment : network.segmentsSnapshot()) {
             if (segment.roadClass() == roadClass) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether any polyline of the network has a vertex at the given place. */
+    private static boolean hasVertexNear(RoadNetwork network, int x, int z) {
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            for (int i = 0; i < segment.vertexCount(); i++) {
+                if (segment.x(i) == x && segment.z(i) == z) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Whether one of the stations is at the given place, at the given height. */
+    private static boolean stationAt(List<MtrTransit.Station> stations, int x, int y, int z) {
+        for (MtrTransit.Station station : stations) {
+            if (station.x() == x && station.y() == y && station.z() == z) {
                 return true;
             }
         }

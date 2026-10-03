@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.compat.mcphone;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.Destinations;import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadStore;
@@ -401,7 +402,9 @@ public final class DestinationPickerPage implements IPhonePage {
             for (RoadSegment segment : RoadStore.get().segmentsSnapshot()) {
                 emitRoad(quads, last, segment, minX, minY, maxX, maxY);
             }
-            for (RoadSegment segment : RailTrackStore.segments()) {
+            // Both machine-read rail layers, so a station the list offers has its line drawn under it
+            // whether that station is Create's or MTR's.
+            for (RoadSegment segment : RailLayers.all()) {
                 emitRoad(quads, last, segment, minX, minY, maxX, maxY);
             }
             for (Destination place : all) {

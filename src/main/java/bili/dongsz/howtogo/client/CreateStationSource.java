@@ -2,7 +2,6 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
-import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -57,20 +56,14 @@ public final class CreateStationSource implements DestinationSource {
      * What to call a station: Create's own name when the layer read it from Create's graph, and its
      * position otherwise.
      *
-     * <p>The name is the one string the route, the spoken announcement, the HUD and the search all
-     * share, so the fallback is a whole translated sentence rather than a prefix glued on here. The
-     * blocks in the world carry no station name at all -- it lives in Create's railway data -- so a
-     * block-scan station genuinely has nothing to offer and its coordinates are the honest answer.
+     * <p>The fallback lives in {@link Destinations#stationName}, which the MTR source uses as well: a
+     * station with no name is nameless for the same reason in both cases, and one rule is what keeps
+     * the two sources from listing one station two different ways.
      *
      * <p>Public because the map draws the same label: a station's name on the map and its entry in
      * the picker being two independently built strings is exactly how they drift apart.
      */
     public static String nameOf(RailTrackStore.Station station) {
-        String name = station.name();
-        if (name != null && !name.isBlank()) {
-            return name.trim();
-        }
-        return Component.translatable("hud.howtogo.station.name",
-                String.valueOf(station.x()), String.valueOf(station.z())).getString();
+        return Destinations.stationName(station.name(), station.x(), station.z());
     }
 }

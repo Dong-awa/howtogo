@@ -19,19 +19,19 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Whether each line read out of MTR brings its own track with it.
+ * Whether each line read out of MTR has its track marked as roads of this mod.
  *
  * <h2>What the switch does</h2>
  * A line read out of MTR has its stops, and MTR's rails are in the world under them. With a line's
- * marks on, that line is planned over the rails MTR reports -- so a ride follows the track that was
- * actually laid rather than a line of the player's own roads that happens to run nearby. With them
- * off, the line is planned over the player's roads alone, by the ordinary rule this mod used before it
- * knew anything about MTR, which is the right answer for a line that runs on water or on roads that
- * have already been drawn.
+ * marks on, the stretch of that track the line actually runs along is marked as read-only rail or water
+ * roads -- drawn on the map like any other road, and the roads a ride along that line is planned over.
+ * With them off, the line contributes no roads at all, and its stops are matched to the roads the
+ * player drew by the ordinary rule this mod used before it knew anything about MTR, which is the right
+ * answer for a line that runs on water or on roads that have already been drawn.
  *
  * <h2>Why it is per line and not one setting</h2>
  * The two kinds of line want opposite answers and the two answers coexist: a train line's track is its
- * own and is worth reading, while a boat line's water usually is not. A single switch would make the
+ * own and is worth marking, while a boat line's water usually is not. A single switch would make the
  * player choose which of their lines to spoil.
  *
  * <h2>Why the choice is kept here rather than on the line</h2>
@@ -91,20 +91,6 @@ public final class MtrMarks {
     public static boolean isChosen(long mtrLineId) {
         ensureLoaded();
         return ON.contains(mtrLineId) || OFF.contains(mtrLineId);
-    }
-
-    /**
-     * Whether any line at all has been switched on by hand.
-     *
-     * <p>Asked before the marks are built rather than after: a player who has the configured default
-     * off and turns one line on has asked for that line's track, and a reading that threw the tracks
-     * away because the setting says off would make the switch do nothing. The set can hold ids of lines
-     * that no longer exist, which only means the layer is built and then not wanted -- cheap, and the
-     * alternative is a switch that sometimes does nothing.
-     */
-    public static boolean anyOn() {
-        ensureLoaded();
-        return !ON.isEmpty();
     }
 
     /** Flips this line's answer, recording it as the player's own either way. */

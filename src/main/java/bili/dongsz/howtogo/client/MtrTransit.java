@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongPredicate;
 
 /**
  * What {@link MtrClientData} read, said in this mod's own terms.
@@ -25,9 +26,11 @@ import java.util.List;
  *       currently knows about. They are handed to the planner and never to the line editor, which is
  *       what makes them read-only: the editor works on the player's own list and this is a different
  *       list, so no accident in the editor can write to a line MTR owns;</li>
- *   <li><b>a rail layer</b> -- MTR's rails as this mod's roads, read-only and never saved, so that a
- *       ride along a line read out of MTR is planned along the track MTR actually laid rather than
- *       along whatever the player happened to draw nearby.</li>
+ *   <li><b>the track they run along</b> -- for each line whose marks are switched on, the stretch
+ *       between its own neighbouring stops, stamped as read-only rail or water roads of this mod. Not
+ *       MTR's rails as a whole: MTR's data does not say which rails belong to which line, so each line's
+ *       ride is planned over them and the path it takes is what is marked. A line whose marks are off
+ *       contributes nothing, and its stops are then matched to the roads the player drew.</li>
  * </ul>
  *
  * <h2>Why the stops are where the platforms are</h2>
@@ -66,6 +69,7 @@ public final class MtrTransit {
 
     private static String signature = "";
     private static List<LineStop> stops = List.of();
+    private static List<Station> stationList = List.of();
     private static List<TransitLine> lines = List.of();
     private static RoadNetwork rails = new RoadNetwork();
     private static int imported;
@@ -82,6 +86,18 @@ public final class MtrTransit {
     }
 
     /**
+     * Every MTR station the client knows about, as a place a journey can end at.
+     *
+     * <p>The same stations as {@link #stops()}, with the height a stop has no room for: a stop is a
+     * point on a line and the router needs only where on the map it is, while a destination is offered
+     * in a list and marked on a map, and a mark has a height.
+     */
+    public static List<Station> stations() {
+        refresh();
+        return stationList;
+    }
+
+    /**
      * Every MTR line whose type this mod has a kind for, with the stops currently in range.
      *
      * <p>Handed to the planner and never to the editor, which is what keeps MTR's lines MTR's.
@@ -92,11 +108,17 @@ public final class MtrTransit {
     }
 
     /**
-     * MTR's rails as a read-only network, or an empty one.
+     * The track each line runs along, as a read-only network of this mod's rail and water roads.
      *
-     * <p>Empty when {@code mtr_auto_route_marks} is off, which is the setting that means "do not bring
-     * the track with you": a line's stops are then matched to the player's own roads by the rule that
-     * was in force before this mod knew anything about MTR.
+     * <p>Only the lines whose marks are switched on are in it, which is what makes the switch beside a
+     * line in the editor real: a line whose marks are off contributes nothing here, so nothing of its
+     * track is drawn and nothing of it is offered to a ride. What each line contributes is the stretch
+     * between its own neighbouring stops rather than MTR's rails as a whole -- MTR's data does not say
+     * which rails belong to which line, so the ride is planned over them and its path is what is marked
+     * (see {@link MtrLineTracks}).
+     *
+     * <p>Empty when no line wants marks at all, which is what a player who has asked for MTR's track to
+     * be left alone gets: their own roads, and none of MTR's.
      */
     public static RoadNetwork railLayer() {
         refresh();
@@ -122,11 +144,22 @@ public final class MtrTransit {
     }
 
     /** What a reading becomes, and what had to be left out of it. */
-    record Built(List<LineStop> stops, List<TransitLine> lines, RoadNetwork rails, int imported,
-                 int skipped, int unplaced) {
+    record Built(List<Station> stations, List<LineStop> stops, List<TransitLine> lines,
+                 RoadNetwork rails, int imported, int skipped, int unplaced) {
 
         static final Built EMPTY =
-                new Built(List.of(), List.of(), new RoadNetwork(), 0, 0, 0);
+                new Built(List.of(), List.of(), List.of(), new RoadNetwork(), 0, 0, 0);
+    }
+
+    /**
+     * One MTR station, as a place a journey can end at.
+     *
+     * @param name what MTR calls the station, or an empty string when it has no name
+     * @param x    where its vehicles stop: the middle of its platforms, or of its area
+     * @param y    the station's own height, for a marker to be drawn at
+     * @param z    where its vehicles stop
+     */
+    public record Station(String name, int x, int y, int z) {
     }
 
     /** Counts the passes below fill in, so that they stay functions of their arguments. */
@@ -136,24 +169,70 @@ public final class MtrTransit {
     }
 
     /**
-     * Turns a reading into this mod's stops, lines and rail layer.
+     * Turns a reading into this mod's stops, lines and the track they run along.
      *
-     * <p>A function of the reading and one flag, and of nothing else, so that everything about the
+     * <p>A function of the reading and one question, and of nothing else, so that everything about the
      * conversion can be checked with no MTR installed -- which is the only way it can be checked at all
      * here. The state above is a cache of this, not the other way round.
      *
-     * @param withRails whether MTR's tracks are turned into a layer of route marks at all; whether any
-     *                  particular line rides them is decided per line, later
+     * @param wantsMarks asked per MTR line id: whether that line's track is marked as roads of this mod
+     *                   at all. The line's own answer, so that the caller -- which is the only place
+     *                   that may read a config or a switch, and the only place that can do it off the
+     *                   render thread -- decides, and this stays a function
      */
-    static Built build(MtrClientData.Snapshot reading, boolean withRails) {
+    static Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
         Counts counts = new Counts();
+        List<Station> builtStations = buildStations(reading);
         List<TransitLine> builtLines = buildLines(reading, counts);
-        RoadNetwork builtRails = withRails ? buildRailLayer(reading) : new RoadNetwork();
-        return new Built(buildStops(reading), builtLines, builtRails, builtLines.size(),
-                counts.skipped, counts.unplaced);
+        return new Built(builtStations, stopsOf(builtStations), builtLines,
+                buildMarks(reading, builtLines, wantsMarks), builtLines.size(), counts.skipped,
+                counts.unplaced);
+    }
+
+    /**
+     * The track of every line that wants its marks, as one network.
+     *
+     * <p>MTR's own rails are read first, because the path a line runs along has to be found over them,
+     * and then thrown away: what comes out is the lines' rides and never the rails as a whole. Nothing
+     * of MTR's own geometry reaches a plan, which is what makes a mark the track <em>this line</em>
+     * uses rather than every rail within reach of the player.
+     *
+     * <p>The ids are drawn from one counter for all the lines of a reading, so no two marks can share
+     * an id even when two lines run over the same ground.
+     */
+    private static RoadNetwork buildMarks(MtrClientData.Snapshot reading, List<TransitLine> lines,
+                                          LongPredicate wantsMarks) {
+        boolean wanted = false;
+        for (TransitLine line : lines) {
+            if (wantsMarks.test(lineId(line))) {
+                wanted = true;
+                break;
+            }
+        }
+        if (!wanted) {
+            // Nothing is marked, so MTR's rails are not even joined into a layer: a player who wants
+            // their own roads and none of MTR's pays nothing for the reading.
+            return new RoadNetwork();
+        }
+        RoadNetwork rails = buildRailLayer(reading);
+        RoadNetwork marks = new RoadNetwork();
+        int[] nextId = {ID_BASE};
+        for (TransitLine line : lines) {
+            if (!wantsMarks.test(lineId(line))) {
+                continue;
+            }
+            RoadNetwork ofLine = MtrLineTracks.of(rails, line, nextId);
+            for (RoadNode node : ofLine.nodesSnapshot()) {
+                marks.putNode(node);
+            }
+            for (RoadSegment segment : ofLine.segmentsSnapshot()) {
+                marks.putSegment(segment);
+            }
+        }
+        return marks;
     }
 
     /**
@@ -166,20 +245,23 @@ public final class MtrTransit {
      */
     private static void refresh() {
         MtrClientData.Snapshot reading = MtrClientData.snapshot();
-        // Built when MTR's marks are wanted at all: the configured default, or any single line the
-        // player has switched on by hand. A line's own answer cannot be asked of the layer, because the
-        // layer is shared -- but a reading that dropped the tracks whenever the setting said off would
-        // leave that per-line switch with nothing to turn on.
-        boolean autoMarks = RoadConfig.mtrAutoRouteMarks() || MtrMarks.anyOn();
         boolean enabled = RoadConfig.mtrTransit();
         StringBuilder key = new StringBuilder();
-        key.append(autoMarks).append(';').append(enabled).append(';')
+        key.append(enabled).append(';')
                 .append(reading.stations().size()).append('/')
                 .append(reading.platforms().size()).append('/')
                 .append(reading.lines().size()).append('/')
-                .append(reading.tracks().size());
+                .append(reading.tracks().size())
+                // A rail that left the client's window as another arrived leaves the count alone, and
+                // the marks are cut out of the rails, so what they are made of is part of what this
+                // notices rather than only how many of them there are.
+                .append('/').append(railSignature(reading));
         for (MtrClientData.Line line : reading.lines()) {
-            key.append('|').append(line.id()).append(':').append(line.stops().size());
+            // Which lines want their track marked is part of the signature too: flipping a switch has
+            // to rebuild, and the switch is read here rather than in the conversion so that the
+            // conversion stays a function of the reading and a decision it is handed.
+            key.append('|').append(line.id()).append(':').append(line.stops().size())
+                    .append(marksWanted(line.id()) ? '+' : '-');
         }
         String now = key.toString();
         if (now.equals(signature)) {
@@ -192,24 +274,51 @@ public final class MtrTransit {
         unplaced = 0;
         if (!enabled) {
             stops = List.of();
+            stationList = List.of();
             lines = List.of();
             rails = new RoadNetwork();
             return;
         }
 
-        Built built = build(reading, autoMarks);
+        long startedAt = System.nanoTime();
+        Built built = build(reading, MtrTransit::marksWanted);
         stops = built.stops();
+        stationList = built.stations();
         lines = built.lines();
         rails = built.rails();
         imported = built.imported();
         skipped = built.skipped();
         unplaced = built.unplaced();
         if (imported > 0 || skipped > 0 || !stops.isEmpty()) {
+            // The time is here because marking plans a ride per pair of neighbouring stops, and this
+            // runs wherever a reading is first asked for -- which can be the render thread, in the
+            // middle of a map drawing. If it ever grows past a frame, that number is the evidence.
             HowToGo.LOGGER.info("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
-                            + "| rails {} nodes {} | {}",
+                            + "| marks {} rails {} nodes {} | {} ms | {}",
                     stops.size(), imported, skipped, unplaced, rails.segmentCount(), rails.nodeCount(),
-                    describe());
+                    Math.round((System.nanoTime() - startedAt) / 1_000_000.0), describe());
         }
+    }
+
+    /** A cheap fingerprint of the rails a reading holds, so a rail swapped for another is noticed. */
+    private static int railSignature(MtrClientData.Snapshot reading) {
+        int hash = 1;
+        for (MtrClientData.Track track : reading.tracks()) {
+            hash = hash * 31 + track.hexId().hashCode();
+            hash = hash * 31 + track.vertexCount();
+        }
+        return hash;
+    }
+
+    /**
+     * Whether this line's track is marked as roads of this mod.
+     *
+     * <p>MTR's own switch on the outside: nothing is marked at all while MTR is not being read. Inside
+     * that, the player's answer for the line if they have given one, and otherwise the configured
+     * default -- see {@link MtrMarks}, which is where the answers live.
+     */
+    private static boolean marksWanted(long mtrLineId) {
+        return RoadConfig.mtrTransit() && MtrMarks.forLine(mtrLineId);
     }
 
     /** The imported lines by name and kind, bounded, for the one log line a reading earns. */
@@ -232,18 +341,22 @@ public final class MtrTransit {
     }
 
     /**
-     * Whether a line brings MTR's own track with it.
+     * Whether a line is planned over MTR's track.
      *
      * <p>A line the player built takes the configured default: the marks are MTR's, and a line of the
      * player's own has no answer of its own to give about them. A line read out of MTR has whatever the
      * player chose for it, falling back to the same default -- see {@link MtrMarks}.
+     *
+     * <p>For an imported line this is the same question {@link #marksWanted} answers, and deliberately
+     * so: whether a line's track is marked and whether a ride along it uses that track cannot be two
+     * different answers, or the switch would draw one thing and route another.
      */
     public static boolean marksEnabled(TransitLine line) {
         if (!RoadConfig.mtrTransit()) {
             // Nothing is read from MTR, so there is nothing of MTR's to bring in.
             return false;
         }
-        return isImported(line) ? MtrMarks.forLine(lineId(line)) : RoadConfig.mtrAutoRouteMarks();
+        return isImported(line) ? marksWanted(lineId(line)) : RoadConfig.mtrAutoRouteMarks();
     }
 
     /**
@@ -292,15 +405,30 @@ public final class MtrTransit {
     }
 
     /** One stop per station, where its vehicles stop. */
-    private static List<LineStop> buildStops(MtrClientData.Snapshot reading) {
-        List<LineStop> built = new ArrayList<>(reading.stations().size());
+    private static List<Station> buildStations(MtrClientData.Snapshot reading) {
+        List<Station> built = new ArrayList<>(reading.stations().size());
         for (MtrClientData.Station station : reading.stations()) {
             int[] position = reading.stopPosition(station.id());
             if (position == null) {
                 continue;
             }
-            built.add(LineStop.ofStation(station.name() == null ? "" : station.name(),
-                    position[0], position[1]));
+            built.add(new Station(station.name() == null ? "" : station.name(), position[0],
+                    station.centerY(), position[1]));
+        }
+        return List.copyOf(built);
+    }
+
+    /**
+     * The stations as the planner's kind of stop.
+     *
+     * <p>A projection rather than a second walk of the reading, so the rule that decides where a
+     * station's vehicles stop -- the middle of its platforms, or of its area -- has one home and a
+     * station can never be offered as a destination at one place and planned to at another.
+     */
+    private static List<LineStop> stopsOf(List<Station> stations) {
+        List<LineStop> built = new ArrayList<>(stations.size());
+        for (Station station : stations) {
+            built.add(LineStop.ofStation(station.name(), station.x(), station.z()));
         }
         return List.copyOf(built);
     }
