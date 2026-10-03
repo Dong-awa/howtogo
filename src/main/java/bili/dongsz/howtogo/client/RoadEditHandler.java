@@ -87,29 +87,33 @@ public final class RoadEditHandler {
 
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
         Screen screen = Minecraft.getInstance().screen;
-        boolean gate = isMapOpen(screen);
-        if (!gate) {
-            return;
-        }
         if (event.getAction() != GLFW.GLFW_PRESS) {
             return;
         }
 
-        // Picking a destination works regardless of the editor being open, the way tapping a map
-        // does in a navigation app.
-        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT && Screen.hasControlDown()) {
+        // Picking a destination comes before the typing gate: a click is not a typed character, so a
+        // focused text field -- the map's search box, most of the time -- must not swallow it. With that
+        // gate in front, a player who had once clicked in the search box found the map unpickable.
+        //
+        // The map's own switches are not handled here at all: they belong to the screen rather than to
+        // the map, and are handled and drawn by MapFilterOverlay.
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT && isMapScreen(screen)
+                && !RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
             return;
         }
 
-        // The map's own switches, in its ordinary mode where they are drawn. Asked before anything else
-        // that could act on the click: a press that fell through the panel would move the map or place a
-        // road under the thing the player was aiming at.
-        if (!RoadEditSession.isActive()
-                && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
-                && handlesFilterPanel()) {
+        // And while editing, the same click is a destination too: the editor places points on a bare
+        // click and picks a destination on a Ctrl one.
+        if (isMapOpen(screen) && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
+                && RoadEditSession.isActive() && Screen.hasControlDown()) {
+            safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
+            return;
+        }
+
+        if (!isMapOpen(screen)) {
             return;
         }
         if (!RoadEditSession.isActive()) {
@@ -135,117 +139,15 @@ public final class RoadEditHandler {
         }
     }
 
-    /**
-     * Presses one of the map panel's switches, or takes hold of its title to move it.
-     *
-     * <p>The boxes come from the panel itself, so the switch that is flipped is the one that was drawn
-     * under the cursor rather than one worked out a second time here.
-     *
-     * <p>The title does two things, and which one a press means is decided when it is let go: a press and
-     * release without moving rolls the panel up, and a press that moves drags it. Deciding on the press
-     * would make one of the two impossible.
-     *
-     * @return whether the press was the panel's business, in which case the map must not also see it
-     */
-    private static boolean handlesFilterPanel() {
-        Minecraft minecraft = Minecraft.getInstance();
-        com.mojang.blaze3d.platform.Window window = minecraft.getWindow();
-        if (window == null) {
-            return false;
-        }
-        double mouseX = cursorX(window);
-        double mouseY = cursorY(window);
-        net.minecraft.client.gui.Font font = minecraft.font;
-        if (!MapFilterPanel.covers(font, mouseX, mouseY)) {
-            return false;
-        }
-        MapFilterPanel.Toggle title = MapFilterPanel.titleToggle(font, mouseX, mouseY);
-        if (title != null) {
-            panelGrabX = MapFilter.panelX() - mouseX;
-            panelGrabY = MapFilter.panelY() - mouseY;
-            panelHeld = true;
-            panelMoved = false;
-            return true;
-        }
-        MapFilterPanel.Toggle pressed = MapFilterPanel.pressed(font, mouseX, mouseY);
-        if (pressed != null) {
-            safely("map filter", pressed::flip);
-        }
-        // Cancelled either way: the panel is opaque, and a press inside it is not a press on the map.
-        return true;
-    }
-
-    /**
-     * A drag while the panel's title is held moves the panel.
-     *
-     * <p>The map pans on a drag, so the event is cancelled while the panel owns the press: a panel that
-     * moved and took the map with it would be a panel nobody could place.
-     */
-    public static void onMouseDragged(ScreenEvent.MouseDragged.Pre event) {
-        if (!panelHeld) {
-            return;
-        }
-        Minecraft minecraft = Minecraft.getInstance();
-        com.mojang.blaze3d.platform.Window window = minecraft.getWindow();
-        if (window == null) {
-            return;
-        }
-        double mouseX = cursorX(window);
-        double mouseY = cursorY(window);
-        if (Math.abs(mouseX - (MapFilter.panelX() - panelGrabX)) > 2
-                || Math.abs(mouseY - (MapFilter.panelY() - panelGrabY)) > 2) {
-            panelMoved = true;
-        }
-        int[] bounds = MapFilterPanel.bounds(minecraft.font);
-        MapFilter.movePanel((int) Math.round(mouseX + panelGrabX),
-                (int) Math.round(mouseY + panelGrabY),
-                window.getGuiScaledWidth(), window.getGuiScaledHeight(), bounds[2], bounds[3]);
-        event.setCanceled(true);
-    }
-
-    /** The cursor in the same pixels the panel is drawn in. */
-    private static double cursorX(com.mojang.blaze3d.platform.Window window) {
-        return Minecraft.getInstance().mouseHandler.xpos()
-                * window.getGuiScaledWidth() / window.getScreenWidth();
-    }
-
-    /** The same for the other axis. */
-    private static double cursorY(com.mojang.blaze3d.platform.Window window) {
-        return Minecraft.getInstance().mouseHandler.ypos()
-                * window.getGuiScaledHeight() / window.getScreenHeight();
-    }
-
     public static void onMouseButtonReleased(InputEvent.MouseButton.Post event) {
         if (event.getAction() != GLFW.GLFW_RELEASE) {
             return;
         }
-        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
-            if (panelHeld) {
-                panelHeld = false;
-                if (panelMoved) {
-                    // Written when the drag ends rather than on every pixel of it.
-                    MapFilter.keepPanelPosition();
-                } else {
-                    MapFilterPanel.Toggle title = MapFilterPanel.titleToggle(
-                            Minecraft.getInstance().font, cursorX(Minecraft.getInstance().getWindow()),
-                            cursorY(Minecraft.getInstance().getWindow()));
-                    if (title != null) {
-                        safely("map filter", title::flip);
-                    }
-                }
-                return;
-            }
-            if (RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
-                RoadEditSession.endDrag();
-            }
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
+                && RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
+            RoadEditSession.endDrag();
         }
     }
-
-    /** Whether the panel's title is being held, and whether it has been moved since it was. */
-    private static boolean panelHeld;
-    private static boolean panelMoved;
-    private static double panelGrabX;
-    private static double panelGrabY;
 
     // --------------------------------------------------------------- keyboard
 
@@ -376,6 +278,20 @@ public final class RoadEditHandler {
      */
     private static boolean isMapOpen(Screen screen) {
         if (screen == null || isTyping(screen)) {
+            return false;
+        }
+        return isMapScreen(screen);
+    }
+
+    /**
+     * Whether the screen is the world map's, with no opinion about what is focused.
+     *
+     * <p>The distinction exists for the mouse: a focused text field has to swallow shortcut <em>keys</em>,
+     * because a letter typed into a search box is text, but it must not swallow a click on the mod's own
+     * panel or a click that picks a destination.
+     */
+    static boolean isMapScreen(Screen screen) {
+        if (screen == null) {
             return false;
         }
         if (isInPackage(screen, "xaero.map.")) {

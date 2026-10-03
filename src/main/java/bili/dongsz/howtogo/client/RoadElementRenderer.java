@@ -118,8 +118,132 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double ROUTE_STROKE_PX = 4.0;
     private static final double ROUTE_MARKER_PX = 5.0;
 
-    /** Names are only drawn once the map is zoomed in enough for them not to collide. */
-    private static final double LABEL_MIN_SCALE = 0.75;
+    /**
+     * Names are only drawn once the map is zoomed in enough for them not to collide.
+     *
+     * <p>Lower than it was, because names now shrink with the map: the reason for the gate was that a
+     * screenful of full-sized words smears into itself when the map is far out, and smaller words smear
+     * far less. The floor on their size is what keeps them readable at the edge of this.
+     */
+    private static final double LABEL_MIN_SCALE = 0.5;
+
+    /**
+     * The map scale a name's size is measured from, the size it is drawn at there, and the bounds on how
+     * far it may grow or shrink from there.
+     *
+     * <h2>Why the base is below the font's own size</h2>
+     * The font is made for reading a line of text at the top of a screen, and a name laid on a map is
+     * read at a glance and in company with a hundred others: at its own size it is a shout. Everything
+     * here is therefore a fraction of the font, and the largest it ever gets is barely above it.
+     *
+     * <p>Zoomed out from the reference a name shrinks in proportion to the map until it stops being
+     * legible; zoomed in it grows far more slowly, over the whole of the range rather than in one step.
+     */
+    private static final double LABEL_NATURAL_SCALE = 0.75;
+    /** The size at the reference: four fifths of the font. */
+    private static final double LABEL_BASE_FACTOR = 0.8;
+    private static final double LABEL_MIN_FACTOR = 0.55;
+    private static final double LABEL_MAX_FACTOR = 1.1;
+    /**
+     * How far past the reference the growth from the base size to the largest is spread.
+     *
+     * <p>Fifty times the reference, which is the whole of the range a player ever zooms through, rather
+     * than the first step of it: growing in proportion to the map reaches the largest size a little past
+     * the reference, so every ordinary zoom looks the same and the close-in range has nothing left to
+     * give.
+     */
+    private static final double LABEL_GROWTH_SPAN = 50.0;
+    /**
+     * How far below a place's marker its name is written, before the name's own size scales it.
+     *
+     * <p>Scaled with the name: a gap of a fixed number of pixels is a name floating away from its marker
+     * when the text is small and touching it when the text is large, and the gap is there to keep the two
+     * apart rather than to be a distance of its own. Small, because the marker already has a size.
+     */
+    private static final double PLACE_NAME_GAP_PX = 6.0;
+    /**
+     * How far above a line's own centre its name is written, before the name's own size scales it.
+     *
+     * <p>Half of the font's nine-pixel line height, so the road runs through the middle of the word
+     * rather than under or beside it. A name that is set clear of its road is a name that has drifted
+     * away from the thing it labels, which is what these read as when the offset was larger.
+     */
+    private static final int LINE_LABEL_RISE_PX = 4;
+
+    /**
+     * Where a world position lands on screen, through the pose the map is drawing with right now.
+     *
+     * <h2>Why not {@link MapViewState}</h2>
+     * The map texture, the roads and the route are all placed by Xaero's own pose for the frame, and
+     * Xaero builds that pose from its camera as it stands at the moment of the draw. The cached view
+     * state is a different reading of the same thing -- the camera from the render info, kept for the
+     * mouse handlers, which run outside the render pass -- and the two are not the same number within a
+     * frame: the map moves between them. Placing a marker from the cached camera while the map under it
+     * is drawn from the pose is what made the transit lines, the stop markers and the place markers
+     * trail behind the map while it was being panned -- exact while standing still, dragging while
+     * moving, which is the signature of two readings of one frame.
+     *
+     * <p>So the arithmetic here is the pose's own: the anchor is the world point Xaero built the pose
+     * around, so subtracting it and applying the pose's scale and translate gives exactly the position
+     * the map has just drawn the same point at. {@code scale} is Xaero's units per block, the same value
+     * the roads are placed with.
+     *
+     * @param anchorX world x the pose was built around
+     * @param anchorZ world z the pose was built around
+     * @param scale   xaero's units per block for this frame
+     * @param m00     the pose's x scale
+     * @param m11     the pose's z scale
+     * @param m30     the pose's x translate
+     * @param m31     the pose's z translate
+     */
+    private record Projection(double anchorX, double anchorZ, double scale, double m00, double m11,
+                              double m30, double m31) {
+
+        double screenX(double worldX) {
+            return (worldX - anchorX) * scale * m00 + m30;
+        }
+
+        double screenZ(double worldZ) {
+            return (worldZ - anchorZ) * scale * m11 + m31;
+        }
+    }
+
+    /**
+     * How much bigger or smaller than the font a name is drawn at this map scale.
+     *
+     * <p>Zoomed out from the reference, a name shrinks in proportion to the map until it stops being
+     * legible. Zoomed in, it grows far more slowly, over the whole of the range rather than in one step:
+     * a name is a label rather than a measurement, and one that is already at its largest while the map is
+     * still half way out makes every zoom look the same.
+     */
+    private static float labelScale(double scale) {
+        double magnitude = Math.abs(scale);
+        double reference = LABEL_NATURAL_SCALE;
+        if (magnitude <= reference) {
+            return (float) Math.max(LABEL_MIN_FACTOR, LABEL_BASE_FACTOR * magnitude / reference);
+        }
+        double grown = LABEL_BASE_FACTOR + (LABEL_MAX_FACTOR - LABEL_BASE_FACTOR)
+                * Math.min(1.0, (magnitude - reference) / (reference * LABEL_GROWTH_SPAN));
+        return (float) grown;
+    }
+
+    /**
+     * One name on the map, centred on a point and drawn at the size the map is zoomed to.
+     *
+     * <p>Text is drawn after the pose has been flattened to screen space, so the scaling has to be put
+     * back for the text alone: the pose is pushed, moved to the point and scaled, and the name is written
+     * at the origin of that frame. The offsets inside it are in the name's own units, so a centred name
+     * stays centred at every size.
+     */
+    private static void drawMapLabel(GuiGraphics graphics, Font font, String name, double x, double y,
+                                     int colour, float factor) {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(x, y, 0.0);
+        pose.scale(factor, factor, 1.0F);
+        graphics.drawString(font, name, -font.width(name) / 2, 0, colour, true);
+        pose.popPose();
+    }
 
     public RoadElementRenderer(RoadRenderContext context, RoadElementProvider provider, RoadElementReader reader) {
         super(context, provider, reader);
@@ -227,10 +351,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // the context these panels want.
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             // Where the cursor is, on every frame the map draws and not only while editing: Ctrl+click
-            // sets the destination, and the spot it uses is this one. Tracking it only in the editor's
-            // branch is what made that click do nothing at all in the map's ordinary mode -- the handler
-            // was there, and the position it needed was not. The raw position only: snapping costs a walk
-            // of the whole network and is the editor's business.
+            // sets the destination, and the map's own panel is clicked through it. The raw position only:
+            // snapping costs a walk of the whole network and is the editor's business.
             RoadEditSession.setMouse(info.mouseX, info.mouseZ);
             if (!(minecraft.screen instanceof TransitLineScreen)
                     && !(minecraft.screen instanceof RoadNameScreen)) {
@@ -244,18 +366,20 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // working it out would be two answers that could disagree.
                 java.util.List<TransitInterchanges.Interchange> interchanges =
                         TransitInterchanges.of(Navigation.linesInPlay());
+                // Everything drawn in screen coordinates in this pass goes through this, and not through
+                // the cached view state: the pose is what the map under it was just drawn with, so the
+                // two cannot disagree while the map is moving.
+                Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
+                        m00, m.m11(), m.m30(), m.m31());
                 drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
-                        graphics.guiHeight() + lineMargin, Math.abs(info.scale), interchanges);
-                renderLabels(graphics, pose, info, vc, interchanges);
-                // Last of all, and only in the map's ordinary mode: the panel is a way of reading the
-                // map, and while the editor is open its own HUD owns that corner. The cursor is put
-                // through the map's own transform, because what Xaero hands a renderer is a world
-                // position and the panel is drawn in screen pixels.
-                if (!RoadEditSession.isActive()) {
-                    int cursorX = (int) Math.round(MapViewState.toScreenX(info.mouseX));
-                    int cursorY = (int) Math.round(MapViewState.toScreenZ(info.mouseZ));
-                    MapFilterPanel.draw(graphics, cursorX, cursorY);
-                }
+                        graphics.guiHeight() + lineMargin, Math.abs(info.scale), interchanges,
+                        projection);
+                renderLabels(graphics, pose, info, vc, interchanges, projection);
+                // The map's switches are not drawn here. They are not part of the map: drawn from this
+                // pass they came out under the lines, the markers and the names however late they were
+                // emitted, because those are written through this renderer's own vertex buffers and the
+                // game flushes them when it flushes them. They are a screen overlay and are drawn from
+                // the screen's render event, after the map has finished -- see MapFilterOverlay.
             }
             return true;
         }
@@ -431,7 +555,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private void renderLabels(GuiGraphics graphics, PoseStack pose, ElementRenderInfo info,
                               VertexConsumer vc,
-                              java.util.List<TransitInterchanges.Interchange> interchanges) {
+                              java.util.List<TransitInterchanges.Interchange> interchanges,
+                              Projection projection) {
         Minecraft mc = Minecraft.getInstance();
         Font font = mc.font;
         RoadNetwork network = RoadStore.get();
@@ -452,10 +577,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // for being unreadable -- so gating the two together would remove the marker exactly when it
         // is needed. Shapes before text: see the warning on HudDraw.
         drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges,
-                Math.abs(info.scale));
+                Math.abs(info.scale), projection);
 
         // Names need a zoom at which they can be read at all; at lower zoom they overlap into a
-        // smear. Only the text is gated, never the markers above.
+        // smear. Only the text is gated, never the markers above. Their size follows the zoom: the
+        // font's own size at the reference scale, shrinking or growing with the map either side of it.
+        float labelFactor = labelScale(info.scale);
         if (Math.abs(info.scale) >= LABEL_MIN_SCALE) {
             for (RoadSegment segment : network.segments()) {
                 String name = segment.name();
@@ -475,8 +602,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // is off screen is work whose result is thrown away one line later. On a large
                 // network this was the label pass's dominant cost.
                 double[] mid = segment.midpoint();
-                int x = (int) Math.round(MapViewState.toScreenX(mid[0]));
-                int y = (int) Math.round(MapViewState.toScreenZ(mid[1]));
+                int x = (int) Math.round(projection.screenX(mid[0]));
+                int y = (int) Math.round(projection.screenZ(mid[1]));
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
@@ -488,10 +615,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 }
                 // A name longer than the road it belongs to would hang off both its ends and read as
                 // a label for whatever is beside it, so it is dropped rather than written.
-                if (font.width(name) > chainLengthPx(network, chain)) {
+                if (font.width(name) * labelFactor > chainLengthPx(network, chain, projection)) {
                     continue;
                 }
-                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_ROAD);
+                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_ROAD, projection,
+                        labelFactor);
             }
             // Railway names, one per line. Which segment of a chain carries the label was decided
             // when the layer was rebuilt, so this asks a map instead of walking every chain a frame.
@@ -504,17 +632,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // The same rule as for a road, over the whole railway. The chain is walked here rather
                 // than remembered: only the one segment per railway that carries the label gets this
                 // far, so it runs for a handful of segments a frame and not for the whole layer.
-                if (font.width(name) > chainLengthPx(layer,
-                        RoadChains.chainContaining(layer, segment.id()))) {
+                if (font.width(name) * labelFactor > chainLengthPx(layer,
+                        RoadChains.chainContaining(layer, segment.id()), projection)) {
                     continue;
                 }
                 double[] mid = segment.midpoint();
-                int x = (int) Math.round(MapViewState.toScreenX(mid[0]));
-                int y = (int) Math.round(MapViewState.toScreenZ(mid[1]));
+                int x = (int) Math.round(projection.screenX(mid[0]));
+                int y = (int) Math.round(projection.screenZ(mid[1]));
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_RAIL);
+                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_RAIL, projection,
+                        labelFactor);
             }
 
             // Place names, under their markers. A station's name comes from
@@ -527,25 +656,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (!MapFilter.shows(node.placeKind(), info.scale)) {
                     continue;
                 }
-                int x = (int) Math.round(MapViewState.toScreenX(node.x()));
-                int y = (int) Math.round(MapViewState.toScreenZ(node.z()));
+                int x = (int) Math.round(projection.screenX(node.x()));
+                int y = (int) Math.round(projection.screenZ(node.z()));
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                graphics.drawString(font, node.name(), x - font.width(node.name()) / 2, y + 8,
-                        HudDraw.COLOR_PLACE, true);
+                drawMapLabel(graphics, font, node.name(), x, y + PLACE_NAME_GAP_PX * labelFactor,
+                        HudDraw.COLOR_PLACE, labelFactor);
             }
 
             if (MapFilter.shows(PlaceKind.STATION, info.scale)) {
                 for (RailTrackStore.Station station : RailTrackStore.stations()) {
                     String name = CreateStationSource.nameOf(station);
-                    int x = (int) Math.round(MapViewState.toScreenX(station.x()));
-                    int y = (int) Math.round(MapViewState.toScreenZ(station.z()));
+                    int x = (int) Math.round(projection.screenX(station.x()));
+                    int y = (int) Math.round(projection.screenZ(station.z()));
                     if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                         continue;
                     }
-                    graphics.drawString(font, name, x - font.width(name) / 2, y + 8,
-                            HudDraw.COLOR_PLACE, true);
+                    drawMapLabel(graphics, font, name, x, y + PLACE_NAME_GAP_PX * labelFactor,
+                            HudDraw.COLOR_PLACE, labelFactor);
                 }
             }
         }
@@ -561,7 +690,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * its own pieces is exactly right. Measuring a single piece would drop the name of a road drawn
      * with many short clicks even though there is plenty of road to write it on.
      */
-    private static double chainLengthPx(RoadNetwork network, List<Integer> chain) {
+    private static double chainLengthPx(RoadNetwork network, List<Integer> chain,
+                                     Projection projection) {
         double total = 0;
         for (int id : chain) {
             RoadSegment member = network.segment(id);
@@ -570,8 +700,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             for (int i = 1; i < member.vertexCount(); i++) {
                 total += Math.hypot(
-                        MapViewState.toScreenX(member.x(i)) - MapViewState.toScreenX(member.x(i - 1)),
-                        MapViewState.toScreenZ(member.z(i)) - MapViewState.toScreenZ(member.z(i - 1)));
+                        projection.screenX(member.x(i)) - projection.screenX(member.x(i - 1)),
+                        projection.screenZ(member.z(i)) - projection.screenZ(member.z(i - 1)));
             }
         }
         return total;
@@ -589,19 +719,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <h2>How the rotation is applied</h2>
      * The label pass has already flattened the pose to screen space, so the translation is in pixels
      * and the rotation is about the label's own centre -- the text is then drawn at the origin and
-     * the half-width offset puts its middle on the line. The perpendicular offset stays, so the name
-     * still sits beside the line rather than on top of it.
+     * the half-width offset puts its middle on the line.
+     *
+     * <h2>The perpendicular offset</h2>
+     * The text is centred on the line rather than pushed clear of it: a name set a few pixels off its
+     * road is a name that has floated away from the road, which is the fault that made these look
+     * placed by hand. Half a line of text is the whole of the offset, so the road runs through the
+     * middle of the word at every size.
      */
     private void drawLineLabel(GuiGraphics graphics, PoseStack pose, Font font, String name,
-                               RoadSegment segment, int color) {
+                               RoadSegment segment, int color, Projection projection,
+                               float factor) {
         double[] mid = segment.midpoint();
-        double x = MapViewState.toScreenX(mid[0]);
-        double y = MapViewState.toScreenZ(mid[1]);
+        double x = projection.screenX(mid[0]);
+        double y = projection.screenZ(mid[1]);
 
         pose.pushPose();
         pose.translate(x, y, 0.0);
-        pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment)));
-        graphics.drawString(font, name, -font.width(name) / 2, -4, color, true);
+        pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));
+        pose.scale(factor, factor, 1.0F);
+        graphics.drawString(font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
         pose.popPose();
     }
 
@@ -613,10 +750,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * the label would be readable only by tilting one's head, so it is turned the other way instead --
      * the same choice a printed map makes.
      */
-    private static double screenAngle(RoadSegment segment) {
+    private static double screenAngle(RoadSegment segment, Projection projection) {
         int last = segment.vertexCount() - 1;
-        double dx = MapViewState.toScreenX(segment.x(last)) - MapViewState.toScreenX(segment.x(0));
-        double dy = MapViewState.toScreenZ(segment.z(last)) - MapViewState.toScreenZ(segment.z(0));
+        double dx = projection.screenX(segment.x(last)) - projection.screenX(segment.x(0));
+        double dy = projection.screenZ(segment.z(last)) - projection.screenZ(segment.z(0));
         double angle = Math.atan2(dy, dx);
         if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
             angle += Math.PI;
@@ -655,7 +792,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private static final double MARKER_NATURAL_SCALE = 0.5;
     private static final double MARKER_MIN_HALF_PX = 1.4;
-    private static final double MARKER_MAX_HALF_PX = 6.5;
+    /**
+     * The most a marker may grow to, in half-width pixels.
+     *
+     * <p>About a third of what a marker reaches if it is left to follow the scale all the way up: a place
+     * is a dot on a map, and one that grows to a fifth of the screen while the map is zoomed in is a
+     * building, not a marker. The scale still moves it between this and the floor below.
+     */
+    private static final double MARKER_MAX_HALF_PX = 2.2;
     /**
      * How close two interchange markers have to land to be drawn as one, in pixels.
      *
@@ -838,7 +982,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
                                              int viewRight, int viewBottom, double scale,
                                              java.util.List<TransitInterchanges.Interchange>
-                                                     interchanges) {
+                                                     interchanges,
+                                             Projection projection) {
         List<LineLabel> labels = new java.util.ArrayList<>();
         // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
         // a line whose route the map should show, whichever of the two it came from. Never shed by zoom:
@@ -882,15 +1027,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 shape = hop(line);
             }
             for (int i = 1; i < shape.size(); i++) {
-                double x1 = MapViewState.toScreenX(shape.get(i - 1)[0]);
-                double y1 = MapViewState.toScreenZ(shape.get(i - 1)[1]);
-                double x2 = MapViewState.toScreenX(shape.get(i)[0]);
-                double y2 = MapViewState.toScreenZ(shape.get(i)[1]);
+                double x1 = projection.screenX(shape.get(i - 1)[0]);
+                double y1 = projection.screenZ(shape.get(i - 1)[1]);
+                double x2 = projection.screenX(shape.get(i)[0]);
+                double y2 = projection.screenZ(shape.get(i)[1]);
                 if (Math.max(x1, x2) < -margin || Math.min(x1, x2) > viewRight
                         || Math.max(y1, y2) < -margin || Math.min(y1, y2) > viewBottom) {
                     continue;
                 }
-                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, lineStrokePx(), lineColour(line),
+                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, lineStrokePx(scale), lineColour(line),
                         0xFF);
             }
             if (shape.size() >= 2) {
@@ -915,8 +1060,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     // Drawn once, as the interchange, below.
                     continue;
                 }
-                double x = MapViewState.toScreenX(stop.x());
-                double y = MapViewState.toScreenZ(stop.z());
+                double x = projection.screenX(stop.x());
+                double y = projection.screenZ(stop.z());
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
@@ -937,14 +1082,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (MapFilter.shows(PlaceKind.STATION, scale)) {
             for (TransitInterchanges.Interchange interchange : interchanges) {
                 for (List<Integer> group : TransitInterchanges.overlapping(interchange,
-                        x -> (int) Math.round(MapViewState.toScreenX(x)),
-                        z -> (int) Math.round(MapViewState.toScreenZ(z)), stopHalf * 2.0)) {
+                        x -> (int) Math.round(projection.screenX(x)),
+                        z -> (int) Math.round(projection.screenZ(z)), stopHalf * 2.0)) {
                     double x = 0;
                     double y = 0;
                     for (int index : group) {
                         int[] stop = interchange.stops().get(index);
-                        x += MapViewState.toScreenX(stop[0]);
-                        y += MapViewState.toScreenZ(stop[1]);
+                        x += projection.screenX(stop[0]);
+                        y += projection.screenZ(stop[1]);
                     }
                     x /= group.size();
                     y /= group.size();
@@ -1005,9 +1150,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * line was still two and a half pixels of solid colour and read as a rope laid over the map. It
      * thins with the map down to a floor, so it is never invisible and never fat.
      */
-    private static double lineStrokePx() {
-        double scale = Math.abs(MapViewState.scale());
-        double thinned = LINE_STROKE_PX * scale / FULL_LINE_STROKE_SCALE;
+    private static double lineStrokePx(double scale) {
+        double thinned = LINE_STROKE_PX * Math.abs(scale) / FULL_LINE_STROKE_SCALE;
         return Math.max(MIN_LINE_STROKE_PX, Math.min(LINE_STROKE_PX, thinned));
     }
 
@@ -1099,7 +1243,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
                                   java.util.List<TransitInterchanges.Interchange> interchanges,
-                                  double scale) {
+                                  double scale, Projection projection) {
         double half = markerHalfPx(HudDraw.PLACE_MARKER_PX, scale);
         for (Destination place : Destinations.places()) {
             // The panel's switches and the map's zoom, through the one rule: a shop is shed before a
@@ -1114,8 +1258,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (inAnInterchange(interchanges, place.x(), place.z())) {
                 continue;
             }
-            double x = MapViewState.toScreenX(place.x());
-            double y = MapViewState.toScreenZ(place.z());
+            double x = projection.screenX(place.x());
+            double y = projection.screenZ(place.z());
             if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                 continue;
             }

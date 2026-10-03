@@ -5,6 +5,7 @@ import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.client.RailTrackStore;
+import bili.dongsz.howtogo.client.MapFilterOverlay;
 import bili.dongsz.howtogo.client.RoadEditHandler;
 import bili.dongsz.howtogo.client.RoadEditSession;
 import bili.dongsz.howtogo.client.RoadLayer;
@@ -56,9 +57,14 @@ public final class HowToGo {
         // handler posts its event before any screen sees the click. RoadEditHandler carries the detail.
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseButton);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseButtonReleased);
-        NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseDragged);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyPressed);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyReleased);
+        // The map's switches: a screen overlay rather than part of the map, so that nothing the map
+        // draws can end up over them. See MapFilterOverlay.
+        NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onScreenRender);
+        NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onMousePressed);
+        NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onMouseDragged);
+        NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onMouseReleased);
 
         modEventBus.addListener(RoadEditHandler::onRegisterKeyMappings);
         // Client setup runs after the config files have been read, so this is the first point at

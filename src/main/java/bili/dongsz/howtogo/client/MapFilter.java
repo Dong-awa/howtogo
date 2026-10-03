@@ -75,8 +75,18 @@ public final class MapFilter {
     private static boolean linesHidden;
     private static boolean collapsed;
     /** Where the panel sits, in screen pixels from the top left, since the player may drag it. */
-    private static int panelX = 4;
-    private static int panelY = 4;
+    private static final int DEFAULT_PANEL_X = 40;
+    private static final int DEFAULT_PANEL_Y = 4;
+    /**
+     * The version whose file may hold a panel position.
+     *
+     * <p>A file written before this one had the panel in the very corner, which is where other mods put
+     * their own overlays; the position it holds is therefore not the position to keep, and the default is
+     * used instead. Written on the first save, so this happens once.
+     */
+    private static final int POSITION_VERSION = 2;
+    private static int panelX = DEFAULT_PANEL_X;
+    private static int panelY = DEFAULT_PANEL_Y;
     private static boolean loaded;
     private static boolean dirty;
 
@@ -239,8 +249,10 @@ public final class MapFilter {
             }
             linesHidden = dto.lines;
             collapsed = dto.collapsed;
-            panelX = dto.panelX;
-            panelY = dto.panelY;
+            if (dto.version >= POSITION_VERSION) {
+                panelX = dto.panelX;
+                panelY = dto.panelY;
+            }
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; the map shows everything", file, e);
         }
@@ -281,7 +293,7 @@ public final class MapFilter {
         try {
             Files.createDirectories(file.getParent());
             FilterDto dto = new FilterDto();
-            dto.version = 1;
+            dto.version = POSITION_VERSION;
             dto.roads = new ArrayList<>();
             for (RoadClass roadClass : HIDDEN_ROADS) {
                 dto.roads.add(roadClass.name());
@@ -316,7 +328,7 @@ public final class MapFilter {
         List<String> places;
         boolean lines;
         boolean collapsed;
-        int panelX = 4;
-        int panelY = 4;
+        int panelX = DEFAULT_PANEL_X;
+        int panelY = DEFAULT_PANEL_Y;
     }
 }
