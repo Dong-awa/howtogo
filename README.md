@@ -224,6 +224,25 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.11"
 
 ---
 
+### 切换分支后构建失败？先清缓存
+
+`.gradle/`、`build/`、`run/` 都在 `.gitignore` 里，所以**切分支不会清掉它们**。而每条分支是不同的 Minecraft、不同的加载器，Fabric 分支还是不同的映射命名空间——Loom 按映射的哈希给缓存文件命名，不按分支名，于是同一个目录里会堆出好几套。用错了那一套，就报成这样：
+
+```
+Failed to setup Minecraft
+java.lang.IllegalArgumentException: Cannot remap access widener from namespace 'official'. Expected: 'intermediary'
+```
+
+这是 Loom 在建 Minecraft 的时候抛的，看着像源码问题，**不是**。本分支源码里根本没有 access widener（`validateAccessWidener` 是 `NO-SOURCE`）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\reset-caches.ps1
+```
+
+它清掉本项目的构建缓存，然后**从冷状态重新构建**来验证。加 `-Deep` 会连全局 Loom 存储（按 Minecraft 版本）和 Gradle 构建缓存一起清；那一步要重新下载，慢一些，只有上一条没解决时才需要。
+
+---
+
 ## 代码结构
 
 ```
