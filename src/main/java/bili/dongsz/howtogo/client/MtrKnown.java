@@ -31,17 +31,18 @@ import java.util.function.LongPredicate;
  *       ground the player has already covered updates them; walking away leaves the last word standing.
  *       A line is only replaced by a reading that placed at least as many of its stops, so a window
  *       arriving with fewer of them cannot shrink the line to what happens to be in range.</li>
- *   <li><b>marks</b> -- the union of every stretch of that line's track ever marked. Track is discovered
- *       a window at a time, so the pieces of it are added rather than replaced: a ride planned from far
- *       away runs along the track the player found earlier, which is the whole reason the marks exist.
- *       A piece already kept is not added twice, and the union is capped, so a session that walks the
- *       whole network cannot grow without limit.</li>
+ *   <li><b>track</b> -- the union of every stretch of that line's track ever found. Track is discovered a
+ *       window at a time, so the pieces of it are added rather than replaced: the map draws the line
+ *       along the track the player found earlier, and a ride planned from far away runs along it too. A
+ *       piece already kept is not added twice, and the union is capped, so a session that walks the whole
+ *       network cannot grow without limit.</li>
  * </ul>
  *
- * <p>Nothing here reads a config or a switch: which lines want their marks is asked of the caller when
- * the union is assembled, so that a line's own answer applies to track that was marked before the answer
- * was given -- turning a line's marks off takes its track out of the layer, and turning them back on puts
- * it back, without anything having to be read from MTR again.
+ * <p>Track is kept for every line, not only for the ones whose marks are switched on: the switch is about
+ * whether a line's track is added to the road network as roads, and a line switched off is still drawn
+ * along the track it runs on. Nothing here reads a config or a switch either -- which lines want their
+ * roads is asked of the caller when the roads are assembled, so a line's answer applies to track that was
+ * found before the answer was given.
  */
 final class MtrKnown {
 
@@ -72,7 +73,7 @@ final class MtrKnown {
 
     private final Map<Long, TransitLine> lines = new LinkedHashMap<>();
     private final Map<Long, MtrTransit.Station> stations = new LinkedHashMap<>();
-    private final Map<Long, RoadNetwork> marks = new LinkedHashMap<>();
+    private final Map<Long, RoadNetwork> tracks = new LinkedHashMap<>();
     private long markSegments;
     private boolean lineCapReported;
     private boolean markCapReported;
@@ -97,7 +98,7 @@ final class MtrKnown {
                 lines.put(id, line);
             }
         }
-        for (Map.Entry<Long, RoadNetwork> entry : reading.marks().entrySet()) {
+        for (Map.Entry<Long, RoadNetwork> entry : reading.tracks().entrySet()) {
             addMarks(entry.getKey(), entry.getValue());
         }
         cap();
@@ -119,7 +120,7 @@ final class MtrKnown {
             }
             return;
         }
-        RoadNetwork kept = marks.computeIfAbsent(lineId, id -> new RoadNetwork());
+        RoadNetwork kept = tracks.computeIfAbsent(lineId, id -> new RoadNetwork());
         for (RoadSegment segment : fresh.segmentsSnapshot()) {
             if (markSegments >= MAX_MARK_SEGMENTS) {
                 break;
@@ -167,14 +168,14 @@ final class MtrKnown {
         while (lines.size() > MAX_LINES) {
             Long oldest = lines.keySet().iterator().next();
             lines.remove(oldest);
-            marks.remove(oldest);
+            tracks.remove(oldest);
             if (!lineCapReported) {
                 lineCapReported = true;
                 HowToGo.LOGGER.warn("[HowToGo] MTR has reported more than {} lines; the earliest are "
                         + "being forgotten so that the newest are kept", MAX_LINES);
             }
             markSegments = 0;
-            for (RoadNetwork network : marks.values()) {
+            for (RoadNetwork network : tracks.values()) {
                 markSegments += network.segmentCount();
             }
         }
@@ -196,18 +197,29 @@ final class MtrKnown {
     /**
      * The track of every line that wants its marks, as one network.
      *
-     * <p>Filtered here rather than when the marks were cut, so that a line's answer applies to track that
-     * was marked before the answer was given: a line switched off has its track left out of the layer and
-     * keeps it in memory, and switching it back on brings it back without a fresh reading.
+     * <p>Filtered here rather than when the track was worked out, so that a line's answer applies to
+     * track that was found before the answer was given: a line switched off has its track left out of
+     * the roads and keeps it remembered -- it is still drawn along it -- and switching it back on brings
+     * the road back without a fresh reading.
      */
     RoadNetwork marks(LongPredicate wantsMarks) {
         List<RoadNetwork> wanted = new ArrayList<>();
-        for (Map.Entry<Long, RoadNetwork> entry : marks.entrySet()) {
+        for (Map.Entry<Long, RoadNetwork> entry : tracks.entrySet()) {
             if (wantsMarks.test(entry.getKey())) {
                 wanted.add(entry.getValue());
             }
         }
         return union(wanted);
+    }
+
+    /**
+     * The track one line runs along, whether or not its marks are switched on.
+     *
+     * <p>What the map draws the line along. Null when MTR has never sent that line with rails under it,
+     * which is a line whose track is not known rather than a line with no track.
+     */
+    RoadNetwork trackOf(long lineId) {
+        return tracks.get(lineId);
     }
 
     /**
@@ -234,7 +246,7 @@ final class MtrKnown {
     void clear() {
         lines.clear();
         stations.clear();
-        marks.clear();
+        tracks.clear();
         markSegments = 0;
         lineCapReported = false;
         markCapReported = false;

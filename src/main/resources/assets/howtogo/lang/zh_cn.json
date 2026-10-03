@@ -10,6 +10,8 @@
   "screen.howtogo.place_kind.resource": "资源点",
   "screen.howtogo.place_kind.shop": "商店",
   "screen.howtogo.place_kind.station": "站点",
+  "screen.howtogo.map_filter": "地图显示",
+  "screen.howtogo.map_lines": "公共交通线路",
   "screen.howtogo.station_needs_road": "站点必须建在道路上（或道路端点）",
   "screen.howtogo.name_rail": "铁路线名称（机械动力自动识别）",
   "screen.howtogo.hover_place": "%s（%s）",

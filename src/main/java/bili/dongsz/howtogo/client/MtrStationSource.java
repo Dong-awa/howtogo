@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
 
@@ -48,7 +49,8 @@ public final class MtrStationSource implements DestinationSource {
         List<Destination> result = new ArrayList<>(stations.size());
         for (MtrTransit.Station station : stations) {
             result.add(new Destination(Destinations.stationName(station.name(), station.x(), station.z()),
-                    station.x(), station.y(), station.z(), ID));
+                    station.x(), station.y(), station.z(), ID, Destination.NO_COLOR,
+                    PlaceKind.STATION));
         }
         return result;
     }

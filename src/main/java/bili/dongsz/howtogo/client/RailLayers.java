@@ -5,23 +5,25 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import java.util.Iterator;
 
 /**
- * The machine-read rails a view draws.
+ * The machine-read rails a view draws, as one sequence.
  *
- * <h2>What is drawn, and what is deliberately not</h2>
- * Create's track graph, which no line of this mod describes: without it a Create station on the list
- * would be a station with no line running to it, so it is drawn wherever a map is.
- *
- * <p>MTR's marks are not drawn, although they are roads of this mod in exactly the same sense. They are
- * the track an MTR line runs along, and the line's own stroke on the map is planned along that very
- * track -- so drawing the marks as well paints the same route twice, an orange road under a blue line,
- * and the line is the one that says what it is. The marks are still in the routing network and still
- * what a ride is planned over; this is only about what is drawn, and the switch beside a line still
- * decides whether that line's track is marked at all.
+ * <h2>Two layers, and who decides what is in them</h2>
+ * Create's track graph and MTR's marks -- the track each line read out of MTR runs along, cut per line
+ * and kept per line. Whether a line's part of the second layer is there at all is that line's own switch
+ * in the editor (see {@link MtrMarks} and {@link MtrKnown}), so a line switched off contributes no road
+ * and one switched on contributes the stretch it was planned along. The line's own stroke on the map is
+ * planned over exactly those marks and painted after them, which is what makes the road the thing under
+ * the line and the line the thing you read.
  *
  * <h2>Why one name</h2>
  * Every view that draws a machine-read rail used to name Create's layer itself, and each of them drifted
  * as the layers changed. Going through here is what makes "the views draw the same rails" a property of
  * the code rather than something each new view has to remember.
+ *
+ * <h2>Why it is a sequence and not a list</h2>
+ * The callers draw one segment at a time and are called per frame, sometimes several times a frame;
+ * building a merged list would copy both layers on every pass. Walking the two in turn costs one
+ * iterator and nothing else, and neither layer can be double-counted because each is walked once.
  */
 public final class RailLayers {
 
@@ -29,24 +31,12 @@ public final class RailLayers {
     }
 
     /**
-     * The rails to draw: Create's layer, as one sequence.
+     * Every segment of both layers, Create's first.
      *
      * <p>Evaluated on iteration rather than on the call, so a caller may hold the sequence across the
      * frame it is drawing without pinning a view of a layer that a rebuild replaced in between.
      */
-    public static Iterable<RoadSegment> drawn() {
-        return RailTrackStore.segments();
-    }
-
-    /**
-     * Every machine-read rail a vehicle can be travelling on: Create's and MTR's both.
-     *
-     * <p>For what is underfoot rather than for what is drawn. Riding a track MTR laid is riding a rail,
-     * and a reading that only knew about Create's would call it walking across open country -- the pace
-     * and the instructions would be those of a person on foot while the player sat on a train. That the
-     * same track is not drawn as a road is a separate question, answered by {@link #drawn()}.
-     */
-    public static Iterable<RoadSegment> travelled() {
+    public static Iterable<RoadSegment> all() {
         return () -> new java.util.Iterator<RoadSegment>() {
 
             private final java.util.Iterator<RoadSegment> create =
@@ -66,8 +56,8 @@ public final class RailLayers {
         };
     }
 
-    /** Whether there is anything to draw, for a caller that only wants to skip the pass. */
+    /** Whether either layer has anything in it, for a caller that only wants to skip the pass. */
     public static boolean isEmpty() {
-        return RailTrackStore.segments().isEmpty();
+        return RailTrackStore.segments().isEmpty() && MtrTransit.railLayer().segmentCount() == 0;
     }
 }

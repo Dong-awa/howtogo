@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.RoadNode;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
 
@@ -37,7 +38,7 @@ public final class PoiDestinationSource implements DestinationSource {
         List<Destination> result = new ArrayList<>();
         for (RoadNode node : RoadStore.get().nodes()) {
             if (node.type() == RoadNode.Type.POI && node.name() != null) {
-                result.add(new Destination(node.name(), node.x(), node.y(), node.z(), ID));
+                result.add(new Destination(node.name(), node.x(), node.y(), node.z(), ID, Destination.NO_COLOR,node.placeKind()));
             }
         }
         return result;

@@ -56,6 +56,7 @@ public final class HowToGo {
         // handler posts its event before any screen sees the click. RoadEditHandler carries the detail.
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseButton);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseButtonReleased);
+        NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseDragged);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyPressed);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyReleased);
 

@@ -938,7 +938,7 @@ public final class DestinationScreen extends Screen {
         // labels: a station on the list should be a station the player can see the line to, and for a
         // station that exists only in MTR that line is the one MTR's own rails run along. The whole
         // quad sequence stays ahead of the name pass below, which is what keeps the emit order legal.
-        for (RoadSegment segment : RailLayers.drawn()) {
+        for (RoadSegment segment : RailLayers.all()) {
             for (int i = 1; i < segment.vertexCount(); i++) {
                 double ax = segment.x(i - 1);
                 double az = segment.z(i - 1);

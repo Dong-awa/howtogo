@@ -40,6 +40,7 @@ public final class Harness {
         scenarioLargeNetworkIsQuick();
         scenarioTransferBeatsDetour();
         scenarioConcatKeepsConnectors();
+        scenarioTurnIsCountedFromThePlayer();
         scenarioMtrTypeMapping();
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
@@ -99,6 +100,88 @@ public final class Harness {
         if (route.isPresent()) {
             expectNear("it is the 50 blocks up the second leg", route.totalLength(), 50, 10);
             expectNear("with no connector hop to the far end of the road", route.startConnector(), 0, 2);
+        }
+    }
+
+    /**
+     * The distance a turn is counted down from: a manoeuvre's distance is measured along the route from
+     * its own start, and the countdown is that number less how far the player has come.
+     *
+     * <p>This is the arithmetic behind "in 200 metres" and "now", and it is the one place a mistake
+     * shows as the wrong number rather than as a missing route -- a turn called "now" while the player is
+     * still two hundred blocks short is this count coming out short. It is checked here because the two
+     * halves of it live in different classes: the manoeuvre's distance is the route's, and the distance
+     * already travelled is `total - remaining`, which the readout asks for separately.
+     */
+    private static void scenarioTurnIsCountedFromThePlayer() {
+        System.out.println("== the distance to a turn ==");
+        RoadNetwork net = new RoadNetwork();
+        // A road east, and a road north branching off it: the turn is a real fork, which is what makes it
+        // a manoeuvre rather than a bend inside one road.
+        addNamedRoad(net, "A", 0, 0, 200, 0);
+        addNamedRoad(net, "B", 100, 0, 100, 200);
+
+        Route route = RoadRouter.findRoute(net, 10, 0, 100, 150, "north", TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("a route through the fork is planned", route.isPresent());
+        if (!route.isPresent()) {
+            return;
+        }
+        expect("and the turn onto the other road is a manoeuvre ("
+                        + route.maneuvers().size() + ")", route.maneuvers().size() == 1);
+        if (route.maneuvers().size() != 1) {
+            return;
+        }
+        Route.Maneuver turn = route.maneuvers().get(0);
+        expectNear("the turn stands where the two roads meet", turn.junctionX(), 100, 1);
+        expectNear("and is the 90 blocks from where the player set off", turn.distanceFromStart(), 90, 3);
+
+        // Standing at the start: nothing travelled, so the countdown is the whole 90 along the road and
+        // the 150 up the other one, which is 240 blocks of route from end to end.
+        expectNear("the route is the 240 blocks of road it uses",
+                route.totalLength(), 240, 5);
+        expectNear("with nothing travelled the turn is 240 blocks of route away",
+                remainingFrom(route, 10, 0), 240, 5);
+        expectNear("the distance already travelled is nothing", travelled(route, 10, 0), 0, 5);
+        expectNear("and so the turn is called 90 blocks out",
+                turn.distanceFromStart() - travelled(route, 10, 0), 90, 5);
+
+        // Halfway along the first road: 40 travelled, 50 to go. This is the countdown a player reads.
+        expectNear("halfway there, 40 blocks have been travelled", travelled(route, 50, 0), 40, 5);
+        expectNear("and the turn is called 50 blocks out",
+                turn.distanceFromStart() - travelled(route, 50, 0), 50, 5);
+
+        // Standing at the fork itself: the countdown reaches zero and not before.
+        expectNear("at the fork the turn is called now",
+                turn.distanceFromStart() - travelled(route, 100, 0), 0, 3);
+
+        // And a point on the road the player is on rather than off it: the projection is the nearest
+        // point of the route, so a player a few blocks to the side counts from where they are beside it.
+        expectNear("standing beside the road counts from the point beside it",
+                travelled(route, 50, 4), 40, 6);
+    }
+
+    /** Blocks of a route already covered, as the readout computes it: total less what is left. */
+    private static double travelled(Route route, double x, double z) {
+        return Math.max(0, route.totalLength() - remainingFrom(route, x, z));
+    }
+
+    /** Blocks left along a route from a position, as the readout computes it. */
+    private static double remainingFrom(Route route, double x, double z) {
+        return route.remainingLength(x, z);
+    }
+
+    /** A named road, so that a fork onto it counts as entering a different road. */
+    private static void addNamedRoad(RoadNetwork net, String name, int... xz) {
+        addRoadAt(net, RoadClass.ROAD, 64, xz);
+        // The last segment added is this road's, and a fork is only worth announcing onto a road that has
+        // a name of its own.
+        RoadSegment last = null;
+        for (RoadSegment segment : net.segments()) {
+            last = segment;
+        }
+        if (last != null) {
+            last.setName(name);
         }
     }
 

@@ -52,6 +52,7 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | A 3120 segment network | Guards the cost of all of the above: the network is copied and repaired once per plan, on the client thread, so a plan must stay well under a fifth of a second |
 | One line that goes 2500 blocks around against two lines that change at a 20 block walk | The 2500 block single-line journey: transfers were searched in a second pass that only ran when the first found nothing |
 | A journey whose last leg is a 200 block off-road hop | Flattened route time and length short by that hop, because only the first part's start connector and the last part's goal connector were carried into the joined route |
+| A turn at a fork, and the countdown read off the route at three points along it | Guards the arithmetic behind "in 200 metres" and "now": a turn's distance is measured from the route's own start and the countdown is that less what has been travelled, so a mistake shows as the wrong number rather than as a missing route |
 
 The last two also assert that `TransitPlanner.planRoute`'s flattened route agrees with the sum of the
 trip's own legs, and that one boarding's waiting is in the estimate -- the invariant that keeps the
@@ -89,12 +90,17 @@ marked at all -- that one line's answer marks its track and leaves another line'
 which cannot reach a mark's class is not offered it.
 
 And it covers **what a mark is**, through `MtrLineTracks` directly, because that is the part no view can
-show: that a line's track is marked rather than MTR's rails as a whole (MTR's data does not say which
+show: that a line's track is worked out rather than MTR's rails as a whole (MTR's data does not say which
 rails belong to which line, so the ride between each pair of neighbouring stops is planned and its path
-is what is marked), that the mark follows the rails rather than joining the two stops with a chord, that
-its ends are the two stops and the hops from a stop onto the track are not marked as track, that a line
-whose stops are nowhere near its rails is marked nowhere rather than joined up across open country, and
-that two lines over one stretch of rail get marks of their own with ids that cannot collide.
+is what is found), that it follows the rails rather than joining the two stops with a chord, that its ends
+are the two stops and the hops from a stop onto the track are not part of it, that a line whose stops are
+nowhere near its rails gets no track rather than one joined up across open country, and that two lines
+over one stretch of rail get tracks of their own with ids that cannot collide.
+
+That split -- the track is worked out for **every** line, and the switch decides which tracks become
+**roads** -- is what the checks hold: a line's track is there whether or not its marks are switched on,
+because the map draws the line along it either way, while the road layer is empty with every switch off
+and holds exactly the switched-on lines' tracks with them on.
 
 And it covers the **interchange rule** the map draws its orange markers from, through
 `TransitInterchanges`: that two lines calling a few blocks apart are one interchange (the platform and
@@ -111,6 +117,13 @@ away, with no lines in it at all, takes none of that away; walking along the lin
 and adds the new stretch of track to the old; walking back over the same track does not remember it
 twice; a line's switch filters the remembered track rather than the reading, so switching it off and back
 on needs no fresh data; and switching the whole integration off forgets the railway.
+
+`checkMapFilter` goes with it: what the map draws and leaves out is one question (`MapFilter.shows`),
+answered from the player's own switches and from the map's zoom, so the panel and the shedding of detail
+cannot disagree. The checks pin the order things go in as the map is zoomed out -- paths, then roads,
+then waterways, then railways, with the highways and ice roads never shed; shops, then stations, then
+landmarks, with resource points last -- and that the transit lines are never shed at all, while a kind
+switched off by hand stays off at every scale.
 
 `RideRoadsCheck.java` is in the `route` package for the same reason, and checks the seam the switch
 rests on: a line whose marks are off is handed a network that never had them, because MTR's marks are

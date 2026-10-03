@@ -1,17 +1,18 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
+import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.function.LongPredicate;
 
 /**
  * Checks the MTR import against a reading that was made up here.
@@ -45,7 +46,7 @@ public final class MtrImportCheck {
 
         MtrClientData.Snapshot reading = syntheticReading();
 
-        MtrTransit.Built built = build(reading, id -> true);
+        MtrTransit.Built built = build(reading);
         expect("one stop per station", built.stops().size() == 4);
         expect("a stop sits at the middle of its station's platforms, not the middle of the station",
                 stopAt(built.stops(), 5, 0));
@@ -71,33 +72,39 @@ public final class MtrImportCheck {
                 + " lines, " + built.rails().segmentCount() + " marked segments, "
                 + built.rails().nodeCount() + " marked nodes");
 
-        // What is marked is the track the lines run along: one road per pair that could be planned, of
-        // the line's own class, and never MTR's rails as a whole.
-        expect("a mark is made for each ride that could be planned", built.rails().segmentCount() == 2);
-        expect("a train line's mark is rail", hasClass(built.rails(), RoadClass.RAIL));
+        // What is worked out is the track the lines run along: one road per pair that could be planned,
+        // of the line's own class, and never MTR's rails as a whole.
+        expect("a stretch is worked out for each ride that could be planned",
+                built.rails().segmentCount() == 2);
+        expect("a train line's track is rail", hasClass(built.rails(), RoadClass.RAIL));
         expect("and a boat line's is water", hasClass(built.rails(), RoadClass.WATER));
-        expect("the mark reaches the station the ride reaches", hasVertexNear(built.rails(), 100, 0));
+        expect("the track reaches the station the ride reaches", hasVertexNear(built.rails(), 100, 0));
         expect("and stops where the ride runs out of track",
                 !hasVertexNear(built.rails(), 110, 0) && !hasVertexNear(built.rails(), 105, 0));
-        expect("every mark is marked as read rather than drawn, by its id alone",
+        expect("every piece of it is marked as read rather than drawn, by its id alone",
                 built.rails().segmentsSnapshot().stream().allMatch(RailTrackStore::isOurs));
+        expect("and it is worked out whether or not the line's marks are switched on, because the map "
+                        + "draws the line along it either way",
+                build(reading).rails().segmentCount() == 2);
 
-        // The switch: nothing marked means nothing added, and the stops and lines are untouched.
-        MtrTransit.Built withoutMarks = build(reading, id -> false);
-        expect("with every line's marks off nothing is marked at all",
-                withoutMarks.rails().segmentCount() == 0);
-        expect("and the stops and lines are the same ones", withoutMarks.lines().size() == 2
-                && withoutMarks.stops().size() == 4);
+        // The switch, which decides which of those tracks become roads of this mod: the roads are what
+        // the ride runs on and what is drawn under the line, and the track itself is not affected.
+        MtrKnown forSwitch = new MtrKnown();
+        forSwitch.remember(build(reading));
+        expect("with every line's marks off no track becomes a road",
+                forSwitch.marks(id -> false).segmentCount() == 0);
+        expect("while the track is still remembered, which is what the line is drawn along",
+                forSwitch.trackOf(1) != null && forSwitch.trackOf(1).segmentCount() > 0);
+        expect("with them on it is a road", forSwitch.marks(id -> true).segmentCount() == 2);
 
-        // One line's answer is that line's own: the boat line's mark exists and the train line's does
+        // One line's answer is that line's own: the boat line's road exists and the train line's does
         // not, which is the whole point of asking per line rather than once for the layer.
-        MtrTransit.Built onlyTheBoat = build(reading, id -> id == 4);
-        expect("one line's answer marks its track and leaves the other line's alone",
-                hasClass(onlyTheBoat.rails(), RoadClass.WATER)
-                        && !hasClass(onlyTheBoat.rails(), RoadClass.RAIL));
+        expect("one line's answer makes its track a road and leaves the other line's alone",
+                hasClass(forSwitch.marks(id -> id == 4), RoadClass.WATER)
+                        && !hasClass(forSwitch.marks(id -> id == 4), RoadClass.RAIL));
 
         expect("an empty reading becomes nothing at all",
-                build(MtrClientData.Snapshot.EMPTY, id -> true).lines().isEmpty());
+                build(MtrClientData.Snapshot.EMPTY).lines().isEmpty());
 
         checkHandshake();
 
@@ -112,6 +119,7 @@ public final class MtrImportCheck {
         checkLineTracks();
         checkInterchanges();
         checkKnown();
+        checkMapFilter();
 
         // A boat line: the other kind this mod has a use for.
         MtrClientData.Snapshot boatsOnly = new MtrClientData.Snapshot(
@@ -119,7 +127,7 @@ public final class MtrImportCheck {
                 reading.lines().stream().filter(line -> "BOAT".equals(line.mode())).toList(),
                 List.of());
         expect("a boat line becomes a water line",
-                build(boatsOnly, id -> true).lines().stream()
+                build(boatsOnly).lines().stream()
                         .allMatch(line -> line.kind() == RoadClass.WATER));
 
         // A line all of whose stations are outside what the client was sent has no ride in it.
@@ -128,7 +136,7 @@ public final class MtrImportCheck {
                 List.of(new MtrClientData.Line(9, "Far away", "TRAIN", 0, List.of(
                         stop(11, 1, "Alpha"), stop(21, 2, "Beta")))),
                 List.of());
-        MtrTransit.Built unplaced = build(nothingPlaced, id -> true);
+        MtrTransit.Built unplaced = build(nothingPlaced);
         expect("a line whose stops the client has not been sent is not offered",
                 unplaced.lines().isEmpty());
         expect("and its stops are counted", unplaced.unplaced() == 2);
@@ -140,14 +148,67 @@ public final class MtrImportCheck {
     }
 
     /**
+     * What the map draws, and what it leaves out.
+     *
+     * <p>Two rules in one question, and both are checked here because both are silent when wrong: the
+     * player's switches (a kind hidden by hand is never drawn) and the map's own shedding of detail as it
+     * is zoomed out, which has an order -- paths, then roads, then waterways, then railways, with the
+     * highways and ice roads never shed, and shops before stations before landmarks before resource
+     * points. The transit lines are never shed at all.
+     */
+    private static void checkMapFilter() {
+        System.out.println("   what the map draws when zoomed out");
+
+        expect("at close zoom a footpath is drawn", MapFilter.shows(RoadClass.PATH, 1.0));
+        expect("zoomed out it is the first thing shed", !MapFilter.shows(RoadClass.PATH, 0.3));
+        expect("and the ordinary road outlives it",
+                MapFilter.shows(RoadClass.ROAD, 0.3) && !MapFilter.shows(RoadClass.ROAD, 0.18));
+        expect("with the waterway outliving that, and the railway the last road to go",
+                MapFilter.shows(RoadClass.WATER, 0.18) && !MapFilter.shows(RoadClass.WATER, 0.14)
+                        && MapFilter.shows(RoadClass.RAIL, 0.14)
+                        && !MapFilter.shows(RoadClass.RAIL, 0.1));
+        expect("while the highway and the ice road are never shed",
+                MapFilter.shows(RoadClass.HIGHWAY, 0.01) && MapFilter.shows(RoadClass.ICE, 0.01));
+
+        expect("a shop is shed before a station, a station before a landmark",
+                !MapFilter.shows(PlaceKind.SHOP, 0.4) && MapFilter.shows(PlaceKind.STATION, 0.4)
+                        && MapFilter.shows(PlaceKind.PLACE, 0.4)
+                        && !MapFilter.shows(PlaceKind.STATION, 0.25)
+                        && MapFilter.shows(PlaceKind.PLACE, 0.25));
+        expect("and a resource point outlives them all",
+                MapFilter.shows(PlaceKind.RESOURCE, 0.13)
+                        && !MapFilter.shows(PlaceKind.PLACE, 0.13));
+        expect("the transit lines are never shed by zoom", MapFilter.showsLines());
+
+        // The switches, which outrank the zoom: what the player hides stays hidden at every scale.
+        MapFilter.toggleRoad(RoadClass.HIGHWAY);
+        expect("a road switched off by hand is not drawn even at full zoom",
+                !MapFilter.shows(RoadClass.HIGHWAY, 5.0));
+        MapFilter.toggleRoad(RoadClass.HIGHWAY);
+        expect("and switching it back on restores it", MapFilter.shows(RoadClass.HIGHWAY, 5.0));
+
+        MapFilter.togglePlace(PlaceKind.RESOURCE);
+        expect("a kind of place switched off is not drawn either",
+                !MapFilter.shows(PlaceKind.RESOURCE, 5.0));
+        MapFilter.togglePlace(PlaceKind.RESOURCE);
+        expect("and is back when switched on", MapFilter.shows(PlaceKind.RESOURCE, 5.0));
+
+        MapFilter.toggleLines();
+        expect("the lines can be switched off by hand, though the zoom never does",
+                !MapFilter.showsLines());
+        MapFilter.toggleLines();
+        expect("and back on", MapFilter.showsLines());
+    }
+
+    /**
      * A reading converted with its own mark-id counter, which is what a caller outside the memory has.
      *
      * <p>The counter is handed in rather than owned by the conversion because a session keeps what it has
      * read and merges the next reading into it: ids that began again at the same base every time would
      * make the second reading's track look like the first's.
      */
-    private static MtrTransit.Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks) {
-        return MtrTransit.build(reading, wantsMarks, new int[]{1_500_000_000});
+    private static MtrTransit.Built build(MtrClientData.Snapshot reading) {
+        return MtrTransit.build(reading, new int[]{1_500_000_000});
     }
 
     /**
@@ -213,6 +274,36 @@ public final class MtrImportCheck {
         expect("and neither can driving",
                 !RailTrackStore.movesOnMtrMarks(bili.dongsz.howtogo.route.TravelMode.DRIVE));
         expect("and no mode at all cannot either", !RailTrackStore.movesOnMtrMarks(null));
+
+        checkCallPace();
+    }
+
+    /**
+     * The pace a turn is called at, when the road underfoot is not one the table names.
+     *
+     * <p>The interesting case is public transport, whose fastest class is the ice boat at forty blocks a
+     * second: taking that as the pace of someone walking along a road to their stop called every turn
+     * "now" from sixty blocks away. Whatever the mode, a player with no road they can travel on under
+     * them is on foot, and the pace has to be the walker's.
+     */
+    private static void checkCallPace() {
+        TravelMode transit = TravelMode.TRANSIT;
+        TravelMode drive = TravelMode.DRIVE;
+        TravelMode walk = TravelMode.WALK;
+
+        expect("a rider walking along a road is paced as a walker on that road",
+                Navigation.paceUnderfoot(transit, RoadClass.ROAD)
+                        == walk.speedOn(RoadClass.ROAD));
+        expect("not as the fastest thing public transport can be",
+                Navigation.paceUnderfoot(transit, RoadClass.ROAD) < transit.speedOn(RoadClass.ICE));
+        expect("a rider off the network at all is paced as a walker too",
+                Navigation.paceUnderfoot(transit, null) < transit.speedOn(RoadClass.ICE));
+        expect("a driver on a footpath is walking it",
+                Navigation.paceUnderfoot(drive, RoadClass.PATH) == walk.speedOn(RoadClass.PATH));
+        expect("while a driver on a road keeps the car's pace",
+                Navigation.paceUnderfoot(drive, RoadClass.ROAD) == drive.speedOn(RoadClass.ROAD));
+        expect("and a walker on a footpath is unchanged",
+                Navigation.paceUnderfoot(walk, RoadClass.PATH) == walk.speedOn(RoadClass.PATH));
     }
 
     /**
@@ -320,7 +411,7 @@ public final class MtrImportCheck {
                 List.of(new MtrClientData.Line(1, "Line 1", "TRAIN", 0xFF0000, List.of(
                         stop(11, 1, "Alpha"), stop(12, 2, "Beta")))),
                 List.of(track("a", "TRAIN", 0, 0, 100, 0)));
-        known.remember(MtrTransit.build(near, id -> true, counter));
+        known.remember(MtrTransit.build(near, counter));
         expect("a reading near a line is remembered", known.lines().size() == 1
                 && known.stations().size() == 2);
         expect("with the track it marked", known.marks(id -> true).segmentCount() == 1);
@@ -332,7 +423,7 @@ public final class MtrImportCheck {
                 List.of(platform(12, 2, "1", "TRAIN", 100, 0)),
                 List.of(),
                 List.of());
-        known.remember(MtrTransit.build(away, id -> true, counter));
+        known.remember(MtrTransit.build(away, counter));
         expect("a reading from far away does not take the lines with it", known.lines().size() == 1);
         expect("nor the stations", known.stations().size() == 2);
         expect("nor the track, which is what a journey over the line is planned along",
@@ -346,7 +437,7 @@ public final class MtrImportCheck {
                 List.of(new MtrClientData.Line(1, "Line 1", "TRAIN", 0xFF0000, List.of(
                         stop(12, 2, "Beta"), stop(13, 3, "Gamma")))),
                 List.of(track("b", "TRAIN", 100, 0, 200, 0)));
-        known.remember(MtrTransit.build(further, id -> true, counter));
+        known.remember(MtrTransit.build(further, counter));
         expect("a later reading brings the line's newest stops", known.lines().size() == 1
                 && known.lines().get(0).stopCount() == 2
                 && known.lines().get(0).stops().get(1).x() == 200);
@@ -354,7 +445,7 @@ public final class MtrImportCheck {
                 known.marks(id -> true).segmentCount() == 2);
 
         // Back over the same ground: the same stretch of rail is marked again, and must not be kept twice.
-        known.remember(MtrTransit.build(near, id -> true, counter));
+        known.remember(MtrTransit.build(near, counter));
         expect("walking back over the same track does not remember it a second time",
                 known.marks(id -> true).segmentCount() == 2);
 

@@ -441,7 +441,9 @@ public final class Navigation {
     /**
      * A U-turn call: the junction to turn around at, and how far away it is.
      *
-     * @param distanceAhead straight-line blocks from the player to that junction
+     * @param distanceAhead blocks from the player to that junction, following the road they are on --
+     *                      the same quantity the ordinary countdown is, so "now" means the same thing
+     *                      for both calls
      * @param junctionX     world x of the junction, which is what identifies the call to a latch --
      *                      the distance changes on every step and cannot
      * @param junctionZ     world z of the junction
@@ -1046,20 +1048,36 @@ public final class Navigation {
     }
 
     /**
-     * Pace in blocks per second the player is making, given the road already found underfoot.
+     * Pace in blocks per second the player is actually making, given the road already found underfoot.
      *
-     * <p>Only reached by the fallback above, so the class is either absent or one the table does not
-     * name: the mode's best pace is then the answer, for the reason given there.
+     * <h2>Why this is the walker's pace far more often than it looks</h2>
+     * Only reached when the table above names no combination: either there is no road underfoot at all --
+     * off the network, on one of the walked connectors, or between roads after a re-plan -- or there is
+     * one the mode cannot travel on. Both of those are the player being <em>on foot</em>: the first and
+     * last hop of every trip is walked whatever the mode, and a rider walking along the road to their
+     * station is the commonest journey this mod plans.
+     *
+     * <p>It used to return the mode's fastest class instead, on the argument that the mode's best pace is
+     * all that is known. For public transport that is the ice-boat pace, forty blocks a second, and the
+     * result was a turn called "now" from sixty blocks away and announced from four hundred and eighty --
+     * to a player walking at five. What the player is doing is known: they are on foot, so the pace is the
+     * walker's, and on a named surface it is the walker's pace on that surface.
      */
-    private static double paceUnderfoot(TravelMode active, RoadClass underfoot) {
-        if (underfoot != null) {
+    static double paceUnderfoot(TravelMode active, RoadClass underfoot) {
+        if (underfoot != null && active.speedOn(underfoot) > 0) {
+            // Travelling by this mode on a surface the table happens not to name: the mode's own pace is
+            // the answer, and this is the only case where it is.
             return active.speedOn(underfoot);
         }
-        double fastest = 0;
-        for (RoadClass roadClass : RoadClass.values()) {
-            fastest = Math.max(fastest, active.speedOn(roadClass));
+        double walkOnSurface = underfoot == null ? 0 : TravelMode.WALK.speedOn(underfoot);
+        if (walkOnSurface > 0) {
+            return walkOnSurface;
         }
-        return fastest;
+        double fastestWalk = 0;
+        for (RoadClass roadClass : RoadClass.values()) {
+            fastestWalk = Math.max(fastestWalk, TravelMode.WALK.speedOn(roadClass));
+        }
+        return fastestWalk;
     }
 
     /**
@@ -1135,7 +1153,7 @@ public final class Navigation {
         // MTR's marks are not drawn as roads but are ridden all the same.
         if (nearest == null && (active.speedOn(RoadClass.RAIL) > 0
                 || active.speedOn(RoadClass.WATER) > 0)) {
-            for (RoadSegment segment : RailLayers.travelled()) {
+            for (RoadSegment segment : RailLayers.all()) {
                 if (active.speedOn(segment.roadClass()) <= 0) {
                     continue;
                 }

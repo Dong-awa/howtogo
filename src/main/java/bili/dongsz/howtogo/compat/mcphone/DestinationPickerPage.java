@@ -404,7 +404,7 @@ public final class DestinationPickerPage implements IPhonePage {
             }
             // Both machine-read rail layers, so a station the list offers has its line drawn under it
             // whether that station is Create's or MTR's.
-            for (RoadSegment segment : RailLayers.drawn()) {
+            for (RoadSegment segment : RailLayers.all()) {
                 emitRoad(quads, last, segment, minX, minY, maxX, maxY);
             }
             for (Destination place : all) {

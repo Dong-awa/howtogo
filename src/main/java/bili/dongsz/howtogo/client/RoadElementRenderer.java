@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.transit.LineStop;
@@ -49,14 +50,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** Set {@code -Dhowtogo.debug=true} to dump projection data once a second. */
     private static final boolean DEBUG = Boolean.getBoolean("howtogo.debug");
 
-    /** Minimum stroke width in screen pixels, so zoomed-out roads stay visible. */
-    private static final double MIN_STROKE_PX = 1.5;
+    /** Minimum stroke width in screen pixels, so zoomed-out roads stay visible without going fat. */
+    private static final double MIN_STROKE_PX = 1.0;
 
-    /**
-     * Below this map scale (pixels per block) minor roads are dropped, the way real maps shed
-     * detail as you zoom out. Set to 0 to always draw everything.
-     */
-    private static final double MIN_SCALE_FOR_PATHS = 0.35;
+    // What is drawn at all, by zoom and by the player's own switches, is MapFilter's business: the scale
+    // thresholds used to live here as a single footpath rule, and they are now one question asked in one
+    // place so that the panel and the zoom cannot disagree.
 
     // Editing UI palette.
     private static final int COLOR_ENDPOINT = 0xFFE0E0E0;
@@ -227,6 +226,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // list of stops and reads as part of the list. The map itself still shows through, which is
             // the context these panels want.
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+            // Where the cursor is, on every frame the map draws and not only while editing: Ctrl+click
+            // sets the destination, and the spot it uses is this one. Tracking it only in the editor's
+            // branch is what made that click do nothing at all in the map's ordinary mode -- the handler
+            // was there, and the position it needed was not. The raw position only: snapping costs a walk
+            // of the whole network and is the editor's business.
+            RoadEditSession.setMouse(info.mouseX, info.mouseZ);
             if (!(minecraft.screen instanceof TransitLineScreen)
                     && !(minecraft.screen instanceof RoadNameScreen)) {
                 // Shapes before text, and the lines before the names: a line name drawn under a stop
@@ -240,8 +245,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 java.util.List<TransitInterchanges.Interchange> interchanges =
                         TransitInterchanges.of(Navigation.linesInPlay());
                 drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
-                        graphics.guiHeight() + lineMargin, interchanges);
+                        graphics.guiHeight() + lineMargin, Math.abs(info.scale), interchanges);
                 renderLabels(graphics, pose, info, vc, interchanges);
+                // Last of all, and only in the map's ordinary mode: the panel is a way of reading the
+                // map, and while the editor is open its own HUD owns that corner. The cursor is put
+                // through the map's own transform, because what Xaero hands a renderer is a world
+                // position and the panel is drawn in screen pixels.
+                if (!RoadEditSession.isActive()) {
+                    int cursorX = (int) Math.round(MapViewState.toScreenX(info.mouseX));
+                    int cursorY = (int) Math.round(MapViewState.toScreenZ(info.mouseZ));
+                    MapFilterPanel.draw(graphics, cursorX, cursorY);
+                }
             }
             return true;
         }
@@ -251,8 +265,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return false;
         }
 
-        // Level of detail: shed minor roads when zoomed out.
-        if (segment.roadClass() == RoadClass.PATH && Math.abs(info.scale) < MIN_SCALE_FOR_PATHS) {
+        // Level of detail, and the player's own switches: one question, asked in one place, so that what
+        // is shed as the map is zoomed out and what the panel hides cannot disagree. See MapFilter.
+        if (!MapFilter.shows(segment.roadClass(), info.scale)) {
             return false;
         }
 
@@ -436,7 +451,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // findable when the map is zoomed out, which is exactly when the names below are suppressed
         // for being unreadable -- so gating the two together would remove the marker exactly when it
         // is needed. Shapes before text: see the warning on HudDraw.
-        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges);
+        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges,
+                Math.abs(info.scale));
 
         // Names need a zoom at which they can be read at all; at lower zoom they overlap into a
         // smear. Only the text is gated, never the markers above.
@@ -446,6 +462,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (name == null) {
                     // Only named roads are labelled. Most of a fresh network is unnamed, and a
                     // placeholder on every one of them buries the names that do exist.
+                    continue;
+                }
+                // A road that is not drawn is not named either, by the same rule that decided it: a name
+                // left behind by the road it belongs to is a word pointing at nothing.
+                if (!MapFilter.shows(segment.roadClass(), info.scale)) {
                     continue;
                 }
                 // Culled before the chain walk, not after. Walking the chain is the expensive part
@@ -503,6 +524,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (node.type() != RoadNode.Type.POI || node.name() == null) {
                     continue;
                 }
+                if (!MapFilter.shows(node.placeKind(), info.scale)) {
+                    continue;
+                }
                 int x = (int) Math.round(MapViewState.toScreenX(node.x()));
                 int y = (int) Math.round(MapViewState.toScreenZ(node.z()));
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
@@ -512,15 +536,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         HudDraw.COLOR_PLACE, true);
             }
 
-            for (RailTrackStore.Station station : RailTrackStore.stations()) {
-                String name = CreateStationSource.nameOf(station);
-                int x = (int) Math.round(MapViewState.toScreenX(station.x()));
-                int y = (int) Math.round(MapViewState.toScreenZ(station.z()));
-                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                    continue;
+            if (MapFilter.shows(PlaceKind.STATION, info.scale)) {
+                for (RailTrackStore.Station station : RailTrackStore.stations()) {
+                    String name = CreateStationSource.nameOf(station);
+                    int x = (int) Math.round(MapViewState.toScreenX(station.x()));
+                    int y = (int) Math.round(MapViewState.toScreenZ(station.z()));
+                    if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                        continue;
+                    }
+                    graphics.drawString(font, name, x - font.width(name) / 2, y + 8,
+                            HudDraw.COLOR_PLACE, true);
                 }
-                graphics.drawString(font, name, x - font.width(name) / 2, y + 8,
-                        HudDraw.COLOR_PLACE, true);
             }
         }
 
@@ -614,7 +640,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <p>Shapes before text: see the warning on HudDraw.
      */
     private static final double LINE_STROKE_PX = 2.5;
+    /** Narrowest a line is drawn at, so a line never disappears however far the map is zoomed out. */
+    private static final double MIN_LINE_STROKE_PX = 0.9;
+    /** Map scale at which a line is drawn at its full width: below it, the stroke thins with the map. */
+    private static final double FULL_LINE_STROKE_SCALE = 0.5;
     private static final double LINE_STOP_PX = 5.0;
+    /**
+     * The map scale at which a marker is drawn at {@link HudDraw#PLACE_MARKER_PX} across, and the bounds
+     * on how far it may grow or shrink from there.
+     *
+     * <p>A marker is a place on the ground, so it is drawn at the size of a place on the ground: a fixed
+     * number of pixels is a marker that covers half a village when the map is zoomed in and is invisible
+     * when it is zoomed out. The bounds are what keep it from becoming a wall or a speck at the extremes.
+     */
+    private static final double MARKER_NATURAL_SCALE = 0.5;
+    private static final double MARKER_MIN_HALF_PX = 1.4;
+    private static final double MARKER_MAX_HALF_PX = 6.5;
     /**
      * How close two interchange markers have to land to be drawn as one, in pixels.
      *
@@ -622,7 +663,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * overlap, which is the case the fused marker exists for. Further apart they are two markers, at
      * whatever zoom that happens to be.
      */
-    private static final double MERGE_PX = LINE_STOP_PX * 2.0;
     private static final int COLOR_LINE_TRANSFER = 0xFFFF7A3C;
     /**
      * The dark backing under a stop marker.
@@ -720,16 +760,29 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One line's path: every neighbouring pair planned, and a straight hop where one cannot be.
+     * One line's path: its own track where it has one, and a planned route over the roads where it does
+     * not.
      *
-     * <p>The workspaces are keyed by kind <em>and</em> by whether the line brought its own marks,
-     * because those are the two things that decide which network a pair is planned on -- a line whose
-     * marks are off is drawn along the roads it will actually be ridden over, not along the marks.
+     * <p>A line read out of MTR is drawn along the track it runs on, which is known and is not a question
+     * about anybody's roads -- and is drawn that way whether or not the line's marks are switched on. The
+     * switch decides whether that track is also added to the road network as rail or water roads; it has
+     * nothing to do with where the line is drawn. Planning an imported line over the roads instead, which
+     * is what this used to do, is what made a line switched off collapse into straight hops between its
+     * stops and read as having gone missing.
+     *
+     * <p>A line of the player's own has no track of its own, so it keeps the planning it always had: the
+     * pairs of neighbouring stops are planned over the network the line is ridden on, and a pair that
+     * cannot be planned gets its straight hop so that a mis-typed line is visible as a line rather than as
+     * a gap.
      */
     private static List<double[]> planLine(TransitLine line,
                                            java.util.Map<String,
                                                    bili.dongsz.howtogo.route.RoadRouter.Workspace>
                                                    workspaces) {
+        List<double[]> track = ownTrack(line);
+        if (!track.isEmpty()) {
+            return track;
+        }
         List<double[]> points = new java.util.ArrayList<>();
         RoadClass kind = line.kind();
         bili.dongsz.howtogo.route.TravelMode mode =
@@ -760,13 +813,39 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return points;
     }
 
+    /**
+     * The track of an imported line, as one polyline, or an empty list for a line that has none.
+     *
+     * <p>The pieces are walked one after another rather than in any order of the line's stops, because
+     * drawing does not care: a pair whose track is missing leaves the two pieces on either side of it
+     * joined by the straight hop between them, which is the same thing the planning fallback draws and is
+     * the honest answer for a stretch whose track is not known.
+     */
+    private static List<double[]> ownTrack(TransitLine line) {
+        bili.dongsz.howtogo.road.RoadNetwork track = MtrTransit.trackOf(line);
+        if (track == null || track.segmentCount() == 0) {
+            return List.of();
+        }
+        List<double[]> points = new java.util.ArrayList<>();
+        for (RoadSegment segment : track.segmentsSnapshot()) {
+            for (int i = 0; i < segment.vertexCount(); i++) {
+                points.add(new double[]{segment.x(i), segment.z(i)});
+            }
+        }
+        return points.size() >= 2 ? points : List.of();
+    }
+
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
-                                             int viewRight, int viewBottom,
+                                             int viewRight, int viewBottom, double scale,
                                              java.util.List<TransitInterchanges.Interchange>
                                                      interchanges) {
         List<LineLabel> labels = new java.util.ArrayList<>();
         // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
-        // a line whose route the map should show, whichever of the two it came from.
+        // a line whose route the map should show, whichever of the two it came from. Never shed by zoom:
+        // a line is what this map is for, and it is the one thing on it the roads do not already imply.
+        if (!MapFilter.showsLines()) {
+            return labels;
+        }
         List<TransitLine> lines = Navigation.linesInPlay();
         reportLines(lines);
         if (lines.isEmpty()) {
@@ -811,7 +890,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         || Math.max(y1, y2) < -margin || Math.min(y1, y2) > viewBottom) {
                     continue;
                 }
-                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, LINE_STROKE_PX, lineColour(line),
+                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, lineStrokePx(), lineColour(line),
                         0xFF);
             }
             if (shape.size() >= 2) {
@@ -823,8 +902,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
 
+        // The stops, each at the size a place on the ground covers at this zoom, and each only while the
+        // place it stands at is being drawn at all: a stop marker left behind by a station that the zoom
+        // (or the panel) has taken off the map is a dot pointing at nothing.
+        double stopHalf = markerHalfPx(LINE_STOP_PX, scale);
         for (TransitLine line : lines) {
             for (LineStop stop : line.stops()) {
+                if (!standShown(stop, scale)) {
+                    continue;
+                }
                 if (inAnInterchange(interchanges, stop.x(), stop.z())) {
                     // Drawn once, as the interchange, below.
                     continue;
@@ -834,9 +920,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX + 1.0,
+                HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf + 1.0,
                         COLOR_LINE_STOP_EDGE);
-                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX, lineColour(line));
+                HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf, lineColour(line));
             }
         }
 
@@ -845,36 +931,84 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // the map showing what it knows rather than fusing them at every scale. A group of one is that
         // stop's own marker, in the interchange colour, because a stop two lines call at is an
         // interchange whether or not its marker happens to touch the other's.
-        for (TransitInterchanges.Interchange interchange : interchanges) {
-            for (List<Integer> group : TransitInterchanges.overlapping(interchange,
-                    x -> (int) Math.round(MapViewState.toScreenX(x)),
-                    z -> (int) Math.round(MapViewState.toScreenZ(z)), MERGE_PX)) {
-                double x = 0;
-                double y = 0;
-                for (int index : group) {
-                    int[] stop = interchange.stops().get(index);
-                    x += MapViewState.toScreenX(stop[0]);
-                    y += MapViewState.toScreenZ(stop[1]);
-                }
-                x /= group.size();
-                y /= group.size();
-                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                    continue;
-                }
-                double half = LINE_STOP_PX;
-                if (group.size() == 1) {
-                    HudDraw.emitPlaceMarker(screenPose, vc, x, y, half + 1.0, COLOR_LINE_STOP_EDGE);
-                    HudDraw.emitPlaceMarker(screenPose, vc, x, y, half, COLOR_LINE_TRANSFER);
-                } else {
-                    // A square, and the same size as a stop's round marker: the fused place is a thing of
-                    // its own rather than a stop of either line, and the shape is what says so.
-                    emitBox(screenPose, vc, x, y, half + 1.0, half + 1.0, COLOR_LINE_STOP_EDGE);
-                    emitBox(screenPose, vc, x, y, half, half, COLOR_LINE_TRANSFER);
+        //
+        // An interchange is a station, so it goes the way the stations go: the zoom that takes the station
+        // markers off the map takes these with them.
+        if (MapFilter.shows(PlaceKind.STATION, scale)) {
+            for (TransitInterchanges.Interchange interchange : interchanges) {
+                for (List<Integer> group : TransitInterchanges.overlapping(interchange,
+                        x -> (int) Math.round(MapViewState.toScreenX(x)),
+                        z -> (int) Math.round(MapViewState.toScreenZ(z)), stopHalf * 2.0)) {
+                    double x = 0;
+                    double y = 0;
+                    for (int index : group) {
+                        int[] stop = interchange.stops().get(index);
+                        x += MapViewState.toScreenX(stop[0]);
+                        y += MapViewState.toScreenZ(stop[1]);
+                    }
+                    x /= group.size();
+                    y /= group.size();
+                    if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                        continue;
+                    }
+                    if (group.size() == 1) {
+                        HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf + 1.0,
+                                COLOR_LINE_STOP_EDGE);
+                        HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf, COLOR_LINE_TRANSFER);
+                    } else {
+                        // A square, and the same size as a stop's round marker: the fused place is a thing
+                        // of its own rather than a stop of either line, and the shape is what says so.
+                        emitBox(screenPose, vc, x, y, stopHalf + 1.0, stopHalf + 1.0,
+                                COLOR_LINE_STOP_EDGE);
+                        emitBox(screenPose, vc, x, y, stopHalf, stopHalf, COLOR_LINE_TRANSFER);
+                    }
                 }
             }
         }
         pose.popPose();
         return labels;
+    }
+
+    /**
+     * Whether the place a stop stands at is being drawn, which is what the stop marker follows.
+     *
+     * <p>A stop made at a place the player marked is that place's kind; a stop at a station this mod read
+     * out of another mod is a station. The two answers differ in what the map's switches do to them: a
+     * line calling at a shop is hidden with the shops, and one calling at a station with the stations.
+     */
+    private static boolean standShown(LineStop stop, double scale) {
+        if (stop.nodeId() == LineStop.NO_NODE) {
+            return MapFilter.shows(PlaceKind.STATION, scale);
+        }
+        RoadNode node = RoadStore.get().node(stop.nodeId());
+        return MapFilter.shows(node == null ? PlaceKind.PLACE : node.placeKind(), scale);
+    }
+
+    /**
+     * Half the width of a marker drawn at the given map scale, in screen pixels.
+     *
+     * <p>The map's own transform is not applied to markers -- they are emitted in screen space -- so the
+     * size has to be worked out from the scale by hand. What it buys is a marker that keeps its size on
+     * the ground: the same place covers more pixels when the map is zoomed in, and fewer when it is
+     * zoomed out, until the bounds stop it.
+     */
+    private static double markerHalfPx(double fullSizePx, double scale) {
+        double natural = fullSizePx * 0.5 * Math.abs(scale) / MARKER_NATURAL_SCALE;
+        return Math.max(MARKER_MIN_HALF_PX, Math.min(MARKER_MAX_HALF_PX, natural));
+    }
+
+    /**
+     * How wide a transit line is drawn, in screen pixels.
+     *
+     * <p>A line's stroke is emitted in screen space, so a constant number is a stroke that grows
+     * <em>relative to the map</em> as the map is zoomed out: at a scale where a road is a hairline, a
+     * line was still two and a half pixels of solid colour and read as a rope laid over the map. It
+     * thins with the map down to a floor, so it is never invisible and never fat.
+     */
+    private static double lineStrokePx() {
+        double scale = Math.abs(MapViewState.scale());
+        double thinned = LINE_STROKE_PX * scale / FULL_LINE_STROKE_SCALE;
+        return Math.max(MIN_LINE_STROKE_PX, Math.min(LINE_STROKE_PX, thinned));
     }
 
     /**
@@ -964,9 +1098,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
-                                  java.util.List<TransitInterchanges.Interchange> interchanges) {
-        double half = HudDraw.PLACE_MARKER_PX * 0.5;
+                                  java.util.List<TransitInterchanges.Interchange> interchanges,
+                                  double scale) {
+        double half = markerHalfPx(HudDraw.PLACE_MARKER_PX, scale);
         for (Destination place : Destinations.places()) {
+            // The panel's switches and the map's zoom, through the one rule: a shop is shed before a
+            // station, and a resource point -- worth travelling to from far away -- last of all.
+            if (!MapFilter.shows(place.kind(), scale)) {
+                continue;
+            }
             // A place a line stops at is drawn twice -- once as a place, once as the stop -- and the two
             // markers are the same size in the same spot, so the later one hides the earlier. That is the
             // wrong way round for an interchange, whose whole point is its colour: the place marker

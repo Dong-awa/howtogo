@@ -145,6 +145,20 @@ public final class MtrTransit {
         return rails;
     }
 
+    /**
+     * The stretch of MTR's track one imported line runs along, or null for a line of the player's own.
+     *
+     * <p>What the map draws the line along, whether or not the line's marks are switched on: the switch
+     * decides whether this track is added to the road network as rail or water roads -- which is what a
+     * ride is planned over, and what puts a road under the line -- and not whether the line is drawn.
+     * The line is always drawn, along the track it actually runs on.
+     */
+    public static RoadNetwork trackOf(TransitLine line) {
+        refresh();
+        Long id = lineId(line);
+        return id == null ? null : known.trackOf(id);
+    }
+
     /** How many lines MTR offered that this mod has no kind for. */
     public static int skippedLines() {
         refresh();
@@ -178,19 +192,21 @@ public final class MtrTransit {
     /**
      * What a reading becomes, and what had to be left out of it.
      *
-     * @param marks the track each line runs along, by MTR's own line id: per line and not merged, because
-     *              what is kept of a reading is kept per line -- see {@link MtrKnown}, which is what
-     *              makes a line survive the player walking out of MTR's range
+     * @param tracks the track each line runs along, by MTR's own line id: worked out for every line and
+     *               not only for the ones whose marks are switched on, because the map draws a line
+     *               along its track whatever the switch says -- the switch is about whether that track
+     *               is added to the road network as roads, not about whether the line is drawn. See
+     *               {@link MtrKnown}, which keeps them, and {@link MtrMarks}, which is the switch.
      */
     record Built(List<Station> stations, List<LineStop> stops, List<TransitLine> lines,
-                 Map<Long, RoadNetwork> marks, int imported, int skipped, int unplaced) {
+                 Map<Long, RoadNetwork> tracks, int imported, int skipped, int unplaced) {
 
         static final Built EMPTY =
                 new Built(List.of(), List.of(), List.of(), Map.of(), 0, 0, 0);
 
-        /** Every line's marks as one network, which is only ever what a check asks for. */
+        /** Every line's track as one network. */
         RoadNetwork rails() {
-            return MtrKnown.union(marks.values());
+            return MtrKnown.union(tracks.values());
         }
     }
 
@@ -216,20 +232,21 @@ public final class MtrTransit {
     /**
      * Turns a reading into this mod's stops, lines and the track they run along.
      *
-     * <p>A function of the reading and one question, and of nothing else, so that everything about the
+     * <p>A function of the reading and the id counter, and of nothing else, so that everything about the
      * conversion can be checked with no MTR installed -- which is the only way it can be checked at all
      * here. The state above is a cache of this, not the other way round.
      *
-     * @param wantsMarks asked per MTR line id: whether that line's track is marked as roads of this mod
-     *                   at all. The line's own answer, so that the caller -- which is the only place
-     *                   that may read a config or a switch, and the only place that can do it off the
-     *                   render thread -- decides, and this stays a function
-     * @param nextId     the id counter the marks are drawn from, handed in so that two readings of one
-     *                   session cannot number two different marks alike: what is kept of a reading is
-     *                   merged with what was kept of the ones before it, and ids that repeat would make
-     *                   that merge lose track
+     * <p>The switch beside a line is deliberately not an argument: every line's track is worked out, and
+     * which of those tracks are then added to the road network as roads is decided later, by
+     * {@link MtrKnown#marks} -- so that a line switched off is still drawn along the track it runs on,
+     * and switching it on adds the roads without needing a fresh reading.
+     *
+     * @param nextId the id counter the track is drawn from, handed in so that two readings of one session
+     *               cannot number two different pieces alike: what is kept of a reading is merged with
+     *               what was kept of the ones before it, and ids that repeat would make that merge lose
+     *               track
      */
-    static Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks, int[] nextId) {
+    static Built build(MtrClientData.Snapshot reading, int[] nextId) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
@@ -237,51 +254,42 @@ public final class MtrTransit {
         List<Station> builtStations = buildStations(reading);
         List<TransitLine> builtLines = buildLines(reading, counts);
         return new Built(builtStations, stopsOf(builtStations), builtLines,
-                buildMarks(reading, builtLines, wantsMarks, nextId), builtLines.size(),
-                counts.skipped, counts.unplaced);
+                buildTracks(reading, builtLines, nextId), builtLines.size(), counts.skipped,
+                counts.unplaced);
     }
 
     /**
-     * The track of every line that wants its marks, by line.
+     * The track every line runs along, by line.
      *
      * <p>MTR's own rails are read first, because the path a line runs along has to be found over them,
      * and then thrown away: what comes out is the lines' rides and never the rails as a whole. Nothing
-     * of MTR's own geometry reaches a plan, which is what makes a mark the track <em>this line</em>
+     * of MTR's own geometry reaches a plan, which is what makes a track the stretch <em>this line</em>
      * uses rather than every rail within reach of the player.
      *
      * <p>Per line rather than folded into one network, because a reading is kept per line once it has
      * been read and the player has walked away from it -- see {@link MtrKnown}. The ids come from the
-     * caller's counter, so the marks of one reading can be merged with the marks of the next.
+     * caller's counter, so the track of one reading can be merged with the track of the next.
      */
-    private static Map<Long, RoadNetwork> buildMarks(MtrClientData.Snapshot reading,
-                                                     List<TransitLine> lines,
-                                                     LongPredicate wantsMarks, int[] nextId) {
-        Map<Long, RoadNetwork> marks = new HashMap<>();
-        boolean wanted = false;
-        for (TransitLine line : lines) {
-            Long id = lineId(line);
-            if (id != null && wantsMarks.test(id)) {
-                wanted = true;
-                break;
-            }
-        }
-        if (!wanted) {
-            // Nothing is marked, so MTR's rails are not even joined into a layer: a player who wants
-            // their own roads and none of MTR's pays nothing for the reading.
-            return marks;
+    private static Map<Long, RoadNetwork> buildTracks(MtrClientData.Snapshot reading,
+                                                      List<TransitLine> lines, int[] nextId) {
+        Map<Long, RoadNetwork> tracks = new HashMap<>();
+        if (lines.isEmpty()) {
+            // No line, no track: MTR's rails are not even joined into a layer, which is what a world
+            // whose lines this mod has no kind for costs.
+            return tracks;
         }
         RoadNetwork rails = buildRailLayer(reading);
         for (TransitLine line : lines) {
             Long id = lineId(line);
-            if (id == null || !wantsMarks.test(id)) {
+            if (id == null) {
                 continue;
             }
             RoadNetwork ofLine = MtrLineTracks.of(rails, line, nextId);
             if (ofLine.segmentCount() > 0) {
-                marks.put(id, ofLine);
+                tracks.put(id, ofLine);
             }
         }
-        return marks;
+        return tracks;
     }
 
     /**
@@ -342,7 +350,7 @@ public final class MtrTransit {
         }
 
         long startedAt = System.nanoTime();
-        Built built = build(reading, MtrTransit::marksWanted, markIds);
+        Built built = build(reading, markIds);
         // What this reading adds to what the ones before it taught, and then the answers taken from the
         // whole of that rather than from this reading alone: MTR sends a client only what is near it, so
         // a reading read on its own is a window that closes behind the player as they walk.

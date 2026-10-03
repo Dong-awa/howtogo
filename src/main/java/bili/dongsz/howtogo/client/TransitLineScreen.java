@@ -227,7 +227,10 @@ public final class TransitLineScreen extends Screen {
         nameField.setValue(line == null ? "" : line.name());
         addRenderableWidget(nameField);
 
-        listY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + PAD;
+        // The lists start below the column headers, not below the controls: the headers are drawn at
+        // listY - HEADER_HEIGHT, so leaving only PAD between them and the controls row drew the three of
+        // them through the kind buttons above.
+        listY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + HEADER_HEIGHT + 2;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
         // Back to four slots: five footer buttons at a small panel width leave too little room for the

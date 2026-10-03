@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
 
@@ -47,7 +48,8 @@ public final class CreateStationSource implements DestinationSource {
         List<RailTrackStore.Station> stations = RailTrackStore.stations();
         List<Destination> result = new ArrayList<>(stations.size());
         for (RailTrackStore.Station station : stations) {
-            result.add(new Destination(nameOf(station), station.x(), station.y(), station.z(), ID));
+            result.add(new Destination(nameOf(station), station.x(), station.y(), station.z(), ID,
+                    Destination.NO_COLOR, PlaceKind.STATION));
         }
         return result;
     }
