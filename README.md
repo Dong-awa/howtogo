@@ -10,7 +10,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 - 模组 ID：`howtogo`
 - 支持版本：Minecraft **1.21.1** / NeoForge **21.1.x**
 - 运行侧：**纯客户端**（不需要装在服务器上）
-- 最新版本：0.1.0
+- 最新版本：0.2.0
 
 ---
 
@@ -214,7 +214,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.11"
-.\gradlew.bat build          # 产物：build/libs/howtogo-0.1.0.jar
+.\gradlew.bat build          # 产物：build/libs/howtogo-0.2.0.jar
 .\gradlew.bat runClient      # 开发环境启动客户端
 ```
 
