@@ -95,7 +95,7 @@ public final class RoadStorage {
                 s.roadClass = segment.roadClass().name();
                 s.from = segment.fromNode();
                 s.to = segment.toNode();
-                s.oneWay = segment.oneWay();
+                s.direction = segment.direction().name();
                 s.y = segment.y();
                 s.name = segment.name();
                 s.xs = new int[segment.vertexCount()];
@@ -150,9 +150,25 @@ public final class RoadStorage {
         }
         segment.setFromNode(s.from);
         segment.setToNode(s.to);
-        segment.setOneWay(s.oneWay);
+        segment.setDirection(directionOf(s));
         segment.setName(s.name);
         return segment;
+    }
+
+    /**
+     * A segment's direction, from whichever of the two fields the file has.
+     *
+     * <p>{@code direction} is what this version writes. {@code oneWay} is the boolean an earlier build of
+     * this feature wrote, and a file from it means the one direction that boolean could express, which is
+     * {@link RoadDirection#FORWARD}. Reading the old field rather than ignoring it is what keeps a save
+     * from that build meaning the same thing after the upgrade; a file with neither field is a road
+     * nobody has said anything about, which is a two-way road.
+     */
+    private static RoadDirection directionOf(SegmentDto s) {
+        if (s.direction != null) {
+            return RoadDirection.byId(s.direction);
+        }
+        return s.oneWay ? RoadDirection.FORWARD : RoadDirection.TWO_WAY;
     }
 
     // ------------------------------------------------------------------- DTOs
@@ -184,6 +200,19 @@ public final class RoadStorage {
         String roadClass;
         int from;
         int to;
+        /**
+         * The one-way state, as {@link RoadDirection}'s constant name.
+         *
+         * <p>Written always, read tolerantly: absent in a file written before directions existed, and
+         * then {@link #oneWay} decides.
+         */
+        String direction;
+        /**
+         * The boolean this field replaced, still read and no longer written.
+         *
+         * <p>A file that has it was written by the version that could only say "one-way forwards", and
+         * writing it again would claim the same thing about a road that now runs backwards.
+         */
         boolean oneWay;
         int y;
         String name;

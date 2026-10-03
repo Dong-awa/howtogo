@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadEditor;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -144,6 +145,39 @@ public final class RoadEditSession {
             RoadStore.markDirty();
         } else {
             ed.setActiveClass(next);
+        }
+    }
+
+    /**
+     * Moves the road under the cursor, or the selected one, through the one-way states.
+     *
+     * <h2>What it acts on</h2>
+     * The selection first, then the road under the cursor, which is the same order {@code N} and
+     * {@code <} use: having selected a road, a player expects the next press to act on that road and not
+     * on whatever the cursor has drifted over since. The whole road is marked rather than the piece under
+     * the cursor -- see {@link RoadEditor#setChainDirection} -- because a street that is one-way for one
+     * of its bends is not a thing anyone means to build.
+     *
+     * <h2>Why the directions cycle</h2>
+     * Two-way, then one-way along the road, then one-way against it, then back. A boolean switch would
+     * have to pick a direction on the player's behalf, and the direction a road is stored in is an
+     * accident of which end was clicked first, so the only honest answer is to let them say which way
+     * round and show them on the map that it took.
+     */
+    public static void toggleOneWay() {
+        RoadEditor ed = editor();
+        int target = ed.selectedSegmentId();
+        if (target == RoadSegment.NO_SEGMENT
+                && lastSnap.kind() == RoadSnapper.Kind.SEGMENT) {
+            target = lastSnap.segmentId();
+        }
+        if (target == RoadSegment.NO_SEGMENT || RoadStore.get().segment(target) == null) {
+            return;
+        }
+        RoadDirection next = ed.chainDirection(target).next();
+        if (ed.setChainDirection(target, next)) {
+            RoadStore.markDirty();
+            HowToGo.LOGGER.info("[HowToGo] road {} set to {}", target, next.id());
         }
     }
 

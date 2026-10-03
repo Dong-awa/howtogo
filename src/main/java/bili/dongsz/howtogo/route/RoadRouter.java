@@ -625,8 +625,13 @@ public final class RoadRouter {
             if (network.node(from) == null || network.node(to) == null) {
                 continue;
             }
-            graph.computeIfAbsent(from, k -> new ArrayList<>()).add(new Edge(to, segment));
-            if (!segment.oneWay()) {
+            // One edge per direction the road actually allows: a one-way street contributes exactly one,
+            // and asking the segment rather than testing the flag here keeps the graph and the arrows the
+            // map draws reading the same rule -- see RoadSegment.allowsTravelFrom.
+            if (segment.allowsTravelFrom(from)) {
+                graph.computeIfAbsent(from, k -> new ArrayList<>()).add(new Edge(to, segment));
+            }
+            if (segment.allowsTravelFrom(to)) {
                 graph.computeIfAbsent(to, k -> new ArrayList<>()).add(new Edge(from, segment));
             }
         }

@@ -17,7 +17,7 @@ public final class RoadSegment {
     private RoadClass roadClass;
     private int fromNode = NO_NODE;
     private int toNode = NO_NODE;
-    private boolean oneWay;
+    private RoadDirection direction = RoadDirection.TWO_WAY;
     private String name;
 
     /** Interleaved vertex data: xs[i], zs[i] form the i-th vertex. */
@@ -92,13 +92,45 @@ public final class RoadSegment {
         this.y = y;
     }
 
-    /** True when travel is only allowed from {@link #fromNode()} to {@link #toNode()}. */
-    public boolean oneWay() {
-        return oneWay;
+    /**
+     * Which way travel is allowed along this piece of road.
+     *
+     * <p>Read from the segment's own two endpoints rather than from anything about how it was drawn: see
+     * {@link RoadDirection}.
+     */
+    public RoadDirection direction() {
+        return direction;
     }
 
-    public void setOneWay(boolean oneWay) {
-        this.oneWay = oneWay;
+    public void setDirection(RoadDirection direction) {
+        this.direction = direction == null ? RoadDirection.TWO_WAY : direction;
+    }
+
+    /** Whether travel is restricted to one direction, in either sense. */
+    public boolean oneWay() {
+        return direction.isOneWay();
+    }
+
+    /**
+     * Whether a traveller at the given node of this segment may set off along it.
+     *
+     * <p>The whole of the one-way rule, in one place: a router asks this once per direction it is
+     * considering rather than reasoning about the two ends itself, so the graph and the map's arrows
+     * cannot disagree about which way a road runs.
+     *
+     * @param startNodeId the node the traveller is standing at, either end of the segment
+     */
+    public boolean allowsTravelFrom(int startNodeId) {
+        if (!direction.isOneWay()) {
+            return true;
+        }
+        if (startNodeId == fromNode) {
+            return direction == RoadDirection.FORWARD;
+        }
+        if (startNodeId == toNode) {
+            return direction == RoadDirection.BACKWARD;
+        }
+        return false;
     }
 
     /** Player-facing road name, or null when unnamed. */
@@ -196,7 +228,7 @@ public final class RoadSegment {
         c.vertexCount = vertexCount;
         c.fromNode = fromNode;
         c.toNode = toNode;
-        c.oneWay = oneWay;
+        c.direction = direction;
         c.name = name;
         return c;
     }

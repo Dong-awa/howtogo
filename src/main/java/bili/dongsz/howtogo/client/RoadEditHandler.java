@@ -48,6 +48,8 @@ import org.lwjgl.glfw.GLFW;
  *   <li><b>Right click</b> - finish the current road, or clear the selection</li>
  *   <li><b>&lt; / &gt;</b> (comma / period) - change the road class being drawn, or of the selection</li>
  *   <li><b>N</b> - name the selected road, or the road under the cursor</li>
+ *   <li><b>O</b> - make the selected road, or the road under the cursor, one-way; each press moves it
+ *       on to the next state, and the fourth brings it back to two-way</li>
  *   <li><b>Delete</b> - delete the selection</li>
  *   <li><b>Ctrl+Z / Ctrl+Y</b> - undo / redo</li>
  * </ul>
@@ -223,6 +225,10 @@ public final class RoadEditHandler {
             safely("name road", RoadEditSession::nameSelectedRoad);
         } else if (key == GLFW.GLFW_KEY_P) {
             safely("place landmark", RoadEditSession::placePoi);
+        } else if (key == GLFW.GLFW_KEY_O) {
+            // One-way. A bare letter like N and P, and not a registered mapping, for the same reason
+            // those are not: it acts on a selection the editor owns and only exists while editing is on.
+            safely("toggle one-way", RoadEditSession::toggleOneWay);
         } else if (LINES.matches(key, scanCode)) {
             // The lines are a property of the network rather than of whatever is selected, so this
             // opens on the map itself and needs no selection first. Deferred to the next tick, like

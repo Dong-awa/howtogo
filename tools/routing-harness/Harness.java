@@ -1,5 +1,6 @@
 import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -41,6 +42,7 @@ public final class Harness {
         scenarioTransferBeatsDetour();
         scenarioConcatKeepsConnectors();
         scenarioTurnIsCountedFromThePlayer();
+        scenarioOneWayRoad();
         scenarioMtrTypeMapping();
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
@@ -48,6 +50,9 @@ public final class Harness {
         int[] rideRoads = bili.dongsz.howtogo.route.RideRoadsCheck.run();
         checks += rideRoads[0];
         failures += rideRoads[1];
+        int[] oneWay = bili.dongsz.howtogo.road.OneWayCheck.run();
+        checks += oneWay[0];
+        failures += oneWay[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");
@@ -164,9 +169,7 @@ public final class Harness {
     /** Blocks of a route already covered, as the readout computes it: total less what is left. */
     private static double travelled(Route route, double x, double z) {
         return Math.max(0, route.totalLength() - remainingFrom(route, x, z));
-    }
-
-    /** Blocks left along a route from a position, as the readout computes it. */
+    }    /** Blocks left along a route from a position, as the readout computes it. */
     private static double remainingFrom(Route route, double x, double z) {
         return route.remainingLength(x, z);
     }
@@ -574,7 +577,78 @@ public final class Harness {
     // ----------------------------------------------------------------- helpers
 
     /**
-     * The MTR integration, in a session with no MTR in it.
+     * A one-way street with a bypass around it, so that "the router would not go that way" is a question
+     * about direction rather than about whether the two ends are connected at all.
+     *
+     * <p>The bypass is what makes this check able to fail: without it, refusing the one-way direction
+     * would leave no route and a router that ignored the direction entirely would look identical to one
+     * that obeyed it, since both would answer with the same straight street.
+     */
+    private static void scenarioOneWayRoad() {
+        System.out.println("== one-way street ==");
+
+        RoadNetwork open = oneWayNetwork(RoadDirection.TWO_WAY);
+        expectNear("two-way: the route east is the 400 block street",
+                walkLength(open, 0, 0, 400, 0), 400, 15);
+        expectNear("two-way: and so is the route west", walkLength(open, 400, 0, 0, 0), 400, 15);
+
+        RoadNetwork forward = oneWayNetwork(RoadDirection.FORWARD);
+        expectNear("one-way east: the route east still uses the street",
+                walkLength(forward, 0, 0, 400, 0), 400, 15);
+        expectNear("one-way east: the route west goes round the bypass instead",
+                walkLength(forward, 400, 0, 0, 0), 520, 30);
+
+        RoadNetwork backward = oneWayNetwork(RoadDirection.BACKWARD);
+        expectNear("one-way west: now the route west uses the street",
+                walkLength(backward, 400, 0, 0, 0), 400, 15);
+        expectNear("one-way west: and the route east goes round",
+                walkLength(backward, 0, 0, 400, 0), 520, 30);
+
+        // A vehicle obeys it too. The restriction is a property of the road rather than of who is on it,
+        // and every mode goes through the one question the graph asks the segment, so this is a check
+        // that the drive branch did not grow a rule of its own.
+        expectNear("a drive obeys the same restriction",
+                driveLength(forward, 400, 0, 0, 0), 520, 30);
+    }
+
+    /** The street from west to east, a bypass beside it, and a connector at each end. */
+    private static RoadNetwork oneWayNetwork(RoadDirection direction) {
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.ROAD, 0, 0, 400, 0);
+        addRoad(net, RoadClass.ROAD, 0, 60, 400, 60);
+        addRoad(net, RoadClass.ROAD, 0, 0, 0, 60);
+        addRoad(net, RoadClass.ROAD, 400, 0, 400, 60);
+
+        // The street is the one road with both ends on z = 0: the connectors each have an end there, and
+        // the bypass has none.
+        for (RoadSegment segment : net.segments()) {
+            RoadNode from = net.node(segment.fromNode());
+            RoadNode to = net.node(segment.toNode());
+            if (from != null && to != null && from.z() == 0 && to.z() == 0) {
+                segment.setDirection(direction);
+            }
+        }
+        return net;
+    }
+
+    private static double walkLength(RoadNetwork net, int fromX, int fromZ, int toX, int toZ) {
+        return length(net, fromX, fromZ, toX, toZ, TravelMode.WALK);
+    }
+
+    private static double driveLength(RoadNetwork net, int fromX, int fromZ, int toX, int toZ) {
+        return length(net, fromX, fromZ, toX, toZ, TravelMode.DRIVE);
+    }
+
+    private static double length(RoadNetwork net, int fromX, int fromZ, int toX, int toZ,
+                                 TravelMode mode) {
+        Route route = RoadRouter.findRoute(net, fromX, fromZ, toX, toZ, "one-way", mode,
+                RoutePreferences.DEFAULTS);
+        // Not a route at all is reported as a length no assertion can match, so that "refused" fails a
+        // check that expected a way round rather than looking like a perfect zero.
+        return route.isPresent() ? route.totalLength() : Double.NaN;
+    }
+
+    /** The MTR integration, in a session with no MTR in it.
      *
      * <p>Reading another mod's internals reflectively is only defensible if the session without that
      * mod is untouched by it, so that is the first thing to check: nothing bound, nothing read, and no

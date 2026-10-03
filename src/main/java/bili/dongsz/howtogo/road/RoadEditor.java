@@ -91,6 +91,144 @@ public final class RoadEditor {
         return true;
     }
 
+    /**
+     * Which way the whole road the given segment belongs to runs.
+     *
+     * <p>The direction of the road the player is looking at, rather than of the one piece of it the
+     * cursor happens to be over: a street that bends is several segments, and asking only the piece under
+     * the cursor would report "two-way" for a street whose other half is one-way.
+     *
+     * <h2>Why the chain is walked rather than the segments compared</h2>
+     * Two pieces of one street need not be stored pointing the same way -- see
+     * {@link #setChainDirection} -- so their raw directions can differ while the street itself runs
+     * cleanly one way. Comparing the stored values would call such a street two-way, and the way to avoid
+     * that is to ask the same question the marking wrote: walk the street from one end and see whether
+     * every piece lets travel in where the previous one let it out, and whether they all run with the
+     * walk or all against it.
+     *
+     * <p>{@link RoadDirection#TWO_WAY} is also the answer for a road whose pieces disagree, or half of
+     * which nobody has marked yet, because that is the state a switch has to move on from: a half-marked
+     * road is not one-way in either sense, and the next press makes it one-way in the first sense rather
+     * than flipping a coin.
+     */
+    public RoadDirection chainDirection(int segmentId) {
+        java.util.List<Integer> chain = RoadChains.chainContaining(network, segmentId);
+        if (chain.isEmpty()) {
+            return RoadDirection.TWO_WAY;
+        }
+        int node = chainStartNode(chain, segmentId);
+        Boolean along = null;
+        boolean any = false;
+
+        for (int id : chain) {
+            RoadSegment segment = network.segment(id);
+            if (segment == null) {
+                continue;
+            }
+            boolean enteredAtFrom = segment.fromNode() == node;
+            if (!enteredAtFrom && segment.toNode() != node) {
+                continue;
+            }
+            if (!segment.direction().isOneWay()) {
+                // A piece with no restriction on it: whatever the rest of the street says, this road is
+                // not one-way, and the switch has something to do.
+                return RoadDirection.TWO_WAY;
+            }
+            boolean pieceAlong = (segment.direction() == RoadDirection.FORWARD) == enteredAtFrom;
+            if (along == null) {
+                along = pieceAlong;
+            } else if (along != pieceAlong) {
+                return RoadDirection.TWO_WAY;
+            }
+            any = true;
+            node = enteredAtFrom ? segment.toNode() : segment.fromNode();
+        }
+        if (!any || along == null) {
+            return RoadDirection.TWO_WAY;
+        }
+        return along ? RoadDirection.FORWARD : RoadDirection.BACKWARD;
+    }
+
+    /**
+     * Sets the whole road the given segment belongs to one-way, in the given direction.
+     *
+     * <h2>Why the chain and not the segment</h2>
+     * A player marking a street is marking the street. A road drawn with bends is one chain of segments,
+     * and marking only the piece under the cursor would leave a street that is one-way for fifty blocks
+     * and then two-way, which is not a road anybody built on purpose.
+     *
+     * <h2>Why each segment is oriented rather than copied</h2>
+     * Nothing guarantees that the segments of a chain are stored pointing the same way: two polylines
+     * joined end to end can have been drawn from opposite ends, and a road that was split by a crossing
+     * keeps the original's numbering. So {@code forward} cannot simply be written onto every segment --
+     * that would make half of a bent street one-way against the other half. The chain is walked from one
+     * end, and each segment is told the direction it runs <em>in that walk</em>, which is what makes the
+     * street one-way rather than its pieces.
+     *
+     * @param direction the direction to set, with {@link RoadDirection#FORWARD} meaning along the chain
+     * @return whether anything changed
+     */
+    public boolean setChainDirection(int segmentId, RoadDirection direction) {
+        if (network.segment(segmentId) == null || direction == null) {
+            return false;
+        }
+        java.util.List<Integer> chain = RoadChains.chainContaining(network, segmentId);
+        if (chain.isEmpty()) {
+            return false;
+        }
+        pushUndo();
+
+        // The node the walk starts from: the end of the first segment that the second one is not attached
+        // to. A chain of one segment has no second one, and then the segment's own from-node is the start
+        // -- so FORWARD on a single piece of road is the direction it was drawn in, which is the answer
+        // that needs no explaining to the player who drew it.
+        int node = chainStartNode(chain, segmentId);
+
+        for (int id : chain) {
+            RoadSegment segment = network.segment(id);
+            if (segment == null) {
+                continue;
+            }
+            if (!direction.isOneWay()) {
+                segment.setDirection(RoadDirection.TWO_WAY);
+                continue;
+            }
+            boolean along = segment.fromNode() == node;
+            if (!along && segment.toNode() != node) {
+                // The chain index and the geometry disagree, which a hand-edited or half-repaired file
+                // can produce. The segment is left alone rather than given a direction that means
+                // nothing about it.
+                continue;
+            }
+            segment.setDirection(along ? direction : direction.reversed());
+            node = along ? segment.toNode() : segment.fromNode();
+        }
+        return true;
+    }
+
+    /**
+     * The node a chain walk starts from, as the chain walk produced it.
+     *
+     * <p>{@link RoadChains#chainContaining} walks both ways from the seed and stitches the far half in
+     * front of it, so the seed itself is traversed from its own from-node to its to-node and the chain's
+     * start is the free end of the first segment. Falling back to the seed keeps a one-segment chain
+     * meaningful.
+     */
+    private int chainStartNode(java.util.List<Integer> chain, int seedSegmentId) {
+        RoadSegment seed = network.segment(seedSegmentId);
+        if (chain.size() < 2 || seed == null) {
+            return seed == null ? RoadSegment.NO_NODE : seed.fromNode();
+        }
+        RoadSegment first = network.segment(chain.get(0));
+        RoadSegment second = network.segment(chain.get(1));
+        if (first == null || second == null) {
+            return seed.fromNode();
+        }
+        boolean firstTouchesSecond = first.fromNode() == second.fromNode()
+                || first.fromNode() == second.toNode();
+        return firstTouchesSecond ? first.toNode() : first.fromNode();
+    }
+
     /** Creates a point of interest and selects it. */
     public int addPoi(int x, int y, int z) {
         pushUndo();
@@ -394,7 +532,7 @@ public final class RoadEditor {
         first.setFromNode(original.fromNode());
         first.setToNode(junction.id());
         first.setName(original.name());
-        first.setOneWay(original.oneWay());
+        first.setDirection(original.direction());
 
         RoadSegment second = network.newSegment(original.roadClass(), y,
                 original.vertexCount() - vertexIndex + 1);
@@ -405,7 +543,7 @@ public final class RoadEditor {
         second.setFromNode(junction.id());
         second.setToNode(original.toNode());
         second.setName(original.name());
-        second.setOneWay(original.oneWay());
+        second.setDirection(original.direction());
 
         network.removeSegment(segmentId);
         network.addSegment(first);

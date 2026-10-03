@@ -4,6 +4,7 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -103,6 +104,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             "hud.howtogo.edit.select",
             "hud.howtogo.edit.class",
             "hud.howtogo.edit.name",
+            "hud.howtogo.edit.oneway",
             "hud.howtogo.edit.poi",
             "hud.howtogo.edit.navigate",
             "hud.howtogo.edit.lines",
@@ -448,6 +450,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     localX(segment.x(i), anchorX, fracX, p10),
                     localY(segment.z(i), anchorZ, fracY, p10),
                     halfWidth, r, g, b, a);
+        }
+
+        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after the
+        // road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they would
+        // be a second pass that could disagree with it about the road's colour, width or visibility.
+        if (segment.direction().isOneWay() && Math.abs(info.scale) >= ONEWAY_ARROW_MIN_SCALE) {
+            emitOneWayArrows(last, vc, segment, anchorX, anchorZ, fracX, fracY, p10, posePerPixel);
         }
 
         // TEMPORARY rail diagnostic: one of the auto-detected layer's segments was actually stroked,
@@ -1431,9 +1440,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             boolean segmentSelected =
                     RoadEditSession.editor().selectedSegmentId() != RoadSegment.NO_SEGMENT;
             swatchLine = leftLines.size();
-            leftLines.add(Component.translatable(
+            String headline = Component.translatable(
                     segmentSelected ? "hud.howtogo.selected" : "hud.howtogo.drawing",
-                    roadClass.name()).getString());
+                    roadClass.name()).getString();
+            if (segmentSelected) {
+                // The one-way state of the road the player has selected, spelled out: the arrows on the
+                // map say which way it runs, and this says what pressing the key again will do to it.
+                RoadDirection direction = RoadEditSession.editor()
+                        .chainDirection(RoadEditSession.editor().selectedSegmentId());
+                headline = headline + " · " + Component.translatable(
+                        "hud.howtogo.direction." + direction.id()).getString();
+            }
+            leftLines.add(headline);
             leftLines.add(editStats());
             hintLines.addAll(controlHints());
             swatchColor = 0xFF000000 | (roadClass.color() & 0xFFFFFF);
@@ -1618,6 +1636,111 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         vertex(pose, vc, cx + halfX, cy - halfY, r, g, b, a);
         vertex(pose, vc, cx + halfX, cy + halfY, r, g, b, a);
         vertex(pose, vc, cx - halfX, cy + halfY, r, g, b, a);
+    }
+
+    // ------------------------------------------------------------ one-way marks
+
+    /**
+     * Screen distance between the direction arrows along a one-way road.
+     *
+     * <p>A screen distance rather than a world one: the arrows are a reading of the map, and how many of
+     * them fit along a road is a question about the screen. Zoomed out, a fixed world spacing would put
+     * them all on top of each other; zoomed in, it would leave a street with one arrow on it that points
+     * off the edge of the screen.
+     */
+    private static final double ONEWAY_ARROW_SPACING_PX = 26.0;
+    /** Length of one arrowhead, which is also the size the dark rim around it is grown by. */
+    private static final double ONEWAY_ARROW_PX = 7.5;
+    /** The most arrowheads one segment draws, so a long road cannot fill the map with them. */
+    private static final int ONEWAY_ARROW_LIMIT = 40;
+    /**
+     * Map scale below which a one-way road is drawn without its arrows.
+     *
+     * <p>The same idea as the label gate: at a scale where a whole region is on screen, a road is part of
+     * a picture rather than something being read, and forty arrowheads per street would turn the picture
+     * into a texture. Past the gate the road is still drawn exactly as it is -- only the marks that say
+     * which way it runs are left off.
+     */
+    private static final double ONEWAY_ARROW_MIN_SCALE = 0.3;
+    /** The arrowhead itself: white, so it stands off all six road colours. */
+    private static final int COLOR_ARROW = 0xFFF4F8FF;
+    /** The rim under it, which is what makes it visible on the ice road as well as the highway. */
+    private static final int COLOR_ARROW_RIM = 0xB0101418;
+
+    /**
+     * Draws arrowheads along a one-way segment, pointing the way travel is allowed.
+     *
+     * <p>The polyline is walked in the allowed direction -- forwards for a segment that runs from its
+     * from-node to its to-node, backwards for the other -- and an arrowhead is placed at every spacing,
+     * each one turned to the local direction of the road so it follows a bend instead of pointing at the
+     * first arrow's angle.
+     *
+     * <p>Everything here is in the segment's own local (map) units, the same as the stroke, so the arrows
+     * pan and zoom with the road they belong to.
+     */
+    private static void emitOneWayArrows(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
+                                         double anchorX, double anchorZ, double fracX, double fracY,
+                                         double p10, double posePerPixel) {
+        int count = segment.vertexCount();
+        if (count < 2) {
+            return;
+        }
+        double spacing = ONEWAY_ARROW_SPACING_PX * posePerPixel;
+        double size = ONEWAY_ARROW_PX * posePerPixel;
+        if (!(spacing > 0.0) || !(size > 0.0)) {
+            return;
+        }
+        boolean backward = segment.direction() == RoadDirection.BACKWARD;
+        // The first arrow sits a little way in from the end rather than in the very first pixel of the
+        // road, where it would overlap the junction's round cap and the arrows of the road meeting it.
+        double nextAt = spacing * 0.75;
+        double travelled = 0.0;
+        int drawn = 0;
+
+        for (int step = 1; step < count && drawn < ONEWAY_ARROW_LIMIT; step++) {
+            int a = backward ? count - step : step - 1;
+            int b = backward ? count - step - 1 : step;
+            double x1 = localX(segment.x(a), anchorX, fracX, p10);
+            double y1 = localY(segment.z(a), anchorZ, fracY, p10);
+            double x2 = localX(segment.x(b), anchorX, fracX, p10);
+            double y2 = localY(segment.z(b), anchorZ, fracY, p10);
+            double length = Math.hypot(x2 - x1, y2 - y1);
+            if (length < 1.0E-6) {
+                continue;
+            }
+            double ux = (x2 - x1) / length;
+            double uy = (y2 - y1) / length;
+            while (nextAt <= travelled + length && drawn < ONEWAY_ARROW_LIMIT) {
+                double at = nextAt - travelled;
+                emitArrowHead(pose, vc, x1 + ux * at, y1 + uy * at, ux, uy, size);
+                drawn++;
+                nextAt += spacing;
+            }
+            travelled += length;
+        }
+    }
+
+    /** One arrowhead: a dark rim with a light head on top of it, pointing along (ux, uy). */
+    private static void emitArrowHead(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
+                                      double ux, double uy, double size) {
+        double nx = -uy;
+        double ny = ux;
+        double tipX = cx + ux * size * 0.5;
+        double tipY = cy + uy * size * 0.5;
+        double backX = cx - ux * size * 0.5;
+        double backY = cy - uy * size * 0.5;
+        double wingX = nx * size * 0.62;
+        double wingY = ny * size * 0.62;
+        double rim = size * 0.22;
+
+        HudDraw.emitTriangle(pose, vc,
+                tipX + ux * rim, tipY + uy * rim,
+                backX + wingX - nx * rim, backY + wingY - ny * rim,
+                backX - wingX + nx * rim, backY - wingY + ny * rim, COLOR_ARROW_RIM);
+        HudDraw.emitTriangle(pose, vc,
+                tipX, tipY,
+                backX + wingX, backY + wingY,
+                backX - wingX, backY - wingY, COLOR_ARROW);
     }
 
     /**
