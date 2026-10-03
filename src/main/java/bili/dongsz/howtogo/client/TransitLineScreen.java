@@ -285,8 +285,8 @@ public final class TransitLineScreen extends Screen {
         if (line == null || !readOnly(line)) {
             return;
         }
-        long id = MtrTransit.mtrLineId(line);
-        if (id < 0) {
+        Long id = MtrTransit.mtrLineId(line);
+        if (id == null) {
             return;
         }
         boolean on = MtrTransit.marksEnabled(line);
@@ -498,10 +498,17 @@ public final class TransitLineScreen extends Screen {
                 && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
         graphics.fill(x, y, x + TOGGLE_WIDTH - 1, y + ROW_HEIGHT - 1,
                 hovered ? 0xFF3A4450 : 0xFF242A33);
-        // A dot rather than a tick: the two glyphs are the same width in every font the game ships, so
-        // the state reads the same whether the line is on or off.
-        graphics.drawString(this.font, on ? "\u25CF" : "\u25CB", x + 2, y + 2,
-                on ? 0xFF000000 | (line.kind().color() & 0xFFFFFF) : 0xFF6A7480, false);
+        if (!on) {
+            // Nothing in the box at all, which is as different from a glyph as two states can be: a dot
+            // that differed only in colour was read as "the click did nothing", which is what a control
+            // whose two states look alike costs.
+            return;
+        }
+        // The class the line marks in, in one character: 铁 for rail and 水 for water, so the box says
+        // what turning it on actually adds. Both are one glyph wide, so the row's text does not shift.
+        String glyph = line.kind() == RoadClass.WATER ? "\u6C34" : "\u8F68";
+        graphics.drawString(this.font, glyph, x + 1, y + 2,
+                0xFF000000 | (line.kind().color() & 0xFFFFFF), false);
     }
 
     private void drawStops(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
@@ -728,6 +735,9 @@ public final class TransitLineScreen extends Screen {
     /**
      * Whether the pointer is on the marks switch at the right end of the given row.
      *
+     * <p>The whole height of the row and a little more than the box is wide, because a control that has
+     * to be hit exactly is a control that feels broken.
+     *
      * @param row the row's index within the column, not the one on screen
      */
     private boolean marksToggleAt(double mouseX, double mouseY, TransitLine line, int row) {
@@ -736,7 +746,7 @@ public final class TransitLineScreen extends Screen {
         }
         int x = linesX + columnW - TOGGLE_WIDTH - 1;
         int y = listY + (row - lineScroll) * ROW_HEIGHT;
-        return mouseX >= x && mouseX < x + TOGGLE_WIDTH
+        return mouseX >= x - 2 && mouseX < x + TOGGLE_WIDTH
                 && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
     }
 

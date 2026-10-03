@@ -83,9 +83,10 @@ line; every marked segment identifiable as read rather than drawn by its id alon
 It also covers the **per-line marks switch** the line editor draws beside each imported line: that a
 line nobody has answered for takes the configured default, that an answer is kept by MTR's own line id
 (an imported line is rebuilt from every reading, so a field on it would not survive the player walking
-to the next station), that one line's answer marks its track and leaves another line's alone, and that a
-mode which cannot reach a mark's class is not offered it -- the rule that had to ask about water as well
-as rail, or a boat line's switch would have done nothing.
+to the next station), including an id whose high bit is set -- which is half of MTR's, and which used to
+be read as "not ours" and thrown away, so that a line's switch did nothing and its track was never
+marked at all -- that one line's answer marks its track and leaves another line's alone, and that a mode
+which cannot reach a mark's class is not offered it.
 
 And it covers **what a mark is**, through `MtrLineTracks` directly, because that is the part no view can
 show: that a line's track is marked rather than MTR's rails as a whole (MTR's data does not say which
@@ -96,11 +97,20 @@ whose stops are nowhere near its rails is marked nowhere rather than joined up a
 that two lines over one stretch of rail get marks of their own with ids that cannot collide.
 
 And it covers the **interchange rule** the map draws its orange markers from, through
-`TransitInterchanges`: that two lines calling a few blocks apart are an interchange (the platform and
-the stop beside it are one place to travel through), that the radius is the planner's own and inclusive
-at its edge, that one line's own stops standing close are *not* an interchange, and that with one of the
-two lines gone the place stops being one. That last pair is what the rule is for: a marker that stayed
-orange after a line was cancelled, because the marker had never been about two lines.
+`TransitInterchanges`: that two lines calling a few blocks apart are one interchange (the platform and
+the stop beside it are one place to travel through), that it is drawn once at the middle of the stops
+that make it up rather than on each of them, that three lines at one place are still one marker, that
+the radius is the planner's own and inclusive at its edge, that one line's own stops standing close are
+*not* an interchange, and that with one of the two lines gone the place stops being one. That last pair
+is what the rule is for: a marker that stayed orange after a line was cancelled, because the marker had
+never been about two lines.
+
+`checkKnown` covers the **memory** a session keeps of what MTR has said, which matters because MTR sends
+a client only what is near it: a reading near a line is remembered with its track; a reading from far
+away, with no lines in it at all, takes none of that away; walking along the line brings its newest stops
+and adds the new stretch of track to the old; walking back over the same track does not remember it
+twice; a line's switch filters the remembered track rather than the reading, so switching it off and back
+on needs no fresh data; and switching the whole integration off forgets the railway.
 
 `RideRoadsCheck.java` is in the `route` package for the same reason, and checks the seam the switch
 rests on: a line whose marks are off is handed a network that never had them, because MTR's marks are

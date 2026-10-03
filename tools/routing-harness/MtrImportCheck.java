@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.transit.TransitLine;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.LongPredicate;
 
 /**
  * Checks the MTR import against a reading that was made up here.
@@ -44,7 +45,7 @@ public final class MtrImportCheck {
 
         MtrClientData.Snapshot reading = syntheticReading();
 
-        MtrTransit.Built built = MtrTransit.build(reading, id -> true);
+        MtrTransit.Built built = build(reading, id -> true);
         expect("one stop per station", built.stops().size() == 4);
         expect("a stop sits at the middle of its station's platforms, not the middle of the station",
                 stopAt(built.stops(), 5, 0));
@@ -82,7 +83,7 @@ public final class MtrImportCheck {
                 built.rails().segmentsSnapshot().stream().allMatch(RailTrackStore::isOurs));
 
         // The switch: nothing marked means nothing added, and the stops and lines are untouched.
-        MtrTransit.Built withoutMarks = MtrTransit.build(reading, id -> false);
+        MtrTransit.Built withoutMarks = build(reading, id -> false);
         expect("with every line's marks off nothing is marked at all",
                 withoutMarks.rails().segmentCount() == 0);
         expect("and the stops and lines are the same ones", withoutMarks.lines().size() == 2
@@ -90,13 +91,13 @@ public final class MtrImportCheck {
 
         // One line's answer is that line's own: the boat line's mark exists and the train line's does
         // not, which is the whole point of asking per line rather than once for the layer.
-        MtrTransit.Built onlyTheBoat = MtrTransit.build(reading, id -> id == 4);
+        MtrTransit.Built onlyTheBoat = build(reading, id -> id == 4);
         expect("one line's answer marks its track and leaves the other line's alone",
                 hasClass(onlyTheBoat.rails(), RoadClass.WATER)
                         && !hasClass(onlyTheBoat.rails(), RoadClass.RAIL));
 
         expect("an empty reading becomes nothing at all",
-                MtrTransit.build(MtrClientData.Snapshot.EMPTY, id -> true).lines().isEmpty());
+                build(MtrClientData.Snapshot.EMPTY, id -> true).lines().isEmpty());
 
         checkHandshake();
 
@@ -110,6 +111,7 @@ public final class MtrImportCheck {
         checkMarksSwitch(imported);
         checkLineTracks();
         checkInterchanges();
+        checkKnown();
 
         // A boat line: the other kind this mod has a use for.
         MtrClientData.Snapshot boatsOnly = new MtrClientData.Snapshot(
@@ -117,7 +119,7 @@ public final class MtrImportCheck {
                 reading.lines().stream().filter(line -> "BOAT".equals(line.mode())).toList(),
                 List.of());
         expect("a boat line becomes a water line",
-                MtrTransit.build(boatsOnly, id -> true).lines().stream()
+                build(boatsOnly, id -> true).lines().stream()
                         .allMatch(line -> line.kind() == RoadClass.WATER));
 
         // A line all of whose stations are outside what the client was sent has no ride in it.
@@ -126,7 +128,7 @@ public final class MtrImportCheck {
                 List.of(new MtrClientData.Line(9, "Far away", "TRAIN", 0, List.of(
                         stop(11, 1, "Alpha"), stop(21, 2, "Beta")))),
                 List.of());
-        MtrTransit.Built unplaced = MtrTransit.build(nothingPlaced, id -> true);
+        MtrTransit.Built unplaced = build(nothingPlaced, id -> true);
         expect("a line whose stops the client has not been sent is not offered",
                 unplaced.lines().isEmpty());
         expect("and its stops are counted", unplaced.unplaced() == 2);
@@ -135,6 +137,17 @@ public final class MtrImportCheck {
         System.out.println(failures == 0 ? "  MTR import ok (" + checks + " checks)"
                 : "  MTR import FAILED: " + failures + " of " + checks);
         return new int[]{checks, failures};
+    }
+
+    /**
+     * A reading converted with its own mark-id counter, which is what a caller outside the memory has.
+     *
+     * <p>The counter is handed in rather than owned by the conversion because a session keeps what it has
+     * read and merges the next reading into it: ids that began again at the same base every time would
+     * make the second reading's track look like the first's.
+     */
+    private static MtrTransit.Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks) {
+        return MtrTransit.build(reading, wantsMarks, new int[]{1_500_000_000});
     }
 
     /**
@@ -147,10 +160,19 @@ public final class MtrImportCheck {
      * is also why the answers are held in memory for the length of this check.
      */
     private static void checkMarksSwitch(TransitLine imported) {
-        long id = MtrTransit.mtrLineId(imported);
-        expect("an imported line carries MTR's own id, which is what an answer is kept by", id == 1);
+        Long id = MtrTransit.mtrLineId(imported);
+        expect("an imported line carries MTR's own id, which is what an answer is kept by",
+                id != null && id == 1L);
         expect("and a line the player made carries none",
-                MtrTransit.mtrLineId(new TransitLine("mine", "Mine", RoadClass.RAIL)) < 0);
+                MtrTransit.mtrLineId(new TransitLine("mine", "Mine", RoadClass.RAIL)) == null);
+
+        // MTR's ids are longs, and half of them are negative. A negative id read as "not ours" is what
+        // made the switch beside a line do nothing: the answer was never written, so the marker never
+        // moved and the line kept taking the configured default for ever.
+        TransitLine negative = new TransitLine("mtr:" + Long.toHexString(-2L), "Negative",
+                RoadClass.RAIL);
+        Long negativeId = MtrTransit.mtrLineId(negative);
+        expect("a line whose MTR id is negative is still MTR's", negativeId != null && negativeId == -2L);
 
         boolean fallback = RoadConfig.mtrAutoRouteMarks();
         MtrMarks.clear(id);
@@ -170,6 +192,11 @@ public final class MtrImportCheck {
         MtrMarks.clear(id);
         expect("forgetting the answer puts the line back on the default",
                 !MtrMarks.isChosen(id) && MtrTransit.marksEnabled(imported) == fallback);
+
+        MtrMarks.toggle(-2L, true);
+        expect("and a line with a negative id answers for itself rather than for every such line",
+                !MtrTransit.marksEnabled(negative) && MtrTransit.marksEnabled(imported) == fallback);
+        MtrMarks.clear(-2L);
 
         expect("a listed answer beats the default",
                 !MtrMarks.decide(false, true, true) && MtrMarks.decide(true, false, false));
@@ -274,6 +301,84 @@ public final class MtrImportCheck {
     }
 
     /**
+     * What is kept of a reading, and why it has to be kept at all.
+     *
+     * <p>MTR sends a client only what is near it, so a reading on its own is a window that closes behind
+     * the player: used on its own, the lines vanish from the planner and the editor as they walk away and
+     * the track the marks were cut from is gone. These checks walk a session through three readings --
+     * near a line, away from everything, along the line -- and hold the memory to what it should have.
+     */
+    private static void checkKnown() {
+        System.out.println("   what is kept after the player walks away");
+        int[] counter = {1_500_000_000};
+        MtrKnown known = new MtrKnown();
+
+        // Near the first half of a line: one train line calling at two stations, with the rail under it.
+        MtrClientData.Snapshot near = reading(
+                List.of(station(1, "Alpha", "TRAIN", 0, 0), station(2, "Beta", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(new MtrClientData.Line(1, "Line 1", "TRAIN", 0xFF0000, List.of(
+                        stop(11, 1, "Alpha"), stop(12, 2, "Beta")))),
+                List.of(track("a", "TRAIN", 0, 0, 100, 0)));
+        known.remember(MtrTransit.build(near, id -> true, counter));
+        expect("a reading near a line is remembered", known.lines().size() == 1
+                && known.stations().size() == 2);
+        expect("with the track it marked", known.marks(id -> true).segmentCount() == 1);
+
+        // Walked away: MTR now sends one station and no lines at all, which is what a reading looks like
+        // from far off. Everything already read has to still be there.
+        MtrClientData.Snapshot away = reading(
+                List.of(station(2, "Beta", "TRAIN", 100, 0)),
+                List.of(platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(),
+                List.of());
+        known.remember(MtrTransit.build(away, id -> true, counter));
+        expect("a reading from far away does not take the lines with it", known.lines().size() == 1);
+        expect("nor the stations", known.stations().size() == 2);
+        expect("nor the track, which is what a journey over the line is planned along",
+                known.marks(id -> true).segmentCount() == 1);
+
+        // Walked along the line: the same line again, a window further on with one stop in common.
+        MtrClientData.Snapshot further = reading(
+                List.of(station(2, "Beta", "TRAIN", 100, 0), station(3, "Gamma", "TRAIN", 200, 0)),
+                List.of(platform(12, 2, "1", "TRAIN", 100, 0),
+                        platform(13, 3, "1", "TRAIN", 200, 0)),
+                List.of(new MtrClientData.Line(1, "Line 1", "TRAIN", 0xFF0000, List.of(
+                        stop(12, 2, "Beta"), stop(13, 3, "Gamma")))),
+                List.of(track("b", "TRAIN", 100, 0, 200, 0)));
+        known.remember(MtrTransit.build(further, id -> true, counter));
+        expect("a later reading brings the line's newest stops", known.lines().size() == 1
+                && known.lines().get(0).stopCount() == 2
+                && known.lines().get(0).stops().get(1).x() == 200);
+        expect("and its track is added to the track already known",
+                known.marks(id -> true).segmentCount() == 2);
+
+        // Back over the same ground: the same stretch of rail is marked again, and must not be kept twice.
+        known.remember(MtrTransit.build(near, id -> true, counter));
+        expect("walking back over the same track does not remember it a second time",
+                known.marks(id -> true).segmentCount() == 2);
+
+        // A line's answer filters the memory rather than what was put in it: switching a line off takes
+        // its track out of the layer and keeps it, so switching it back on needs no fresh reading.
+        expect("a line whose marks are off contributes no track",
+                known.marks(id -> false).segmentCount() == 0);
+        expect("and still has it when switched back on", known.marks(id -> true).segmentCount() == 2);
+
+        known.clear();
+        expect("switching MTR off forgets the railway entirely",
+                known.lines().isEmpty() && known.stations().isEmpty()
+                        && known.marks(id -> true).segmentCount() == 0);
+    }
+
+    /** A reading of the given parts, for the checks that need one built by hand. */
+    private static MtrClientData.Snapshot reading(List<MtrClientData.Station> stations,
+                                                  List<MtrClientData.Platform> platforms,
+                                                  List<MtrClientData.Line> lines,
+                                                  List<MtrClientData.Track> tracks) {
+        return new MtrClientData.Snapshot(stations, platforms, lines, tracks);
+    }
+
+    /**
      * The interchange rule the map draws from.
      *
      * <p>Two lines, standing within the planner's own transfer radius -- and the two things that have
@@ -289,34 +394,50 @@ public final class MtrImportCheck {
         // A rail line and a boat line calling at the two sides of one station.
         TransitLine rail = line("mtr:1", RoadClass.RAIL, 0, 0, 100, 0);
         TransitLine beside = line("mtr:2", RoadClass.WATER, 5, 0, 200, 0);
-        Set<Long> shared = TransitInterchanges.shared(List.of(rail, beside));
-        expect("two lines calling a few blocks apart make an interchange",
-                shared.contains(TransitInterchanges.pack(0, 0))
-                        && shared.contains(TransitInterchanges.pack(5, 0)));
-        expect("and a stop of theirs nowhere near another line is not one",
-                !shared.contains(TransitInterchanges.pack(100, 0))
-                        && !shared.contains(TransitInterchanges.pack(200, 0)));
+        List<TransitInterchanges.Interchange> shared =
+                TransitInterchanges.of(List.of(rail, beside));
+        expect("two lines calling a few blocks apart make an interchange", shared.size() == 1);
+        expect("holding both stops, so the map can decide where to draw it",
+                shared.get(0).holds(0, 0) && shared.get(0).holds(5, 0));
+        expect("centred between them, which is where a fused marker goes",
+                shared.get(0).centreX() == 3 && shared.get(0).centreZ() == 0);
+        expect("and it names both lines",
+                shared.get(0).lineIds().size() == 2);
+        expect("while a stop of theirs nowhere near another line is not in it",
+                !shared.get(0).holds(100, 0) && !shared.get(0).holds(200, 0));
+
+        // Whether the two markers are drawn as one is a question about the screen: at a zoom where they
+        // land far apart they are two markers, and at one where they touch they are one.
+        TransitInterchanges.Interchange pair = shared.get(0);
+        expect("zoomed in far enough to separate them, they are two markers",
+                TransitInterchanges.overlapping(pair, x -> x * 50, z -> z * 50, 10.0).size() == 2);
+        expect("and zoomed out until they touch, one",
+                TransitInterchanges.overlapping(pair, x -> x, z -> z, 10.0).size() == 1);
 
         // The radius is the planner's, inclusive at its own edge: the map must not call two stations
         // separate that a journey will change lines at.
         TransitLine atTheEdge = line("mtr:3", RoadClass.WATER, (int) radius, 0, 300, 0);
         TransitLine pastIt = line("mtr:4", RoadClass.WATER, (int) radius + 1, 0, 300, 0);
         expect("a stop exactly the radius away still counts",
-                TransitInterchanges.shared(List.of(rail, atTheEdge))
-                        .contains(TransitInterchanges.pack(0, 0)));
+                TransitInterchanges.of(List.of(rail, atTheEdge)).size() == 1);
         expect("and one a block further out does not",
-                TransitInterchanges.shared(List.of(rail, pastIt)).isEmpty());
+                TransitInterchanges.of(List.of(rail, pastIt)).isEmpty());
+
+        // Three lines at one place are one interchange, not two pairs of them.
+        TransitLine third = line("mtr:6", RoadClass.RAIL, -4, 0, 400, 0);
+        expect("three lines at one place are one marker",
+                TransitInterchanges.of(List.of(rail, beside, third)).size() == 1);
 
         // One line's own stops, standing close: not a change of lines, and so not an interchange. This
         // is the case that left an orange marker on a place no second line ever called at.
         expect("one line's own stops standing close are not an interchange",
-                TransitInterchanges.shared(List.of(line("mtr:5", RoadClass.RAIL, 0, 0, 5, 0))).isEmpty());
+                TransitInterchanges.of(List.of(line("mtr:5", RoadClass.RAIL, 0, 0, 5, 0))).isEmpty());
 
         // Worked out from the lines handed in, every call: with one of the two gone the place is not an
         // interchange, which is what "the marker stayed after I cancelled the line" was about.
         expect("with one of the two lines gone the place is not an interchange any more",
-                TransitInterchanges.shared(List.of(rail)).isEmpty());
-        expect("and no lines at all is no interchanges", TransitInterchanges.shared(List.of()).isEmpty());
+                TransitInterchanges.of(List.of(rail)).isEmpty());
+        expect("and no lines at all is no interchanges", TransitInterchanges.of(List.of()).isEmpty());
     }
 
     /** A rail of this mod's rail class, as the raw layer a line's ride is planned over. */

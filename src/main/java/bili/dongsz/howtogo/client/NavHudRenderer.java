@@ -226,7 +226,7 @@ public final class NavHudRenderer {
         // the same reach: the map is a view of the ground, and a rail the player can see on the world
         // map belongs on this one too. Both layers are bounded by their own read radius, so this pass
         // is a handful of polylines.
-        for (RoadSegment segment : RailLayers.all()) {
+        for (RoadSegment segment : RailLayers.drawn()) {
             for (int i = 1; i < segment.vertexCount(); i++) {
                 double ax = segment.x(i - 1);
                 double az = segment.z(i - 1);

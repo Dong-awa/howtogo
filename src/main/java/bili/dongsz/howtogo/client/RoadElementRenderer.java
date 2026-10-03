@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.transit.LineStop;
@@ -232,12 +233,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // marker is a name nobody can read. The line names go last of all, after the place
                 // markers renderLabels emits, for the same reason.
                 int lineMargin = 64;
-                // Worked out once and handed to both passes: the stop markers draw the interchange in
-                // orange, and the place markers stand aside where one is drawn, since a station that is
+                // Worked out once and handed to both passes: the stops draw an interchange as one orange
+                // marker, and the place markers stand aside where one is drawn, since a station that is
                 // also an interchange is a place whose whole point is that colour. Two passes each
                 // working it out would be two answers that could disagree.
-                java.util.Set<Long> interchanges =
-                        TransitInterchanges.shared(Navigation.linesInPlay());
+                java.util.List<TransitInterchanges.Interchange> interchanges =
+                        TransitInterchanges.of(Navigation.linesInPlay());
                 drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
                         graphics.guiHeight() + lineMargin, interchanges);
                 renderLabels(graphics, pose, info, vc, interchanges);
@@ -414,7 +415,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * unreadable smear.
      */
     private void renderLabels(GuiGraphics graphics, PoseStack pose, ElementRenderInfo info,
-                              VertexConsumer vc, java.util.Set<Long> interchanges) {
+                              VertexConsumer vc,
+                              java.util.List<TransitInterchanges.Interchange> interchanges) {
         Minecraft mc = Minecraft.getInstance();
         Font font = mc.font;
         RoadNetwork network = RoadStore.get();
@@ -613,6 +615,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private static final double LINE_STROKE_PX = 2.5;
     private static final double LINE_STOP_PX = 5.0;
+    /**
+     * How close two interchange markers have to land to be drawn as one, in pixels.
+     *
+     * <p>Twice the marker's radius, which is where two of them are just touching: any closer and they
+     * overlap, which is the case the fused marker exists for. Further apart they are two markers, at
+     * whatever zoom that happens to be.
+     */
+    private static final double MERGE_PX = LINE_STOP_PX * 2.0;
     private static final int COLOR_LINE_TRANSFER = 0xFFFF7A3C;
     /**
      * The dark backing under a stop marker.
@@ -639,6 +649,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** The path each line actually runs along, one shape per line, and the lines it was built for. */
     private static String lineShapeSignature = "";
     private static List<List<double[]>> lineShapes = List.of();
+    /** The line count the diagnostic last reported, so it speaks when that changes and not per frame. */
+    private static int reportedLineCount = -1;
     /**
      * One line's shape, kept until that line's own stops or kind change.
      *
@@ -750,11 +762,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
                                              int viewRight, int viewBottom,
-                                             java.util.Set<Long> interchanges) {
+                                             java.util.List<TransitInterchanges.Interchange>
+                                                     interchanges) {
         List<LineLabel> labels = new java.util.ArrayList<>();
         // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
         // a line whose route the map should show, whichever of the two it came from.
         List<TransitLine> lines = Navigation.linesInPlay();
+        reportLines(lines);
         if (lines.isEmpty()) {
             return labels;
         }
@@ -771,9 +785,23 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // the place markers stand aside for exactly the same set, so the two passes have to be looking
         // at one answer. See TransitInterchanges, which carries the rule itself.
         refreshLineShapes(lines);
+        if (lineShapes.size() != lines.size()) {
+            // Should not happen -- the shapes are rebuilt whenever the lines change -- and it is checked
+            // because the failure it would cause is silent and total: indexing past the end throws, the
+            // whole overlay is lost for that frame, and what the player sees is every line disappearing
+            // at once, which reads as the mod having forgotten them. Rebuilding is cheap next to that.
+            lineShapeSignature = "";
+            refreshLineShapes(lines);
+        }
         for (int index = 0; index < lines.size(); index++) {
             TransitLine line = lines.get(index);
-            List<double[]> shape = lineShapes.get(index);
+            List<double[]> shape = index < lineShapes.size() ? lineShapes.get(index) : List.of();
+            if (shape.size() < 2) {
+                // A line is drawn as a line: a pair that could not be planned at all still gets the
+                // straight hop between its ends, so a line nobody can ride is visible as a line rather
+                // than as nothing at all.
+                shape = hop(line);
+            }
             for (int i = 1; i < shape.size(); i++) {
                 double x1 = MapViewState.toScreenX(shape.get(i - 1)[0]);
                 double y1 = MapViewState.toScreenZ(shape.get(i - 1)[1]);
@@ -797,20 +825,104 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         for (TransitLine line : lines) {
             for (LineStop stop : line.stops()) {
+                if (inAnInterchange(interchanges, stop.x(), stop.z())) {
+                    // Drawn once, as the interchange, below.
+                    continue;
+                }
                 double x = MapViewState.toScreenX(stop.x());
                 double y = MapViewState.toScreenZ(stop.z());
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                boolean transfer = interchanges.contains(TransitInterchanges.pack(stop.x(), stop.z()));
                 HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX + 1.0,
                         COLOR_LINE_STOP_EDGE);
-                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX,
-                        transfer ? COLOR_LINE_TRANSFER : lineColour(line));
+                HudDraw.emitPlaceMarker(screenPose, vc, x, y, LINE_STOP_PX, lineColour(line));
+            }
+        }
+
+        // One marker per place two lines meet at, and one marker per group of its stops that land on top
+        // of each other: at a zoom where the two stops are far apart they are drawn separately, which is
+        // the map showing what it knows rather than fusing them at every scale. A group of one is that
+        // stop's own marker, in the interchange colour, because a stop two lines call at is an
+        // interchange whether or not its marker happens to touch the other's.
+        for (TransitInterchanges.Interchange interchange : interchanges) {
+            for (List<Integer> group : TransitInterchanges.overlapping(interchange,
+                    x -> (int) Math.round(MapViewState.toScreenX(x)),
+                    z -> (int) Math.round(MapViewState.toScreenZ(z)), MERGE_PX)) {
+                double x = 0;
+                double y = 0;
+                for (int index : group) {
+                    int[] stop = interchange.stops().get(index);
+                    x += MapViewState.toScreenX(stop[0]);
+                    y += MapViewState.toScreenZ(stop[1]);
+                }
+                x /= group.size();
+                y /= group.size();
+                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                    continue;
+                }
+                double half = LINE_STOP_PX;
+                if (group.size() == 1) {
+                    HudDraw.emitPlaceMarker(screenPose, vc, x, y, half + 1.0, COLOR_LINE_STOP_EDGE);
+                    HudDraw.emitPlaceMarker(screenPose, vc, x, y, half, COLOR_LINE_TRANSFER);
+                } else {
+                    // A square, and the same size as a stop's round marker: the fused place is a thing of
+                    // its own rather than a stop of either line, and the shape is what says so.
+                    emitBox(screenPose, vc, x, y, half + 1.0, half + 1.0, COLOR_LINE_STOP_EDGE);
+                    emitBox(screenPose, vc, x, y, half, half, COLOR_LINE_TRANSFER);
+                }
             }
         }
         pose.popPose();
         return labels;
+    }
+
+    /**
+     * How many lines the map is drawing, written when that changes.
+     *
+     * <p>One line per change and none otherwise, and only while a map is open. It is here because "the
+     * line disappeared" has two very different causes that look identical from outside -- the line
+     * leaving the list the map draws from, and the line being in the list but drawn nowhere -- and this
+     * is the number that tells them apart without a guess: a count that stays put while the stroke goes
+     * is the second, and a count that drops is the first.
+     */
+    private static void reportLines(List<TransitLine> lines) {
+        if (lines.size() == reportedLineCount) {
+            return;
+        }
+        reportedLineCount = lines.size();
+        int imported = 0;
+        int stops = 0;
+        for (TransitLine line : lines) {
+            if (MtrTransit.isImported(line)) {
+                imported++;
+            }
+            stops += line.stopCount();
+        }
+        HowToGo.LOGGER.info("[HowToGo] drawing {} transit line(s), {} of them read out of MTR, "
+                + "{} stops between them; {} line(s) and {} station(s) remembered", lines.size(),
+                imported, stops, MtrTransit.rememberedLines(), MtrTransit.rememberedStations());
+    }
+
+    /** A line's two ends as a straight hop, for a line whose path could not be worked out at all. */
+    private static List<double[]> hop(TransitLine line) {
+        if (line.stopCount() < 2) {
+            return List.of();
+        }
+        LineStop first = line.stops().get(0);
+        LineStop last = line.stops().get(line.stopCount() - 1);
+        return List.of(new double[] {first.x(), first.z()}, new double[] {last.x(), last.z()});
+    }
+
+    /** Whether a place is one of the stops an interchange marker already stands for. */
+    private static boolean inAnInterchange(
+            java.util.List<TransitInterchanges.Interchange> interchanges, int x, int z) {
+        for (TransitInterchanges.Interchange interchange : interchanges) {
+            if (interchange.holds(x, z)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A line's name and where to write it, kept until every shape has been emitted. */
@@ -852,14 +964,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
-                                  java.util.Set<Long> interchanges) {
+                                  java.util.List<TransitInterchanges.Interchange> interchanges) {
         double half = HudDraw.PLACE_MARKER_PX * 0.5;
         for (Destination place : Destinations.places()) {
             // A place a line stops at is drawn twice -- once as a place, once as the stop -- and the two
             // markers are the same size in the same spot, so the later one hides the earlier. That is the
             // wrong way round for an interchange, whose whole point is its colour: the place marker
-            // stands aside there and lets the orange stop marker be the one that is seen.
-            if (interchanges.contains(TransitInterchanges.pack(place.x(), place.z()))) {
+            // stands aside there and lets the orange marker be the one that is seen.
+            if (inAnInterchange(interchanges, place.x(), place.z())) {
                 continue;
             }
             double x = MapViewState.toScreenX(place.x());

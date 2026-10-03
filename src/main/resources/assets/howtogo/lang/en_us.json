@@ -123,6 +123,6 @@
   "screen.howtogo.line_copy": "Copy to mine",
   "screen.howtogo.line_copy_suffix": " (copy)",
   "screen.howtogo.line_from_mtr": "[MTR]",
-  "screen.howtogo.line_from_mtr_note": "From MTR: read-only. ● at the row marks the track it runs on",
+  "screen.howtogo.line_from_mtr_note": "From MTR: read-only. Click the box at the row to mark its track (rail/water)",
   "hud.howtogo.edit.lines": "L transit lines"
 }

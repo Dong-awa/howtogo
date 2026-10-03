@@ -123,6 +123,6 @@
   "screen.howtogo.line_copy": "复制为我的",
   "screen.howtogo.line_copy_suffix": "（副本）",
   "screen.howtogo.line_from_mtr": "[MTR]",
-  "screen.howtogo.line_from_mtr_note": "来自 MTR：只读，行尾 ● = 标记这条线路走的轨道",
+  "screen.howtogo.line_from_mtr_note": "来自 MTR：只读，点行尾方块＝标记这条线路走的轨道（轨/水）",
   "hud.howtogo.edit.lines": "L 线路配置"
 }

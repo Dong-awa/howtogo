@@ -1131,10 +1131,11 @@ public final class Navigation {
         // a fallback, which is what keeps a drawn road beside a track deciding the underfoot reading
         // exactly as it always did. Both of a mark's classes are read, and each with its own tolerance,
         // because MTR's marks are rail for a train and water for a boat: asking only about rail would
-        // leave a boat ride reading as though the player were walking on nothing.
+        // leave a boat ride reading as though the player were walking on nothing. Both layers too, since
+        // MTR's marks are not drawn as roads but are ridden all the same.
         if (nearest == null && (active.speedOn(RoadClass.RAIL) > 0
                 || active.speedOn(RoadClass.WATER) > 0)) {
-            for (RoadSegment segment : RailLayers.all()) {
+            for (RoadSegment segment : RailLayers.travelled()) {
                 if (active.speedOn(segment.roadClass()) <= 0) {
                     continue;
                 }

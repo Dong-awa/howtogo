@@ -10,7 +10,9 @@ import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.LongPredicate;
 
 /**
@@ -75,6 +77,24 @@ public final class MtrTransit {
     private static int imported;
     private static int skipped;
     private static int unplaced;
+
+    /**
+     * Everything MTR has said so far, kept because it only ever says what is near the player.
+     *
+     * <p>See {@link MtrKnown}: a reading on its own is a window, and a window that closes behind the
+     * player would take their railway with it -- the lines, the stations they can navigate to, and the
+     * track the marks are cut from.
+     */
+    private static final MtrKnown known = new MtrKnown();
+
+    /**
+     * The counter the marks' ids are drawn from, for the whole session.
+     *
+     * <p>Never reset, because what is kept of one reading is merged with what was kept of the readings
+     * before it: two builds both starting at {@link #ID_BASE} would number two different marks alike, and
+     * the merge would then drop one of them as a duplicate of the other.
+     */
+    private static final int[] markIds = {ID_BASE};
 
     private MtrTransit() {
     }
@@ -143,23 +163,48 @@ public final class MtrTransit {
         return imported;
     }
 
-    /** What a reading becomes, and what had to be left out of it. */
+    /** How many lines are remembered, including the ones MTR is no longer sending. */
+    public static int rememberedLines() {
+        refresh();
+        return known.lines().size();
+    }
+
+    /** How many stations are remembered, including the ones MTR is no longer sending. */
+    public static int rememberedStations() {
+        refresh();
+        return known.stations().size();
+    }
+
+    /**
+     * What a reading becomes, and what had to be left out of it.
+     *
+     * @param marks the track each line runs along, by MTR's own line id: per line and not merged, because
+     *              what is kept of a reading is kept per line -- see {@link MtrKnown}, which is what
+     *              makes a line survive the player walking out of MTR's range
+     */
     record Built(List<Station> stations, List<LineStop> stops, List<TransitLine> lines,
-                 RoadNetwork rails, int imported, int skipped, int unplaced) {
+                 Map<Long, RoadNetwork> marks, int imported, int skipped, int unplaced) {
 
         static final Built EMPTY =
-                new Built(List.of(), List.of(), List.of(), new RoadNetwork(), 0, 0, 0);
+                new Built(List.of(), List.of(), List.of(), Map.of(), 0, 0, 0);
+
+        /** Every line's marks as one network, which is only ever what a check asks for. */
+        RoadNetwork rails() {
+            return MtrKnown.union(marks.values());
+        }
     }
 
     /**
      * One MTR station, as a place a journey can end at.
      *
+     * @param id   MTR's own id for the station, which is what makes two readings the same station -- a
+     *             name can be changed and a position can move as platforms are built
      * @param name what MTR calls the station, or an empty string when it has no name
      * @param x    where its vehicles stop: the middle of its platforms, or of its area
      * @param y    the station's own height, for a marker to be drawn at
      * @param z    where its vehicles stop
      */
-    public record Station(String name, int x, int y, int z) {
+    public record Station(long id, String name, int x, int y, int z) {
     }
 
     /** Counts the passes below fill in, so that they stay functions of their arguments. */
@@ -179,8 +224,12 @@ public final class MtrTransit {
      *                   at all. The line's own answer, so that the caller -- which is the only place
      *                   that may read a config or a switch, and the only place that can do it off the
      *                   render thread -- decides, and this stays a function
+     * @param nextId     the id counter the marks are drawn from, handed in so that two readings of one
+     *                   session cannot number two different marks alike: what is kept of a reading is
+     *                   merged with what was kept of the ones before it, and ids that repeat would make
+     *                   that merge lose track
      */
-    static Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks) {
+    static Built build(MtrClientData.Snapshot reading, LongPredicate wantsMarks, int[] nextId) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
@@ -188,26 +237,30 @@ public final class MtrTransit {
         List<Station> builtStations = buildStations(reading);
         List<TransitLine> builtLines = buildLines(reading, counts);
         return new Built(builtStations, stopsOf(builtStations), builtLines,
-                buildMarks(reading, builtLines, wantsMarks), builtLines.size(), counts.skipped,
-                counts.unplaced);
+                buildMarks(reading, builtLines, wantsMarks, nextId), builtLines.size(),
+                counts.skipped, counts.unplaced);
     }
 
     /**
-     * The track of every line that wants its marks, as one network.
+     * The track of every line that wants its marks, by line.
      *
      * <p>MTR's own rails are read first, because the path a line runs along has to be found over them,
      * and then thrown away: what comes out is the lines' rides and never the rails as a whole. Nothing
      * of MTR's own geometry reaches a plan, which is what makes a mark the track <em>this line</em>
      * uses rather than every rail within reach of the player.
      *
-     * <p>The ids are drawn from one counter for all the lines of a reading, so no two marks can share
-     * an id even when two lines run over the same ground.
+     * <p>Per line rather than folded into one network, because a reading is kept per line once it has
+     * been read and the player has walked away from it -- see {@link MtrKnown}. The ids come from the
+     * caller's counter, so the marks of one reading can be merged with the marks of the next.
      */
-    private static RoadNetwork buildMarks(MtrClientData.Snapshot reading, List<TransitLine> lines,
-                                          LongPredicate wantsMarks) {
+    private static Map<Long, RoadNetwork> buildMarks(MtrClientData.Snapshot reading,
+                                                     List<TransitLine> lines,
+                                                     LongPredicate wantsMarks, int[] nextId) {
+        Map<Long, RoadNetwork> marks = new HashMap<>();
         boolean wanted = false;
         for (TransitLine line : lines) {
-            if (wantsMarks.test(lineId(line))) {
+            Long id = lineId(line);
+            if (id != null && wantsMarks.test(id)) {
                 wanted = true;
                 break;
             }
@@ -215,21 +268,17 @@ public final class MtrTransit {
         if (!wanted) {
             // Nothing is marked, so MTR's rails are not even joined into a layer: a player who wants
             // their own roads and none of MTR's pays nothing for the reading.
-            return new RoadNetwork();
+            return marks;
         }
         RoadNetwork rails = buildRailLayer(reading);
-        RoadNetwork marks = new RoadNetwork();
-        int[] nextId = {ID_BASE};
         for (TransitLine line : lines) {
-            if (!wantsMarks.test(lineId(line))) {
+            Long id = lineId(line);
+            if (id == null || !wantsMarks.test(id)) {
                 continue;
             }
             RoadNetwork ofLine = MtrLineTracks.of(rails, line, nextId);
-            for (RoadNode node : ofLine.nodesSnapshot()) {
-                marks.putNode(node);
-            }
-            for (RoadSegment segment : ofLine.segmentsSnapshot()) {
-                marks.putSegment(segment);
+            if (ofLine.segmentCount() > 0) {
+                marks.put(id, ofLine);
             }
         }
         return marks;
@@ -263,6 +312,15 @@ public final class MtrTransit {
             key.append('|').append(line.id()).append(':').append(line.stops().size())
                     .append(marksWanted(line.id()) ? '+' : '-');
         }
+        for (TransitLine line : known.lines()) {
+            // And the same for what is only remembered: a line the player has walked away from is no
+            // longer in the reading, so its switch would otherwise change nothing until MTR happened to
+            // send that part of the world again.
+            Long id = lineId(line);
+            if (id != null) {
+                key.append('~').append(id).append(marksWanted(id) ? '+' : '-');
+            }
+        }
         String now = key.toString();
         if (now.equals(signature)) {
             return;
@@ -273,6 +331,9 @@ public final class MtrTransit {
         skipped = 0;
         unplaced = 0;
         if (!enabled) {
+            // Switched off means forgotten, not merely hidden: the readings are MTR's, and a player who
+            // turns the integration off is asking for the mod to know nothing about their railway.
+            known.clear();
             stops = List.of();
             stationList = List.of();
             lines = List.of();
@@ -281,11 +342,15 @@ public final class MtrTransit {
         }
 
         long startedAt = System.nanoTime();
-        Built built = build(reading, MtrTransit::marksWanted);
-        stops = built.stops();
-        stationList = built.stations();
-        lines = built.lines();
-        rails = built.rails();
+        Built built = build(reading, MtrTransit::marksWanted, markIds);
+        // What this reading adds to what the ones before it taught, and then the answers taken from the
+        // whole of that rather than from this reading alone: MTR sends a client only what is near it, so
+        // a reading read on its own is a window that closes behind the player as they walk.
+        known.remember(built);
+        stops = stopsOf(known.stations());
+        stationList = known.stations();
+        lines = known.lines();
+        rails = known.marks(MtrTransit::marksWanted);
         imported = built.imported();
         skipped = built.skipped();
         unplaced = built.unplaced();
@@ -294,8 +359,10 @@ public final class MtrTransit {
             // runs wherever a reading is first asked for -- which can be the render thread, in the
             // middle of a map drawing. If it ever grows past a frame, that number is the evidence.
             HowToGo.LOGGER.info("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
-                            + "| marks {} rails {} nodes {} | {} ms | {}",
+                            + "| marks {} rails {} nodes {} | kept {} lines {} stations {} track pieces "
+                            + "| {} ms | {}",
                     stops.size(), imported, skipped, unplaced, rails.segmentCount(), rails.nodeCount(),
+                    known.lines().size(), known.stations().size(), known.markSegments(),
                     Math.round((System.nanoTime() - startedAt) / 1_000_000.0), describe());
         }
     }
@@ -356,7 +423,8 @@ public final class MtrTransit {
             // Nothing is read from MTR, so there is nothing of MTR's to bring in.
             return false;
         }
-        return isImported(line) ? marksWanted(lineId(line)) : RoadConfig.mtrAutoRouteMarks();
+        Long id = lineId(line);
+        return id != null ? marksWanted(id) : RoadConfig.mtrAutoRouteMarks();
     }
 
     /**
@@ -375,22 +443,33 @@ public final class MtrTransit {
         return false;
     }
 
-    /** MTR's own id for a line this mod imported, or -1 when the line is not one of MTR's. */
-    private static long lineId(TransitLine line) {
-        if (!isImported(line)) {
-            return -1;
-        }
-        try {
-            return Long.parseLong(line.id().substring(LINE_ID_PREFIX.length()), 16);
-        } catch (NumberFormatException notOurs) {
-            // An id this class did not write, which means something else is using the prefix.
-            return -1;
-        }
+    /**
+     * MTR's own id for an imported line, or null when the line is not one of MTR's.
+     *
+     * <p>Boxed rather than a sentinel, and that is the whole point: MTR's ids are longs and half of the
+     * ones it hands out have the top bit set, so a negative number cannot mean "not ours". It did mean
+     * that here, and the cost was the switch beside a line doing nothing at all -- every such line was
+     * read as somebody else's, so its answer was never written and its marker never moved.
+     */
+    public static Long mtrLineId(TransitLine line) {
+        return lineId(line);
     }
 
-    /** MTR's own id for a line this mod imported. */
-    public static long mtrLineId(TransitLine line) {
-        return lineId(line);
+    /** The same, for the conversion and for the memory, which ask it of every line they hold. */
+    private static Long lineId(TransitLine line) {
+        if (!isImported(line)) {
+            return null;
+        }
+        try {
+            // Unsigned, because the id was written as {@link Long#toHexString} and that prints a negative
+            // long as its sixteen-digit bit pattern: read as a signed number, every id with the top bit
+            // set overflowed and the line was thrown away as somebody else's -- so its track was never
+            // marked and the switch beside it had nothing to change. Half of MTR's ids are like that.
+            return Long.parseUnsignedLong(line.id().substring(LINE_ID_PREFIX.length()), 16);
+        } catch (NumberFormatException notOurs) {
+            // An id this class did not write, which means something else is using the prefix.
+            return null;
+        }
     }
 
     /**
@@ -412,8 +491,8 @@ public final class MtrTransit {
             if (position == null) {
                 continue;
             }
-            built.add(new Station(station.name() == null ? "" : station.name(), position[0],
-                    station.centerY(), position[1]));
+            built.add(new Station(station.id(), station.name() == null ? "" : station.name(),
+                    position[0], station.centerY(), position[1]));
         }
         return List.copyOf(built);
     }
