@@ -26,6 +26,18 @@ neoForge {
     }
 }
 
+// The mod is split across two source roots so that the parts which are genuinely portable stay
+// portable. Anything under src/common is pure Java -- the road network, the routing engine, the
+// transit model, the reflective bridges to other mods -- and contains no Minecraft, loader or
+// Xaero import at all, so the same files can be shared verbatim by every loader/version branch
+// instead of being forked and left to drift. src/main holds everything that has to know which
+// Minecraft and which loader it is running on.
+sourceSets {
+    main {
+        java.srcDirs = ['src/main/java', 'src/common/java']
+    }
+}
+
 repositories {
     flatDir { dirs 'libs' }
 }
