@@ -69,7 +69,14 @@ $compileOnly = (Get-ChildItem (Join-Path $project 'libs') -Filter *.jar |
 $compilePath = "$runtime;$compileOnly"
 
 Write-Host 'compiling the mod...'
-$sources = Get-ChildItem (Join-Path $project 'src\main\java') -Recurse -Filter *.java |
+# Both source roots. The mod is split -- src/main holds everything that has to know which Minecraft and
+# which loader it is on, src/common the pure Java every branch shares -- and a compile that sees only one
+# of them cannot resolve the other's packages, so it fails on the first import rather than on anything the
+# change under test touched.
+$sources = @('src\main\java', 'src\common\java') |
+    ForEach-Object { Join-Path $project $_ } |
+    Where-Object { Test-Path $_ } |
+    ForEach-Object { Get-ChildItem $_ -Recurse -Filter *.java } |
     ForEach-Object { $_.FullName }
 # Deliberately without MTR on the classpath: the reader is reflective, and compiling against the mod
 # only its users have would be a dependency by another name. The compiler not seeing MTR is what keeps
@@ -93,7 +100,9 @@ if ($mtr) {
 Write-Host 'compiling the harness...'
 # The freshly compiled classes come before the ones gradle built, so what runs is the working tree
 # rather than the last build.
-$harnessSources = Get-ChildItem $here -Filter *.java | ForEach-Object { $_.FullName }
+# Recurse: a check that has to reach package-private members lives in that package's directories
+# rather than in this one, so a top-level-only listing would compile every check but those.
+$harnessSources = Get-ChildItem $here -Recurse -Filter *.java | ForEach-Object { $_.FullName }
 & javac -encoding UTF-8 -proc:none -nowarn -cp "$modClasses;$harnessPath" -d $harnessClasses `
     $harnessSources
 if ($LASTEXITCODE -ne 0) { throw "javac failed on the harness with $LASTEXITCODE" }

@@ -20,6 +20,37 @@ public final class RoadNetwork {
     private int nextSegmentId = 1;
 
     /**
+     * Bumped whenever a node or a segment is added, removed or moved.
+     *
+     * <p>For anything that caches a reading of the geometry -- a spatial index, a chain grouping --
+     * so that it can tell "the same network object" from "the same network, unchanged". An identity
+     * check is not enough on its own: the editor mutates one network in place for the whole session,
+     * so a cache keyed on the reference alone would serve a reading of roads that have since moved.
+     *
+     * <p>Deliberately not bumped for a change that cannot move geometry: a rename, a re-class, a
+     * one-way flag. Those are read through the same objects a cache already holds, so the cache stays
+     * correct and a rebuild would be wasted work.
+     */
+    private int revision;
+
+    /** @see #revision */
+    public int revision() {
+        return revision;
+    }
+
+    /**
+     * Marks the geometry as changed, for a mutation made through an object this network handed out.
+     *
+     * <p>A segment's vertices are moved through the segment itself -- the router splits a road and the
+     * editor drags a node by writing vertices -- so the network cannot see those writes. Anything that
+     * does one is expected to say so; {@link #revision} is what keeps a spatial index from serving a
+     * reading of where the roads used to be.
+     */
+    public void touch() {
+        revision++;
+    }
+
+    /**
      * Live view of the nodes. <b>Do not add or remove while iterating</b> -- this is the backing
      * map's value view and structural changes during iteration throw
      * {@link java.util.ConcurrentModificationException}. Take {@link #nodesSnapshot()} first if the
@@ -58,11 +89,13 @@ public final class RoadNetwork {
     public RoadNode addNode(int x, int y, int z, RoadNode.Type type, String name) {
         RoadNode node = new RoadNode(nextNodeId++, x, y, z, type, name);
         nodes.put(node.id(), node);
+        revision++;
         return node;
     }
 
     public RoadSegment addSegment(RoadSegment segment) {
         segments.put(segment.id(), segment);
+        revision++;
         return segment;
     }
 
@@ -71,11 +104,19 @@ public final class RoadNetwork {
     }
 
     public boolean removeNode(int id) {
-        return nodes.remove(id) != null;
+        boolean removed = nodes.remove(id) != null;
+        if (removed) {
+            revision++;
+        }
+        return removed;
     }
 
     public boolean removeSegment(int id) {
-        return segments.remove(id) != null;
+        boolean removed = segments.remove(id) != null;
+        if (removed) {
+            revision++;
+        }
+        return removed;
     }
 
     /** Finds the node nearest to {@code (x, z)} within {@code maxDistance} blocks, or null. */
@@ -104,12 +145,14 @@ public final class RoadNetwork {
     public void putNode(RoadNode node) {
         nodes.put(node.id(), node);
         nextNodeId = Math.max(nextNodeId, node.id() + 1);
+        revision++;
     }
 
     /** Inserts a pre-built segment, keeping the id counter ahead of it. */
     public void putSegment(RoadSegment segment) {
         segments.put(segment.id(), segment);
         nextSegmentId = Math.max(nextSegmentId, segment.id() + 1);
+        revision++;
     }
 
     /** Deep copy. The editor keeps these on an undo stack, so it must not share state. */
@@ -138,6 +181,7 @@ public final class RoadNetwork {
         for (RoadSegment s : other.segments.values()) {
             segments.put(s.id(), s.copy());
         }
+        revision++;
     }
 
     /**

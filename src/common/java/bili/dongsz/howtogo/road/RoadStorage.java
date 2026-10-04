@@ -9,8 +9,10 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,6 +26,14 @@ import java.util.List;
 public final class RoadStorage {
 
     public static final int FORMAT_VERSION = 1;
+
+    /**
+     * Suffix of the file a save is written to before it takes the real one's place.
+     *
+     * <p>Kept beside the target rather than in a temporary directory, because the last step of the
+     * save is a rename onto the target and a rename cannot cross a filesystem.
+     */
+    private static final String PARTIAL_SUFFIX = ".part";
 
     private static final Gson GSON = new GsonBuilder()
             .setPrettyPrinting()
@@ -63,14 +73,53 @@ public final class RoadStorage {
                     network.nodeCount(), network.segmentCount(), file.getFileName());
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting empty", file, e);
+            // Starting empty is the only thing that can be done with a file that does not parse, but
+            // it must not also be the end of that data: the next autosave writes over it, and a save
+            // interrupted before this version wrote atomically leaves exactly this -- a truncated
+            // file whose roads are still in there, in part. Moving it aside keeps the salvagable
+            // remainder and costs a name in the world's folder instead of the player's whole map.
+            quarantine(file);
         }
         return network;
     }
 
+    /** Renames an unreadable network aside so that starting empty does not destroy it. */
+    private static void quarantine(Path file) {
+        Path salvaged = file.resolveSibling(file.getFileName() + ".corrupt");
+        try {
+            Files.move(file, salvaged, StandardCopyOption.REPLACE_EXISTING);
+            HowToGo.LOGGER.error("[HowToGo] kept the unreadable file as {} -- "
+                    + "part of it may still be recoverable by hand", salvaged);
+        } catch (IOException moveFailed) {
+            HowToGo.LOGGER.error("[HowToGo] could not set {} aside either; it will be overwritten",
+                    file, moveFailed);
+        }
+    }
+
+    /**
+     * Writes the network out, replacing the file in one step.
+     *
+     * <h2>Why this does not write the target directly</h2>
+     * A save is not one operation but a stream of them, and a stream can be cut in half: the game
+     * can be killed, the machine can lose power, the disk can fill. Writing straight onto the target
+     * means the moment that happens the only copy of a player's whole road network is a truncated
+     * JSON file, and {@link #load} reports it as unreadable and starts empty -- so the failure mode of
+     * an interrupted save is losing the map, not losing the edit that was in flight.
+     *
+     * <p>So the bytes go to a neighbouring {@code .part} file first and the target is replaced by a
+     * rename, which a filesystem performs as one step: either the old file is still there in full or
+     * the new one is. The half-written file is never a name anything reads.
+     *
+     * <p>The move is attempted as an atomic one and falls back to a plain replace, because atomic
+     * moves are a filesystem capability rather than a guarantee -- a network share or an unusual
+     * filesystem can refuse. The fallback is the old behaviour on those, which is the honest answer:
+     * better a save that can be interrupted than a save that does not happen.
+     */
     public static boolean save(Path file, RoadNetwork network) {
         if (file == null) {
             return false;
         }
+        Path partial = file.resolveSibling(file.getFileName() + PARTIAL_SUFFIX);
         try {
             Files.createDirectories(file.getParent());
             NetworkDto dto = new NetworkDto();
@@ -107,13 +156,39 @@ public final class RoadStorage {
                 dto.segments.add(s);
             }
 
-            try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            try (Writer writer = Files.newBufferedWriter(partial, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);
             }
+            replace(partial, file);
             return true;
         } catch (IOException e) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", file, e);
+            // The half-written file is left behind otherwise, and the next save would overwrite it
+            // anyway -- but a stray .part beside the network is confusing to find, so it goes now.
+            discard(partial);
             return false;
+        }
+    }
+
+    /** Gives {@code partial} the target's name, atomically where the filesystem allows it. */
+    private static void replace(Path partial, Path file) throws IOException {
+        try {
+            Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException notAtomic) {
+            HowToGo.LOGGER.warn(
+                    "[HowToGo] this filesystem cannot replace {} in one step; falling back to a plain overwrite",
+                    file.getFileName());
+            Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /** Removes a partial file if it is there. Never throws: this runs while reporting a failure. */
+    private static void discard(Path partial) {
+        try {
+            Files.deleteIfExists(partial);
+        } catch (IOException ignored) {
+            // Nothing useful can be done about it here, and the error that mattered is already logged.
         }
     }
 

@@ -479,6 +479,8 @@ public final class RoadEditor {
                 segment.moveVertex(segment.vertexCount() - 1, x, z);
             }
         }
+        // The vertices were written through the segments, which the network cannot see.
+        network.touch();
         return true;
     }
 

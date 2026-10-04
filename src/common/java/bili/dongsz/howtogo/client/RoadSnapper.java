@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
+import bili.dongsz.howtogo.road.RoadSpatialIndex;
 
 /**
  * Resolves a raw mouse position into a road vertex position.
@@ -13,6 +14,17 @@ import bili.dongsz.howtogo.road.RoadSegment;
  *
  * <p>Priority: existing node &gt; point on an existing segment &gt; 45-degree angle constraint
  * relative to the node being drawn from &gt; free placement.
+ *
+ * <h2>How the near-enough points are found</h2>
+ * The catch radius is a screen distance and the geometry is in world blocks, so the radius is
+ * converted to blocks against the viewport and handed to {@link RoadSpatialIndex}, which reads the
+ * grid cells around the cursor instead of walking the network. The conversion used to be the other
+ * way round -- every node and every vertex projected to the screen and measured there -- which was
+ * exact but linear in the network, on every frame.
+ *
+ * <p>The two axes are converted separately and the test stays elliptical in blocks, because the
+ * viewport's pixels-per-block can differ between them. The result is the same point the projected
+ * walk would have chosen; {@link RoadSpatialIndex} carries the argument for why.
  */
 public final class RoadSnapper {
 
@@ -61,20 +73,57 @@ public final class RoadSnapper {
         }
     }
 
+    /**
+     * The index most recently used, kept for the network revision it was built from.
+     *
+     * <p>The editor asks once a frame and the rail layer asks again whenever the hand-drawn roads
+     * were not close enough, so a build per query would spend the saving on rebuilding a structure
+     * that has not changed. The revision is a counter rather than the reference because the editor
+     * mutates one network in place for the whole session: a cache keyed on the reference alone would
+     * keep serving a reading of roads that have since moved.
+     */
+    private static RoadSpatialIndex cachedIndex;
+    private static RoadNetwork cachedNetwork;
+    private static int cachedRevision = Integer.MIN_VALUE;
+
     private RoadSnapper() {
     }
 
+    private static RoadSpatialIndex indexFor(RoadNetwork network) {
+        if (cachedIndex == null || cachedNetwork != network || cachedRevision != network.revision()) {
+            cachedIndex = RoadSpatialIndex.of(network);
+            cachedNetwork = network;
+            cachedRevision = network.revision();
+        }
+        return cachedIndex;
+    }
+
+    /**
+     * Drops the cached reading, for a caller that has changed a network it does not own the index for.
+     *
+     * <p>Not needed for an edit made through {@link bili.dongsz.howtogo.road.RoadEditor}, which bumps
+     * the network's revision and so invalidates this by itself. It is here for a layer rebuilt
+     * wholesale, where the sensible thing is to say so rather than to rely on the builder having
+     * remembered.
+     */
+    public static void invalidateIndex() {
+        cachedIndex = null;
+        cachedNetwork = null;
+        cachedRevision = Integer.MIN_VALUE;
+    }
+
     public static Result snap(RoadNetwork network, double worldX, double worldZ, int chainNodeId) {
-        if (!MapViewState.isValid()) {
+        Viewport viewport = Viewport.current();
+        if (viewport == null) {
             return Result.free(worldX, worldZ);
         }
 
-        Result node = snapToNode(network, worldX, worldZ);
+        Result node = snapToNode(network, worldX, worldZ, viewport);
         if (node != null) {
             return node;
         }
 
-        Result segment = snapToSegment(network, worldX, worldZ);
+        Result segment = snapToSegment(network, worldX, worldZ, viewport);
         if (segment != null) {
             return segment;
         }
@@ -87,74 +136,84 @@ public final class RoadSnapper {
         return Result.free(worldX, worldZ);
     }
 
-    private static Result snapToNode(RoadNetwork network, double worldX, double worldZ) {
-        double mouseSx = MapViewState.toScreenX(worldX);
-        double mouseSz = MapViewState.toScreenZ(worldZ);
+    /**
+     * The viewport as a blocks-per-pixel conversion.
+     *
+     * <p>Snapping measures in pixels and the index measures in blocks, so the two have to meet
+     * somewhere; this is that place. It exists so that the conversion is done once per query in one
+     * direction (pixels to blocks) rather than once per candidate in the other (blocks to pixels).
+     */
+    private record Viewport(double blocksPerPixelX, double blocksPerPixelZ) {
 
-        RoadNode best = null;
-        double bestDistSq = NODE_SNAP_PX * NODE_SNAP_PX;
-        for (RoadNode node : network.nodes()) {
-            double dx = MapViewState.toScreenX(node.x()) - mouseSx;
-            double dz = MapViewState.toScreenZ(node.z()) - mouseSz;
-            double d = dx * dx + dz * dz;
-            if (d <= bestDistSq) {
-                bestDistSq = d;
-                best = node;
+        /** Null when there is no usable viewport, which is when snapping cannot mean anything. */
+        static Viewport current() {
+            if (!MapViewState.isValid()) {
+                return null;
             }
+            double perBlockX = Math.abs(MapViewState.pixelsPerBlockX());
+            double perBlockZ = Math.abs(MapViewState.pixelsPerBlockZ());
+            if (perBlockX < 1.0E-9 || perBlockZ < 1.0E-9) {
+                return null;
+            }
+            return new Viewport(1.0 / perBlockX, 1.0 / perBlockZ);
         }
+
+        /** The world radius a pixel catch radius corresponds to, per axis. */
+        double radiusX(double pixels) {
+            return pixels * blocksPerPixelX;
+        }
+
+        double radiusZ(double pixels) {
+            return pixels * blocksPerPixelZ;
+        }
+    }
+
+    private static Result snapToNode(RoadNetwork network, double worldX, double worldZ,
+                                     Viewport viewport) {
+        double radiusX = viewport.radiusX(NODE_SNAP_PX);
+        double radiusZ = viewport.radiusZ(NODE_SNAP_PX);
+        // The index ranks candidates by plain distance, over a radius wide enough to hold the whole
+        // ellipse: every point the elliptical test would accept is inside this circle, so the nearest
+        // node the index can miss is none. It may hand back a node the ellipse then refuses, and that
+        // is the one case the test below exists for -- the node it hands back is no further than the
+        // node the ellipse wanted, so refusing it cannot hide that one.
+        RoadNode best = indexFor(network).nearestNode(worldX, worldZ, Math.max(radiusX, radiusZ));
         if (best == null) {
+            return null;
+        }
+        double dx = worldX - best.x();
+        double dz = worldZ - best.z();
+        // The same elliptical test the per-candidate projection used to make: each offset over its
+        // own axis's radius is the screen offset in pixels, so the sum of squares is the squared
+        // screen distance.
+        double sx = dx / radiusX;
+        double sz = dz / radiusZ;
+        if (sx * sx + sz * sz > NODE_SNAP_PX * NODE_SNAP_PX) {
             return null;
         }
         return new Result(best.x(), best.z(), Kind.NODE, best.id(), RoadSegment.NO_SEGMENT, -1);
     }
 
-    private static Result snapToSegment(RoadNetwork network, double worldX, double worldZ) {
-        double mouseSx = MapViewState.toScreenX(worldX);
-        double mouseSz = MapViewState.toScreenZ(worldZ);
+    private static Result snapToSegment(RoadNetwork network, double worldX, double worldZ,
+                                        Viewport viewport) {
+        double radiusX = viewport.radiusX(SEGMENT_SNAP_PX);
+        double radiusZ = viewport.radiusZ(SEGMENT_SNAP_PX);
+        double pixelSq = SEGMENT_SNAP_PX * SEGMENT_SNAP_PX;
+        // Only the radius is stated; which of two equally near points is the answer is the index's
+        // own rule, so that a click at a shared vertex does not depend on the grid's reading order.
+        RoadSpatialIndex.Coverage coverage = (dx, dz) -> {
+            double sx = dx / radiusX;
+            double sz = dz / radiusZ;
+            return sx * sx + sz * sz <= pixelSq;
+        };
 
-        RoadSegment bestSegment = null;
-        double bestDistSq = SEGMENT_SNAP_PX * SEGMENT_SNAP_PX;
-        double bestWorldX = 0;
-        double bestWorldZ = 0;
-        int bestIndex = -1;
-
-        for (RoadSegment segment : network.segments()) {
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                double ax = MapViewState.toScreenX(segment.x(i - 1));
-                double az = MapViewState.toScreenZ(segment.z(i - 1));
-                double bx = MapViewState.toScreenX(segment.x(i));
-                double bz = MapViewState.toScreenZ(segment.z(i));
-
-                double ex = bx - ax;
-                double ez = bz - az;
-                double lenSq = ex * ex + ez * ez;
-                if (lenSq < 1.0E-9) {
-                    continue;
-                }
-                double t = ((mouseSx - ax) * ex + (mouseSz - az) * ez) / lenSq;
-                t = Math.max(0.0, Math.min(1.0, t));
-
-                double px = ax + ex * t;
-                double pz = az + ez * t;
-                double dx = px - mouseSx;
-                double dz = pz - mouseSz;
-                double d = dx * dx + dz * dz;
-
-                if (d <= bestDistSq) {
-                    bestDistSq = d;
-                    bestSegment = segment;
-                    bestIndex = i;
-                    bestWorldX = segment.x(i - 1) + (segment.x(i) - segment.x(i - 1)) * t;
-                    bestWorldZ = segment.z(i - 1) + (segment.z(i) - segment.z(i - 1)) * t;
-                }
-            }
-        }
-
-        if (bestSegment == null) {
+        RoadSpatialIndex.SegmentHit hit = indexFor(network).nearestOnSegment(worldX, worldZ,
+                Math.max(radiusX, radiusZ), coverage);
+        if (hit == null) {
             return null;
         }
-        return new Result(bestWorldX, bestWorldZ, Kind.SEGMENT, RoadSegment.NO_NODE,
-                bestSegment.id(), bestIndex);
+        return new Result(hit.x(), hit.z(), Kind.SEGMENT, RoadSegment.NO_NODE,
+                hit.segment().id(), hit.edgeIndex());
     }
 
     private static Result applyAngleConstraint(RoadNetwork network, double worldX, double worldZ, int chainNodeId) {
