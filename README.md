@@ -165,6 +165,20 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 - **语音播报**（使用 Minecraft 原版 TTS，可在界面开关）：出发时说一句「问道地图为您导航」，转弯前、现在转弯、偏离路线，到达时说「已到达目的地附近，本次导航结束」。
 - **选择目的地界面**：搜索框、可拖拽缩放的地图、地点列表、交通方式与偏好控件；界面**不暂停游戏**。
 
+### 浏览器地图
+
+`/howtogo webmap` 会在 `127.0.0.1` 上开一个小型本地 HTTP 服务，把**当前维度画出来的路网**送到浏览器里，画成一张可平移缩放的俯视 2D 地图，并带一个**导出 PNG** 的按钮。地址以可点击的链接发在聊天栏，点一下就用默认浏览器打开；`/howtogo webmap stop` 关掉，`/howtogo webmap status` 报地址、当前世界与维度、以及路网规模。
+
+- **数据只在客户端主线程读**。HTTP 处理器线程从不碰路网对象——那是一个编辑器会就地改一整个会话的 `HashMap`，从别的线程遍历它就是等着撞上 `ConcurrentModificationException`。请求被排进客户端刻的队列（`ClientScheduler`），由游戏自己的线程把路网摊平成一份**不可变快照**（`RoadMapSnapshot`）再交回 HTTP 线程。等待有 5 秒上限，超时返回 503，所以「这个世界还没画路」与「游戏还在加载世界」是两个能分辨的答案，页面把这句话显示出来，而不是画一张空地图。
+- **只监听本机回环地址**：`127.0.0.1` 与 `::1` 两个都绑（`localhost` 在双栈机器上先解析到 `::1`，只绑一个的话第一次连接要先等 IPv6 回退），配置里没有任何能把它放到局域网上的开关。服务只认一张固定的路径表——页面、样式、五个脚本、html2canvas、两个 API——表以外的路径一律 404：没有目录，就没有目录穿越。
+- **离线可用**：页面、样式、脚本与 html2canvas 1.4.1（MIT，见 `assets/howtogo/webmap/vendor/`）都打包在 jar 里，运行期不请求任何外部资源。
+- **遮挡关系按「层」和「描边」两遍排**。路段按 `layer` 从小到大画：高架（层 1）压在地面（层 0）之上、隧道（层 -1）在最下面，低层永远不会盖住高层。同一层里**先画完所有描边、再画所有填充**，所以十字路口看起来是一条路从另一条上跨过去，而不是两团颜色糊在一起；单向箭头跟着本层的填充画，之后才是路口点、地点标记，最后是所有文字。
+- **文字会挪位置，而不是压住别人**。路名沿路走、顺着道路方向旋转且永远不写成倒的；地点名默认写在标记下方，被占了就依次试上面、右面、左面、四个斜角，每个方向还有更远的一档。都放不下时**这个标签就不画**——一句压在别人身上的路名比没有路名更难读。所有文字带一圈底色描边，压在任何颜色的路上都读得清。
+- **导出用的是屏幕上那同一个绘制函数**，只是按 2 倍分辨率重画一遍（同样的视野、同样的层序、同样的文字排布），交给 html2canvas 截成一张带标题栏（世界、维度、时间、统计、图例）的 PNG，文件名形如 `howtogo-minecraft_overworld-20261006-233000.png`。html2canvas 万一不可用会退回直接导出画布，按钮不会静默失效。
+- 侧栏可按**道路等级**与**层**过滤、单独开关路名与地点名，并列出统计；工具栏是适应窗口 / 放大 / 缩小 / 刷新 / 自动刷新（每 5 秒）；底部状态栏显示光标坐标、当前缩放，以及鼠标下最近的一条路或一个地点。
+- 让它在世界加载后自动启动：`config/howtogo-client.toml` 里的 `webmap_auto_start`（默认关）；换端口：`webmap_port`（默认 `7573`，被占用时依次试后面 9 个，**实际绑定的端口写在聊天消息里**，所以书签不会悄悄失效）。
+- 想不开游戏就看这张图：`powershell -ExecutionPolicy Bypass -File tools\webmap\run.ps1` 会用一份假城市数据把同一套页面在本机跑起来（真资源、真 HTTP、真导出）。**它运行期间不要跑 Gradle 构建**：那个进程的 classpath 上有 `build\moddev\artifacts\neoforge-*.jar`，Windows 不允许构建去重写被别人打开着的 jar，构建会在 `createMinecraftArtifacts` 处报失败而看不出原因；不带 `-Seconds` 时回车即可停止，没有控制台时五分钟后自行停止。
+
 ---
 
 ## 操作
@@ -193,7 +207,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 
 ### 指令
 
-三条指令，都是**客户端指令**：不需要服务器装本模组、不需要权限、联机也能用（`/htg` 是 `/howtogo` 的简写）。
+这些都是**客户端指令**：不需要服务器装本模组、不需要权限、联机也能用（`/htg` 是 `/howtogo` 的简写）。
 
 | 指令                        | 作用                                        |
 | ------------------------- | ----------------------------------------- |
@@ -202,6 +216,9 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 | `/howtogo mode`           | 切到下一种出行方式（步行 → 驾车 → 公共交通 → 步行，与快捷键同序）     |
 | `/howtogo mode <方式>`     | 切到指定出行方式：`walk` / `drive` / `transit`      |
 | `/howtogo selftest`       | **对着当前这个世界自检**：路网/站点/线路读到了什么、每条线路能不能坐通、模拟一趟乘车把报站逐句打出来、普通规划与存档往返；报告同时写日志 |
+| `/howtogo webmap`         | 启动**浏览器地图**服务，并把地址发成一条可点击的链接（已在运行则只报地址）       |
+| `/howtogo webmap stop`    | 停止浏览器地图服务                                    |
+| `/howtogo webmap status`  | 报告服务地址、当前世界与维度、以及路网的节点/路段数与总长               |
 | `/howtogo`                | 不带参数时只显示用法                                 |
 
 打开界面的那一条会**延后一个客户端刻**执行：指令是在聊天界面处理这一行的过程中跑的，在那里直接开新界面会被旧界面的关闭流程顶掉，看起来像指令没生效。
@@ -234,6 +251,8 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 | `mtr_auto_route_marks`             | `true`                     | MTR 线路默认是否沿自己走的轨道标记只读的铁路/水路道路（可在线路配置界面逐条覆盖）    |
 | `transit_board_only`               | `true`                     | 公共交通导航是否只报站、不报转向（默认开；也可在选择目的地界面切换）                 |
 | `debug_log`                        | `false`                    | 是否把本模组自己的诊断写进日志（铁路图层每秒一行、地图耗时、MTR 读数统计、路由算术等）      |
+| `webmap_auto_start`                | `false`                    | 世界加载后自动启动浏览器地图服务（只监听 `127.0.0.1`，没有能把它放到局域网上的开关）        |
+| `webmap_port`                      | `7573`                     | 浏览器地图的端口；被占用时依次试后面 9 个，实际绑定的端口写在聊天消息里                  |
 
 交通方式、路线偏好、语音开关、公交只报站不报转向也能在「选择目的地」界面直接点击切换，这些改动会写入 `config/howtogo/route_preferences.json` 并在重启后保留；该文件不存在时以上表的值为准。**交通方式本身是例外**：它只作用于本次游戏，重启后回到上表的 `default_travel_mode`（路线偏好、语音开关与公交只报站不报转向会保留）。
 `transit_board_only` 的默认值改成了**开**；但**已经有 `route_preferences.json` 的实例以文件里的值为准**（以前在界面里点过任何一个开关，整份文件就都写了一遍），`howtogo-client.toml` 也一样——NeoForge 只在文件不存在时写入默认值。要回到新默认：在界面里把那个开关打开，或在 `route_preferences.json` 里把 `transitBoardOnly` 改成 `true` / 删掉这一项。
@@ -272,6 +291,8 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.11"
 `tools/routing-harness/` 是不需要启动游戏的检查器：把纯逻辑（路网、规划、MTR 导入、缩放取舍）在一份手写的桩上跑一遍断言，`run-fast.ps1` 复用已解析的 classpath，几秒钟出结果。`run/mods` 里有 MTR / MTR Map Overlay 的 jar 时，它还会用那两个 mod 的**真 jar**核对一遍本模组反射读取的每一个类名、字段名与方法名（`-MtrJar <jar>` / `-MtrMapJar <jar>` 可指定任意版本，不必放进 `run/mods`），所以「这个版本还认不认」是一条命令的事。
 
 `tools/user-test/` 是**真实游戏里**的那一半：`run-user-test.ps1` 启动开发客户端并等模组加载好（也能 `-Stop` 停掉本项目启动的客户端、`-ResetData` 把 `config/howtogo` 备份走从空世界重来），进去以后用 `/howtogo selftest` 一条命令对着当前世界自检；`-Auto` 更进一步——客户端**自己打开指定存档、自己跑一遍自检、把报告写进日志然后自己退出**，脚本读到报告并按失败数返回退出码，所以可以当成一条构建检查来跑（`run-user-test.ps1 -Auto -World TEST`，世界名默认 `TEST`）。`tools/user-test/README.md` 是自检盖不到、只能手点的玩家清单（画路、线路配置、选择目的地、报站、地图面板），每条都写了「应该看到什么」。两者分工：harness 管规则，user-test 管玩家真的会遇到什么。
+
+浏览器地图这一块有两层检查，都不需要开游戏：`tools/webmap-test/`（`node tools/webmap-test/run.js`）跑页面自己的纯逻辑——坐标变换、载荷解析、**文字避让排布**、以及用录制用的假 canvas 断言**绘制的先后顺序**（层、描边先于填充、文字最后），这正是「遮挡关系」在浏览器里唯一能被断言的部分；`tools/webmap/run.ps1` 则**不开游戏**地把真页面跑起来（真资源、真 HTTP、假城市数据），用来在浏览器里肉眼核对显示与导出：`powershell -ExecutionPolicy Bypass -File tools\webmap\run.ps1` 然后打开它打印的地址。
 
 ---
 
@@ -330,9 +351,16 @@ bili.dongsz.howtogo
 │                         RideRoads（按线路决定骑哪些道路）
 ├── transit/              线路模型与存档：TransitLine / LineStop / TransitLineStorage
 ├── store/                RoutePreferenceStore（偏好的持久化）
+├── webmap/               浏览器地图
+│   ├── WebMapServer                                              本地 HTTP 服务：固定路径表 + 两个 API（只监听 127.0.0.1）
+│   ├── WebMapService                                             生命周期，以及「读取排到客户端刻」的接线
+│   ├── RoadMapSnapshot / RoadMapSource / RoadReader               不可变快照与 JSON 载荷（纯 Java，无 Minecraft）
+│   └── MainThreadRoadMapSource                                   把读取排进客户端刻并等它，带超时
 ├── compat/mcphone/       MCPhone 的「问道导航」应用（反射/服务注册，不硬依赖）
 └── item/                 导航仪物品（右键打开选择界面，tooltip 显示当前行程）
 ```
+
+页面本体在 `src/main/resources/assets/howtogo/webmap/`（`index.html` / `style.css` / `js/*.js`，以及 `vendor/html2canvas.min.js`），随 jar 一起分发，运行期不需要网络。`src/common` 里的 `webmap` 三个类不含任何 Minecraft 引用，所以回归测试能直接跑它们。
 
 渲染通过 Xaero 的公开扩展点 `WorldMap.mapElementRenderHandler` 注册，**没有使用 mixin**。
 
@@ -375,6 +403,7 @@ bili.dongsz.howtogo
 - **MTR 与机械动力的线路/轨道只读**。它们的几何与站位属于那个模组，问道不会去改；想改成自己的，用线路配置界面的「复制为我的」。
 - **MTR 中问道没有对应等级的类型会被忽略**（例如飞机），不会硬套成铁路。
 - **小地图路标点数据源需要安装 Xaero's Minimap**；未安装时该数据源为空，其余功能正常。
+- **浏览器地图只在本机、只读、只看你自己的数据**。它读的是这个客户端持有的路网——多人游戏里就是你自己画在本地的那一份，既不向服务器索取任何东西，也不监听 `0.0.0.0`，所以同一个局域网里的别人打不开它。端口被占用时自动顺延到后面 9 个，实际地址以聊天消息里的链接为准。
 - 距离单位已本地化（中文显示「米 / 千米」），但时间仍是拉丁写法（`44s`、`1h 5m`）。
 - 路网规模较大时的性能尚未专门验证；当前对道路等级的查找按方块位置做了缓存。
 

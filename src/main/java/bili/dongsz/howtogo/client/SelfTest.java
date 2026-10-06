@@ -17,12 +17,23 @@ import bili.dongsz.howtogo.route.Trip;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
+import bili.dongsz.howtogo.webmap.RoadMapSnapshot;
+import bili.dongsz.howtogo.webmap.WebMapServer;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 
 import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -108,6 +119,7 @@ public final class SelfTest {
         results.add(checkSimulatedRide());
         results.add(checkRoutes(network));
         results.add(checkStorage(network, lines));
+        results.add(checkWebMap(network));
         return results;
     }
 
@@ -475,5 +487,112 @@ public final class SelfTest {
                              RoutePreferences preferences) {
         return bili.dongsz.howtogo.route.TransitPlanner.plan(roads, lines,
                 from.x(), from.z(), to.x(), to.z(), to.label(), preferences);
+    }
+
+    /**
+     * Whether the browser map's server really starts and really serves, in this client.
+     *
+     * <h2>What only the game can answer</h2>
+     * The regression harness runs this same server over a real socket, so the HTTP surface itself is
+     * covered outside. What it cannot cover is the two things that depend on how the game is
+     * launched: whether {@code com.sun.net.httpserver} is resolvable from a mod at all -- it needs the
+     * JDK's own module, and a launcher that built a narrower module graph would leave the page dead
+     * with nothing but a {@code NoClassDefFoundError} in the log -- and whether the page, its scripts
+     * and the vendored html2canvas are found through the mod's own class loader, which is a
+     * transforming one in development and a jar in a release.
+     *
+     * <p>It is checked on a port the operating system hands out, on the loopback address, and the
+     * server is stopped before this returns, so a self-test never leaves a listening socket behind and
+     * never collides with a map the player has open.
+     *
+     * <h2>Why it does not go through the main-thread hand-off</h2>
+     * This runs <em>on</em> the client thread, and the real API reads the roads by queueing work for
+     * exactly that thread and waiting for it -- so asking it here would be the client thread waiting
+     * for itself, and the check would hang until the timeout and then fail for the wrong reason. The
+     * snapshot is therefore taken here, where the network is, and handed to the server as a finished
+     * reading; that is a copy by construction, so nothing on the HTTP thread can touch the live roads.
+     */
+    private static Result checkWebMap(RoadNetwork network) {
+        WebMapServer server = null;
+        try {
+            String dimension = Minecraft.getInstance().level == null
+                    ? "unknown"
+                    : Minecraft.getInstance().level.dimension().location().toString();
+            RoadMapSnapshot snapshot = RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension,
+                    network);
+
+            server = WebMapServer.start(() -> snapshot, freePort());
+            try (HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10)).build()) {
+                Reply page = fetch(client, server.url());
+                Reply script = fetch(client, server.url() + "js/app.js");
+                Reply library = fetch(client, server.url() + "vendor/html2canvas.min.js");
+                Reply roads = fetch(client, server.url() + "api/roads");
+
+                boolean pageOk = page.status == 200 && page.body.contains("<canvas");
+                boolean scriptOk = script.status == 200 && script.body.length() > 1000;
+                boolean libraryOk = library.status == 200 && library.body.length() > 100_000;
+                JsonObject payload = roads.status == 200
+                        ? JsonParser.parseString(roads.body).getAsJsonObject() : null;
+                boolean apiOk = payload != null
+                        && payload.get("version").getAsInt() == RoadMapSnapshot.FORMAT_VERSION
+                        && payload.getAsJsonArray("segments").size() == network.segmentCount();
+
+                String detail = "port=" + server.port() + " page=" + page.body.length() + "B"
+                        + " app.js=" + script.body.length() + "B"
+                        + " html2canvas=" + library.body.length() + "B"
+                        + " api=" + roads.status + "/" + (payload == null ? "-"
+                                : payload.getAsJsonArray("segments").size() + " segments");
+                if (!pageOk) {
+                    detail += " | the page did not come back as the map";
+                }
+                if (!scriptOk || !libraryOk) {
+                    detail += " | an asset is missing from the jar";
+                }
+                if (!apiOk) {
+                    detail += " | the roads did not come back as the payload";
+                }
+                return new Result("command.howtogo.selftest.check.webmap",
+                        pageOk && scriptOk && libraryOk && apiOk, detail);
+            }
+        } catch (IOException | RuntimeException failed) {
+            // Most likely here: no port could be bound, or the JDK's HTTP module is not in this
+            // launcher's graph. Both are worth the whole line the command gives them.
+            return new Result("command.howtogo.selftest.check.webmap", false,
+                    "the browser map could not be served: " + failed);
+        } finally {
+            if (server != null) {
+                server.stop();
+            }
+        }
+    }
+
+    /** One HTTP reply, as the check above reads it. */
+    private record Reply(int status, String body) {
+    }
+
+    /** Fetches a URL from the loopback server, reporting a refusal as a status of -1. */
+    private static Reply fetch(HttpClient client, String url) {
+        try {
+            HttpResponse<String> response = client.send(
+                    HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return new Reply(response.statusCode(), response.body());
+        } catch (IOException | InterruptedException failed) {
+            if (failed instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return new Reply(-1, "");
+        }
+    }
+
+    /** A port nothing else is listening on, so the self-test cannot collide with an open map. */
+    private static int freePort() {
+        try (ServerSocket probe = new ServerSocket(0)) {
+            return probe.getLocalPort();
+        } catch (IOException failed) {
+            return 0;
+        }
     }
 }

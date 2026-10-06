@@ -302,6 +302,48 @@ The mod itself is compiled **without** MTR or the overlay on its classpath, deli
 are reflective, and compiling against a mod only some users have would be a dependency by another name.
 Those jars are added only for the harness, after the mod has been compiled.
 
+## The browser map checks
+
+`WebMapCheck.java` and `WebMapHttpCheck.java` run as part of the harness and cover the local web server
+the browser map is served from. Both are in the `webmap` package, and both are about the two halves of
+that feature that a running game cannot show you.
+
+`WebMapCheck` is the payload and the thread hand-off. The payload half is the contract the page is
+written against: the root keys are exactly the documented set, a class carries a colour and a width
+rather than the page hard-coding them, a name with a quote, a backslash, a newline and Chinese in it
+survives the round trip, an empty network is empty lists rather than missing fields, storeys are listed
+ascending and distinct. The other half is the rule the whole feature turns on: the roads are read on
+the game's thread and never on the HTTP thread. It is checked with a stand-in for the client tick -- a
+queue plus a thread that drains it, which is exactly what `ClientScheduler` is -- so the harness can
+assert that a request is queued rather than answered in place, that the read runs on the other thread,
+that a game which never answers produces a 503-shaped failure after its timeout rather than a hang,
+that a reader which throws is a failed request and not a dead browser tab, and that eight concurrent
+requests are all answered, each with its own read on the game's thread.
+
+`WebMapHttpCheck` starts the real server on a real socket and fetches it with `HttpClient`. Every path
+the server advertises is fetched and required to be present, non-empty and served as the type a browser
+will execute; everything `index.html` refers to must be among the paths the server serves, which is
+what catches a renamed script before a player finds a blank page; a traversal is refused; a write is a
+405 with `Allow: GET`; a source with nothing to read is a 503 carrying its reason while the page itself
+still loads; and two requests that each make the handler wait 400 ms finish in about 400 ms, which is
+what the two-thread executor is for -- with `HttpServer`'s default single dispatcher they would take
+800.
+
+Both are fed by the same fixture network, built in `WebMapCheck` rather than read from a file: one of
+each shape the payload has to carry, including the awkward ones -- an unnamed road, a place with no
+road, a bridge at storey one over a road at storey zero, a one-way street drawn backwards.
+
+`-WriteWebMapFixture <path>` writes that fixture's payload out as the server would send it, which is
+how the page's own Node tests are pointed at a payload the Java serialiser really produced:
+
+```powershell
+.\tools\routing-harness\run-fast.ps1 -WriteWebMapFixture roads.json
+node tools\webmap-test\run.js roads.json
+```
+
+That pair is the contract check: if a field is renamed on one side of it, this fails rather than the
+map coming up blank in a browser.
+
 ## Inspecting a real network
 
 `NetworkInspector` runs the router over a network saved by the game, and is how the harness's

@@ -16,6 +16,7 @@ import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.TransitLineStore;
 import bili.dongsz.howtogo.item.ModItems;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
+import bili.dongsz.howtogo.webmap.WebMapService;
 import com.mojang.logging.LogUtils;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -74,6 +75,9 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
+        // The browser map's server, when the config asks for it to start itself: it waits for a world
+        // to be loaded, because a page opened onto a 503 is worse than a socket opened a moment later.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> WebMapService.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Navigation.tick());
         // The commands' own deferral: a screen cannot be opened from inside the command that asked for
         // it, so the work is run on the tick after.

@@ -134,6 +134,19 @@ public final class WorldFiles {
         return "unknown";
     }
 
+    /**
+     * The key of the world now loaded, for something that has to say which world it is showing.
+     *
+     * <p>Public so that the browser map can name the world in its title without a second copy of the
+     * rule above -- two copies would agree today and disagree the first time this one is corrected,
+     * which is the same argument that put this class in one piece to begin with. The value is the
+     * directory name modulo the disambiguating suffix, so it reads as {@code sp_MyWorld} or
+     * {@code mp_play.example.net}.
+     */
+    public static String currentWorldKey() {
+        return worldKey(Minecraft.getInstance());
+    }
+
     /** Strips characters that are not safe in a file name. */
     private static String sanitize(String raw) {
         if (raw == null || raw.isBlank()) {

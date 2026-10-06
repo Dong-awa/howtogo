@@ -162,7 +162,7 @@
   "screen.howtogo.line_from_mtr": "[MTR]",
   "screen.howtogo.line_from_mtr_note": "From MTR: read-only. Click the box at the row to mark its track (rail/water)",
   "hud.howtogo.edit.lines": "L transit lines",
-  "command.howtogo.help": "Usage: %s terminal to open the terminal, %s stop to end the trip, %s mode [walk|drive|transit] to change how you travel, %s selftest to check this mod against the world",
+  "command.howtogo.help": "Usage: %s terminal to open the terminal, %s stop to end the trip, %s mode [walk|drive|transit] to change how you travel, %s selftest to check this mod against the world, %s webmap to serve this world's roads to your browser",
   "command.howtogo.terminal": "Opening the navigation terminal",
   "command.howtogo.stop": "Navigation to %s ended",
   "command.howtogo.stop.none": "There is no navigation to end",
@@ -176,5 +176,16 @@
   "command.howtogo.selftest.check.plans": "line journeys",
   "command.howtogo.selftest.check.ride": "simulated ride",
   "command.howtogo.selftest.check.routes": "ordinary routing",
-  "command.howtogo.selftest.check.storage": "save round trip"
+  "command.howtogo.selftest.check.storage": "save round trip",
+  "command.howtogo.selftest.check.webmap": "browser map",
+  "command.howtogo.webmap.started": "Browser map started: %s (click to open)",
+  "command.howtogo.webmap.running": "Browser map is already running: %s",
+  "command.howtogo.webmap.stopped": "Browser map server stopped",
+  "command.howtogo.webmap.not_running": "The browser map server is not running (start it with /howtogo webmap start)",
+  "command.howtogo.webmap.failed": "The browser map could not start: %s",
+  "command.howtogo.webmap.status": "Browser map: %s | %s | %s",
+  "command.howtogo.webmap.status_no_world": "Browser map: %s | %s",
+  "command.howtogo.webmap.where": "%s (%s)",
+  "command.howtogo.webmap.no_world": "no world loaded",
+  "command.howtogo.webmap.stats": "%s nodes / %s roads / %s km in total"
 }

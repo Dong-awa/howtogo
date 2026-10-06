@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HowToGo 浏览器地图</title>
+<!--
+  The favicon is a data URI on purpose: the local server serves only the paths in the
+  contract, so a separate icon file would be a 404 on every page load.
+-->
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='6'%20fill='%23101418'/%3E%3Cpath%20d='M8%2026%20L14%206%20L18%206%20L24%2026'%20fill='none'%20stroke='%233FD07A'%20stroke-width='4'%20stroke-linecap='round'/%3E%3Cpath%20d='M11%2018%20L21%2018'%20stroke='%23E8F1FA'%20stroke-width='2'%20stroke-dasharray='3%203'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1 id="map-title">HowToGo 浏览器地图</h1>
+  <p id="world-line" class="world-line">正在读取道路数据…</p>
+</header>
+
+<main class="layout">
+  <section class="map-area" id="map-area">
+    <canvas id="map" aria-label="道路地图"></canvas>
+
+    <div class="map-toolbar">
+      <button id="btn-fit" type="button" title="Fit the whole network into the window">适应窗口</button>
+      <button id="btn-zoom-in" type="button" title="Zoom in">放大</button>
+      <button id="btn-zoom-out" type="button" title="Zoom out">缩小</button>
+      <button id="btn-refresh" type="button" title="Re-fetch /api/roads">刷新</button>
+      <label class="toggle" title="Poll /api/roads every 5 seconds">
+        <input id="auto-refresh" type="checkbox">
+        <span>自动刷新</span>
+      </label>
+    </div>
+
+    <div id="banner" class="banner" hidden></div>
+    <div id="toast" class="toast" hidden></div>
+  </section>
+
+  <aside class="side">
+    <section class="panel">
+      <h2>类别筛选</h2>
+      <p class="hint">图例与筛选：取消勾选即可在地图上隐藏这个等级。</p>
+      <div id="class-list" class="rows"></div>
+    </section>
+
+    <section class="panel">
+      <h2>道路层</h2>
+      <p class="hint">层号越大画得越靠上：高架压住地面，地面压住隧道。</p>
+      <div id="layer-list" class="rows"></div>
+    </section>
+
+    <section class="panel">
+      <h2>显示选项</h2>
+      <label class="toggle" title="Show road names">
+        <input id="show-road-names" type="checkbox" checked>
+        <span>显示路名</span>
+      </label>
+      <label class="toggle" title="Show place markers and their names">
+        <input id="show-places" type="checkbox" checked>
+        <span>显示地点</span>
+      </label>
+    </section>
+
+    <section class="panel">
+      <h2>数据统计</h2>
+      <dl id="stats-list" class="stats"></dl>
+    </section>
+
+    <section class="panel">
+      <button id="btn-export" type="button" class="wide primary" title="Export the current view as a PNG at twice the screen resolution">导出图片</button>
+      <p class="hint">导出当前视野的 2 倍分辨率 PNG，含标题、统计与图例。</p>
+    </section>
+  </aside>
+</main>
+
+<footer class="statusbar">
+  <span id="status-cursor">坐标 —</span>
+  <span id="status-zoom">缩放 —</span>
+  <span id="status-hover" class="status-hover">把光标移到地图上，这里会显示最近的道路或地点。</span>
+</footer>
+
+<!--
+  Classic scripts, in dependency order: each module adds itself to window.HowToGoMap,
+  and app.js is the only one that touches the DOM. html2canvas is the vendored 1.4.1
+  copy, loaded here so that a missing file degrades to the canvas-only export rather
+  than breaking the page.
+-->
+<script src="/js/model.js"></script>
+<script src="/js/geom.js"></script>
+<script src="/js/labels.js"></script>
+<script src="/js/render.js"></script>
+<script src="/vendor/html2canvas.min.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

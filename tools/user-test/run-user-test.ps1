@@ -122,7 +122,13 @@ while ((Get-Date) -lt $deadline) {
         # says the run is over, and it is written once.
         $stream = [System.IO.File]::Open($latest, 'Open', 'Read', 'ReadWrite')
         try {
-            $null = $stream.Seek($fromByte, 'Begin')
+            # A client rolls latest.log as it starts: the file this run writes is a new, shorter one, so
+            # the offset taken before the launch lands past its end -- where reading returns nothing for
+            # ever, and a run that has already finished and quit looks exactly like one that never came
+            # up. The offset is therefore only used when the file really did grow; if it shrank, the whole
+            # file is this run's and reading from the beginning is the only correct answer.
+            $offset = if ($fromByte -le $stream.Length) { $fromByte } else { 0 }
+            $null = $stream.Seek($offset, 'Begin')
             $reader = New-Object System.IO.StreamReader($stream)
             $text = $reader.ReadToEnd()
         } finally {

@@ -48,6 +48,8 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
     /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
     private static final ModConfigSpec.BooleanValue DEBUG_LOG;
+    private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
+    private static final ModConfigSpec.IntValue WEBMAP_PORT;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -278,6 +280,24 @@ public final class RoadConfig {
                         "so they are off by default. Warnings and errors are not affected: a problem is",
                         "always reported.")
                 .define("debug_log", false);
+
+        WEBMAP_AUTO_START = builder.comment(
+                        "Whether the browser map's local server is started as soon as a world is",
+                        "loaded, rather than waiting for the /howtogo webmap command.",
+                        "It listens on the two loopback addresses only -- 127.0.0.1 and ::1 -- and",
+                        "there is deliberately no key that widens that to the network, so this is not",
+                        "a switch about exposure, only about whether the port is open before the player",
+                        "asks for it. Off by default: a mod that opens a listening socket without being",
+                        "asked is a mod that shows up in a firewall list nobody asked for.")
+                .define("webmap_auto_start", false);
+
+        WEBMAP_PORT = builder.comment(
+                        "The port the browser map is served on: http://127.0.0.1:<port>/",
+                        "If it is taken, the nine ports above it are tried in turn and the address",
+                        "actually bound is the one written into the chat message, so a bookmark can be",
+                        "kept correct after a fallback. Set it to something memorable rather than to",
+                        "something free: the port is a thing a player types.")
+                .defineInRange("webmap_port", 7573, 1024, 65535);
 
         SPEC = builder.build();
     }
@@ -575,6 +595,32 @@ public final class RoadConfig {
             return MTR_AUTO_ROUTE_MARKS.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
+        }
+    }
+
+    // ------------------------------------------------------------ browser map
+
+    /**
+     * The port the browser map asks for, or the declared default before the config has been read.
+     *
+     * <p>A default rather than a null: unlike the travel mode there is no answer that is wrong here,
+     * and the port is needed the instant a player types the command, which can be before the config
+     * file has ever been read.
+     */
+    public static int webMapPort() {
+        try {
+            return WEBMAP_PORT.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 7573;
+        }
+    }
+
+    /** Whether the browser map's server starts with the first world loaded, off before the config loads. */
+    public static boolean webMapAutoStart() {
+        try {
+            return WEBMAP_AUTO_START.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
         }
     }
 }

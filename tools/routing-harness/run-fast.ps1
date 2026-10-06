@@ -16,7 +16,11 @@ param(
     # as a parameter because the answer to "does this mod work with MTR x.y.z" is per build: one jar at
     # a time on the classpath, one run each, and the check reads that jar's own shapes.
     [string]$MtrJar,
-    [string]$MtrMapJar
+    [string]$MtrMapJar,
+    # Writes the browser map's fixture payload to this path. The page's own tests are then run against
+    # a payload this server really produced -- node tools\webmap-test\run.js <path> -- rather than
+    # against one written to match it, which is what catches the two sides drifting apart.
+    [string]$WriteWebMapFixture
 )
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -127,8 +131,12 @@ Write-Host 'running the harness...'
 Write-Host ''
 # From the harness's own directory: the logging setup that comes with the game's classpath writes a
 # logs/ folder into the working directory, and it belongs next to the harness's other output.
+# The mod's own resources are appended last so that the web map's checks can fetch the page, its
+# scripts and the vendored html2canvas out of the real files rather than out of a stub -- appended
+# rather than prepended, so nothing here can shadow a class or a resource the runtime already has.
+$resources = Join-Path $project 'src\main\resources'
 Push-Location $work
-& java -cp "$harnessClasses;$modClasses;$harnessPath" Harness
+& java "-Dhowtogo.webmap.fixture=$WriteWebMapFixture" -cp "$harnessClasses;$modClasses;$harnessPath;$resources" Harness
 $harnessCode = $LASTEXITCODE
 Pop-Location
 exit $harnessCode

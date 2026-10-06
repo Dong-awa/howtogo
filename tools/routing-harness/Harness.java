@@ -107,6 +107,12 @@ public final class Harness {
         int[] addonPath = bili.dongsz.howtogo.client.AddonDataFileCheck.run();
         checks += addonPath[0];
         failures += addonPath[1];
+        int[] webMap = bili.dongsz.howtogo.webmap.WebMapCheck.run();
+        checks += webMap[0];
+        failures += webMap[1];
+        int[] webMapHttp = bili.dongsz.howtogo.webmap.WebMapHttpCheck.run();
+        checks += webMapHttp[0];
+        failures += webMapHttp[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");

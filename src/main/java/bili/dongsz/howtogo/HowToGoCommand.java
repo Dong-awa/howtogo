@@ -3,19 +3,28 @@ package bili.dongsz.howtogo;
 import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.client.DestinationScreen;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.SelfTest;
+import bili.dongsz.howtogo.client.WorldFiles;
+import bili.dongsz.howtogo.road.RoadNetwork;
+import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.webmap.WebMapService;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -90,6 +99,14 @@ public final class HowToGoCommand {
                         .executes(HowToGoCommand::stop))
                 .then(Commands.literal("selftest")
                         .executes(HowToGoCommand::selfTest))
+                .then(Commands.literal("webmap")
+                        .executes(HowToGoCommand::webMapStart)
+                        .then(Commands.literal("start")
+                                .executes(HowToGoCommand::webMapStart))
+                        .then(Commands.literal("stop")
+                                .executes(HowToGoCommand::webMapStop))
+                        .then(Commands.literal("status")
+                                .executes(HowToGoCommand::webMapStatus)))
                 .then(Commands.literal("mode")
                         .executes(HowToGoCommand::cycleMode)
                         .then(Commands.argument("mode", StringArgumentType.word())
@@ -104,7 +121,11 @@ public final class HowToGoCommand {
 
     /** Says what the command does, rather than doing something surprising with no arguments. */
     private static int help(CommandContext<CommandSourceStack> context) {
-        say(context, Component.translatable("command.howtogo.help", "/" + ROOT));
+        // One argument per placeholder, all of them the same string: the lang line spells each
+        // subcommand out in full, and a shortfall here does not strip the extra placeholders, it
+        // makes the whole line fail to format and the player read the raw pattern instead.
+        String root = "/" + ROOT;
+        say(context, Component.translatable("command.howtogo.help", root, root, root, root, root));
         return 1;
     }
 
@@ -171,6 +192,91 @@ public final class HowToGoCommand {
             say(context, Component.literal(line));
         }
         return failed == 0 ? 1 : 0;
+    }
+
+    /**
+     * Starts the browser map's server, or says where it already is.
+     *
+     * <p>The URL is a clickable link: the point of this feature is a page in the player's own browser,
+     * and asking them to copy a port number out of a chat line by hand is the kind of friction that
+     * makes a feature not get used. The link opens the default browser through the game's own
+     * platform helper, which is the same path the chat's other links take.
+     */
+    private static int webMapStart(CommandContext<CommandSourceStack> context) {
+        String running = WebMapService.url();
+        if (running != null) {
+            say(context, Component.translatable("command.howtogo.webmap.running", urlLink(running)));
+            return 1;
+        }
+        try {
+            say(context, Component.translatable("command.howtogo.webmap.started",
+                    urlLink(WebMapService.start())));
+            return 1;
+        } catch (IOException | RuntimeException failed) {
+            // Reported rather than logged and forgotten: the usual cause is a port the player could
+            // change, and a failure they cannot see is one they cannot fix.
+            HowToGo.LOGGER.warn("[HowToGo] webmap | could not start: {}", failed.toString());
+            context.getSource().sendFailure(Component.translatable("command.howtogo.webmap.failed",
+                    String.valueOf(failed.getMessage())));
+            return 0;
+        }
+    }
+
+    /** Stops the server, and says whether there was one. */
+    private static int webMapStop(CommandContext<CommandSourceStack> context) {
+        if (WebMapService.stop()) {
+            say(context, Component.translatable("command.howtogo.webmap.stopped"));
+            return 1;
+        }
+        say(context, Component.translatable("command.howtogo.webmap.not_running"));
+        return 0;
+    }
+
+    /**
+     * Says whether the map is up, at which address, and what the page would show right now.
+     *
+     * <p>Run on the client thread, which is why it may read {@link RoadStore} directly: a command is
+     * executed on the client's own thread, so this needs none of the hand-off the HTTP side does.
+     */
+    private static int webMapStatus(CommandContext<CommandSourceStack> context) {
+        String url = WebMapService.url();
+        if (url == null) {
+            say(context, Component.translatable("command.howtogo.webmap.not_running"));
+            return 0;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            say(context, Component.translatable("command.howtogo.webmap.status_no_world",
+                    urlLink(url), Component.translatable("command.howtogo.webmap.no_world")));
+            return 1;
+        }
+        RoadNetwork network = RoadStore.get();
+        Component where = Component.translatable("command.howtogo.webmap.where",
+                WorldFiles.currentWorldKey(),
+                minecraft.level.dimension().location().toString());
+        Component stats = Component.translatable("command.howtogo.webmap.stats",
+                network.nodeCount(), network.segmentCount(),
+                String.format(Locale.ROOT, "%.2f", networkLengthKilometres(network)));
+        say(context, Component.translatable("command.howtogo.webmap.status", urlLink(url), where,
+                stats));
+        return 1;
+    }
+
+    /** The total length of every road in the network, in kilometres, for the status line. */
+    private static double networkLengthKilometres(RoadNetwork network) {
+        double blocks = 0.0;
+        for (RoadSegment segment : network.segments()) {
+            blocks += segment.length();
+        }
+        return blocks / 1000.0;
+    }
+
+    /** A URL a player can click, styled as the link it is. */
+    private static Component urlLink(String url) {
+        return Component.literal(url).withStyle(Style.EMPTY
+                .withColor(ChatFormatting.AQUA)
+                .withUnderlined(true)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
     }
 
     /** Ends the trip, if there is one. */
