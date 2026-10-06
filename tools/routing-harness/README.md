@@ -78,6 +78,19 @@ a divided highway round its turning loop as still plannable, and sweep every pai
 network, reading the bend back off the route's own drawn line rather than out of the search that made
 it.
 
+`RoutePreferenceCheck.java` covers the routing taste, which has to steer the route and nothing else.
+Two things were wrong with it. "Prefer major roads" was one penalty laid on footpaths -- a class a car
+may not travel -- so driving's two classes were left at the same pace and the switch changed no route
+a driver could ever be offered; and the shortest-distance metric returned a bare length and dropped
+the penalty entirely, so the same switch meant one thing under "fastest" and nothing under "shortest".
+Both are held here, on a network where a direct road and a slightly longer highway join the same two
+places: the switch must move the route, in either metric. The other half is the estimate, which must
+stay the route's own geometry at the mode's real paces no matter what the policy says -- the preference
+used to be folded into the pace, so the search minimised a weighted speed while the panel printed the
+real one, and they agreed only because the weighted value happened never to reach the route's legs.
+The check works the estimate out again from the drawn line, for a policy off and on and in both
+metrics, so a return of that mistake is caught rather than believed.
+
 `TurnCursorCheck.java` covers the other half of the guidance: **which** junction the readout is on.
 `TurnCursor` is that state machine on its own, with no Minecraft in it, so it can be driven here.
 Being level with a junction is not the same as having taken it, and only the heading says which the

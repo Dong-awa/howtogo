@@ -59,6 +59,9 @@ public final class Harness {
         int[] bend = HighwayBendCheck.run();
         checks += bend[0];
         failures += bend[1];
+        int[] preference = RoutePreferenceCheck.run();
+        checks += preference[0];
+        failures += preference[1];
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
         failures += imported[1];

@@ -1666,7 +1666,10 @@ public final class RoadRouter {
         double fastest = 0;
         for (RoadClass roadClass : RoadClass.values()) {
             if (usable(mode, preferences, roadClass)) {
-                fastest = Math.max(fastest, effectiveSpeed(mode, preferences, roadClass));
+                // The roomiest pace in play, whatever the trip is being steered towards. A weight
+                // only ever multiplies a cost up -- see RoutePreferences.weight -- so a bound built
+                // from unweighted paces stays under every real cost and the search stays admissible.
+                fastest = Math.max(fastest, effectiveSpeed(mode, roadClass));
             }
         }
         return fastest;
@@ -1702,8 +1705,9 @@ public final class RoadRouter {
         // whole network rather than of any one segment.
         for (RoadSegment segment : path) {
             appendSegment(builder, grouping, segment, previousNode);
-            builder.addRoadLeg(segment.length(),
-                    effectiveSpeed(mode, preferences, segment.roadClass()));
+            // The mode's real pace on this class, so the route's own legs time it at the speed the
+            // player actually travels: the preference steers the search and never the estimate.
+            builder.addRoadLeg(segment.length(), effectiveSpeed(mode, segment.roadClass()));
             previousNode = other(segment, previousNode);
         }
 
