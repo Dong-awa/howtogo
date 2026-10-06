@@ -55,8 +55,21 @@ import java.util.Set;
  */
 public final class SelfTest {
 
-    /** How many steps a simulated ride is sampled at: enough to see every stage, few enough to be quick. */
-    private static final int RIDE_SAMPLES = 48;
+    /**
+     * How many steps a simulated ride is sampled at, and the closest together they may be.
+     *
+     * <p>A stage of the ride is only reported within a few blocks of where it happens -- the boarding
+     * prompt is said as the stop is reached, not a hundred blocks before it -- so sampling a long
+     * journey evenly at a fixed count walks straight over it: the first real run of this check sampled a
+     * two-thousand-block ride forty blocks at a time, saw the arrival and the stop counts, and never saw
+     * the boarding at all, which read as a missing stage rather than as a sampling gap. The count
+     * therefore follows the length: {@value #RIDE_SAMPLE_BLOCKS} blocks a step, capped so a journey
+     * across a whole railway cannot make this slow.
+     */
+    private static final int RIDE_SAMPLE_BLOCKS = 2;
+
+    /** The most steps a simulated ride is sampled at, whatever its length. */
+    private static final int MAX_RIDE_SAMPLES = 4000;
 
     /** How many lines the plan check walks through, so a whole railway cannot make this slow. */
     private static final int MAX_LINES_CHECKED = 8;
@@ -271,8 +284,10 @@ public final class SelfTest {
             Set<String> seen = new LinkedHashSet<>();
             boolean boarded = false;
             boolean left = false;
-            for (int step = 0; step <= RIDE_SAMPLES; step++) {
-                double travelled = route.totalLength() * step / RIDE_SAMPLES;
+            int samples = (int) Math.min(MAX_RIDE_SAMPLES,
+                    Math.max(1, Math.ceil(route.totalLength() / RIDE_SAMPLE_BLOCKS)));
+            for (int step = 0; step <= samples; step++) {
+                double travelled = route.totalLength() * step / samples;
                 double[] at = pointAt(route, travelled);
                 Navigation.TransitStep cue = Navigation.transitStepAt(at[0], at[1], travelled);
                 if (cue == null) {
@@ -283,8 +298,11 @@ public final class SelfTest {
                 left |= cue.cue() == Navigation.TransitCue.ALIGHT
                         || cue.cue() == Navigation.TransitCue.ARRIVE;
             }
-            String detail = "to '" + here.name() + "': " + seen.size() + " line(s) | "
-                    + String.join(" → ", seen);
+            String detail = "to '" + here.name() + "': " + Math.round(route.totalLength())
+                    + " blocks, " + seen.size() + " line(s)"
+                    + (boarded ? "" : " | no boarding prompt")
+                    + (left ? "" : " | no alighting prompt")
+                    + " | " + String.join(" → ", seen);
             boolean ok = !seen.isEmpty() && boarded && left;
             return new Result("command.howtogo.selftest.check.ride", ok, detail);
         } finally {
@@ -358,9 +376,16 @@ public final class SelfTest {
      * reports what came back. A network of separate pieces is expected to fail some of these -- the
      * reason is printed with it, so a failure reads as "the roads are in fragments" rather than as
      * "the router is broken".
+     *
+     * <p>Run on a copy of the network, through a temporary file, and not on the player's own. Anchoring a
+     * route to a point in the middle of a road splits that road at the point, which is right when the
+     * player asked for a route from where they are standing and wrong when a self-test asks on their
+     * behalf: the first real run of this check left a node and a segment in the world that nobody had
+     * drawn, and a player who opened the line editor afterwards would have found a junction there.
      */
     private static Result checkRoutes(RoadNetwork network) {
-        List<RoadNode> nodes = network.nodesSnapshot();
+        RoadNetwork probe = copyOf(network);
+        List<RoadNode> nodes = probe.nodesSnapshot();
         if (nodes.size() < 2) {
             return new Result("command.howtogo.selftest.check.routes", true, "not enough roads to probe");
         }
@@ -369,7 +394,7 @@ public final class SelfTest {
         StringBuilder detail = new StringBuilder();
         boolean ok = true;
         for (TravelMode mode : new TravelMode[]{TravelMode.WALK, TravelMode.DRIVE}) {
-            Route route = RoadRouter.findRoute(network, first.x(), first.z(), last.x(), last.z(),
+            Route route = RoadRouter.findRoute(probe, first.x(), first.z(), last.x(), last.z(),
                     "self test", mode, RoutePreferences.DEFAULTS);
             if (detail.length() > 0) {
                 detail.append(" | ");
@@ -379,11 +404,35 @@ public final class SelfTest {
                         .append(Math.round(route.totalLength())).append(" blocks");
             } else {
                 detail.append(mode.id()).append(" refused: ").append(RoadRouter.explainFailure(
-                        network, first.x(), first.z(), last.x(), last.z(), mode,
+                        probe, first.x(), first.z(), last.x(), last.z(), mode,
                         RoutePreferences.DEFAULTS));
             }
         }
         return new Result("command.howtogo.selftest.check.routes", ok, detail.toString());
+    }
+
+    /** A copy of a network, through a temporary file, or the network itself when there is none to be had. */
+    private static RoadNetwork copyOf(RoadNetwork network) {
+        Path file = null;
+        try {
+            file = Files.createTempFile("howtogo-selftest-copy", ".json");
+            Files.delete(file);
+            if (!RoadStorage.save(file, network)) {
+                return network;
+            }
+            return RoadStorage.load(file);
+        } catch (IOException | RuntimeException failed) {
+            HowToGo.LOGGER.warn("[HowToGo] selftest could not copy the network: {}", failed.toString());
+            return network;
+        } finally {
+            if (file != null) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException ignored) {
+                    HowToGo.LOGGER.debug("[HowToGo] selftest could not remove {}", file);
+                }
+            }
+        }
     }
 
     /**

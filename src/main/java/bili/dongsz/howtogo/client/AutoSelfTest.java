@@ -58,10 +58,22 @@ public final class AutoSelfTest {
         }
         ran = true;
         report();
-        if (Boolean.getBoolean(QUIT_PROPERTY)) {
+        if (quitAsked()) {
             HowToGo.LOGGER.info("[HowToGo] selftest asked the client to stop");
             minecraft.stop();
         }
+    }
+
+    /**
+     * Whether the launcher asked the client to close once the report was written.
+     *
+     * <p>Read as "1" as well as "true": the rig passes 1, and {@link Boolean#getBoolean} answers false
+     * for it -- which is how the first automated run wrote its report and then sat there instead of
+     * ending, leaving the rig waiting on a client that had nothing left to do.
+     */
+    private static boolean quitAsked() {
+        String raw = System.getProperty(QUIT_PROPERTY, "").trim();
+        return raw.equals("1") || raw.equalsIgnoreCase("true") || raw.equalsIgnoreCase("yes");
     }
 
     /** Runs the checks and writes the report the rig reads, in the same shape the command logs. */

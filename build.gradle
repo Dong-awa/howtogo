@@ -22,6 +22,14 @@ neoForge {
             // default -- means the client behaves exactly as a player's does.
             systemProperty 'howtogo.selftest', project.findProperty('htgSelftest') ?: ''
             systemProperty 'howtogo.selftest.quit', project.findProperty('htgSelftestQuit') ?: ''
+            // -PhtgQuickPlay=<world name> opens that world on start, which is what makes the rig a single
+            // command: without it the client sits on the title screen and the checks, which are all about
+            // a world, have nothing to read. Passing it through the run config because Gradle's own
+            // --args replaces the launcher's arguments rather than adding to them.
+            if (project.hasProperty('htgQuickPlay')) {
+                programArgument '--quickPlaySingleplayer'
+                programArgument project.property('htgQuickPlay')
+            }
         }
     }
 

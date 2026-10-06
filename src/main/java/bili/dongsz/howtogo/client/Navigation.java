@@ -1783,6 +1783,7 @@ public final class Navigation {
             // the picker calling the journey impossible and the navigation doing it anyway.
             planned = RoadRouter.findRoute(RailTrackStore.forRouting(TravelMode.WALK, policy), x, z,
                     destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
+            planned = timedForRequested(planned, active);
         }
         if (!planned.isPresent()) {
             // Said out loud, and this is the only place it can be: a preview that finds nothing shows
@@ -1887,14 +1888,31 @@ public final class Navigation {
                 // exactly how it was read. The comparison is still made and still logged, so the
                 // numbers are there to be read; the walk is an alternative that a later picker can
                 // offer, not a replacement. A journey the lines cannot carry at all is still
-                // answered with the walk, and every other mode keeps the old rule -- that is what
-                // stops a drive being planned as a walk across a field.
+                // answered with the walk, and a drive that is merely slower than walking keeps the
+                // old rule as well -- that is what stops a drive being planned as a walk across a
+                // field. A drive that reaches no road at all is the one case below.
                 if (active == TravelMode.TRANSIT && plannedRoute.isPresent()) {
                     HowToGo.diagnostic(
                             "[HowToGo] transit is slower than walking ({} vs {}); keeping transit, "
                                     + "the walk is an alternative rather than a replacement",
                             Route.formatDuration(plannedRoute.estimatedSeconds()),
                             Route.formatDuration(onFoot.estimatedSeconds()));
+                } else if (active == TravelMode.DRIVE && !plannedRoute.isPresent()) {
+                    // No road the car may use comes within its connector distance of one of the two
+                    // ends -- the case a walk at the destination is unavoidable in. The walker's
+                    // line is then the only plan there is, and the trip along it is the car's up to
+                    // the last road and the walker's from there, so it is kept and timed for the
+                    // drive rather than for the walk. Nothing is noted as abandoned: the mode the
+                    // player chose is the mode being navigated, and the readout would otherwise
+                    // explain a fallback that is no longer being made.
+                    HowToGo.diagnostic("[HowToGo] drive reaches no road at one end ({}); keeping the "
+                                    + "walker's line, timed as the road driven and the rest walked",
+                            RoadRouter.explainFailure(RailTrackStore.forRouting(active, preferences),
+                                    routeOriginX, routeOriginZ, target.x(), target.z(), active,
+                                    preferences));
+                    route = timedForRequested(onFoot, active);
+                    logRoute(preferences);
+                    return;
                 } else {
                     noteFallback(active, plannedRoute, onFoot, preferences);
                     route = onFoot;
@@ -2001,6 +2019,26 @@ public final class Navigation {
      */
     private static boolean losesToWalking(Route planned, Route onFoot) {
         return !planned.isPresent() || planned.estimatedSeconds() > onFoot.estimatedSeconds();
+    }
+
+    /**
+     * The walker's line, timed for the mode the player asked for.
+     *
+     * <h2>Why the drive needs this and the other modes do not</h2>
+     * A mode that finds no route at all is answered with a plan made on foot, because the walker is
+     * the only one who can leave the network. For the drive that plan is not a walk: the trip the
+     * player then makes along it is the car's up to the last road and the walker's from there, and
+     * timing the whole line at walking pace reported a destination with a short walk at the end as a
+     * much longer trip -- with every block of road the car would have driven costed as though it were
+     * walked, which is what made the preview of a drive to such a place read as an hour of walking.
+     * So the line is kept exactly as planned and re-timed for the drive; see {@link Route#timedFor}.
+     *
+     * <p>Walking needs nothing, and public transport deliberately gets nothing: a journey is not a
+     * ride where one can and a walk where one cannot, so a line that cannot carry the journey leaves
+     * the walk it is, time and all.
+     */
+    private static Route timedForRequested(Route planned, TravelMode active) {
+        return active == TravelMode.DRIVE ? planned.timedFor(TravelMode.DRIVE) : planned;
     }
 
     private static void clearFallback() {

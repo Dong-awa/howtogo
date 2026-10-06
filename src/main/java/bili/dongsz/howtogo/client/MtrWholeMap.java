@@ -56,6 +56,12 @@ final class MtrWholeMap {
 
     /** The class MTR keeps its running server in, under each name it has given it. */
     private static final String[] INIT_NAMES = {
+            // 4.1 renamed the mod's entry class to org.mtr.MTR, alongside moving its other classes from
+            // org.mtr.mod.* to org.mtr.*. Found by the handshake against the real 4.1.0-beta.2 jar, not
+            // from a changelog: the class that holds a static org.mtr.core.Main is the class this wants,
+            // and under the two older spellings there was no such class at all on 4.1 -- so the whole-map
+            // read reported itself unavailable and the mod quietly fell back to the windowed one.
+            "org.mtr.MTR",
             "org.mtr.Init",
             "org.mtr.mod.Init",
     };
@@ -389,6 +395,23 @@ final class MtrWholeMap {
         if (!MtrClientData.ready()) {
             return false;
         }
+        return bind();
+    }
+
+    /**
+     * Looks up every class, field and method the whole-map read needs, and remembers whether it worked.
+     *
+     * <p>Split out of {@link #resolve()} so that the same lookups can be made with no game running, which
+     * is what lets the regression harness check them against a real MTR jar: whether this reader still
+     * knows MTR's names is otherwise only found out by a player opening the map, from a log line that
+     * says the data was unavailable and not which name was wrong. The same separation, for the same
+     * reason, as {@link MtrClientData#bind()}.
+     *
+     * <p>Classes are loaded without being initialised: this needs their shapes, not their state.
+     *
+     * @return whether MTR's shapes are the ones this reads
+     */
+    static boolean bind() {
         try {
             Class<?> main = load(MAIN);
             Class<?> simulator = load(SIMULATOR);
@@ -447,6 +470,31 @@ final class MtrWholeMap {
             warnUnavailable(e);
             return false;
         }
+    }
+
+    /**
+     * Whether MTR's server-side classes are on the classpath at all, under any of their names.
+     *
+     * <p>Asked by the harness before it checks the handshake, the same way
+     * {@link MtrClientData#classesPresent()} is: a machine that has never seen MTR should skip the
+     * check rather than fail it.
+     */
+    static boolean classesPresent() {
+        try {
+            load(MAIN);
+            load(SIMULATOR);
+        } catch (ClassNotFoundException | LinkageError absent) {
+            return false;
+        }
+        for (String name : INIT_NAMES) {
+            try {
+                load(name);
+                return true;
+            } catch (ClassNotFoundException | LinkageError absent) {
+                // Not that name; the next one is the other spelling of the same class.
+            }
+        }
+        return false;
     }
 
     private static Class<?> load(String name) throws ClassNotFoundException {

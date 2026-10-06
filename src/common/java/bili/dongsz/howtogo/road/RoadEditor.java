@@ -678,12 +678,39 @@ public final class RoadEditor {
         return new Split(first.id(), second.id(), junction.id());
     }
 
-    /** Deletes the current selection, removing any segments left dangling. */
+    /**
+     * Deletes the current selection, removing any segments left dangling.
+     *
+     * <h2>Why a selected road goes whole</h2>
+     * Selecting a road selects all of it: {@link #selectSegment} takes the chain, the map highlights
+     * the chain, and every other thing that can be done to a selected road -- its name, its class,
+     * its storey, its one-way marking -- already walks the chain. Deleting was the one operation that
+     * did not, so pressing delete removed the single straight piece the cursor happened to be over
+     * and left the rest of a road that was still being shown as selected. A road drawn with bends is
+     * several segments meeting at pass-through nodes, which is what makes it one road rather than
+     * several, so that is what "delete this road" has to mean.
+     *
+     * <p>A node is still deleted as the node it is: what a node has is the segments that end on it,
+     * and those go with it.
+     */
     public boolean deleteSelection() {
         if (selectedSegmentId != RoadSegment.NO_SEGMENT) {
             pushUndo();
-            network.removeSegment(selectedSegmentId);
+            // Read before anything is removed: the walk answers out of the network, so it cannot be
+            // asked once pieces of the road are gone. The chain always holds the seed, so the empty
+            // answer is only reachable for a selection that names no segment at all.
+            java.util.List<Integer> road = RoadChains.chainContaining(network, selectedSegmentId);
+            if (road.isEmpty()) {
+                network.removeSegment(selectedSegmentId);
+            } else {
+                for (int segmentId : road) {
+                    network.removeSegment(segmentId);
+                }
+            }
             selectedSegmentId = RoadSegment.NO_SEGMENT;
+            // The ids just removed are not selection any more; leaving them in the chain would have
+            // the map ask a stale question of every segment it draws.
+            selectedChain.clear();
             pruneOrphanNodes();
             reclassifyNodes();
             return true;

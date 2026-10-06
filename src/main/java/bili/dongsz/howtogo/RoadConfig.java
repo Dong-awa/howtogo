@@ -124,11 +124,12 @@ public final class RoadConfig {
         TRANSIT_BOARD_ONLY = builder.comment(
                         "Whether a public transport journey is guided by boarding and alighting only:",
                         "the readout and the voice name the station to get on at and the one to get off",
-                        "at, and never call a turn. Off by default, because a journey that rides",
-                        "something is still walked to and from it, and the default should be the",
-                        "guidance that says the most. The destination picker carries the same switch,",
-                        "for players who never open this file.")
-                .define("transit_board_only", false);
+                        "at, and never call a turn. On by default, because a passenger on a line is being",
+                        "carried: the only decisions left to them are which stop to get off at and, at a",
+                        "change, which line to board, while the turns of the walk to the stop and away",
+                        "from it are the walk's own and are still called. The destination picker carries",
+                        "the same switch, for players who never open this file.")
+                .define("transit_board_only", true);
 
         VOICE_ANNOUNCEMENTS = builder.comment(
                         "Whether navigation events -- the trip being started, the turn ahead, the turn",
@@ -420,16 +421,18 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether a transit journey is guided by boarding and alighting only, off before the config loads.
+     * Whether a transit journey is guided by boarding and alighting only, on before the config loads.
      *
      * <p>Only the declared default, like the voice switch beside it: the picker's own switch keeps the
-     * player's answer in the preference store, which falls back to this whenever there is none.
+     * player's answer in the preference store, which falls back to this whenever there is none. The
+     * value answered before the config has been read is the declared one, so nothing can act on the
+     * opposite of what the file says in the window before it is loaded.
      */
     public static boolean transitBoardOnly() {
         try {
             return TRANSIT_BOARD_ONLY.get();
         } catch (IllegalStateException notLoadedYet) {
-            return false;
+            return true;
         }
     }
 

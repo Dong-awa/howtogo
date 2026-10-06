@@ -1,6 +1,7 @@
 import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadDirection;
+import bili.dongsz.howtogo.road.RoadEditor;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -52,6 +53,8 @@ public final class Harness {
         scenarioConcatKeepsConnectors();
         scenarioTurnIsCountedFromThePlayer();
         scenarioOneWayRoad();
+        scenarioDeleteRemovesTheWholeRoad();
+        scenarioDriveTimingWalksOnlyTheWalkedPart();
         scenarioMtrTypeMapping();
         int[] direction = RouteDirectionCheck.run();
         checks += direction[0];
@@ -880,6 +883,98 @@ public final class Harness {
                     Math.hypot(close.points().get(close.points().size() - 1)[0] - 350,
                             close.points().get(close.points().size() - 1)[1] + 40), 0, 0.5);
         }
+    }
+
+    /**
+     * Deleting a road deletes the road, not one straight piece of it.
+     *
+     * <p>A road drawn with bends is stored as several segments meeting at pass-through nodes, and
+     * selecting it selects the whole chain: {@code selectSegment} takes the chain, the map highlights
+     * the chain, and naming, re-classing, the storey and the one-way marking all walk it. Deletion was
+     * the one operation that acted on the single piece the cursor happened to be over, so pressing
+     * delete left the rest of a road the player was still being shown as selected, and a street with
+     * two bends had to be deleted a bend at a time.
+     */
+    private static void scenarioDeleteRemovesTheWholeRoad() {
+        System.out.println("== deleting a road ==");
+        RoadNetwork net = new RoadNetwork();
+        // One street drawn a click at a time: three segments meeting at pass-through nodes with both
+        // ends free, which is what makes the three of them one road.
+        road(net, RoadClass.ROAD, 0, 0, 100, 0);
+        RoadSegment middle = road(net, RoadClass.ROAD, 100, 0, 100, 100);
+        road(net, RoadClass.ROAD, 100, 100, 200, 100);
+        // And another road well away from it, which deleting the street must not touch.
+        road(net, RoadClass.ROAD, 500, 500, 600, 500);
+        expect("the fixture is a street of three pieces and a road of one", net.segmentCount() == 4);
+
+        RoadEditor editor = new RoadEditor(net);
+        editor.selectSegment(middle.id());
+        expect("selecting a piece of a street selects the street ("
+                + editor.selectedChain().size() + " pieces)", editor.selectedChain().size() == 3);
+
+        expect("delete removes the whole street",
+                editor.deleteSelection() && net.segmentCount() == 1);
+        expect("leaving the road that was not selected", net.segmentCount() == 1
+                && net.segmentsSnapshot().get(0).midpoint()[0] > 500);
+        // The street's corners were its own: a node nothing is left attached to is not a place.
+        expect("and the nodes the street was made of go with it", net.nodeCount() == 2);
+
+        editor.undo();
+        expect("undo puts the whole street back", net.segmentCount() == 4 && net.nodeCount() == 6);
+    }
+
+    /**
+     * A drive to a destination the roads do not reach is timed as a drive plus the walk.
+     *
+     * <p>When no road a car may use comes within its connector distance of the destination, the only
+     * plan there can be is the walker's -- the walker is the one who leaves the network -- and the
+     * trip the player then makes along that line is the car's up to the last road and the walker's
+     * from there. Timed at walking pace throughout it reported a destination with a short walk at the
+     * end as a much longer trip than it is, with every block of road the car would have driven costed
+     * as though it were walked.
+     */
+    private static void scenarioDriveTimingWalksOnlyTheWalkedPart() {
+        System.out.println("== a drive that ends in a walk ==");
+        RoadNetwork net = new RoadNetwork();
+        // Two kilometres of road with the destination a hundred blocks off its far end: far past the
+        // sixty-four a drive will walk to a road, and well inside the walker's.
+        road(net, RoadClass.ROAD, 0, 0, 2000, 0);
+
+        Route drive = RoadRouter.findRoute(net, 0, 0, 2000, 100, "off the road",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("the drive is refused: no road the car may use reaches it", !drive.isPresent());
+
+        Route walk = RoadRouter.findRoute(net, 0, 0, 2000, 100, "off the road",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("the walk is planned", walk.isPresent());
+        if (!walk.isPresent()) {
+            return;
+        }
+
+        Route asDrive = walk.timedFor(TravelMode.DRIVE);
+        // The walk's own time less its road is the hop off the road, which stays walked whatever the
+        // mode: the check reads it off the planned route rather than restating the connector pace.
+        double hopSeconds = walk.estimatedSeconds()
+                - 2000.0 / TravelMode.WALK.speedOn(RoadClass.ROAD);
+        expectNear("the drive's time is the road driven and the hop walked",
+                asDrive.estimatedSeconds(),
+                2000.0 / TravelMode.DRIVE.speedOn(RoadClass.ROAD) + hopSeconds, 0.5);
+        expect("and the road is no longer costed as if it were walked",
+                asDrive.estimatedSeconds() < walk.estimatedSeconds() - 60);
+        expectNear("the line itself is unchanged",
+                asDrive.totalLength(), walk.totalLength(), 0.01);
+        // The countdown is the same arithmetic read from the other end, so the two have to agree.
+        expectNear("the whole trip is ahead at the start",
+                asDrive.remainingSeconds(0, 0), asDrive.estimatedSeconds(), 0.5);
+        expectNear("and nothing is left at the destination",
+                asDrive.remainingSeconds(2000, 100), 0, 0.5);
+
+        // A drive that does reach the destination is that mode's own route already: re-timing it for
+        // the drive must leave it exactly as it is rather than rebuild it.
+        Route beside = RoadRouter.findRoute(net, 0, 0, 1000, 30, "beside the road",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("a drive that does reach the destination is left as it is",
+                beside.isPresent() && beside.timedFor(TravelMode.DRIVE) == beside);
     }
 
     /**

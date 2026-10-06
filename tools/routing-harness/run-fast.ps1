@@ -7,9 +7,17 @@
 #
 # Usage:  .\tools\routing-harness\run-fast.ps1
 #         .\tools\routing-harness\run-fast.ps1 -Refresh      # re-read the classpath from Gradle first
+#         .\tools\routing-harness\run-fast.ps1 -MtrJar <path>  # check another MTR build's handshake
 # Exit:   the harness's own status, so a failing check fails the script.
 
-param([switch]$Refresh)
+param(
+    [switch]$Refresh,
+    # An MTR build to check the reflection handshake against, instead of whatever is in run/mods. Kept
+    # as a parameter because the answer to "does this mod work with MTR x.y.z" is per build: one jar at
+    # a time on the classpath, one run each, and the check reads that jar's own shapes.
+    [string]$MtrJar,
+    [string]$MtrMapJar
+)
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = (Resolve-Path (Join-Path $here '..\..')).Path
@@ -83,14 +91,18 @@ if ($LASTEXITCODE -ne 0) { throw "javac failed on the mod with $LASTEXITCODE" }
 # MTR Map Overlay is added the same way, for the same check of its own reader: neither is a dependency
 # of the mod itself -- both readers are reflective -- so both are for the harness only, and a machine
 # that has never seen either simply skips the check.
-$mtr = (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -ErrorAction SilentlyContinue |
-    ForEach-Object { $_.FullName }) -join ';'
-$overlay = (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
-    ForEach-Object { $_.FullName }) -join ';'
+$mtr = if ($MtrJar) { (Resolve-Path $MtrJar).Path } else {
+    (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName }) -join ';'
+}
+$overlay = if ($MtrMapJar) { (Resolve-Path $MtrMapJar).Path } else {
+    (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName }) -join ';'
+}
 if ($mtr) {
-    Write-Host 'an MTR jar is present: the reflection handshake will be checked'
+    Write-Host "an MTR jar is present: the reflection handshake will be checked against $(Split-Path $mtr -Leaf)"
 } else {
-    Write-Host 'no MTR jar in run/mods: the handshake check will be skipped'
+    Write-Host 'no MTR jar in run/mods (and none given with -MtrJar): the handshake check will be skipped'
 }
 if ($overlay) {
     Write-Host 'an MTR Map Overlay jar is present: its reflection handshake will be checked'

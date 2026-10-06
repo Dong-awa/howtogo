@@ -1226,6 +1226,17 @@ public final class MtrImportCheck {
         }
         expect("every class, field and method the reader looks up is the one MTR has",
                 MtrClientData.bind());
+        // The whole-map reader has a handshake of its own, and names the other reader never touches:
+        // MTR's server entry class, which 4.1 renamed, and the simulator and route classes it holds.
+        // Checked here for the same reason -- a name that has moved makes that reader report itself
+        // unavailable, which is a log line and not a crash, so nothing else would notice.
+        if (!MtrWholeMap.classesPresent()) {
+            System.out.println("  --   no MTR server classes on the classpath: the whole-map handshake "
+                    + "is not checked here");
+            return;
+        }
+        expect("every class, field and method the whole-map reader looks up is the one MTR has",
+                MtrWholeMap.bind());
     }
 
     /** A reading shaped like the one MTR describes: stations, platforms, routes and rails. */

@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.route;
 
+import bili.dongsz.howtogo.road.RoadClass;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -45,8 +46,8 @@ public final class Route {
     private final boolean[] branchAt;
     private final double startConnector;
     private final double goalConnector;
-    /** Length and pace in blocks per second per road piece, as {@code {length, pace}}. */
-    private final List<double[]> legs;
+    /** The pieces of road the route is made of, in the order they are travelled. */
+    private final List<Leg> legs;
     private final String destinationName;
     /** Off-road speed as a fraction of the mode's pace, applied to the connectors. */
     private final double offRoadSpeedFactor;
@@ -66,11 +67,13 @@ public final class Route {
      */
     private final double fixedSeconds;
     /**
-     * The mode this route was planned for.
+     * The mode this route is travelled and timed in.
      *
      * <p>Kept on the route rather than only on the navigation session, because the ETA is a
      * property of the route: the same polyline walked and driven does not take the same time, and
-     * an estimate that outlives the mode it was made for is simply wrong.
+     * an estimate that outlives the mode it was made for is simply wrong. For a route that has been
+     * re-timed for another mode -- see {@link #timedFor} -- this is the mode it is now timed in,
+     * which is the one the panel's estimate and the countdown are made in.
      */
     private final TravelMode travelMode;
 
@@ -101,7 +104,7 @@ public final class Route {
 
     Route(List<double[]> points, double[] tolerances, int[] roadKeys, String[] roadNames,
           boolean[] branchAt, double startConnector, double goalConnector,
-          List<double[]> legs, String destinationName, double offRoadSpeedFactor,
+          List<Leg> legs, String destinationName, double offRoadSpeedFactor,
           TravelMode travelMode, double fixedSeconds) {
         this.points = points;
         this.tolerances = tolerances;
@@ -129,6 +132,61 @@ public final class Route {
     public static Route empty() {
         return new Route(List.of(), new double[0], new int[0], new String[0], new boolean[0], 0, 0,
                 List.of(), null, 1.0, TravelMode.WALK, 0);
+    }
+
+    /**
+     * One piece of the route, as the estimate needs it: how long it is, the pace it is travelled at,
+     * and which class of road it is on.
+     *
+     * <p>The class is carried beside the pace because the pace is a property of the pair rather than
+     * of either half -- the same road walked and driven does not cost the same -- so a route that is
+     * to be timed for another mode needs to know what each piece of it is. It is null for a piece of
+     * the journey with no road under it at all: a connector, which is walked whatever the mode, and
+     * which is timed at the pace it was built with rather than at a table's.
+     */
+    private record Leg(double length, double pace, RoadClass roadClass) {
+    }
+
+    /**
+     * The same line, timed as the given mode would travel it.
+     *
+     * <h2>What this is for</h2>
+     * A route is planned in one mode and is normally timed in that same one. The exception is a
+     * drive to a destination the drivable network does not reach: the walker is the only one who can
+     * leave the network, so the walker's line is the only plan there is -- and the trip the player
+     * then makes along it is the car's up to the last road and the walker's from there. Timing that
+     * line at walking pace throughout is what reported a destination with a short walk at the end as
+     * a much longer trip than it is, and worse, as a trip in which the road under the car was walked.
+     *
+     * <h2>What changes and what does not</h2>
+     * Each piece of road the given mode may travel is re-timed at that mode's own pace for its class;
+     * every other piece keeps the pace it was planned at, which is the walker's. Nothing else moves:
+     * the geometry, the connectors, the tolerances and the waiting are the route's own, so the line
+     * drawn and guided along is exactly the line that was planned, and only the time it is expected
+     * to take is that of the trip the player would really make.
+     *
+     * <p>Deliberately not offered to public transport: a journey is not a ride where one can and a
+     * walk where one cannot. When no line can carry a journey the answer is the walk, and re-timing
+     * it as a ride would invent a vehicle nobody boarded.
+     *
+     * @param mode the mode to time the route for, or null to leave it as it is
+     */
+    public Route timedFor(TravelMode mode) {
+        TravelMode wanted = mode == null ? travelMode : mode;
+        if (wanted == travelMode) {
+            return this;
+        }
+        List<Leg> retimed = new ArrayList<>(legs.size());
+        for (Leg leg : legs) {
+            if (leg.roadClass() != null && wanted.allows(leg.roadClass())) {
+                retimed.add(new Leg(leg.length(), Math.max(0.05, wanted.speedOn(leg.roadClass())),
+                        leg.roadClass()));
+            } else {
+                retimed.add(leg);
+            }
+        }
+        return new Route(points, tolerances, roadKeys, roadNames, branchAt, startConnector,
+                goalConnector, retimed, destinationName, offRoadSpeedFactor, wanted, fixedSeconds);
     }
 
     /**
@@ -177,7 +235,7 @@ public final class Route {
         List<Integer> roadKeys = new ArrayList<>();
         List<String> roadNames = new ArrayList<>();
         List<Boolean> branchAt = new ArrayList<>();
-        List<double[]> legs = new ArrayList<>();
+        List<Leg> legs = new ArrayList<>();
         double startConnector = 0;
         double goalConnector = 0;
         double offRoadSpeedFactor = 1.0;
@@ -212,10 +270,10 @@ public final class Route {
             // public transport journey's time and length short by every station-side hop in it, and
             // the walking comparison was then made against that short number.
             if (p > 0) {
-                legs.add(new double[]{part.startConnector, part.connectorPace()});
+                legs.add(new Leg(part.startConnector, part.connectorPace(), null));
             }
             if (p < present.size() - 1) {
-                legs.add(new double[]{part.goalConnector, part.connectorPace()});
+                legs.add(new Leg(part.goalConnector, part.connectorPace(), null));
             }
         }
 
@@ -292,8 +350,8 @@ public final class Route {
     /** Length of the road part only, in blocks. */
     public double roadLength() {
         double roadDistance = 0;
-        for (double[] leg : legs) {
-            roadDistance += leg[0];
+        for (Leg leg : legs) {
+            roadDistance += leg.length();
         }
         return roadDistance;
     }
@@ -647,8 +705,8 @@ public final class Route {
             return 1.0 / connectorPace();
         }
         double cost = 0;
-        for (double[] leg : legs) {
-            cost += leg[0] / Math.max(0.05, leg[1]);
+        for (Leg leg : legs) {
+            cost += leg.length() / Math.max(0.05, leg.pace());
         }
         return cost / length;
     }
@@ -725,9 +783,9 @@ public final class Route {
         double left = distance;
         double seconds = 0;
         for (int i = legs.size() - 1; i >= 0 && left > 0; i--) {
-            double[] leg = legs.get(i);
-            double take = Math.min(left, leg[0]);
-            seconds += take / Math.max(0.05, leg[1]);
+            Leg leg = legs.get(i);
+            double take = Math.min(left, leg.length());
+            seconds += take / Math.max(0.05, leg.pace());
             left -= take;
         }
         return seconds;
@@ -743,8 +801,8 @@ public final class Route {
      */
     public double estimatedSeconds() {
         double seconds = fixedSeconds + (startConnector + goalConnector) / connectorPace();
-        for (double[] leg : legs) {
-            seconds += leg[0] / Math.max(0.05, leg[1]);
+        for (Leg leg : legs) {
+            seconds += leg.length() / Math.max(0.05, leg.pace());
         }
         return seconds;
     }
@@ -798,7 +856,7 @@ public final class Route {
         private final List<Integer> roadKeys = new ArrayList<>();
         private final List<String> roadNames = new ArrayList<>();
         private final List<Boolean> branches = new ArrayList<>();
-        private final List<double[]> legs = new ArrayList<>();
+        private final List<Leg> legs = new ArrayList<>();
         private double startConnector;
         private double goalConnector;
         private String destinationName;
@@ -833,9 +891,29 @@ public final class Route {
          *
          * <p>The pace rather than a class, because the pace is what the router costed the piece at;
          * storing the class would let the estimate and the choice drift apart.
+         *
+         * <p>The class is read back out of the pace here rather than handed in beside it, so that the
+         * router goes on handing over the one number it decides and nothing else. The reading is
+         * exact: a leg's pace is this mode's own table entry for the class it was planned on, so the
+         * pace names the class it came from -- and where two classes of one mode share a pace (a
+         * walker's highway and road, a train's rail and water), the mode travels the two identically
+         * in every mode, so which of them is named can change no time this route is ever given.
          */
         void addRoadLeg(double length, double blocksPerSecond) {
-            legs.add(new double[]{length, blocksPerSecond});
+            legs.add(new Leg(length, blocksPerSecond, classForPace(blocksPerSecond)));
+        }
+
+        /** The class of road a pace was looked up from, or null when the table has no such pace. */
+        private RoadClass classForPace(double blocksPerSecond) {
+            if (!(blocksPerSecond > 0)) {
+                return null;
+            }
+            for (RoadClass roadClass : RoadClass.values()) {
+                if (travelMode.speedOn(roadClass) == blocksPerSecond) {
+                    return roadClass;
+                }
+            }
+            return null;
         }
 
         void setStartConnector(double value) {

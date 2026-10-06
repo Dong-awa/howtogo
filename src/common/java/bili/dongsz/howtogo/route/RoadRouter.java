@@ -932,6 +932,15 @@ public final class RoadRouter {
                 if (!better && !tidier) {
                     continue;
                 }
+                // The same rule the anchored search asks, and the whole reason it is asked in the
+                // search rather than priced into the cost: this search builds a route too. It was the
+                // one place that never asked, so a trip whose only road path doubles back on a
+                // highway was refused by the anchored search and then planned by this fallback --
+                // the restriction held for the route that could go round and not for the one that
+                // had to go back. See highwayBendAllowed.
+                if (!highwayBendAllowed(arrived, current, edge.segment())) {
+                    continue;
+                }
                 double settled = Math.min(tentative, known);
                 gScore.put(edge.toNode(), settled);
                 turns.put(edge.toNode(), viaTurns);
@@ -1545,8 +1554,10 @@ public final class RoadRouter {
                     continue;
                 }
                 // A highway is a road with no way to turn round on it, so a bend no highway makes is
-                // not an edge: see highwayBendAllowed. The turn is asked of the piece the traveller
-                // arrived on, which is what makes this a turn rather than a property of one segment.
+                // not an edge: see highwayBendAllowed. Neither half of the rule can be read off one
+                // piece alone -- what happens at this node is a question about the two pieces meeting
+                // there, and what happens along a piece is about that piece's own line -- which is
+                // why the rule lives at the one place both are in hand.
                 if (!highwayBendAllowed(arrived, current, edge.segment())) {
                     continue;
                 }
@@ -1706,6 +1717,14 @@ public final class RoadRouter {
      * highway without having come down one.
      */
     private static boolean highwayBendAllowed(RoadSegment arrived, int current, RoadSegment next) {
+        // A bend inside the piece being taken is asked first, and before the "nothing arrived" case
+        // below, because the first piece out of the source arrives from nowhere: a highway whose own
+        // polyline doubles back is travelled as one edge, so no junction is ever reached to refuse it
+        // at, and the driver would be asked to make the bend all the same. See
+        // bendsPastTheLimitInside.
+        if (bendsPastTheLimitInside(next)) {
+            return false;
+        }
         // A highway is only restricted where a highway is involved: a driver who has come down a road
         // and turns onto a highway has made an ordinary turn, and a walker on a highway's verge is
         // not driving one.
@@ -1724,6 +1743,55 @@ public final class RoadRouter {
         }
         double degrees = turnDegrees(arrived, current, next);
         return Double.isNaN(degrees) || highwayMayBend(Math.abs(degrees));
+    }
+
+    /**
+     * Whether a highway piece bends past the limit at one of its own vertices.
+     *
+     * <h2>Why the rule cannot be about junctions alone</h2>
+     * A road is a polyline, and the places it changes heading are not all junctions: a piece stored
+     * with vertices in its middle bends between its own ends, and a traveller going from one end of
+     * it to the other is asked to make every one of those bends. Read only at junctions, a highway
+     * folded in two inside one piece -- the same hairpin as two pieces meeting at a node, with no
+     * node to meet at -- passed both searches, and the map drew the driver a hundred-and-seventy-six
+     * degree reversal with nothing between it and the rule. The bend belongs to the piece, so the
+     * piece is where it is asked.
+     *
+     * <p>Asked of the piece <em>being taken</em> and asked once for each piece travelled: the first
+     * piece of a trip is taken from its source with nothing arrived from, so a check that only ever
+     * looked at the piece arrived on would never look at that one.
+     */
+    private static boolean bendsPastTheLimitInside(RoadSegment segment) {
+        if (segment.roadClass() != RoadClass.HIGHWAY) {
+            return false;
+        }
+        for (int i = 2; i < segment.vertexCount(); i++) {
+            double degrees = bendDegrees(segment, i);
+            if (!Double.isNaN(degrees) && !highwayMayBend(Math.abs(degrees))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The angle a polyline changes heading by at one of its own vertices, in degrees.
+     *
+     * <p>Exactly the reading {@link #turnDegrees} takes of two pieces at a node, taken here of two
+     * spans of one piece, and with the same sign convention. NaN when either span has no length,
+     * because there is no heading there to change.
+     */
+    private static double bendDegrees(RoadSegment segment, int vertex) {
+        double inX = segment.x(vertex - 1) - segment.x(vertex - 2);
+        double inZ = segment.z(vertex - 1) - segment.z(vertex - 2);
+        double outX = segment.x(vertex) - segment.x(vertex - 1);
+        double outZ = segment.z(vertex) - segment.z(vertex - 1);
+        if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
+            return Double.NaN;
+        }
+        double before = Math.atan2(inZ, inX);
+        double after = Math.atan2(outZ, outX);
+        return Math.toDegrees(Math.atan2(Math.sin(after - before), Math.cos(after - before)));
     }
 
     /**
@@ -1807,8 +1875,30 @@ public final class RoadRouter {
         return bearing(segment.x(last), segment.z(last), segment.x(last - 1), segment.z(last - 1));
     }
 
+    /**
+     * The heading of one span of a piece, in radians, or NaN when the span has no length.
+     *
+     * <h2>Why a span with no length has no heading</h2>
+     * {@code atan2(0, 0)} is zero, so a piece whose two relevant vertices are the same point used to
+     * be given a heading of due east -- a direction invented out of nothing, and read against the
+     * real heading of the piece on the other side of the node as a bend of a hundred and eighty
+     * degrees. The case is not hypothetical: two nodes within {@link #COINCIDENT_DISTANCE} of each
+     * other are joined by a synthetic {@link RoadSegment} that is often exactly zero long, and one
+     * of those links sits between the westbound carriageway of a highway and the road that carries
+     * on west from the same spot. Driving straight on was refused there as a U-turn, and a trip that
+     * had to pass the junction was sent the long way round.
+     *
+     * <p>NaN is the honest answer -- nothing arrived, or nothing leaves -- and both callers already
+     * treat it as "not a turn": see {@link #turnDegrees}, which returns NaN when either side has no
+     * heading to give.
+     */
     private static double bearing(int fromX, int fromZ, int toX, int toZ) {
-        return Math.atan2(toZ - fromZ, toX - fromX);
+        double dx = toX - fromX;
+        double dz = toZ - fromZ;
+        if (Math.hypot(dx, dz) < 1.0E-6) {
+            return Double.NaN;
+        }
+        return Math.atan2(dz, dx);
     }
 
     /**

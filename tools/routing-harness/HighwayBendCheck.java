@@ -88,9 +88,56 @@ public final class HighwayBendCheck {
         checkPlan(divided, 0, 0, 20, 0, true,
                 "a divided highway round its turning loop is planned");
 
+        // ---------------------------------------------------------------------------------------
+        // The shapes that were still planned after the rule was put in, and why each one is here.
+        //
+        // The first three are hairpins that no beeline can stand in for: both ends of each trip are
+        // further apart than the drive mode's own connector cap, so the only answer the router can
+        // give is the road path -- and every road path through them doubles back on a highway.
+        //
+        // Each one is a different way for the rule to be missed rather than a different rule:
+        //  * `fallback` doubles back at a *node*, which the anchored search already refused, so the
+        //    route that came back was planned by the node fallback, which did not ask the rule at
+        //    all;
+        //  * `folded` doubles back *inside one piece*, at a vertex that is not a junction, so neither
+        //    search was ever asked the question where the bend is;
+        //  * `through` is the shape a player meets in practice -- a highway that doubles back in the
+        //    middle of a journey, so the trip cannot avoid it.
+        // ---------------------------------------------------------------------------------------
+
+        // Two highway pieces meeting at a node in a hairpin, 200 blocks apart at the ends.
+        RoadNetwork fallback = new RoadNetwork();
+        addRoad(fallback, RoadClass.HIGHWAY, 0, 0, 0, 400);
+        addRoad(fallback, RoadClass.HIGHWAY, 0, 400, -200, 0);
+        checkPlan(fallback, 0, 0, -200, 0, false,
+                "a hairpin between two highway pieces is not planned by the node fallback");
+
+        // The same hairpin drawn as one piece with the bend as an interior vertex.
+        RoadNetwork folded = new RoadNetwork();
+        addRoad(folded, RoadClass.HIGHWAY, 0, 0, 0, 400, -200, 0);
+        checkPlan(folded, 0, 0, -200, 0, false,
+                "a hairpin inside one highway piece is not planned either");
+
+        // A hairpin in the middle of a highway, with the two trip ends too far apart to be joined
+        // off-road: the only way along is through the bend.
+        RoadNetwork through = new RoadNetwork();
+        addRoad(through, RoadClass.HIGHWAY, 0, 0, 0, 400);
+        addRoad(through, RoadClass.HIGHWAY, 0, 400, 100, 0);
+        addRoad(through, RoadClass.HIGHWAY, 100, 0, 600, 0);
+        checkPlan(through, 0, 0, 600, 0, false,
+                "a hairpin in the middle of a highway journey is not planned");
+
+        // The other side of the interior bend: a highway that curves within one piece, well under
+        // the limit, must stay. This is the shape a rule read off the polyline could wrongly refuse.
+        RoadNetwork curves = new RoadNetwork();
+        addRoad(curves, RoadClass.HIGHWAY, 0, 0, 200, 80, 400, 0);
+        checkPlan(curves, 0, 0, 400, 0, true,
+                "a highway that curves inside one piece under the limit is still planned");
+
         // Every planned route over the networks that are allowed to plan is read back for the bend it
         // really contains, off the drawn line rather than out of the search that made it.
-        for (RoadNetwork net : new RoadNetwork[]{square, viaRoad, tee, divided}) {
+        for (RoadNetwork net : new RoadNetwork[]{square, viaRoad, tee, divided, fallback, folded,
+                through, curves}) {
             turnsAreWithinTheLimit(net);
         }
 
