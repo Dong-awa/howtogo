@@ -359,7 +359,7 @@ public final class MtrClientData {
         }
         reported = signature;
         latest = reading;
-        HowToGo.LOGGER.info("[HowToGo] MTR | {} | {}", signature, summaryOf(reading));
+        HowToGo.diagnostic("[HowToGo] MTR | {} | {}", signature, summaryOf(reading));
         // Handed to the conversion now rather than left for whoever first asks for it: see
         // MtrTransit.warmUp, which is what keeps a reading that has just changed from being answered
         // with the one before it in the middle of a map draw.

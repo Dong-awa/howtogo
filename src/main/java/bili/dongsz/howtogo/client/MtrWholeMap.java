@@ -160,7 +160,7 @@ final class MtrWholeMap {
                     latest = reading;
                     if (!reported && !reading.isEmpty()) {
                         reported = true;
-                        HowToGo.LOGGER.info("[HowToGo] MTR whole map | {} station(s), {} platform(s), "
+                        HowToGo.diagnostic("[HowToGo] MTR whole map | {} station(s), {} platform(s), "
                                         + "{} line(s) read from the simulated network",
                                 reading.stations().size(), reading.platforms().size(),
                                 reading.lines().size());

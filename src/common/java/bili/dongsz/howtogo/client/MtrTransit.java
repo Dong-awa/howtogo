@@ -697,7 +697,7 @@ public final class MtrTransit {
             // The time is here because marking plans a ride per pair of neighbouring stops, and this is
             // the number that says whether it is still worth doing off the thread it used to run on. If
             // it ever grows past a frame, this is the evidence.
-            HowToGo.LOGGER.info("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
+            HowToGo.diagnostic("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
                             + "| marks {} rails {} nodes {} | kept {} lines {} stations {} track pieces "
                             + "| {} ms | {}",
                     keptStops.size(), imported, skipped, unplaced, marks.segmentCount(),

@@ -567,9 +567,11 @@ public final class Narration {
      *       being got off at. This is the one that repeats, once per stop, and it is driven by the stop
      *       index rather than by a distance -- a distance would have it said over and over as the
      *       vehicle crawled up to a platform.</li>
-     *   <li><b>The stop being got off at</b>: said on the approach, once. At a stop where the journey
-     *       changes lines it carries the change with it, so the rider hears one sentence rather than
-     *       two about the same platform.</li>
+     *   <li><b>The stop being got off at</b>: twice -- on the approach, and again standing at it. The
+     *       approach is where a rider on a long ride first needs to know what is coming; the stop
+     *       itself is where they have to act, and it is the only one of the two that is heard before
+     *       the next boarding when the two lines call at the same station and there is no walk to
+     *       change on.</li>
      * </ul>
      *
      * <p>Identity is the ride and the stop within it, which is what makes a phrase that changes with
@@ -588,12 +590,13 @@ public final class Narration {
 
         // Standing at the stop this ride is left at: the one moment the player has to act, and the one
         // the guidance used to miss -- the approach line had already been said by the time the vehicle
-        // got here.
+        // got here. Where the journey changes lines, it names the line being changed onto here as well,
+        // because a change at a station both lines call at is acted on right here rather than on a walk
+        // to another platform.
         if (step.cue() == Navigation.TransitCue.ARRIVE) {
             if (!transitArrivedAnnounced) {
                 transitArrivedAnnounced = true;
-                announce(Component.translatable("hud.howtogo.transit_arrive",
-                        Navigation.named(step.station())).getString());
+                announce(Navigation.transitSentence(step));
             }
             return;
         }
@@ -619,20 +622,13 @@ public final class Narration {
             }
             return;
         }
-        if (step.cue() == Navigation.TransitCue.ALIGHT
-                || step.cue() == Navigation.TransitCue.TRANSFER) {
+        if (step.cue() == Navigation.TransitCue.ALIGHT) {
             // Said on the approach, once, and never made truer by saying it again closer in.
             if (transitAheadAnnounced || step.distanceAhead() > Navigation.turnLeadDistance()) {
                 return;
             }
             transitAheadAnnounced = true;
-            boolean transfer = step.cue() == Navigation.TransitCue.TRANSFER;
-            announce((transfer
-                    ? Component.translatable("hud.howtogo.speak_alight_transfer",
-                            Navigation.named(step.station()), Navigation.named(step.line()),
-                            Navigation.named(step.terminus()))
-                    : Component.translatable("hud.howtogo.speak_alight",
-                            Navigation.named(step.station()))).getString());
+            announce(Navigation.transitSentence(step));
         }
     }
 
@@ -727,7 +723,7 @@ public final class Narration {
                 // Debug, and off in normal play: the exact text handed to the engine, so a report of
                 // odd pronunciation can be checked against what was actually sent rather than guessed
                 // at. Note what it cannot show: which voice read it, since the library cannot say.
-                HowToGo.LOGGER.debug("[HowToGo] speaking: {}", phrase);
+                HowToGo.diagnostic("[HowToGo] speaking: {}", phrase);
                 // The same sequence the vanilla wrapper uses: drop whatever is being said, then
                 // interrupt, which is what a turn prompt wants -- the previous instruction is out of
                 // date by then.

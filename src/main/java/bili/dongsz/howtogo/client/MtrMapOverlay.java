@@ -230,7 +230,7 @@ final class MtrMapOverlay {
                 MtrClientData.Snapshot reading = convert(data);
                 converted = reading;
                 convertedKey = key;
-                HowToGo.LOGGER.info("[HowToGo] MTR Map Overlay | {} | {} station(s), {} platform(s), "
+                HowToGo.diagnostic("[HowToGo] MTR Map Overlay | {} | {} station(s), {} platform(s), "
                                 + "{} line(s), {} rail(s) fetched from the server", dimension,
                         reading.stations().size(), reading.platforms().size(), reading.lines().size(),
                         reading.tracks().size());

@@ -16,6 +16,12 @@ neoForge {
         client {
             client()
             systemProperty 'forge.logging.markers', 'REGISTRIES'
+            // The in-game self-test, for tools/user-test/run-user-test.ps1: the rig runs the client with
+            // -PhtgSelftest=<seconds> (and optionally -PhtgSelftestQuit=1) so the checks run themselves
+            // once a world is loaded and the report lands in the log for the rig to grade. Empty -- the
+            // default -- means the client behaves exactly as a player's does.
+            systemProperty 'howtogo.selftest', project.findProperty('htgSelftest') ?: ''
+            systemProperty 'howtogo.selftest.quit', project.findProperty('htgSelftestQuit') ?: ''
         }
     }
 

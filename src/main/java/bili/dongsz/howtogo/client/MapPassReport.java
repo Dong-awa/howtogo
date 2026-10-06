@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 
 /**
  * What one second of the world map's own drawing cost, and of what.
@@ -43,8 +44,16 @@ final class MapPassReport {
     private MapPassReport() {
     }
 
+    /** Whether anything here is counted at all; see {@link RoadConfig#debugLog()}. */
+    private static boolean counting() {
+        return RoadConfig.debugLog();
+    }
+
     /** One pass over the road layers: how many of each were handed to the map. */
     static void elements(int roads, int rails) {
+        if (!counting()) {
+            return;
+        }
         roadElements += roads;
         railElements += rails;
     }
@@ -58,6 +67,9 @@ final class MapPassReport {
      * @param culled       how many stretches the screen did not touch
      */
     static void marks(long nanos, int strokes, int sourcePoints, int culled) {
+        if (!counting()) {
+            return;
+        }
         passNanos += nanos;
         marksStroked += strokes;
         marksPoints += sourcePoints;
@@ -74,6 +86,9 @@ final class MapPassReport {
      * @param culled       how many stretches the screen did not touch
      */
     static void lines(long nanos, int lineCount, int strokes, int sourcePoints, int culled) {
+        if (!counting()) {
+            return;
+        }
         passNanos += nanos;
         lines = lineCount;
         lineStroked += strokes;
@@ -96,10 +111,10 @@ final class MapPassReport {
         if (now - since < REPORT_MILLIS) {
             return;
         }
-        // Debug rather than info: this is a diagnostic that a session leaves in the log every second
-        // the world map is open, which is a file that grows all session for a number nobody reads
-        // unless they are looking for it.
-        HowToGo.LOGGER.debug("[HowToGo] map | {} frame(s), {} line(s) | {} road(s), {} rail(s) "
+        // A diagnostic, so it goes through the one gate: a session leaves this line in the log every
+        // second the world map is open, which is a file that grows all session for a number nobody
+        // reads unless they are looking for it.
+        HowToGo.diagnostic("[HowToGo] map | {} frame(s), {} line(s) | {} road(s), {} rail(s) "
                         + "offered | strokes of points: marks {} of {}, lines {} of {}, {} stretch(es) "
                         + "off screen | marks, lines and stops {} ms",
                 frames, lines, roadElements, railElements,

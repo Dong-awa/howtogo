@@ -121,7 +121,7 @@ public final class TransitLineScreen extends Screen {
         this.importedLines = MtrTransit.lines();
         List<TransitLine> lines = listed();
         this.selectedId = lines.isEmpty() ? null : lines.get(0).id();
-        HowToGo.LOGGER.info("[HowToGo] line editor: {} line(s), {} of them read out of MTR, "
+        HowToGo.diagnostic("[HowToGo] line editor: {} line(s), {} of them read out of MTR, "
                         + "{} stop(s) available", lines.size() - importedLines.size(),
                 importedLines.size(), candidates.size());
     }

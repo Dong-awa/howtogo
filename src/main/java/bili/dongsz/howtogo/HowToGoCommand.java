@@ -2,6 +2,7 @@ package bili.dongsz.howtogo;
 
 import bili.dongsz.howtogo.client.DestinationScreen;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.SelfTest;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.TravelMode;
 import com.mojang.brigadier.CommandDispatcher;
@@ -14,6 +15,8 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -84,6 +87,8 @@ public final class HowToGoCommand {
                         .executes(HowToGoCommand::terminal))
                 .then(Commands.literal("stop")
                         .executes(HowToGoCommand::stop))
+                .then(Commands.literal("selftest")
+                        .executes(HowToGoCommand::selfTest))
                 .then(Commands.literal("mode")
                         .executes(HowToGoCommand::cycleMode)
                         .then(Commands.argument("mode", StringArgumentType.word())
@@ -115,6 +120,49 @@ public final class HowToGoCommand {
         };
         say(context, Component.translatable("command.howtogo.terminal"));
         return 1;
+    }
+
+    /**
+     * Runs the mod's own checks against the world that is open, and reports what they found.
+     *
+     * <p>The one test that has to run in the game: whether the roads the player drew are the roads the
+     * mod loaded, whether their lines can carry a journey across the world as it stands, and what the
+     * guidance would actually say on the way. It sets a destination and puts back the one being
+     * navigated, which is why this says so before it runs -- see {@link SelfTest}.
+     *
+     * <p>The report goes to the log in full and to chat one line at a time, so a finding can be read
+     * without alt-tabbing and quoted from the log afterwards.
+     */
+    private static int selfTest(CommandContext<CommandSourceStack> context) {
+        List<String> lines;
+        int failed = 0;
+        try {
+            List<SelfTest.Result> results = SelfTest.run();
+            lines = new ArrayList<>(results.size() + 2);
+            for (SelfTest.Result result : results) {
+                if (!result.ok()) {
+                    failed++;
+                }
+                HowToGo.LOGGER.info("[HowToGo] selftest | {} | {} | {}", result.ok() ? "ok" : "FAIL",
+                        result.name(), result.detail());
+                lines.add(Component.translatable(
+                                result.ok() ? "command.howtogo.selftest.ok" : "command.howtogo.selftest.fail",
+                                Component.translatable(result.name()), result.detail())
+                        .getString());
+            }
+        } catch (RuntimeException | LinkageError broke) {
+            // A check that throws is itself the answer, and the one thing that must not happen is the
+            // command dying with it: the stack is written down and reported as a failure.
+            HowToGo.LOGGER.error("[HowToGo] selftest could not run", broke);
+            say(context, Component.translatable("command.howtogo.selftest.broken", String.valueOf(broke)));
+            return 0;
+        }
+        say(context, Component.translatable("command.howtogo.selftest.header", failed,
+                lines.size()));
+        for (String line : lines) {
+            say(context, Component.literal(line));
+        }
+        return failed == 0 ? 1 : 0;
     }
 
     /** Ends the trip, if there is one. */

@@ -3,6 +3,7 @@ package bili.dongsz.howtogo;
 import bili.dongsz.howtogo.client.Narration;
 import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.AutoSelfTest;
 import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.MapFilterOverlay;
@@ -35,6 +36,27 @@ public final class HowToGo {
     public static final String MODID = "howtogo";
     public static final Logger LOGGER = LogUtils.getLogger();
 
+    /**
+     * One of this mod's own diagnostics, written only when the player has asked for them.
+     *
+     * <h2>What counts as a diagnostic</h2>
+     * A line about how the mod is <em>working</em> rather than about what happened to the player: the
+     * rail layer's one line a second, the cost of a map frame, what an MTR reading turned into, the
+     * arithmetic of a planned route, the geometry of a line drawn as a straight step. All of it is
+     * worth having while something is being investigated and none of it is worth writing once a second
+     * for a whole session, so it goes through here and the switch is {@link RoadConfig#debugLog()}.
+     *
+     * <p>Everything that is not a diagnostic stays on the logger directly: warnings and errors, which
+     * are always reported because a problem a player cannot see is a problem nobody can fix, and the
+     * handful of one-off lines that say the mod loaded, saved or listened -- those are the record of a
+     * session rather than measurements of it.
+     */
+    public static void diagnostic(String format, Object... args) {
+        if (RoadConfig.debugLog()) {
+            LOGGER.info(format, args);
+        }
+    }
+
     public HowToGo(IEventBus modEventBus, ModContainer modContainer) {
         // Registration into Xaero's render pipeline has to wait until Xaero has built its
         // handler, so we poll from the client tick instead of doing it here.
@@ -55,6 +77,9 @@ public final class HowToGo {
         // there would repeat the same instruction continuously, and the HUD does not run at all
         // while a screen is open. The speaking itself is on the narration thread; this only feeds it.
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Narration.tick());
+        // The in-game self-test, when a launcher has asked for one: see AutoSelfTest and
+        // tools/user-test/run-user-test.ps1. Silent unless the property is set.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> AutoSelfTest.tick());
         NeoForge.EVENT_BUS.addListener(NavHudRenderer::onRenderGui);
 
         // Editing keys arrive as screen events and editing clicks as low-level input events, and the two

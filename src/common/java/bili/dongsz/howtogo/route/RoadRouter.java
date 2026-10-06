@@ -1435,8 +1435,10 @@ public final class RoadRouter {
         if (fromStart.contains(goals.get(0))) {
             return RouteFailure.of("screen.howtogo.failure.same_component", fromStart.size());
         }
-        return RouteFailure.of("screen.howtogo.failure.split_fragments", modeName(mode), avoided,
-                fromStart.size(), fromGoal.size());
+        // No fragment sizes in the reason. They were there, and no player could act on them: what the
+        // line is for is saying that the two ends are on roads that do not meet, and a pair of node
+        // counts beside it only pushed the part that matters off the end of a picker row.
+        return RouteFailure.of("screen.howtogo.failure.split_fragments", modeName(mode), avoided);
     }
 
     /**

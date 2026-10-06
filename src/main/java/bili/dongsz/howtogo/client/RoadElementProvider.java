@@ -103,8 +103,8 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
         // costs one pass over a list that is small by construction.
         Collection<RoadSegment> layer = RailTrackStore.segments();
         if (!layer.isEmpty()) {
-            // TEMPORARY rail diagnostic: one enumeration of the layer, attributed to the render
-            // location that asked for it, which is how the per-location line explains itself.
+            // Rail diagnostic: one enumeration of the layer, attributed to the render location that
+            // asked for it, which is how the per-location line explains itself.
             RailTrackStore.noteMapPass(location == null ? -1 : location.getIndex());
         }
         for (RoadSegment segment : layer) {
@@ -113,7 +113,7 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             }
             buffer.add(RoadElement.of(segment));
             rails++;
-            // TEMPORARY rail diagnostic: one element of the layer offered in this pass.
+            // Rail diagnostic: one element of the layer offered in this pass.
             RailTrackStore.noteElementOffered();
         }
 

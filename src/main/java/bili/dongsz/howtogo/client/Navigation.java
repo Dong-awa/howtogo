@@ -1428,8 +1428,19 @@ public final class Navigation {
      * the switch changes is what is said <em>while there is a line to be on</em>.
      */
     public static boolean transitGuidance() {
-        return RoutePreferenceStore.transitBoardOnly() && route.isPresent() && transitTrip != null
-                && transitTrip.ridesAnything();
+        return RoutePreferenceStore.transitBoardOnly() && transitPlanInForce();
+    }
+
+    /**
+     * Whether there is a public transport journey for the transit guidance to be about at all.
+     *
+     * <p>Separate from {@link #transitGuidance()} because the switch is a question about what to show
+     * and this is a question about what there is: the reading itself is the same either way, which is
+     * what lets the in-game self-test ask "what would this journey say" without depending on how the
+     * player has their readout configured.
+     */
+    private static boolean transitPlanInForce() {
+        return route.isPresent() && transitTrip != null && transitTrip.ridesAnything();
     }
 
     /**
@@ -1443,11 +1454,8 @@ public final class Navigation {
         /** On board, between two stops: say which stop is coming and what is left. */
         RIDE,
 
-        /** On board and one stop from getting off: say it is time to get ready. */
+        /** On board and nearing the stop being left at: say it is time to get ready. */
         ALIGHT,
-
-        /** The same, at a stop where the journey changes lines. */
-        TRANSFER,
 
         /** Standing at the stop this ride is left at: get off here. */
         ARRIVE
@@ -1458,7 +1466,10 @@ public final class Navigation {
      * being named, the stop being run to, and what is left of the ride.
      *
      * @param cue            what kind of moment this is
-     * @param line           the line ridden, or the one about to be boarded
+     * @param transfer       whether the journey changes lines at the stop this cue names, in which case
+     *                       {@code line} and {@code terminus} are the line being changed <em>onto</em>
+     *                       rather than the one being ridden
+     * @param line           the line ridden, or the one about to be boarded or changed to
      * @param terminus       the stop at the far end of that line in the direction of travel
      * @param station        the stop this cue is about: the one boarded at, or the one left at
      * @param reached        the last stop the ride has called at, which is where the vehicle is now
@@ -1469,9 +1480,9 @@ public final class Navigation {
      * @param stopIndex      which stop of that ride the reading is at, so a repeat can be told from a
      *                       new stop
      */
-    public record TransitStep(TransitCue cue, String line, String terminus, String station,
-                              String reached, String next, int stopsRemaining, double distanceAhead,
-                              int rideIndex, int stopIndex) {
+    public record TransitStep(TransitCue cue, boolean transfer, String line, String terminus,
+                              String station, String reached, String next, int stopsRemaining,
+                              double distanceAhead, int rideIndex, int stopIndex) {
     }
 
     /** What the transit guidance is saying now, or null when the ordinary guidance is in force. */
@@ -1479,12 +1490,31 @@ public final class Navigation {
         if (!transitGuidance()) {
             return null;
         }
+        LocalPlayer player = Minecraft.getInstance().player;
+        return transitStepAt(player == null ? Double.NaN : player.getX(),
+                player == null ? Double.NaN : player.getZ(), travelled());
+    }
+
+    /**
+     * The same reading, taken at a position and a distance along the route given rather than at the
+     * player's own, and without consulting the readout switch.
+     *
+     * <p>The seam exists so that the guidance can be read without a player having to travel: the
+     * in-game self-test walks a planned ride from end to end and checks the sequence of things it would
+     * have said, which is the only way to test what a passenger hears short of riding the whole line by
+     * hand. Everything the reading is made of is passed in, so a caller cannot accidentally read half
+     * of it from the live player and half from the simulation.
+     *
+     * @param x         where the player would be
+     * @param z         where the player would be
+     * @param travelled how far along the route they would have come
+     */
+    static TransitStep transitStepAt(double x, double z, double travelled) {
+        if (!transitPlanInForce()) {
+            return null;
+        }
         Trip trip = transitTrip;
         List<Trip.Ride> rides = trip.rides();
-        double travelled = travelled();
-        LocalPlayer player = Minecraft.getInstance().player;
-        double x = player == null ? Double.NaN : player.getX();
-        double z = player == null ? Double.NaN : player.getZ();
 
         // Arriving at the stop being got off at comes first, and outranks "still on the way to it":
         // this is the moment the player has to act, and it is the one moment the guidance used to miss
@@ -1494,8 +1524,17 @@ public final class Navigation {
         if (arrived >= 0) {
             Trip.Ride ride = rides.get(arrived);
             Trip.RideStop stop = ride.stops().get(ride.stops().size() - 1);
-            return new TransitStep(TransitCue.ARRIVE, ride.line(), ride.terminus(), stop.name(),
-                    stop.name(), null, 0, 0, arrived, ride.stops().size() - 1);
+            Trip.Ride next = arrived + 1 < rides.size() ? rides.get(arrived + 1) : null;
+            // The change is named here as well as on the approach, and that is not a repeat for its own
+            // sake: a change at a station both lines call at has no walk between the two vehicles, so
+            // there is no second boarding prompt far enough away from this stop to carry the news --
+            // and the approach line, said a whole ride earlier, is not what a rider standing on the
+            // platform can act on.
+            return next == null
+                    ? new TransitStep(TransitCue.ARRIVE, false, ride.line(), ride.terminus(),
+                            stop.name(), stop.name(), null, 0, 0, arrived, ride.stops().size() - 1)
+                    : new TransitStep(TransitCue.ARRIVE, true, next.line(), next.terminus(),
+                            stop.name(), stop.name(), null, 0, 0, arrived, ride.stops().size() - 1);
         }
 
         int index = trip.rideIndexAt(travelled);
@@ -1507,16 +1546,18 @@ public final class Navigation {
             String reached = ride.stops().get(passed).name();
             if (ride.approachingAlighting(travelled)) {
                 Trip.Ride next = index + 1 < rides.size() ? rides.get(index + 1) : null;
-                return next == null
-                        ? new TransitStep(TransitCue.ALIGHT, ride.line(), ride.terminus(), left,
-                                reached, null, ride.stopsRemaining(travelled),
-                                ride.alightAt() - travelled, index, passed)
-                        : new TransitStep(TransitCue.TRANSFER, next.line(), next.terminus(), left,
-                                reached, null, ride.stopsRemaining(travelled),
-                                ride.alightAt() - travelled, index, passed);
+                // Which line is being changed onto is carried here as well as at the stop itself: the
+                // approach is where a rider on a long ride first needs to know, and the stop is where
+                // the change has to be acted on. At a station both lines call at there is no walk
+                // between the two vehicles, so the second of those two is the only one that will be
+                // heard before the next boarding prompt.
+                return new TransitStep(TransitCue.ALIGHT, next != null,
+                        next == null ? ride.line() : next.line(),
+                        next == null ? ride.terminus() : next.terminus(), left, reached, null,
+                        ride.stopsRemaining(travelled), ride.alightAt() - travelled, index, passed);
             }
             Trip.RideStop upcoming = ride.nextStop(travelled);
-            return new TransitStep(TransitCue.RIDE, ride.line(), ride.terminus(), left, reached,
+            return new TransitStep(TransitCue.RIDE, false, ride.line(), ride.terminus(), left, reached,
                     upcoming == null ? left : upcoming.name(), ride.stopsRemaining(travelled),
                     upcoming == null ? 0 : upcoming.at() - travelled, index, passed);
         }
@@ -1524,8 +1565,8 @@ public final class Navigation {
         // the walk is the ordinary walking guidance.
         Trip.Ride next = trip.nextRide(travelled);
         if (next != null && next.boardAt() - travelled <= turnNowDistance()) {
-            return new TransitStep(TransitCue.BOARD, next.line(), next.terminus(), next.boardedAt(),
-                    next.boardedAt(), null, Math.max(0, next.stops().size() - 1),
+            return new TransitStep(TransitCue.BOARD, false, next.line(), next.terminus(),
+                    next.boardedAt(), next.boardedAt(), null, Math.max(0, next.stops().size() - 1),
                     Math.max(0, next.boardAt() - travelled), trip.indexOfRide(next), 0);
         }
         return null;
@@ -1581,12 +1622,18 @@ public final class Navigation {
                     named(step.line()), named(step.terminus())).getString();
             case RIDE -> Component.translatable("hud.howtogo.transit_riding", named(step.next()),
                     step.stopsRemaining(), named(step.station())).getString();
-            case ALIGHT -> Component.translatable("hud.howtogo.transit_approach",
-                    named(step.station())).getString();
-            case TRANSFER -> Component.translatable("hud.howtogo.transit_approach_transfer",
-                    named(step.station()), named(step.line()), named(step.terminus())).getString();
-            case ARRIVE -> Component.translatable("hud.howtogo.transit_arrive",
-                    named(step.station())).getString();
+            case ALIGHT -> step.transfer()
+                    ? Component.translatable("hud.howtogo.transit_approach_transfer",
+                            named(step.station()), named(step.line()),
+                            named(step.terminus())).getString()
+                    : Component.translatable("hud.howtogo.transit_approach",
+                            named(step.station())).getString();
+            case ARRIVE -> step.transfer()
+                    ? Component.translatable("hud.howtogo.transit_arrive_transfer",
+                            named(step.station()), named(step.line()),
+                            named(step.terminus())).getString()
+                    : Component.translatable("hud.howtogo.transit_arrive",
+                            named(step.station())).getString();
         };    }
 
     /** What a name that may be missing is called, so a sentence never quietly loses its subject. */
@@ -1843,7 +1890,7 @@ public final class Navigation {
                 // answered with the walk, and every other mode keeps the old rule -- that is what
                 // stops a drive being planned as a walk across a field.
                 if (active == TravelMode.TRANSIT && plannedRoute.isPresent()) {
-                    HowToGo.LOGGER.info(
+                    HowToGo.diagnostic(
                             "[HowToGo] transit is slower than walking ({} vs {}); keeping transit, "
                                     + "the walk is an alternative rather than a replacement",
                             Route.formatDuration(plannedRoute.estimatedSeconds()),
@@ -1936,7 +1983,7 @@ public final class Navigation {
                     RideRoads.of(network, plain, MtrTransit::marksEnabled, MtrTransit::trackOf), lines,
                     x, z, target.x(), target.z(), target.name(), preferences);
             if (!trip.isPresent()) {
-                HowToGo.LOGGER.info("[HowToGo] public transport: no journey over {} line(s)",
+                HowToGo.diagnostic("[HowToGo] public transport: no journey over {} line(s)",
                         lines.size());
                 return new Planned(Route.empty(), null);
             }
@@ -1974,13 +2021,13 @@ public final class Navigation {
         walkingSeconds = onFoot.estimatedSeconds();
         if (planned.isPresent()) {
             abandonedSeconds = planned.estimatedSeconds();
-            HowToGo.LOGGER.info(
+            HowToGo.diagnostic(
                     "[HowToGo] {} is slower than walking ({} vs {}); planning on foot",
                     abandoned.id(), Route.formatDuration(abandonedSeconds),
                     Route.formatDuration(walkingSeconds));
             return;
         }
-        HowToGo.LOGGER.info("[HowToGo] {} finds no route here ({}); planning on foot",
+        HowToGo.diagnostic("[HowToGo] {} finds no route here ({}); planning on foot",
                 abandoned.id(), RoadRouter.explainFailure(RailTrackStore.forRouting(abandoned, preferences),
                         routeOriginX, routeOriginZ, target.x(), target.z(), abandoned, preferences));
     }
@@ -1993,7 +2040,7 @@ public final class Navigation {
      */
     private static void logRoute(RoutePreferences preferences) {
         if (route.isPresent()) {
-            HowToGo.LOGGER.info(
+            HowToGo.diagnostic(
                     "[HowToGo] route to {} from ({}, {}) for {}: {} points, {} blocks, {} turns "
                             + "| network {} nodes / {} segments",
                     target.name(), Math.round(routeOriginX), Math.round(routeOriginZ),

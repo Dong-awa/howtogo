@@ -207,9 +207,9 @@ public final class LinePlanner {
                             RoutePreferences preferences) {
         Trip trip = search(roads, lines, startX, startZ, goalX, goalZ, destinationName, preferences);
         if (trip.isPresent()) {
-            HowToGo.LOGGER.info("[HowToGo] public transport: {} leg(s)", trip.legs().size());
+            HowToGo.diagnostic("[HowToGo] public transport: {} leg(s)", trip.legs().size());
         } else {
-            HowToGo.LOGGER.info("[HowToGo] public transport: no journey -- {} stop(s) in the network, "
+            HowToGo.diagnostic("[HowToGo] public transport: no journey -- {} stop(s) in the network, "
                     + "origin ({}, {}), goal ({}, {})", buildNodes(lines).size(), Math.round(startX),
                     Math.round(startZ), Math.round(goalX), Math.round(goalZ));
         }
@@ -535,7 +535,7 @@ public final class LinePlanner {
                             // Named, because "no journey over 1 line(s)" cannot say which stretch of
                             // which line is the one that could not be ridden, and that is the only
                             // question worth asking.
-                            HowToGo.LOGGER.info(
+                            HowToGo.diagnostic(
                                     "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
                                     from.label(), to.label(), line.kind().name());
                         }
@@ -680,7 +680,7 @@ public final class LinePlanner {
                             // Named, because "no journey over 1 line(s)" cannot say which stretch of
                             // which line is the one that could not be ridden, and that is the only
                             // question worth asking.
-                            HowToGo.LOGGER.info(
+                            HowToGo.diagnostic(
                                     "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
                                     from.label(), to.label(), line.kind().name());
                         }
@@ -893,7 +893,7 @@ public final class LinePlanner {
                 // still gives a time, so a network the router cannot walk at all looks like a working
                 // journey here -- while the same network in walking mode answers "no route". If the
                 // log is full of these, the roads are what is wrong, not the lines.
-                HowToGo.LOGGER.info("[HowToGo] no road route to walk from ({}, {}) to ({}, {}); the "
+                HowToGo.diagnostic("[HowToGo] no road route to walk from ({}, {}) to ({}, {}); the "
                                 + "{} block walk is drawn as a straight hop",
                         Math.round(startX), Math.round(startZ), Math.round(goalX), Math.round(goalZ),
                         Math.round(straight));

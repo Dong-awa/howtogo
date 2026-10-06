@@ -46,6 +46,8 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
     private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
+    /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
+    private static final ModConfigSpec.BooleanValue DEBUG_LOG;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -265,6 +267,17 @@ public final class RoadConfig {
                         "line and overrides this one.")
                 .define("mtr_auto_route_marks", true);
 
+        DEBUG_LOG = builder.comment(
+                        "Whether this mod's own diagnostics are written to the log.",
+                        "They are measurements of how the mod is working rather than reports about the",
+                        "player: the rail layer's one line a second, the map's drawing cost, what an MTR",
+                        "reading turned into, the arithmetic of a planned route, and the geometry of any",
+                        "line drawn as a straight step. Every one of them is worth having while something",
+                        "is being investigated, and none of them is worth a file that grows all session,",
+                        "so they are off by default. Warnings and errors are not affected: a problem is",
+                        "always reported.")
+                .define("debug_log", false);
+
         SPEC = builder.build();
     }
 
@@ -415,6 +428,20 @@ public final class RoadConfig {
     public static boolean transitBoardOnly() {
         try {
             return TRANSIT_BOARD_ONLY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether this mod's own diagnostics are written to the log, off before the config loads.
+     *
+     * <p>Read by {@code HowToGo.diagnostic}, which is the one gate every diagnostic line goes through,
+     * so there is exactly one answer to "was that line meant to be printed" and it is this one.
+     */
+    public static boolean debugLog() {
+        try {
+            return DEBUG_LOG.get();
         } catch (IllegalStateException notLoadedYet) {
             return false;
         }

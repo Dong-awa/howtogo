@@ -58,7 +58,6 @@ public final class TransitGuidanceCheck {
         if (!trip.isPresent()) {
             return report();
         }
-        System.out.println("   DEBUG legs=" + trip.legs().size() + " rides=" + trip.rides().size());
         expect("and it is one ride", trip.rides().size() == 1);
         if (trip.rides().size() != 1) {
             return report();
@@ -155,6 +154,33 @@ public final class TransitGuidanceCheck {
                 expect("and the terminus of that one", "D".equals(rides.get(1).terminus()));
                 expect("the two are told apart by where they begin",
                         rides.get(1).boardAt() > rides.get(0).alightAt() - 1);
+            }
+        }
+
+        // The same change, but at one shared station rather than two stops standing together: both
+        // lines call at the very same stop of the network, so the change is a step off one vehicle and
+        // onto the next with no walk between them at all. Nothing about the announcements may depend on
+        // there being a walk: an interchange assembled out of separate stops and an interchange that is
+        // one stop are the same thing to a rider, and both have to say which line is being changed to.
+        RoadNetwork shared = new RoadNetwork();
+        addRoad(shared, RoadClass.ROAD, 0, 0, 20, 0);
+        addRoad(shared, RoadClass.ROAD, 180, 0, 200, 0);
+        addRoad(shared, RoadClass.RAIL, 0, 0, 200, 0);
+        List<TransitLine> joined = List.of(
+                line("out", "A", 0, 0, "M", 100, 0),
+                line("back", "M", 100, 0, "D", 200, 0));
+        Trip oneStop = TransitPlanner.plan(shared, joined, 5, 0, 195, 0, "the far end",
+                RoutePreferences.DEFAULTS);
+        expect("a change at one shared station is found", oneStop.isPresent());
+        if (oneStop.isPresent()) {
+            List<Trip.Ride> rides = oneStop.rides();
+            expect("and it is two rides, not one (got " + rides.size() + ")", rides.size() == 2);
+            if (rides.size() == 2) {
+                expect("the second names the line changed onto",
+                        "back".equals(rides.get(1).line()));
+                expect("and runs towards its own terminus", "D".equals(rides.get(1).terminus()));
+                expect("the change happens where the first ride ends",
+                        Math.abs(rides.get(1).boardAt() - rides.get(0).alightAt()) < 1.0);
             }
         }
 

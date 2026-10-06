@@ -110,7 +110,7 @@ public final class TransitPlanner {
             // One line per leg, with its length. "The route goes the long way round" is not diagnosable
             // from the whole journey's length: a walk that detours and a ride that loops look identical
             // from outside, and only the per-leg figures say which of them did it.
-            HowToGo.LOGGER.info("[HowToGo] public transport leg: {} {} blocks", leg.mode().id(),
+            HowToGo.diagnostic("[HowToGo] public transport leg: {} {} blocks", leg.mode().id(),
                     Math.round(leg.route().totalLength()));
         }
         return Route.concat(parts, TravelMode.TRANSIT, destinationName);

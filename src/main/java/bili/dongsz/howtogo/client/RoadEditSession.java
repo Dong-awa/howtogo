@@ -610,7 +610,7 @@ public final class RoadEditSession {
      */
     public static void navigateToCursor() {
         if (!mouseValid) {
-            HowToGo.LOGGER.info("[HowToGo] map pick ignored: cursor position not known yet");
+            HowToGo.diagnostic("[HowToGo] map pick ignored: cursor position not known yet");
             return;
         }
         int x = (int) Math.round(mouseWorldX);

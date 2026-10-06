@@ -48,9 +48,6 @@ import java.util.List;
  */
 public final class RoadElementRenderer extends ElementRenderer<RoadElement, RoadRenderContext, RoadElementRenderer> {
 
-    /** Set {@code -Dhowtogo.debug=true} to dump projection data once a second. */
-    private static final boolean DEBUG = Boolean.getBoolean("howtogo.debug");
-
     /** Minimum stroke width in screen pixels, so zoomed-out roads stay visible without going fat. */
     private static final double MIN_STROKE_PX = 1.0;
 
@@ -340,10 +337,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             p10 = 1.0;
         }
 
-        if (DEBUG) {
-            RoadDebug.logProjection(info, m, fracX, fracY, p10, element.anchorX(), element.anchorZ());
-        }
-
         double m00 = m.m00();
         // Pose units per screen pixel.
         double posePerPixel = Math.abs(m00) > 1.0E-6 ? 1.0 / Math.abs(m00) : 1.0;
@@ -519,9 +512,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             emitOneWayArrows(last, vc, segment, anchorX, anchorZ, fracX, fracY, p10, posePerPixel);
         }
 
-        // TEMPORARY rail diagnostic: one of the auto-detected layer's segments was actually stroked,
-        // past the level-of-detail filter, which is the difference between "never handed over" and
-        // "handed over and dropped".
+        // Rail diagnostic: one of the auto-detected layer's segments was actually stroked, past the
+        // level-of-detail filter, which is the difference between "never handed over" and "handed over
+        // and dropped".
         if (RailTrackStore.isOurs(segment)) {
             RailTrackStore.noteElementStroked();
         }
@@ -1112,7 +1105,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             named++;
             TransitLine line = lines.get(index);
-            HowToGo.LOGGER.info("[HowToGo] line '{}' ({}) draws a straight step of {} blocks, from "
+            HowToGo.diagnostic("[HowToGo] line '{}' ({}) draws a straight step of {} blocks, from "
                             + "({}, {}) to ({}, {}), in a stretch of {} point(s) of {} in all; {} "
                             + "stop(s), {}",
                     line.id(), line.kind(), Math.round(longest),
@@ -1121,7 +1114,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     MtrTransit.isImported(line) ? "read out of MTR" : "the player's own");
         }
         if (offenders > 0) {
-            HowToGo.LOGGER.info("[HowToGo] {} of {} line(s) draw a step longer than {} blocks",
+            HowToGo.diagnostic("[HowToGo] {} of {} line(s) draw a step longer than {} blocks",
                     offenders, lines.size(), Math.round(LONG_STEP_BLOCKS));
         }
     }
@@ -1572,7 +1565,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             stops += line.stopCount();
         }
-        HowToGo.LOGGER.info("[HowToGo] drawing {} transit line(s), {} of them read out of MTR, "
+        HowToGo.diagnostic("[HowToGo] drawing {} transit line(s), {} of them read out of MTR, "
                 + "{} stops between them; {} line(s) and {} station(s) remembered", lines.size(),
                 imported, stops, MtrTransit.rememberedLines(), MtrTransit.rememberedStations());
     }

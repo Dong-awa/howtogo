@@ -236,11 +236,13 @@ public final class RailTrackStore {
     private static boolean layerReported;
     private static boolean warnedBadId;
 
-    // ------------------------------------------------- TEMPORARY rail diagnostic
-    // Everything from here to the matching banner is scaffolding for one round of in-game
-    // diagnosis: the one line a second, and the two counters the drawing side feeds. Delete this
-    // block, the report() call in tick(), and the two call sites marked "TEMPORARY rail
-    // diagnostic" once the layer is seen working. Nothing else reads any of it.
+    // ----------------------------------------------------- rail layer diagnostic
+    // The layer is the one part of this mod built out of another mod's data, and it fails in ways that
+    // look identical from outside: the scan finding nothing, a scan that found blocks leaving an empty
+    // layer, and a layer that exists but never reaches the map. Everything from here to the matching
+    // banner is what tells those apart, and all of it is written only when the player has asked for
+    // diagnostics -- see {@link RoadConfig#debugLog()}. The counters are kept cheap rather than exact
+    // when it is off: each of the three note methods returns on the first line.
 
     /** Chunks read since the layer started, and how many of them held anything. */
     private static long chunksRead;
@@ -279,26 +281,35 @@ public final class RailTrackStore {
     /** The station list at the last station dump; empty means nothing has been dumped yet. */
     private static String dumpedStations = "";
 
-    /** TEMPORARY rail diagnostic: the provider began enumerating the layer for one location. */
+    /** Rail diagnostic: the provider began enumerating the layer for one location. */
     public static void noteMapPass(int location) {
+        if (!RoadConfig.debugLog()) {
+            return;
+        }
         mapPasses++;
         if (location >= 0 && location < offersByLocation.length) {
             offersByLocation[location]++;
         }
     }
 
-    /** TEMPORARY rail diagnostic: one rail element was offered to the map's pipeline. */
+    /** Rail diagnostic: one rail element was offered to the map's pipeline. */
     public static void noteElementOffered() {
+        if (!RoadConfig.debugLog()) {
+            return;
+        }
         mapHandedOver++;
     }
 
-    /** TEMPORARY rail diagnostic: one of this layer's segments was actually stroked on the map. */
+    /** Rail diagnostic: one of this layer's segments was actually stroked on the map. */
     public static void noteElementStroked() {
+        if (!RoadConfig.debugLog()) {
+            return;
+        }
         mapStroked++;
     }
 
     /**
-     * TEMPORARY rail diagnostic: whether a segment came from this layer rather than from the editor.
+     * Rail diagnostic: whether a segment came from this layer rather than from the editor.
      *
      * <p>By id range, which is also what keeps the two apart everywhere else.
      */
@@ -307,8 +318,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * TEMPORARY rail diagnostic: the first few segments' two ends and vertex count, written whenever
-     * the layer's size changes.
+     * Rail diagnostic: the first few segments' two ends and vertex count, written whenever the layer's
+     * size changes.
      *
      * <p>Not per second: it is there so that a line seen on the map which no edge connects can be
      * matched against the numbers. Each entry says which segment it is, where its nodes are, how many
@@ -317,7 +328,7 @@ public final class RailTrackStore {
      * argued about.
      */
     private static void reportSegments() {
-        if (!HowToGo.LOGGER.isInfoEnabled()) {
+        if (!RoadConfig.debugLog()) {
             return;
         }
         StringBuilder line = new StringBuilder();
@@ -336,12 +347,12 @@ public final class RailTrackStore {
                     .append(segment.x(segment.vertexCount() - 1)).append(',')
                     .append(segment.z(segment.vertexCount() - 1));
         }
-        HowToGo.LOGGER.info("[HowToGo] rail seg | source={} segments={}{}", source,
+        HowToGo.diagnostic("[HowToGo] rail seg | source={} segments={}{}", source,
                 coarse.segmentCount(), line);
     }
 
     /**
-     * TEMPORARY rail diagnostic: the single line a second, tag {@code [HowToGo] rail}.
+     * Rail diagnostic: the single line a second, tag {@code [HowToGo] rail}.
      *
      * <p>Written to tell apart the failures that look identical from outside: the scan finding
      * nothing, the layer being empty after a scan that found blocks, and the layer existing but
@@ -351,7 +362,7 @@ public final class RailTrackStore {
      * on its own cannot say whether anything is being drawn *now*.
      */
     private static void report() {
-        if (!HowToGo.LOGGER.isInfoEnabled()) {
+        if (!RoadConfig.debugLog()) {
             return;
         }
         long passes = mapPasses - lastMapPasses;
@@ -368,7 +379,7 @@ public final class RailTrackStore {
                 locations.append(locations.length() == 0 ? "" : ",").append(i).append(':').append(delta);
             }
         }
-        HowToGo.LOGGER.info("[HowToGo] rail | enabled={} tracks={} stations={} | source={} graphs={} "
+        HowToGo.diagnostic("[HowToGo] rail | enabled={} tracks={} stations={} | source={} graphs={} "
                         + "nodes={} edges={} curves={} odd={} | radius={} perSecond={} | queued={} read={} "
                         + "withContent={} | remembered tracks={} stations={} | layer edges={} segments={} "
                         + "stations={} | map perSecond passes={} offersByLocation=[{}] offered={} "
@@ -381,7 +392,7 @@ public final class RailTrackStore {
                 stationCount(), passes, locations, handedOver, stroked, mapPasses, mapHandedOver,
                 mapStroked);
     }
-    // --------------------------------------------- end TEMPORARY rail diagnostic
+    // ----------------------------------------------- end rail layer diagnostic
 
     /** A train station, as a place to navigate to; the name is Create's when the graph supplied it. */
     public record Station(int x, int y, int z, String name) {
@@ -890,8 +901,9 @@ public final class RailTrackStore {
             collect(chunk, tracks, shapes, stations);
         }
         scannedAt.put(key, ticks);
-        // TEMPORARY rail diagnostic: the two counters, updated here so nothing is measured outside
-        // the pass. Cheap increments, no allocation.
+        // Rail diagnostic: the two counters, updated here so nothing is measured outside the pass.
+        // Two increments once per chunk read -- not per frame -- so they are left ungated, unlike the
+        // per-element counters the map side feeds.
         chunksRead++;
         if (!tracks.isEmpty() || !stations.isEmpty()) {
             chunksWithContent++;
@@ -1177,7 +1189,7 @@ public final class RailTrackStore {
         reportSegmentsIfChanged();
         if (!reportedGraphBuild) {
             reportedGraphBuild = true;
-            HowToGo.LOGGER.info("[HowToGo] Create track layer from Create's graph: {} nodes, {} edges "
+            HowToGo.diagnostic("[HowToGo] Create track layer from Create's graph: {} nodes, {} edges "
                             + "({} curved), {} segments, {} stations",
                     nodeX.length, edges.size(), snapshot.curves(), coarse.segmentCount(),
                     snapshot.stations().size());
@@ -1226,7 +1238,7 @@ public final class RailTrackStore {
         source = Source.BLOCK_SCAN;
         if (!layerReported && coarse.segmentCount() > 0) {
             layerReported = true;
-            HowToGo.LOGGER.info("[HowToGo] Create track layer from the block scan: {} track blocks in "
+            HowToGo.diagnostic("[HowToGo] Create track layer from the block scan: {} track blocks in "
                             + "{} segments, {} stations", count, coarse.segmentCount(), stationBlockCount());
         }
         reportSegmentsIfChanged();
@@ -1242,7 +1254,7 @@ public final class RailTrackStore {
     }
 
     /**
-     * TEMPORARY rail diagnostic: every station's position and name, written when that set changes.
+     * Rail diagnostic: every station's position and name, written when that set changes.
      *
      * <p>Wanted because a station's name was reported as landing slightly beside the station rather
      * than on it. This says which point the name is being drawn from, so the offset can be compared
@@ -1251,6 +1263,12 @@ public final class RailTrackStore {
      * thing from the other source.
      */
     private static void reportStationsIfChanged() {
+        if (!RoadConfig.debugLog()) {
+            // Out of the whole diagnostic, not only out of the writing: this one builds a line of every
+            // station's position and name just to compare it with the last one, and a comparison nobody
+            // is going to read is not worth a walk of every station every time the layer is rebuilt.
+            return;
+        }
         StringBuilder line = new StringBuilder();
         for (Station station : stations()) {
             line.append(" | @").append(station.x()).append(',').append(station.y()).append(',')
@@ -1261,7 +1279,7 @@ public final class RailTrackStore {
             return;
         }
         dumpedStations = signature;
-        HowToGo.LOGGER.info("[HowToGo] rail station | source={} count={}{}", source, stationCount(), line);
+        HowToGo.diagnostic("[HowToGo] rail station | source={} count={}{}", source, stationCount(), line);
     }
 
     /**
