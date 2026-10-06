@@ -300,9 +300,14 @@ public final class RoadEditHandler {
         if (screen == null) {
             return false;
         }
-        if (isInPackage(screen, "xaero.map.")) {
-            return true;
-        }
+        // Two things, not one. The screen has to be Xaero's, and the map has to have drawn something
+        // in the last moment -- and the second is what tells the map apart from the rest of that mod's
+        // screens. The package alone was the whole test, and that package holds more than the map:
+        // export, the teleport commands, naming a map, world switching, settings. With editing on,
+        // Delete deleted the selected road from those screens and N renamed it, with the key swallowed
+        // so the screen itself never saw it, and the display panel drew itself over their corner and
+        // ate the clicks that landed on it. Freshness of the view state is evidence that the map is
+        // what is being looked at, and it is evidence this class already had.
         return isInPackage(screen, "xaero.") && MapViewState.isFresh();
     }
 

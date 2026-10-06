@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 
 import java.util.Iterator;
@@ -34,15 +35,19 @@ public final class RailLayers {
      * Every segment of both layers, Create's first.
      *
      * <p>Evaluated on iteration rather than on the call, so a caller may hold the sequence across the
-     * frame it is drawing without pinning a view of a layer that a rebuild replaced in between.
+     * frame it is drawing without pinning a view of a layer that a rebuild replaced in between. The
+     * copy that makes that safe is skipped when the layer is empty, which is the usual case for MTR:
+     * a map asks for this every frame, and copying nothing every frame is still work.
      */
     public static Iterable<RoadSegment> all() {
         return () -> new java.util.Iterator<RoadSegment>() {
 
             private final java.util.Iterator<RoadSegment> create =
                     RailTrackStore.segments().iterator();
-            private final java.util.Iterator<RoadSegment> mtr =
-                    MtrTransit.railLayer().segmentsSnapshot().iterator();
+            private final RoadNetwork mtrLayer = MtrTransit.railLayer();
+            private final java.util.Iterator<RoadSegment> mtr = mtrLayer.segmentCount() == 0
+                    ? java.util.List.<RoadSegment>of().iterator()
+                    : mtrLayer.segmentsSnapshot().iterator();
 
             @Override
             public boolean hasNext() {

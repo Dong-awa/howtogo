@@ -46,6 +46,11 @@ public final class RoadEditSession {
         return active;
     }
 
+    /** The storey new roads are drawn on; see {@link RoadEditor#setActiveLayer}. */
+    public static int activeLayer() {
+        return editor().activeLayer();
+    }
+
     /** The editor for the current level, creating it on first use. */
     public static RoadEditor editor() {
         RoadNetwork network = RoadStore.get();
@@ -248,13 +253,20 @@ public final class RoadEditSession {
     // ------------------------------------------------------------- naming
 
     /**
-     * Asks for a name for whatever carries one under the cursor, or for what is selected.
+     * Opens the editor for whatever carries something editable under the cursor, or for what is
+     * selected.
      *
-     * <h2>What N can name, in the order it is tried</h2>
+     * <h2>What N edits, in the order it is tried</h2>
      * An explicit selection first, then what the cursor is over: a road, a place, or a railway. The
      * order matters and is the same one the snap itself uses -- a selection is a deliberate act and
      * outranks a cursor that may have drifted, and a node outranks the segment running through it,
-     * because a place sitting on a road is otherwise impossible to name.
+     * because a place sitting on a road is otherwise impossible to edit.
+     *
+     * <p>What is offered depends on what was hit, because it is what that thing has: a road has a name
+     * and a storey, a place has a name and a kind, and a railway -- which belongs to Create -- has only
+     * a name. The road's is not a naming panel with a second panel beside it for the storey: a storey
+     * shows nowhere on a flat map, so anything that made it a key of its own would leave most players
+     * never setting one.
      *
      * <p>A plain road vertex has no name of its own -- names belong to the whole road -- so pointing
      * at one falls through to the road through it, and a node that is not a place falls through to
@@ -300,14 +312,21 @@ public final class RoadEditSession {
         nameRailUnderCursor();
     }
 
-    /** Opens the naming prompt for a road, addressed by segment. */
+    /**
+     * Opens the editor for a road, addressed by segment: its name and its storey together.
+     *
+     * <p>Both in the one panel, because N on a road is "what is this road" and a storey is half of the
+     * answer -- and because a storey is invisible on a map that cannot show height, so anything that
+     * made it a separate key would leave most players never setting one. The panel's own field is
+     * checked before anything is applied, so a mistyped level costs a correction rather than the edit.
+     */
     private static void promptRoadName(int segmentId) {
         RoadSegment segment = RoadStore.get().segment(segmentId);
         if (segment == null) {
             return;
         }
-        promptName(RoadNameScreen.TITLE_ROAD, segment.name(), mouseScreenX(), mouseScreenZ(),
-                name -> editor().setRoadName(segmentId, name));
+        promptName(RoadNameScreen.TITLE_ROAD, segment.name(), segment.layer(), mouseScreenX(),
+                mouseScreenZ(), (name, layer) -> editor().setRoadNameAndLayer(segmentId, name, layer));
     }
 
     /**
@@ -451,6 +470,27 @@ public final class RoadEditSession {
                         apply.accept(value);
                         RoadStore.markDirty();
                     }));
+        };
+    }
+
+    /**
+     * The same, for a road: its name and its storey handed back together.
+     *
+     * <p>Deliberately deferred for the same reason as the name prompt: opening a screen from the input
+     * handler is what makes a key look dead, and the tick of delay is the difference between a field
+     * that receives an "n" and one that does not.
+     */
+    private static void promptName(String titleKey, String initial, int layer, double anchorX,
+                                   double anchorY,
+                                   java.util.function.BiConsumer<String, Integer> apply) {
+        pendingAction = () -> {
+            Screen parent = Minecraft.getInstance().screen;
+            Minecraft.getInstance().setScreen(
+                    new RoadNameScreen(parent, titleKey, initial, layer, anchorX, anchorY,
+                            (name, storey) -> {
+                                apply.accept(name, storey);
+                                RoadStore.markDirty();
+                            }));
         };
     }
 
@@ -620,6 +660,8 @@ public final class RoadEditSession {
         RoadEditor ed = editor();
         int nodeId = ed.selectedNodeId();
         if (nodeId != RoadSegment.NO_NODE) {
+            // One snapshot for the whole gesture, taken here rather than by every frame of it.
+            ed.beginHistory();
             draggingNodeId = nodeId;
             ed.finishChain();
         }
@@ -640,6 +682,7 @@ public final class RoadEditSession {
             case NODE -> {
                 RailNameStore.clearSelection();
                 ed.selectNode(lastSnap.nodeId());
+                ed.beginHistory();
                 draggingNodeId = lastSnap.nodeId();
                 return true;
             }
@@ -699,7 +742,9 @@ public final class RoadEditSession {
         RoadEditor ed = editor();
         RoadNode node = RoadStore.get().node(draggingNodeId);
         int y = node != null ? node.y() : groundHeight();
-        if (ed.moveNode(draggingNodeId, (int) Math.round(lastSnap.x()), y, (int) Math.round(lastSnap.z()))) {
+        // No snapshot per frame: beginDrag took one for the whole gesture. See RoadEditor.moveNodeLive.
+        if (ed.moveNodeLive(draggingNodeId, (int) Math.round(lastSnap.x()), y,
+                (int) Math.round(lastSnap.z()))) {
             // The autosave is debounced, so flagging every frame only delays the write until the
             // drag actually stops.
             RoadStore.markDirty();

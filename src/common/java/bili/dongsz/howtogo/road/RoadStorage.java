@@ -53,8 +53,33 @@ public final class RoadStorage {
             if (dto == null) {
                 return network;
             }
+            if (dto.version > FORMAT_VERSION) {
+                // Written by something newer than this build. Read it anyway -- the fields this
+                // version knows are still the fields it wrote -- but say so, because the next save
+                // will write only what this version understands.
+                HowToGo.LOGGER.warn("[HowToGo] {} says version {} and this build writes {}; reading "
+                                + "the fields it knows", file.getFileName(), dto.version,
+                        FORMAT_VERSION);
+            }
+            int rejected = 0;
+            int duplicates = 0;
             if (dto.nodes != null) {
                 for (NodeDto n : dto.nodes) {
+                    // A negative id is not an id: -1 is NO_NODE, the sentinel for "this endpoint has
+                    // no node". A file carrying one used to be loaded as written, so the node was
+                    // built, drawn on the map and saved again -- and every segment referring to it was
+                    // skipped by the router, for ever: a road that looks perfectly good and can never
+                    // be travelled.
+                    if (n.id < 0) {
+                        rejected++;
+                        continue;
+                    }
+                    // Ids are the network's keys, so a repeated one used to overwrite: the first
+                    // node, with its position and its name, disappeared without a word.
+                    if (network.node(n.id) != null) {
+                        duplicates++;
+                        continue;
+                    }
                     RoadNode node = new RoadNode(n.id, n.x, n.y, n.z, parseType(n.type), n.name);
                     // Absent in any file written before place kinds existed, and it reads back as
                     // PLACE -- so every place a player had already put down is still an ordinary place
@@ -66,8 +91,22 @@ public final class RoadStorage {
             }
             if (dto.segments != null) {
                 for (SegmentDto s : dto.segments) {
+                    if (s.id < 0) {
+                        rejected++;
+                        continue;
+                    }
+                    if (network.segment(s.id) != null) {
+                        duplicates++;
+                        continue;
+                    }
                     network.putSegment(toSegment(s));
                 }
+            }
+            if (rejected > 0 || duplicates > 0) {
+                HowToGo.LOGGER.warn("[HowToGo] {} held {} entr(ies) with an unusable id and {} with a "
+                                + "repeated one; those were dropped rather than allowed to overwrite "
+                                + "what they collided with",
+                        file.getFileName(), rejected, duplicates);
             }
             HowToGo.LOGGER.info("[HowToGo] loaded {} nodes / {} segments from {}",
                     network.nodeCount(), network.segmentCount(), file.getFileName());
@@ -146,6 +185,7 @@ public final class RoadStorage {
                 s.to = segment.toNode();
                 s.direction = segment.direction().name();
                 s.y = segment.y();
+                s.layer = segment.layer();
                 s.name = segment.name();
                 s.xs = new int[segment.vertexCount()];
                 s.zs = new int[segment.vertexCount()];
@@ -226,6 +266,9 @@ public final class RoadStorage {
         segment.setFromNode(s.from);
         segment.setToNode(s.to);
         segment.setDirection(directionOf(s));
+        // Clamped by the segment itself, so a file somebody edited by hand costs them the storey
+        // rather than the road.
+        segment.setLayer(s.layer);
         segment.setName(s.name);
         return segment;
     }
@@ -290,6 +333,14 @@ public final class RoadStorage {
          */
         boolean oneWay;
         int y;
+        /**
+         * Which storey the road is on: 0 the surface, positive above it, negative below.
+         *
+         * <p>Written alongside the rest and absent in every file written before storeys existed, where
+         * {@code Gson} leaves it at zero -- which is exactly the right reading of an older save: every
+         * road in it was drawn on the surface, because there was nothing else to draw one on.
+         */
+        int layer;
         String name;
         int[] xs;
         int[] zs;

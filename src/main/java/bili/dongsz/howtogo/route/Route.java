@@ -77,6 +77,25 @@ public final class Route {
     /** Cached turn points. */
     private List<Maneuver> maneuvers;
 
+    /**
+     * Drawn distance from the first point to each point, parallel to {@link #points}.
+     *
+     * <p>Computed once, at construction, because "how far along the line is this position" is asked
+     * several times per frame by the readouts and the answer cannot change: the polyline is never
+     * written to after it is built. Walking it each time was the same numbers added up again, on the
+     * render path, for every frame of a trip.
+     */
+    private final double[] cumulative;
+
+    /** Total drawn length, connectors included. The last entry of {@link #cumulative}. */
+    private final double polylineLength;
+
+    /** Where the cached projection was measured from, and what it found. See {@link #closest}. */
+    private double projectionX = Double.NaN;
+    private double projectionZ = Double.NaN;
+    private Projection projectionCache;
+    private boolean projectionCached;
+
     /** A turn sharper than this counts as a manoeuvre worth announcing. */
     private static final double TURN_THRESHOLD_DEG = 25.0;
 
@@ -96,6 +115,15 @@ public final class Route {
         this.offRoadSpeedFactor = offRoadSpeedFactor <= 0 ? 1.0 : offRoadSpeedFactor;
         this.travelMode = travelMode == null ? TravelMode.WALK : travelMode;
         this.fixedSeconds = Math.max(0, fixedSeconds);
+        this.cumulative = new double[points.size()];
+        double drawn = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double[] a = points.get(i - 1);
+            double[] b = points.get(i);
+            drawn += Math.hypot(b[0] - a[0], b[1] - a[1]);
+            cumulative[i] = drawn;
+        }
+        this.polylineLength = drawn;
     }
 
     public static Route empty() {
@@ -439,12 +467,89 @@ public final class Route {
     }
 
     /**
+     * Every direction the route runs within {@code radius} blocks of {@code (x, z)}.
+     *
+     * <h2>Why one direction is not enough to judge a player by</h2>
+     * {@link #bearingAt} answers with the nearest segment, and a route that passes over the same
+     * ground twice makes that answer ambiguous: a road that loops back, a divided highway whose two
+     * carriageways are a lane apart, a destination on the piece of road the trip set off along, and
+     * every case where the connector from the player onto the road happens to lie against the road
+     * it joins. At such a place the two passes are the same distance away, the scan takes the earlier
+     * one, and the direction it reports is the direction of the pass the player has already made --
+     * exactly reversed. A caller comparing a player's heading against that one number then reads a
+     * player travelling correctly as going the wrong way.
+     *
+     * <p>Handing back all of them lets the caller ask the question it actually means: is this player
+     * travelling against the route <em>wherever the route is</em>, which is true only when they
+     * disagree with every pass, not merely with the one that happened to be nearest.
+     *
+     * <p>Only segments whose nearest point is within {@code radius} blocks are offered, so a route
+     * that comes back within a tolerance but not within the caller's own idea of "here" does not
+     * vote. At most a handful of directions come back, and duplicates are dropped.
+     *
+     * @return the bearings, in degrees from +X towards +Z; empty when nothing of the route is near
+     */
+    public double[] bearingsNear(double x, double z, double radius) {
+        if (points.size() < 2) {
+            return new double[0];
+        }
+        double radiusSq = radius * radius;
+        double[] found = new double[8];
+        int count = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double[] a = points.get(i - 1);
+            double[] b = points.get(i);
+            double ex = b[0] - a[0];
+            double ez = b[1] - a[1];
+            double lenSq = ex * ex + ez * ez;
+            if (lenSq < 1.0E-9) {
+                continue;
+            }
+            double t = Math.max(0, Math.min(1, ((x - a[0]) * ex + (z - a[1]) * ez) / lenSq));
+            double px = a[0] + ex * t - x;
+            double pz = a[1] + ez * t - z;
+            if (px * px + pz * pz > radiusSq) {
+                continue;
+            }
+            double bearing = Math.toDegrees(Math.atan2(ez, ex));
+            boolean known = false;
+            for (int j = 0; j < count; j++) {
+                if (Math.abs(gapDegrees(found[j], bearing)) < 1.0E-3) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) {
+                continue;
+            }
+            if (count == found.length) {
+                // More distinct directions than a route can plausibly offer at one place; the ones in
+                // hand already answer the question, and growing the array is not worth the copy.
+                break;
+            }
+            found[count++] = bearing;
+        }
+        double[] result = new double[count];
+        System.arraycopy(found, 0, result, 0, count);
+        return result;
+    }
+
+    /** The smaller angle between two bearings, in degrees. */
+    private static double gapDegrees(double from, double to) {
+        double difference = Math.abs(from - to) % 360.0;
+        return difference > 180.0 ? 360.0 - difference : difference;
+    }
+
+    /**
      * Direction the route runs at the point nearest to {@code (x, z)}, in degrees from +X towards +Z.
      *
      * <p>The convention the manoeuvre angles and the player's heading already use, so a heading can
      * be compared against the route without either being converted. Taken from the segment the
      * projection landed on, which is the direction the route is going where the player is -- what a
      * player travelling the other way is travelling against.
+     *
+     * <p>Where the route passes over the same ground twice this is only one of the answers it has
+     * there; a caller deciding whether a player is going the wrong way wants {@link #bearingsNear}.
      *
      * @return the bearing, or NaN when there is no route to take a direction from
      */
@@ -464,6 +569,24 @@ public final class Route {
 
     /** Closest point on the polyline, as a projection onto a segment. */
     private Projection closest(double x, double z) {
+        // One slot of memo, because the whole of one frame asks the same question: the panel, the map
+        // readout, the progress bar and the voice all measure from the player's position, which does
+        // not move between them. Each of them used to walk every segment of the route to answer it,
+        // and a public transport journey's polyline is thousands of points long. Keyed on the exact
+        // coordinates rather than on a distance, so a player who has moved recomputes -- which is the
+        // one case where the answer is different.
+        if (projectionCached && x == projectionX && z == projectionZ) {
+            return projectionCache;
+        }
+        Projection found = searchClosest(x, z);
+        projectionCached = true;
+        projectionX = x;
+        projectionZ = z;
+        projectionCache = found;
+        return found;
+    }
+
+    private Projection searchClosest(double x, double z) {
         if (points.size() < 2) {
             return null;
         }
@@ -510,9 +633,11 @@ public final class Route {
     /**
      * Seconds of travel per block on the road part of this route.
      *
-     * <p>Each piece already carries the pace the mode makes on its class, penalties included, so
-     * this is the length-weighted mean of their inverses. A single mean is enough for the
-     * remaining-distance readout without re-walking every leg each frame.
+     * <p>This is the length-weighted mean of the pieces' paces, and a mean is all it is: it is right
+     * only for a route whose pieces are all the same pace. It survives as the one number the map's
+     * coarse per-block reading uses, and is deliberately <em>not</em> what the countdown is made of --
+     * see {@link #remainingSeconds}. A public transport route is the counter-example the mean cannot
+     * express: walk, ride, walk again, at paces that differ by a factor of ten.
      */
     public double secondsPerBlock() {
         double length = roadLength();
@@ -536,22 +661,76 @@ public final class Route {
         if (projection == null) {
             return 0;
         }
-        double total = 0;
-        for (int i = 1; i < points.size(); i++) {
-            double[] a = points.get(i - 1);
-            double[] b = points.get(i);
-            total += Math.hypot(b[0] - a[0], b[1] - a[1]);
+        return Math.max(0, polylineLength - distanceAlong(projection));
+    }
+
+    /** Drawn distance from the route's start to a projection, in blocks. */
+    private double distanceAlong(Projection projection) {
+        int i = projection.segmentIndex();
+        double[] a = points.get(i - 1);
+        double[] b = points.get(i);
+        double edge = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        return cumulative[i - 1] + edge * projection.t();
+    }
+
+    /**
+     * Seconds still to travel from the given position, at the pace of the part of the route that is
+     * still ahead.
+     *
+     * <h2>Why this is not the distance left times one pace</h2>
+     * A route is three stretches in a fixed order -- the walk onto the network, the road, the walk off
+     * it again -- and a public transport journey is a fourth shape again: walk, ride, walk, ride. Each
+     * stretch has its own pace, and the places where they meet are not evenly spaced, so multiplying
+     * what is left by a single average pace answers with a number that belongs to no part of the trip.
+     * Measured on a journey that rides ice at forty blocks a second and then walks two kilometres, the
+     * countdown was five to ten times short, and a transit journey's waiting was missing from it
+     * altogether: the picker showed three minutes and the panel said two the moment the trip began.
+     *
+     * <p>So what is left is read from the part of the route the player is actually on: the stretches
+     * still ahead are added up at their own paces, and the wait is apportioned over the road. Both
+     * ends come out exact -- the whole trip at the start, nothing at the destination -- which is the
+     * property that keeps the picker's preview and the panel's countdown the same number.
+     */
+    public double remainingSeconds(double fromX, double fromZ) {
+        Projection projection = closest(fromX, fromZ);
+        if (projection == null) {
+            // Nothing on this route to measure from, so the whole of it is still ahead.
+            return estimatedSeconds();
         }
-        double travelled = 0;
-        for (int i = 1; i < projection.segmentIndex(); i++) {
-            double[] a = points.get(i - 1);
-            double[] b = points.get(i);
-            travelled += Math.hypot(b[0] - a[0], b[1] - a[1]);
+        double along = distanceAlong(projection);
+        double road = roadLength();
+        if (along <= startConnector) {
+            // Still walking onto the network: the road and the walk off it are both ahead.
+            return (startConnector - along + goalConnector) / connectorPace()
+                    + roadSeconds(road) + fixedSeconds;
         }
-        double[] segA = points.get(projection.segmentIndex() - 1);
-        double[] segB = points.get(projection.segmentIndex());
-        travelled += Math.hypot(segB[0] - segA[0], segB[1] - segA[1]) * projection.t();
-        return Math.max(0, total - travelled);
+        double intoRoad = along - startConnector;
+        if (intoRoad < road) {
+            double fractionLeft = road <= 1.0E-6 ? 0 : 1.0 - intoRoad / road;
+            return roadSeconds(road - intoRoad) + goalConnector / connectorPace()
+                    + fixedSeconds * fractionLeft;
+        }
+        // Past the last road node: only the walk to the destination is left, and the waiting is behind.
+        return Math.max(0, polylineLength - along) / connectorPace();
+    }
+
+    /**
+     * Seconds to cover a distance of road, taken from the end of the route backwards.
+     *
+     * <p>Backwards because what is asked for is always the part that is still ahead, and the road ends
+     * at the destination: the pieces to count are the last ones. Within a piece the pace is constant,
+     * so a piece half covered costs half its time.
+     */
+    private double roadSeconds(double distance) {
+        double left = distance;
+        double seconds = 0;
+        for (int i = legs.size() - 1; i >= 0 && left > 0; i--) {
+            double[] leg = legs.get(i);
+            double take = Math.min(left, leg[0]);
+            seconds += take / Math.max(0.05, leg[1]);
+            left -= take;
+        }
+        return seconds;
     }
 
     /**

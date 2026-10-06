@@ -30,7 +30,11 @@ versionRange = "[1.21.1,1.21.2)"
 ordering = "NONE"
 side = "BOTH"
 
-# Hard dependency on the world map: every feature of this mod renders through it.
+# Both halves of Xaero are client-side, and so is this mod: every feature of it renders through the
+# world map, and the entry point is annotated @Mod(dist = Dist.CLIENT). XaeroLib was declared BOTH,
+# which made a dedicated server refuse to start -- "Mod howtogo requires xaerolib 1.1.0 or above.
+# Currently, xaerolib is not installed" -- even though nothing of this mod would ever run there. A
+# client-side dependency has to say CLIENT, or it is a demand that no server can satisfy.
 [[dependencies.howtogo]]
 modId = "xaeroworldmap"
 type = "required"
@@ -43,4 +47,4 @@ modId = "xaerolib"
 type = "required"
 versionRange = "[1.1.0,)"
 ordering = "NONE"
-side = "BOTH"
+side = "CLIENT"

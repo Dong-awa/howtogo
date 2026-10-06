@@ -13,12 +13,87 @@ public final class RoadSegment {
     public static final int NO_NODE = -1;
     public static final int NO_SEGMENT = -1;
 
+    /**
+     * How many times any segment's direction has been set, over the life of this program run.
+     *
+     * <p>A direction is not geometry, so {@link RoadNetwork#revision()} deliberately does not move for
+     * one -- but it is not nothing either: it decides which of a segment's two ends a traveller may set
+     * off from, which is exactly what a routing graph is built out of. A cache that reads a graph has to
+     * be able to tell that the answer has changed, and the segment is where the change happens and the
+     * only place that knows about it, so the count is kept here.
+     *
+     * <p>Whole-program rather than per-network, because a segment is handed out without a reference to
+     * the network holding it and the editor writes through the segment. A count that occasionally moves
+     * for a reason the reader did not care about costs one rebuilt graph and nothing else, which is the
+     * right side to err on: a count that failed to move serves a route along a one-way street the wrong
+     * way. {@code RoadRouter} is the reader that needs it.
+     */
+    private static int directionChanges;
+
+    /** @see #directionChanges */
+    public static int directionChanges() {
+        return directionChanges;
+    }
+
     private final int id;
     private RoadClass roadClass;
     private int fromNode = NO_NODE;
     private int toNode = NO_NODE;
     private RoadDirection direction = RoadDirection.TWO_WAY;
     private String name;
+
+    /**
+     * Which storey of the world this road is on: 0 is the surface, positive is above it and negative
+     * below.
+     *
+     * <p>The thing a flat map cannot show and a router must know. Two roads that cross on the screen
+     * are not necessarily two roads that meet -- a bridge over a road, a tunnel under one, a viaduct
+     * through a station -- and the height in {@link #y()} cannot answer it, because that is whatever
+     * the ground was under each click: two ends of one road across a slope differ by more than a
+     * bridge differs from the road beneath it. A storey is a statement the player makes rather than a
+     * measurement, so it is a field of its own.
+     *
+     * <p>What it decides is only what happens where there is no node. Two roads that share a node are
+     * joined, whatever storey either is on: that is what building the junction means. Two roads whose
+     * ends are close enough to be read as one place are one place only when they are on the same storey,
+     * which is what keeps a bridge from being read as a crossroads. See
+     * {@link bili.dongsz.howtogo.route.RoadRouter}.
+     */
+    private int layer;
+
+    /** The lowest storey a road may be on. */
+    public static final int MIN_LAYER = -32;
+
+    /** The highest storey a road may be on. */
+    public static final int MAX_LAYER = 32;
+
+    /**
+     * How many times any segment's layer has been set, over the life of this program run.
+     *
+     * <p>Kept for the same reason and in the same shape as {@link #directionChanges}: a storey is not
+     * geometry, so {@link RoadNetwork#revision()} does not move for one, but it decides which joins
+     * exist, which is exactly what a routing graph is made of. A cache that reads a graph has to be
+     * able to tell that the answer has changed.
+     */
+    private static int layerChanges;
+
+    /** @see #layerChanges */
+    public static int layerChanges() {
+        return layerChanges;
+    }
+
+    /** The storey this road is on, clamped to what a road may be. */
+    public int layer() {
+        return layer;
+    }
+
+    public void setLayer(int layer) {
+        int clamped = Math.max(MIN_LAYER, Math.min(MAX_LAYER, layer));
+        if (clamped != this.layer) {
+            this.layer = clamped;
+            layerChanges++;
+        }
+    }
 
     /** Interleaved vertex data: xs[i], zs[i] form the i-th vertex. */
     private int[] xs;
@@ -103,7 +178,11 @@ public final class RoadSegment {
     }
 
     public void setDirection(RoadDirection direction) {
-        this.direction = direction == null ? RoadDirection.TWO_WAY : direction;
+        RoadDirection next = direction == null ? RoadDirection.TWO_WAY : direction;
+        if (next != this.direction) {
+            this.direction = next;
+            directionChanges++;
+        }
     }
 
     /** Whether travel is restricted to one direction, in either sense. */
@@ -229,6 +308,7 @@ public final class RoadSegment {
         c.fromNode = fromNode;
         c.toNode = toNode;
         c.direction = direction;
+        c.layer = layer;
         c.name = name;
         return c;
     }

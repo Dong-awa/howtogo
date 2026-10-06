@@ -74,7 +74,7 @@ public final class RoadRouter {
     }
 
     /**
-     * A network the router may repair and split, shared by a batch of queries.
+     * A network the router may split, shared by a batch of queries.
      *
      * <p>Anchoring turns the point on a road nearest the player into a node, which means breaking the
      * segment there, and that cannot be done to the caller's network. The copy that protects it used
@@ -87,10 +87,13 @@ public final class RoadRouter {
      * rest of the graph exactly as it was, so a batch sharing a workspace always reads a refinement of
      * the network it started from and no query can be invalidated by an earlier one.
      *
-     * <p>The copy is also where {@link RoadConflation} does its work, and that has to happen before
-     * the first query rather than lazily on the first split: a join the player's drawing left out is
-     * missing from every route through it, whether or not that particular query needed to anchor
-     * anything.
+     * <p>What the copy is not is repaired. There used to be a pass here that cut junctions where two
+     * roads crossed, or where one road's node landed on another, on the theory that a player who drew
+     * two roads through each other meant a crossroads. It was wrong about the drawing: a crossing and
+     * a bridge look the same on a map that cannot show height, a landing and a near-miss look the same
+     * too, and the pass answered both by inventing a junction the player had not drawn. A road connects
+     * where a node says it connects, and nowhere else; the player who wants a crossing to be a
+     * crossroads puts a node on it, which the editor does when a point is placed on a road.
      *
      * <p>One workspace belongs to one batch, and the network inside it must not be edited between the
      * queries made through it.
@@ -98,42 +101,48 @@ public final class RoadRouter {
     public static final class Workspace {
 
         private final RoadNetwork source;
-        private final boolean repair;
+        /** The revision of {@link #source} this workspace was made from; see {@link WorkspaceCache}. */
+        private int sourceRevision;
+        /**
+         * The one-way state of the world when this workspace was made; see {@link WorkspaceCache}.
+         *
+         * <p>Separate from the revision because a direction is not geometry and the network does not
+         * count it: without this, marking a street one-way left the copy inside this workspace reading
+         * two-way, and every route after it was planned the wrong way down the street.
+         */
+        private int sourceDirections;
+        /**
+         * The storeys of the world when this workspace was made, for the same reason.
+         *
+         * <p>A storey is not geometry either, and it decides which near-coincident nodes the graph
+         * connects as one place, so a copy made before a road was moved to another storey would serve
+         * the joins of the world as it used to be.
+         */
+        private int sourceLayers;
         private RoadNetwork work;
         private RoadEditor editor;
-        private boolean repaired;
         private RoadChains.Grouping grouping;
         private int groupingSegments = -1;
+        /** The graph as of {@link #graphRevision} and {@link #graphDirections}. */
+        private Map<Integer, List<Edge>> graph;
+        private RoutePreferences graphPreferences;
+        private TravelMode graphMode;
+        private int graphRevision = Integer.MIN_VALUE;
+        private int graphDirections = Integer.MIN_VALUE;
+        /** @see #sourceLayers -- the graph's version of the storeys, for the same reason. */
+        private int graphLayers = Integer.MIN_VALUE;
 
         public Workspace(RoadNetwork source) {
-            this(source, true);
-        }
-
-        private Workspace(RoadNetwork source, boolean repair) {
             this.source = source;
-            this.repair = repair;
         }
 
-        /** The network to read: a repaired copy of the caller's, made on first use. */
+        /** The network to read: a copy of the caller's, made on first use. */
         RoadNetwork routingNetwork() {
             if (work == null) {
                 work = source.deepCopy();
                 // Without undo: every split would otherwise copy the whole network again, which is the
                 // cost this class was rewritten to stop paying.
                 editor = RoadEditor.withoutUndo(work);
-                if (repair && RoadConfig.repairRoadJoins()) {
-                    // A repair that throws must cost the player nothing but the repair. The road they
-                    // drew is still a road, and the route over it is what they asked for; losing the
-                    // exception entirely would hide a real bug, so it is reported and the un-repaired
-                    // network is used.
-                    try {
-                        repaired = RoadConflation.conflate(work, editor) > 0;
-                    } catch (RuntimeException failed) {
-                        repaired = false;
-                        HowToGo.LOGGER.warn("[HowToGo] could not repair the road network; routing on "
-                                + "the roads as drawn", failed);
-                    }
-                }
             }
             return work;
         }
@@ -147,20 +156,6 @@ public final class RoadRouter {
         RoadEditor editor() {
             routingNetwork();
             return editor;
-        }
-
-        /**
-         * A second workspace over the same network with the repair left out, or null when there is
-         * nothing to leave out.
-         *
-         * <p>For the caller that found no route at all on the repaired network. The repair only ever
-         * adds a node and a join, so a route that existed before it existed must still be there
-         * afterwards -- and asking the roads as they were drawn is how that is guaranteed rather than
-         * argued. Null when the repair changed nothing, in which case the answer would be identical.
-         */
-        Workspace asDrawn() {
-            routingNetwork();
-            return repaired ? new Workspace(source, false) : null;
         }
 
         /**
@@ -178,6 +173,117 @@ public final class RoadRouter {
             }
             return grouping;
         }
+
+        /**
+         * The graph for one mode and policy, built once per version of the network.
+         *
+         * <p>A public transport plan asks the same network for the same graph dozens of times: every
+         * ride of a line is a query, and every query that anchors an endpoint asks for the graph again.
+         * Building it is a walk of every segment plus a coincident-node pass over every node, so on a
+         * whole railway it was paid dozens of times a plan for one unchanging answer.
+         *
+         * <h2>What the version is made of</h2>
+         * A graph is a reading of two things, and it is only reusable while both are unchanged. The
+         * first is the geometry, and the segment count is what stands for it here: it is exactly what a
+         * split changes, and a split is the one way this class itself moves the network -- subdividing
+         * one segment into two and adding a node, so a graph built before it would be missing the half
+         * the anchor was made on.
+         *
+         * <p>The second is which way each segment may be travelled, and {@link RoadNetwork#revision}
+         * does <em>not</em> move for that: a one-way flag is not geometry, and the network says so
+         * outright. Keying on the segment count alone therefore served a two-way graph after a street
+         * was marked one-way, and the player was routed the wrong way down it -- with the map drawing an
+         * arrow against them. {@link RoadSegment#directionChanges()} is the count that does move, and
+         * both are part of the version because both change what the graph contains: one changes which
+         * edges exist, the other which of the two directions each edge has.
+         */
+        Map<Integer, List<Edge>> graphFor(TravelMode mode, RoutePreferences preferences) {
+            RoadNetwork network = routingNetwork();
+            int version = network.segmentCount();
+            int directions = RoadSegment.directionChanges();
+            int layers = RoadSegment.layerChanges();
+            if (graph == null || graphRevision != version || graphDirections != directions
+                    || graphLayers != layers
+                    || graphMode != mode || !graphPreferences.equals(preferences)) {
+                graph = buildGraph(network, mode, preferences);
+                graphRevision = version;
+                graphDirections = directions;
+                graphLayers = layers;
+                graphMode = mode;
+                graphPreferences = preferences;
+            }
+            return graph;
+        }
+    }
+
+    /**
+     * Workspaces kept for the networks a plan is being made over, so a batch of queries shares each.
+     *
+     * <h2>Why a workspace has to outlive one query</h2>
+     * A {@link Workspace} exists to make one network's copy be paid once for a batch of queries. Only a
+     * caller that holds one gets that: the convenience entry point
+     * {@link #findRoute(RoadNetwork, double, double, double, double, String, TravelMode,
+     * RoutePreferences)} makes a workspace per call, and so did the public transport planner -- one per
+     * ride, and a ride is one pair of neighbouring stops, so a journey over a whole railway asked for
+     * the same few hundred line tracks thousands of times. Measured on a network of four hundred lines,
+     * one plan copied four hundred line tracks in full, and then did it all again on the next plan,
+     * because the map that held them belonged to the plan and was thrown away with it.
+     *
+     * <h2>Why the key is weak, and the revision is checked</h2>
+     * The workspaces are held against the source networks rather than against the calls, so the same
+     * track is copied once for the session. A plain map of those would be a leak the size
+     * of every network ever planned over, so the keys are weak: the workspace lives exactly as long as
+     * the network it was made from, and a merged network rebuilt for one plan takes its copy with it
+     * when the plan lets go.
+     *
+     * <p>The revision is stored with the workspace and checked on the way out, for the reason
+     * {@code RoadSnapper} gives for its own cache: the editor mutates one network in place for a whole
+     * session, so a workspace keyed on the reference alone would keep serving a copy of roads that have
+     * since moved. Here it is a field of the workspace rather than part of a map key, because the key
+     * has to be the network itself for the weakness to mean anything -- and an edited network replaces
+     * its own entry, which is right: the old copy is stale and has nothing left to answer.
+     *
+     * <p>The one-way state is checked beside it, because the network's revision deliberately does not
+     * count it -- a direction is not geometry -- and the copy inside a workspace is exactly what a
+     * direction change invalidates. Marking a street one-way used to leave the copy reading two-way, so
+     * every route planned after it went the wrong way down the street while the map drew the arrow
+     * against the traveller. See {@link RoadSegment#directionChanges()}.
+     */
+    private static final class WorkspaceCache {
+
+        private final Map<RoadNetwork, Workspace> entries =
+                java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+        Workspace get(RoadNetwork network) {
+            int directions = RoadSegment.directionChanges();
+            int layers = RoadSegment.layerChanges();
+            Workspace found = entries.get(network);
+            if (found == null || found.sourceRevision != network.revision()
+                    || found.sourceDirections != directions
+                    || found.sourceLayers != layers) {
+                found = new Workspace(network);
+                found.sourceRevision = network.revision();
+                found.sourceDirections = directions;
+                found.sourceLayers = layers;
+                entries.put(network, found);
+            }
+            return found;
+        }
+    }
+
+    private static final WorkspaceCache WORKSPACES = new WorkspaceCache();
+
+    /**
+     * The workspace a batch of queries should share, kept across batches.
+     *
+     * <p>For a caller that plans many journeys over the same networks -- a public transport planner
+     * asks for one workspace per ride, over a line's own track, and the same tracks are asked about
+     * again on the next plan. Handing the class's own kept workspace over is what makes a line's copy
+     * be paid once for the session rather than once per journey; see
+     * {@link WorkspaceCache}.
+     */
+    public static Workspace workspaceFor(RoadNetwork network) {
+        return WORKSPACES.get(network);
     }
 
     /**
@@ -207,7 +313,7 @@ public final class RoadRouter {
     public static Route findRoute(RoadNetwork network, double startX, double startZ,
                                   double goalX, double goalZ, String destinationName,
                                   TravelMode mode, RoutePreferences preferences) {
-        return findRoute(new Workspace(network), startX, startZ, goalX, goalZ, destinationName,
+        return findRoute(WORKSPACES.get(network), startX, startZ, goalX, goalZ, destinationName,
                 mode, preferences);
     }
 
@@ -224,28 +330,7 @@ public final class RoadRouter {
     public static Route findRoute(Workspace workspace, double startX, double startZ,
                                   double goalX, double goalZ, String destinationName,
                                   TravelMode mode, RoutePreferences preferences) {
-        Route found = plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode,
-                preferences);
-        if (found.isPresent()) {
-            return found;
-        }
-        // Nothing at all on the repaired network. The repair only ever adds a node and a join, so it
-        // cannot have taken a route away -- but that is an argument, and this is the guarantee: the
-        // roads as the player drew them are asked as well, and the best of the two answers is what
-        // comes back. A repair that loses a route would be worse than no repair, so it is not allowed
-        // to be able to.
-        Workspace asDrawn = workspace.asDrawn();
-        if (asDrawn == null) {
-            return found;
-        }
-        Route unrepaired = plan(asDrawn, startX, startZ, goalX, goalZ, destinationName, mode,
-                preferences);
-        if (unrepaired.isPresent()) {
-            HowToGo.LOGGER.info("[HowToGo] the repaired road network found no route from ({}, {}) to "
-                            + "({}, {}); the roads as drawn do, so those are used",
-                    Math.round(startX), Math.round(startZ), Math.round(goalX), Math.round(goalZ));
-        }
-        return unrepaired;
+        return plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode, preferences);
     }
 
     /** One attempt: anchored if it can be, between the nearest nodes if it cannot. */
@@ -257,7 +342,7 @@ public final class RoadRouter {
         if (anchored != null) {
             return anchored;
         }
-        return findNodeRoute(workspace.routingNetwork(), startX, startZ, goalX, goalZ,
+        return findNodeRoute(workspace, startX, startZ, goalX, goalZ,
                 destinationName, mode, preferences);
     }
 
@@ -275,8 +360,7 @@ public final class RoadRouter {
      * onto the network but a line across open country that no vehicle in this mod can travel.
      *
      * <p>The split happens on the workspace's own copy, so routing never mutates the saved network:
-     * see {@link Workspace}, which makes that copy once for a whole batch of queries and repairs the
-     * joins the drawing left out before the first of them.
+     * see {@link Workspace}, which makes that copy once for a whole batch of queries.
      *
      * @return null when there is nothing to anchor to, the anchors are too far away, or they are
      *         not connected
@@ -320,7 +404,7 @@ public final class RoadRouter {
                     startX, startZ, goalX, goalZ, destinationName, mode, preferences);
         }
 
-        Map<Integer, List<Edge>> graph = buildGraph(network, mode, preferences);
+        Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
         List<RoadSegment> path = search(graph, network, startNode, goalNode, mode, preferences);
         if (path == null) {
             return null;
@@ -398,8 +482,21 @@ public final class RoadRouter {
      */
     private static RoadPoint nearestRoadPoint(RoadNetwork network, double x, double z,
                                               TravelMode mode, RoutePreferences preferences) {
+        return nearestRoadPointWithin(network, x, z, mode, preferences, Double.MAX_VALUE);
+    }
+
+    /**
+     * The same, considering only roads within {@code radius} blocks.
+     *
+     * <p>The bound is not an optimisation: a caller that is asking "is there a road nearer than this
+     * one" must not be answered by a road so far away that the answer cannot matter, and reading the
+     * whole network to find it would make that question cost as much as the routing it is checking.
+     */
+    private static RoadPoint nearestRoadPointWithin(RoadNetwork network, double x, double z,
+                                                    TravelMode mode, RoutePreferences preferences,
+                                                    double radius) {
         RoadPoint best = null;
-        double bestDistanceSq = Double.MAX_VALUE;
+        double bestDistanceSq = radius * radius;
         for (RoadSegment segment : network.segmentsSnapshot()) {
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
@@ -433,11 +530,27 @@ public final class RoadRouter {
     /**
      * Fallback routing between the nearest nodes when anchoring is impossible or the anchors are
      * not connected to each other.
+     *
+     * <h2>The endpoints still have to be reachable</h2>
+     * The nodes here are the nearest ones that the graph contains, not the ones the trip would use, and
+     * the first and last hop are drawn as straight lines whatever their length. A node further from the
+     * end than the mode's connector allows therefore produces a route with a beeline at one end of it --
+     * which is exactly the thing {@link TravelMode#maxConnectorDistance()} exists to forbid, and which
+     * the anchored attempt refuses.
+     *
+     * <p>That was not only a long walk. A one-way street is invisible to this search in the sense that
+     * matters: nothing can be driven the wrong way down it, so the anchored attempt returns nothing,
+     * the fallback is asked instead, and it answers with the nearest node on the far side of the street
+     * joined by a straight line. The player asked for a route and got one that goes the wrong way up a
+     * one-way street without ever claiming to -- so the street is not one-way at all, it is merely
+     * inconvenient. Refusing the fallback when its own endpoints are past the cap is what makes the
+     * one-way street mean what it says, and it is the same rule the anchored path already follows.
      */
-    private static Route findNodeRoute(RoadNetwork network, double startX, double startZ,
+    private static Route findNodeRoute(Workspace workspace, double startX, double startZ,
                                        double goalX, double goalZ, String destinationName,
                                        TravelMode mode, RoutePreferences preferences) {
-        Map<Integer, List<Edge>> graph = buildGraph(network, mode, preferences);
+        RoadNetwork network = workspace.routingNetwork();
+        Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
         if (graph.isEmpty()) {
             return Route.empty();
         }
@@ -452,11 +565,120 @@ public final class RoadRouter {
 
         Best best = searchBetweenCandidates(graph, network, starts, goals, startX, startZ, goalX,
                 goalZ, mode, preferences);
-        if (best == null) {
+        if (best == null || beyondConnector(network, best.source(), startX, startZ, mode)
+                || beyondConnector(network, best.goal(), goalX, goalZ, mode)) {
             return Route.empty();
         }
-        return buildRoute(network, RoadChains.group(network), best.source(), best.goal(), best.path(),
-                startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+        // The workspace's own grouping, not a fresh one: this is the fallback path, which a public
+        // transport plan walks once per ride, and building the grouping is a walk of every segment.
+        // The anchored path beside this one has always used the cached one.
+        Route route = buildRoute(network, workspace.grouping(), best.source(), best.goal(),
+                best.path(), startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+        return overshotTheRoad(network, best, route) ? Route.empty() : route;
+    }
+
+    /**
+     * Whether the node is further from the point than this trip may reach off the road.
+     *
+     * <p>Measured on the node rather than on the road point, because the node is what the connector is
+     * actually drawn to -- the same care the anchored attempt takes, and for the same reason: a cap that
+     * a rounding of the anchor could exceed is not a cap.
+     */
+    private static boolean beyondConnector(RoadNetwork network, int nodeId, double x, double z,
+                                           TravelMode mode) {
+        RoadNode node = network.node(nodeId);
+        return node != null
+                && Math.hypot(node.x() - x, node.z() - z) > mode.maxConnectorDistance();
+    }
+
+    /**
+     * Whether the last hop is standing in for a road the trip declined to use.
+     *
+     * <h2>The route this refuses</h2>
+     * Two roads drawn sixty blocks short of each other are two fragments, and nothing can travel from
+     * one to the other -- that is what "not connected" means, and it is what the player has to be told
+     * rather than have papered over. The node fallback is free to choose <em>which</em> node the trip
+     * ends at, though, and that freedom is what closes the gap: it ends the road at a node on the far
+     * side, and the last hop -- drawn as a straight line whatever its length -- is spent coming back
+     * across the gap. Measured on two collinear roads with a sixty block gap, the walk came out as one
+     * straight line from the end of the first road to a point past the start of the second, 250 blocks
+     * of connector at the end of it. On the map that is indistinguishable from a junction, so
+     * the player is told the roads meet when they do not.
+     *
+     * <h2>The two numbers</h2>
+     * The trip arrived on a road at some point along it, and the connector leaves from there to the
+     * destination. Two things about that road can be compared:
+     *
+     * <ul>
+     *   <li>how far <em>past</em> the destination's own nearest point on that road the trip stopped --
+     *       the distance it would have to come back, which is what makes the hop a doubling back at
+     *       all; and</li>
+     *   <li>how long the hop actually is.</li>
+     * </ul>
+     *
+     * <p>The hop replaces road travel only when it is the shorter of the two: coming back further than
+     * the hop is long means the road was left for the hop rather than walked, and that is the shortcut.
+     * When the hop is the longer of the two it is simply the trip leaving the road to reach a
+     * destination beside it, however far past the nearest point it stopped -- a destination with
+     * nothing drawn up to it is reached from whichever node the road happens to end at, and that hop is
+     * the one every route has and the mode's cap exists to allow.
+     *
+     * <p>That is what tells the gap apart from a stub beside the destination that nothing routes to, and
+     * from a destination on a bridge whose foot is below it: in both of those the hop is longer than the
+     * road it would have saved, so both keep the hop they always had. Both are harness cases, and both
+     * failed against the first two rules tried here -- one that refused any hop past a nearer road, and
+     * one that refused any doubling back at all.
+     */
+    private static boolean overshotTheRoad(RoadNetwork network, Best best, Route route) {
+        if (best.path().isEmpty() || !route.isPresent()) {
+            // The whole trip is a hop between two nodes of one road, so there is no road ahead of the
+            // arrival to have been overshot.
+            return false;
+        }
+        // The road the trip arrived on, and the node it arrived at.
+        RoadSegment arrival = best.path().get(best.path().size() - 1);
+        RoadNode at = network.node(best.goal());
+        if (at == null) {
+            return false;
+        }
+        // The route's last point is the destination itself -- buildRoute ends there whatever the hop --
+        // so this is a comparison of two positions on the arrival road, in the same units.
+        double[] destination = route.points().get(route.points().size() - 1);
+        double alongNode = along(arrival, at.x(), at.z());
+        double alongGoal = along(arrival, destination[0], destination[1]);
+        if (Double.isNaN(alongNode) || Double.isNaN(alongGoal)) {
+            return false;
+        }
+        return alongNode - alongGoal > route.goalConnector();
+    }
+
+    /**
+     * How far a point lies along a segment's polyline, in blocks from its first vertex.
+     *
+     * <p>The point is projected onto each vertex span and the closest projection wins, which is the
+     * distance to the polyline itself rather than to its vertices. Zero is the segment's {@code from}
+     * end and the total length is its {@code to} end, so two points on one road are comparable.
+     */
+    private static double along(RoadSegment segment, double x, double z) {
+        double best = Double.NaN;
+        double bestDistance = Double.MAX_VALUE;
+        double travelled = 0;
+        for (int i = 1; i < segment.vertexCount(); i++) {
+            double ax = segment.x(i - 1);
+            double az = segment.z(i - 1);
+            double ex = segment.x(i) - ax;
+            double ez = segment.z(i) - az;
+            double length = Math.hypot(ex, ez);
+            double t = length < 1.0E-9 ? 0
+                    : Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (length * length)));
+            double distance = Math.hypot(ax + ex * t - x, az + ez * t - z);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = travelled + t * length;
+            }
+            travelled += length;
+        }
+        return best;
     }
 
     /** The whole fallback trip: which candidate it leaves from, which it arrives at, and the road. */
@@ -494,25 +716,31 @@ public final class RoadRouter {
                                                 double goalZ, TravelMode mode,
                                                 RoutePreferences preferences) {
         Map<Integer, Double> gScore = new HashMap<>();
+        Map<Integer, Integer> turns = new HashMap<>();
+        Map<Integer, RoadSegment> arrivedBy = new HashMap<>();
         Map<Integer, Integer> cameFromNode = new HashMap<>();
         Map<Integer, RoadSegment> cameFromSegment = new HashMap<>();
         Set<Integer> closed = new HashSet<>();
         Set<Integer> settledGoals = new HashSet<>();
 
-        PriorityQueue<double[]> frontier = new PriorityQueue<>(Comparator.comparingDouble(a -> a[0]));
+        // Ordered by cost and then by turns, for the reason given on the single-source search: on a
+        // rectilinear network the cost cannot tell a staircase from a route with one turn in it.
+        PriorityQueue<double[]> frontier = new PriorityQueue<>(
+                Comparator.<double[]>comparingDouble(a -> a[0]).thenComparingDouble(a -> a[1]));
         for (int start : starts) {
             double connector = connectorCost(network, start, startX, startZ, mode, preferences);
             if (connector < gScore.getOrDefault(start, Double.MAX_VALUE)) {
                 gScore.put(start, connector);
+                turns.put(start, 0);
                 frontier.add(new double[]{
                         connector + nearestGoalEstimate(network, start, goals, mode, preferences),
-                        start});
+                        0, start});
             }
         }
 
         double bestTotal = Double.MAX_VALUE;
         while (!frontier.isEmpty() && frontier.peek()[0] < bestTotal) {
-            int current = (int) frontier.poll()[1];
+            int current = (int) frontier.poll()[2];
             if (!closed.add(current)) {
                 continue;
             }
@@ -526,20 +754,32 @@ public final class RoadRouter {
                 bestTotal = Math.min(bestTotal, total);
             }
 
+            int currentTurns = turns.getOrDefault(current, 0);
+            RoadSegment arrived = arrivedBy.get(current);
             for (Edge edge : graph.getOrDefault(current, List.of())) {
                 if (closed.contains(edge.toNode())) {
                     continue;
                 }
                 double tentative = currentG + edgeCost(edge.segment(), mode, preferences);
-                if (tentative < gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE)) {
-                    gScore.put(edge.toNode(), tentative);
-                    cameFromNode.put(edge.toNode(), current);
-                    cameFromSegment.put(edge.toNode(), edge.segment());
-                    frontier.add(new double[]{
-                            tentative + nearestGoalEstimate(network, edge.toNode(), goals, mode,
-                                    preferences),
-                            edge.toNode()});
+                int viaTurns = currentTurns
+                        + (turnsAt(arrived, current, edge.segment()) ? 1 : 0);
+                double known = gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE);
+                boolean better = tentative < known - COST_EPSILON;
+                boolean tidier = !better && tentative <= known + COST_EPSILON
+                        && viaTurns < turns.getOrDefault(edge.toNode(), Integer.MAX_VALUE);
+                if (!better && !tidier) {
+                    continue;
                 }
+                double settled = Math.min(tentative, known);
+                gScore.put(edge.toNode(), settled);
+                turns.put(edge.toNode(), viaTurns);
+                arrivedBy.put(edge.toNode(), edge.segment());
+                cameFromNode.put(edge.toNode(), current);
+                cameFromSegment.put(edge.toNode(), edge.segment());
+                frontier.add(new double[]{
+                        settled + nearestGoalEstimate(network, edge.toNode(), goals, mode,
+                                preferences),
+                        viaTurns, edge.toNode()});
             }
         }
 
@@ -670,9 +910,9 @@ public final class RoadRouter {
      * same height, to keep a road from being joined to the one passing over it, and that was the wrong
      * trade. The heights in a hand-drawn network are whatever the ground was under each click, so two
      * nodes a block apart across a slope are routinely several blocks apart vertically, and refusing
-     * those joins disconnected networks that had been routing for as long as they existed. Where a
-     * height check does belong is in {@link RoadConflation}, which invents joins rather than keeping
-     * them: there it can only decline to add one.
+     * those joins disconnected networks that had been routing for as long as they existed. The allowance
+     * that admits the slope and refuses the bridge is the one {@link #samePlaceVertically} makes, and
+     * this pass uses it with the storeys beside it.
      */
     private static void addCoincidentNodeLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
                                                TravelMode mode, RoutePreferences preferences) {
@@ -684,6 +924,31 @@ public final class RoadRouter {
         if (junctionClass == null) {
             // Everything this mode could travel on is avoided, so there is no junction to build.
             return;
+        }
+
+        // What each node has drawn at it, worked out once: a join is between two pieces of road, so the
+        // question "could this trip travel from here" is about the segments meeting at the node rather
+        // than about the node's position. Built here because the pairs below are looked at in buckets and
+        // asking the network per pair would walk every segment per pair.
+        Map<Integer, Set<RoadClass>> atNode = new HashMap<>();
+        // What storeys are drawn at each node, worked out in the same pass and for the same reason: a
+        // join is only a join between roads on one storey. Roads that share a *node* are connected
+        // whatever storey either is on -- that is what the node is -- but two nodes merely passing
+        // within three blocks are one place only when something at each of them is on the same storey,
+        // which is what stops a bridge being read as a crossroads with the road under it.
+        Map<Integer, Set<Integer>> layersAtNode = new HashMap<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
+                continue;
+            }
+            for (int nodeId : new int[]{segment.fromNode(), segment.toNode()}) {
+                if (nodeId != RoadSegment.NO_NODE) {
+                    atNode.computeIfAbsent(nodeId, k -> java.util.EnumSet.noneOf(RoadClass.class))
+                            .add(segment.roadClass());
+                    layersAtNode.computeIfAbsent(nodeId, k -> new java.util.HashSet<>())
+                            .add(segment.layer());
+                }
+            }
         }
 
         // Bucketed so this stays near-linear instead of comparing every pair of nodes.
@@ -708,6 +973,13 @@ public final class RoadRouter {
                         if (b.id() <= a.id() || a.distSq(b.x(), b.z()) > maxSq) {
                             continue;
                         }
+                        if (!samePlaceVertically(a, b)) {
+                            continue;
+                        }
+                        if (!shareARoad(atNode.get(a.id()), atNode.get(b.id()))
+                                || !shareALayer(layersAtNode.get(a.id()), layersAtNode.get(b.id()))) {
+                            continue;
+                        }
                         RoadSegment link = syntheticLink(a, b, junctionClass);
                         graph.computeIfAbsent(a.id(), k -> new ArrayList<>()).add(new Edge(b.id(), link));
                         graph.computeIfAbsent(b.id(), k -> new ArrayList<>()).add(new Edge(a.id(), link));
@@ -720,6 +992,125 @@ public final class RoadRouter {
     /** Which bucket a coordinate falls in, which is the only thing a bucket key may be built from. */
     private static int cellOf(double coordinate, double cell) {
         return (int) Math.floor(coordinate / cell);
+    }
+
+    /**
+     * Whether two nodes this close together are also at the same level, which is what makes them one
+     * place rather than one over the other.
+     *
+     * <h2>Why a height check belongs here after all</h2>
+     * This pass joins two nodes within {@link #COINCIDENT_DISTANCE} of each other whatever their
+     * heights, and on a road network that is measured in horizontal blocks that is the same as saying a
+     * bridge is a junction: a road ramping up to a bridge has a node at the foot of the ramp and the
+     * bridge has a node above it, two blocks apart and thirty apart vertically, and the pass made them
+     * one place. Measured on exactly that shape, a drive was sent up the ramp and onto the bridge and
+     * over it -- a turn from one road onto another that share no node, which is the one thing this pass
+     * is not allowed to invent.
+     *
+     * <p>An earlier version of this pass had a height check and it was removed, correctly: a fixed
+     * tolerance refused two ends across a slope, and a hand-drawn network's heights are whatever the
+     * ground was under each click, so roads that had routed for as long as they existed stopped routing.
+     * The harness still holds that case -- two ends three blocks apart and eight apart vertically, which
+     * must join.
+     *
+     * <h2>What the tolerance is, and why it is not a constant</h2>
+     * A place on the ground is not flat, so how much a road may rise between two points two blocks apart
+     * is a question about the ground and not a number to pick. What separates the two cases is the
+     * <em>slope</em>: eight blocks of rise over three blocks of ground is a road going up a hill, and
+     * thirty-six over two is not a road at all. So the allowance grows with the horizontal gap --
+     * {@code SLOPE_RISE_PER_BLOCK * gap + JOIN_DISTANCE} -- which admits the slope (nine allowed against
+     * eight), refuses the bridge (seven against thirty-six), and at a gap of zero admits only the join
+     * distance itself, which is two nodes the player put in the same spot.
+     */
+    private static boolean samePlaceVertically(RoadNode a, RoadNode b) {
+        double gap = Math.hypot(a.x() - b.x(), a.z() - b.z());
+        double allowed = SLOPE_RISE_PER_BLOCK * gap + JOIN_DISTANCE;
+        return Math.abs(a.y() - b.y()) <= allowed;
+    }
+
+    /**
+     * How far a node may stand from where another one is and still be the same place, in blocks.
+     *
+     * <p>The distance this pass calls coincident, and the floor of the height allowance below: two
+     * nodes at the same spot may be that far apart vertically and still be one place, because a spot is
+     * not flat.
+     */
+    private static final double JOIN_DISTANCE = 3.0;
+
+    /**
+     * How much a road may rise per block of ground and still be the same road, in blocks per block.
+     *
+     * <p>Grows the height allowance with the horizontal gap, which is what tells a road going up a hill
+     * from a bridge over one -- see {@link #samePlaceVertically}. A flat tolerance is the wrong answer
+     * in both directions: it refuses the hill and accepts the bridge.
+     */
+    private static final double SLOPE_RISE_PER_BLOCK = 2.0;
+
+    /**
+     * Whether two nodes stand on roads this trip could travel on from both of them, which is what makes
+     * the gap between them a junction rather than two things that happen to be near each other.
+     *
+     * <h2>Why being near is not enough</h2>
+     * Two roads drawn a block apart with no shared node are one road as far as the player is concerned,
+     * and joining them is the whole purpose of the pass. But a node is a point on the map rather than a
+     * statement about what is there, and two of them within three blocks is not evidence that anything
+     * can pass between them:
+     *
+     * <ul>
+     *   <li>a railway crossing a road has a vertex of each inside the join distance at the level
+     *       crossing, and joining them lets a ride leave the rails and continue down the street;</li>
+     *   <li>a road and a footpath beside it are two things a different vehicle travels on, and joining
+     *       them lets a drive appear to use a surface it never touched.</li>
+     * </ul>
+     *
+     * <p>The class the link borrows cannot answer this on its own: it is one class for the whole pass and
+     * says only what the mode may travel on. What matters is what is actually drawn at each end, so the
+     * two nodes are joined only when some class the trip can use is present at both of them -- which is
+     * exactly the question the graph would ask of a real segment between them.
+     *
+     * <p>What this deliberately does not add is a height check. An earlier version of this pass had one,
+     * and it was the wrong trade: the heights in a hand-drawn network are whatever the ground was under
+     * each click, so two ends across a slope are routinely several blocks apart vertically, and refusing
+     * those joins disconnected networks that had been routing for as long as they existed. The height
+     * check belongs in {@link #samePlaceVertically}, which is where the question of whether two nodes are
+     * one place is actually asked.
+     */
+    private static boolean shareARoad(Set<RoadClass> fromA, Set<RoadClass> fromB) {
+        if (fromA == null || fromB == null) {
+            return false;
+        }
+        // "Some one mode can travel on both": a highway ending beside a road is one place to a driver,
+        // and this used to demand an identical class, so a driver's road and the highway it was drawn
+        // up against were two fragments however plainly they met. See TravelMode.shareAMode.
+        for (RoadClass here : fromA) {
+            for (RoadClass there : fromB) {
+                if (TravelMode.shareAMode(here, there)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the two nodes have a storey in common, which is what makes the gap between them
+     * something that can be crossed on the ground.
+     *
+     * <p>The whole of the storey rule where a join is invented: this pass exists to join roads that
+     * were drawn a block apart, and a road on a bridge and the road under it are not that however
+     * close together they are on a map that cannot show height. Roads that share a <em>node</em> are
+     * untouched by this: they are already joined, and a storey cannot take a junction away.
+     */
+    private static boolean shareALayer(Set<Integer> fromA, Set<Integer> fromB) {
+        if (fromA == null || fromB == null) {
+            return false;
+        }
+        for (Integer layer : fromA) {
+            if (fromB.contains(layer)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static long bucketKey(int cellX, int cellZ) {
@@ -813,7 +1204,7 @@ public final class RoadRouter {
     }
 
     /**
-     * Why a route could not be found, in one line.
+     * Why a route could not be found, as a translation key and its arguments.
      *
      * <p>The overwhelmingly common cause is a road network that is really several disconnected
      * fragments, which is invisible on the map -- the roads look joined when they merely overlap.
@@ -823,67 +1214,75 @@ public final class RoadRouter {
      * road of the kind being asked for and a policy that has excluded the roads that would have
      * joined the two ends. The second is named explicitly: the player could see the water line on
      * the map and has no way of guessing that their own avoid list is what broke the journey.
+     *
+     * <p>Answered as {@link RouteFailure} rather than as a sentence because the picker shows this line
+     * to the player and everything else it shows is translated; see that record for why the router
+     * cannot translate it itself.
      */
-    public static String explainFailure(RoadNetwork network, double startX, double startZ,
-                                        double goalX, double goalZ) {
+    public static RouteFailure explainFailure(RoadNetwork network, double startX, double startZ,
+                                              double goalX, double goalZ) {
         return explainFailure(network, startX, startZ, goalX, goalZ, TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
     }
 
-    /** Why no route for this mode could be found, in one line. */
-    public static String explainFailure(RoadNetwork network, double startX, double startZ,
-                                        double goalX, double goalZ, TravelMode mode) {
+    /** Why no route for this mode could be found. */
+    public static RouteFailure explainFailure(RoadNetwork network, double startX, double startZ,
+                                              double goalX, double goalZ, TravelMode mode) {
         return explainFailure(network, startX, startZ, goalX, goalZ, mode, RoutePreferences.DEFAULTS);
     }
 
-    /** Why no route for this mode and policy could be found, in one line. */
-    public static String explainFailure(RoadNetwork network, double startX, double startZ,
-                                        double goalX, double goalZ, TravelMode mode,
-                                        RoutePreferences preferences) {
-        String avoided = avoidedNote(preferences);
+    /** Why no route for this mode and policy could be found. */
+    public static RouteFailure explainFailure(RoadNetwork network, double startX, double startZ,
+                                              double goalX, double goalZ, TravelMode mode,
+                                              RoutePreferences preferences) {
+        Object avoided = avoidedNote(preferences);
         Map<Integer, List<Edge>> graph = buildGraph(network, mode, preferences);
         if (graph.isEmpty()) {
-            if (!avoided.isEmpty()) {
-                return "every road usable by " + modeName(mode) + " is excluded" + avoided
-                        + ", so there is nothing to route on";
+            if (avoidsAnything(avoided)) {
+                return RouteFailure.of("screen.howtogo.failure.all_avoided", modeName(mode), avoided);
             }
-            return "no road usable by " + modeName(mode)
-                    + " has both endpoints attached to nodes, so there is nothing to route on";
+            return RouteFailure.of("screen.howtogo.failure.nothing_to_route_on", modeName(mode));
         }
         if (nearestRoadPoint(network, startX, startZ, mode, preferences) == null) {
-            return "no road usable by " + modeName(mode) + " near the start" + avoided;
+            return RouteFailure.of("screen.howtogo.failure.no_road_at_start", modeName(mode),
+                    avoided);
         }
         if (nearestRoadPoint(network, goalX, goalZ, mode, preferences) == null) {
-            return "no road usable by " + modeName(mode) + " near the destination" + avoided;
+            return RouteFailure.of("screen.howtogo.failure.no_road_at_destination", modeName(mode),
+                    avoided);
         }
         List<Integer> starts = nearestRoutableNodes(network, graph, startX, startZ, 1, mode);
         List<Integer> goals = nearestRoutableNodes(network, graph, goalX, goalZ, 1, mode);
         if (starts.isEmpty() || goals.isEmpty()) {
-            return "no road usable by " + modeName(mode) + " within "
-                    + Math.round(mode.maxConnectorDistance())
-                    + " blocks of the start or the destination" + avoided;
+            return RouteFailure.of("screen.howtogo.failure.too_far_from_road", modeName(mode),
+                    Math.round(mode.maxConnectorDistance()), avoided);
         }
         Set<Integer> fromStart = component(graph, starts.get(0));
         Set<Integer> fromGoal = component(graph, goals.get(0));
         if (fromStart.contains(goals.get(0))) {
-            return "nodes are in the same component (" + fromStart.size()
-                    + " nodes) but no path was found - please report this";
+            return RouteFailure.of("screen.howtogo.failure.same_component", fromStart.size());
         }
-        return modeName(mode) + " cannot get across" + avoided
-                + ": roads are split into separate fragments: nearest road to you has "
-                + fromStart.size() + " nodes, nearest road to the destination has "
-                + fromGoal.size() + " nodes. "
-                + (avoided.isEmpty()
-                        ? "Connect them to route across."
-                        : "Connect them, or stop avoiding those classes.");
+        return RouteFailure.of("screen.howtogo.failure.split_fragments", modeName(mode), avoided,
+                fromStart.size(), fromGoal.size());
     }
 
-    /** A clause naming the avoided classes, or nothing when the policy avoids none. */
-    private static String avoidedNote(RoutePreferences preferences) {
-        if (!preferences.avoidsAny()) {
-            return "";
-        }
-        return " while avoiding " + preferences.avoidedSummary();
+    /**
+     * A clause naming the avoided classes, or nothing when the policy avoids none.
+     *
+     * <p>Passed to the message as its own argument rather than built into it, so a translation decides
+     * where the clause goes and may leave it out of a sentence that reads better without it.
+     */
+    private static Object avoidedNote(RoutePreferences preferences) {
+        return preferences.avoidsAny()
+                ? RouteFailure.of("screen.howtogo.failure.avoided_clause",
+                        preferences.avoidedSummary())
+                : "";
+    }
+
+    /** Whether an avoided clause says anything, which is what decides if the message names it. */
+    private static boolean avoidsAnything(Object avoided) {
+        return avoided instanceof RouteFailure clause ? clause.isPresent()
+                : avoided instanceof String text && !text.isEmpty();
     }
 
     /** The mode by id and localised name, so a log line says which mode could not route. */
@@ -919,17 +1318,31 @@ public final class RoadRouter {
         }
 
         Map<Integer, Double> gScore = new HashMap<>();
+        Map<Integer, Integer> turns = new HashMap<>();
+        Map<Integer, RoadSegment> arrivedBy = new HashMap<>();
         Map<Integer, Integer> cameFromNode = new HashMap<>();
         Map<Integer, RoadSegment> cameFromSegment = new HashMap<>();
         Set<Integer> closed = new HashSet<>();
 
         gScore.put(startNode, 0.0);
-        // Entries are {fScore, nodeId}. Stale entries are tolerated and skipped via the closed set.
-        PriorityQueue<double[]> frontier = new PriorityQueue<>(Comparator.comparingDouble(a -> a[0]));
-        frontier.add(new double[]{heuristic(network, startNode, goal, mode, preferences), startNode});
+        turns.put(startNode, 0);
+        // Entries are {fScore, turns, nodeId}. Stale entries are tolerated and skipped via the closed
+        // set.
+        //
+        // The middle number is the tie-break, and it is the whole answer to a rectilinear network.
+        // Every staircase across a grid of streets is the same length as the two-turn route that goes
+        // straight and turns once, so the cost cannot choose between them and the search used to
+        // return whichever the heap happened to reach first -- which the panel then read out as turn
+        // left, turn right, turn left, turn right, all the way to the destination. Ordering equal
+        // costs by the fewest turns is what a driver does and what a maps app shows. Nothing is added
+        // to the cost: a route that is genuinely longer is still not chosen, so "shortest distance"
+        // remains the shortest and "fastest time" the fastest.
+        PriorityQueue<double[]> frontier = new PriorityQueue<>(
+                Comparator.<double[]>comparingDouble(a -> a[0]).thenComparingDouble(a -> a[1]));
+        frontier.add(new double[]{heuristic(network, startNode, goal, mode, preferences), 0, startNode});
 
         while (!frontier.isEmpty()) {
-            int current = (int) frontier.poll()[1];
+            int current = (int) frontier.poll()[2];
             if (!closed.add(current)) {
                 continue;
             }
@@ -938,19 +1351,39 @@ public final class RoadRouter {
             }
 
             double currentG = gScore.getOrDefault(current, Double.MAX_VALUE);
+            int currentTurns = turns.getOrDefault(current, 0);
+            RoadSegment arrived = arrivedBy.get(current);
             for (Edge edge : graph.getOrDefault(current, List.of())) {
                 if (closed.contains(edge.toNode())) {
                     continue;
                 }
                 double tentative = currentG + edgeCost(edge.segment(), mode, preferences);
-                if (tentative < gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE)) {
-                    gScore.put(edge.toNode(), tentative);
-                    cameFromNode.put(edge.toNode(), current);
-                    cameFromSegment.put(edge.toNode(), edge.segment());
-                    frontier.add(new double[]{
-                            tentative + heuristic(network, edge.toNode(), goal, mode, preferences),
-                            edge.toNode()});
+                int viaTurns = currentTurns
+                        + (turnsAt(arrived, current, edge.segment()) ? 1 : 0);
+                double known = gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE);
+                boolean better = tentative < known - COST_EPSILON;
+                // Equal cost and fewer turns: replace, so the settled route is the tidiest of the
+                // equally good ones rather than the first one found.
+                boolean tidier = !better && tentative <= known + COST_EPSILON
+                        && viaTurns < turns.getOrDefault(edge.toNode(), Integer.MAX_VALUE);
+                if (!better && !tidier) {
+                    continue;
                 }
+                // A highway is a road with no way to turn round on it, so a bend no highway makes is
+                // not an edge: see highwayBendAllowed. The turn is asked of the piece the traveller
+                // arrived on, which is what makes this a turn rather than a property of one segment.
+                if (!highwayBendAllowed(arrived, current, edge.segment())) {
+                    continue;
+                }
+                double settled = Math.min(tentative, known);
+                gScore.put(edge.toNode(), settled);
+                turns.put(edge.toNode(), viaTurns);
+                arrivedBy.put(edge.toNode(), edge.segment());
+                cameFromNode.put(edge.toNode(), current);
+                cameFromSegment.put(edge.toNode(), edge.segment());
+                frontier.add(new double[]{
+                        settled + heuristic(network, edge.toNode(), goal, mode, preferences),
+                        viaTurns, edge.toNode()});
             }
         }
         return null;
@@ -987,29 +1420,40 @@ public final class RoadRouter {
      *
      * <p>Only classes the mode allows and the policy leaves in play can reach this point, since
      * {@link #buildGraph} never puts anything else into the graph.
+     *
+     * <p>The preference weight is applied here, to the cost and to nothing else. It used to be folded
+     * into the pace instead, which quietly made the search minimise a number that was not the estimate
+     * the panel prints -- and, under the shortest-distance metric, was dropped altogether, so the same
+     * switch meant one thing in one metric and nothing in the other. A weight multiplies whichever
+     * metric is in force, so the preference now steers both, and no reported figure is touched.
      */
     private static double edgeCost(RoadSegment segment, TravelMode mode,
                                    RoutePreferences preferences) {
         RoadClass roadClass = segment.roadClass();
+        double weight = preferences.weight(roadClass);
         if (preferences.metric() == RoutePreference.SHORTEST_DISTANCE) {
-            // Pure geometry, with the preference penalty still laid on top: it expresses the
-            // player's taste, which is the same taste whichever metric they asked for.
-            return segment.length() * preferences.penalty(roadClass);
+            // Pure geometry, and nothing else. "Prefer major roads" is a taste about *pace* -- a
+            // footpath is slow, so a longer road is worth the detour -- and length is not pace, so it
+            // has nothing to say in this metric. It used to multiply the length by the footpath's 1.6
+            // here, which made a hundred blocks of footpath lose to a hundred and fifty of road: an
+            // answer that is not the shortest route, under a label that promises exactly that.
+            return segment.length() * weight;
         }
-        return segment.length() / Math.max(0.05, effectiveSpeed(mode, preferences, roadClass));
+        return segment.length() * weight / Math.max(0.05, effectiveSpeed(mode, roadClass));
     }
 
     /**
-     * Pace in blocks per second a class actually offers, once the preference penalty is folded in.
+     * Pace in blocks per second the mode actually makes on a class.
      *
-     * <p>Dividing the penalty out of the pace rather than only multiplying it into the cost is what
-     * lets one number serve the search and the readout: the ETA of a route is then the very cost
-     * the router minimised, so the player is never told a different story from the one the route
-     * was chosen by.
+     * <p>The real pace, and deliberately not a preference-adjusted one. It is what the route's legs
+     * are written with and therefore what the panel's estimate is made of, so it has to be the speed
+     * the player would see, not the speed the search was steered by -- see
+     * {@link RoutePreferences#weight}, which is where the steering lives now. A value that depended on
+     * the routing policy would make the same journey report a different time depending on a switch
+     * that does not move the player any faster.
      */
-    private static double effectiveSpeed(TravelMode mode, RoutePreferences preferences,
-                                         RoadClass roadClass) {
-        return mode.speedOn(roadClass) / preferences.penalty(roadClass);
+    private static double effectiveSpeed(TravelMode mode, RoadClass roadClass) {
+        return mode.speedOn(roadClass);
     }
 
     /** Whether a class takes part in this trip at all. */
@@ -1019,12 +1463,187 @@ public final class RoadRouter {
     }
 
     /**
+     * How much the route has to bend at a node before the bend counts as a turn, in degrees.
+     *
+     * <p>The same angle the turn prompts use, because the two are answers to the same question: a
+     * bend nobody is told to make is not a turn to count either.
+     */
+    private static final double TURN_BREAK_DEGREES = 25.0;
+
+    /**
+     * How sharply a highway may bend before the bend is not one a highway makes, in degrees.
+     *
+     * <h2>What this is for</h2>
+     * A highway is a road built to be driven along, and the one thing it never offers is a way to
+     * turn round: the mod's own guidance says so out loud -- see {@code Navigation.uturnSentence},
+     * where a highway U-turn is re-worded as carrying on to the next junction. That was wording only,
+     * and it could say whatever it liked because the route had already been allowed to plan a
+     * hairpin: a player could be sent onto a highway and told to double back on it, which no highway
+     * has ever permitted and which no driver could carry out.
+     *
+     * <p>A hundred degrees leaves a highway every bend it really has -- a dual carriageway's turn at
+     * the end of a median, a ramp curving away, a road that turns a corner -- and refuses the ones it
+     * does not: the hairpin, the doubling back, and the reversal. A right-angled junction is ninety
+     * and stays.
+     *
+     * <p>Refused in the <em>graph</em> rather than priced in the cost, because this is a rule about
+     * what a highway is and not a preference about which way is nicer: a trip that can only be made
+     * by doubling back on a highway is one this mod does not have an answer for, and the failure it
+     * reports is the honest one. A penalty would leave that route in the answer for a player who
+     * avoided everything else, which is the opposite of what was asked for.
+     */
+    private static final double HIGHWAY_BEND_LIMIT_DEGREES = 100.0;
+
+    /**
+     * Whether a highway may bend this sharply, which is what decides if the edge exists at all.
+     *
+     * <p>On any other class it may: a driver turning off a road into a side street, a walker cutting
+     * back along a path and a boat turning a corner are all ordinary, and the guidance has something
+     * to say about each of them.
+     */
+    private static boolean highwayMayBend(double degrees) {
+        return degrees <= HIGHWAY_BEND_LIMIT_DEGREES;
+    }
+
+    /**
+     * How close two costs have to be to count as the same cost.
+     *
+     * <p>Costs here are sums of lengths over paces, so two routes over the same ground at the same
+     * pace come out equal exactly -- but not necessarily bit for bit once the lengths are hypotenuses
+     * of different legs. The tolerance is what makes "the same cost" mean the same cost rather than
+     * the same double.
+     */
+    private static final double COST_EPSILON = 1.0E-9;
+
+    /**
+     * Whether a traveller who arrived on {@code arrived} may leave {@code current} along
+     * {@code next}.
+     *
+     * <h2>Why this is asked during the search as well as on the road</h2>
+     * The graph stores an edge per road, not per pair of roads: what a highway does at this node is
+     * known once the node is reached, and it is then a question about two pieces at once. Putting it
+     * on the edge would mean storing every pair of roads meeting at every node, which is the
+     * quadratic blow-up {@link #buildGraph} is careful not to be. So the rule lives here, where both
+     * pieces are in hand, and every search that builds a route asks it.
+     *
+     * <p>{@code arrived} is null for the first piece out of the source, which is not a turn: leaving
+     * the node a trip starts at is what a trip is. That is the one place a route may set off along a
+     * highway without having come down one.
+     */
+    private static boolean highwayBendAllowed(RoadSegment arrived, int current, RoadSegment next) {
+        // A highway is only restricted where a highway is involved: a driver who has come down a road
+        // and turns onto a highway has made an ordinary turn, and a walker on a highway's verge is
+        // not driving one.
+        if (arrived == null
+                || (arrived.roadClass() != RoadClass.HIGHWAY
+                        && next.roadClass() != RoadClass.HIGHWAY)) {
+            return true;
+        }
+        // Doubling back on a highway is refused on its own terms rather than through an angle: going
+        // back along the piece just travelled, or onto a piece that leaves this node for the one the
+        // traveller came from, is the U-turn a highway does not have -- whatever the arithmetic of
+        // the bend says. Anything that is not that is then held to the hundred-degree limit, which is
+        // what keeps the hairpin out: a highway cannot curve round and rejoin itself either.
+        if (doublesBackOnItself(arrived, current, next)) {
+            return false;
+        }
+        double degrees = turnDegrees(arrived, current, next);
+        return Double.isNaN(degrees) || highwayMayBend(Math.abs(degrees));
+    }
+
+    /**
+     * Whether travelling on from {@code arrived} to {@code next} at {@code current} puts the
+     * traveller back on the ground they have just come over.
+     *
+     * <p>True when the outgoing piece is the incoming piece itself, and true when the two run
+     * node-to-node between the same pair of nodes -- a road drawn as two pieces, one each way, which
+     * is one road to everybody but the graph.
+     */
+    private static boolean doublesBackOnItself(RoadSegment arrived, int current, RoadSegment next) {
+        if (arrived.id() == next.id()) {
+            return true;
+        }
+        int arrivedFar = arrived.fromNode() == current ? arrived.toNode() : arrived.fromNode();
+        int nextFar = next.fromNode() == current ? next.toNode() : next.fromNode();
+        return arrivedFar == nextFar && arrivedFar != RoadSegment.NO_NODE
+                && arrivedFar != current;
+    }
+
+    /**
+     * Whether going from {@code incoming} to {@code outgoing} at a node is a turn rather than a
+     * continuation.
+     *
+     * <p>Measured on the two pieces' own directions where they meet, not on the nodes: a road that
+     * curves is still one way to travel, and the question here is only whether the traveller has to
+     * change heading.
+     */
+    private static boolean turnsAt(RoadSegment incoming, int atNode, RoadSegment outgoing) {
+        double degrees = turnDegrees(incoming, atNode, outgoing);
+        return !Double.isNaN(degrees) && Math.abs(degrees) >= TURN_BREAK_DEGREES;
+    }
+
+    /**
+     * The angle a traveller changes heading by, going from {@code incoming} to {@code outgoing} at a
+     * node, in degrees; positive is towards +Z, which is {@link #turnsAt}'s convention.
+     *
+     * <p>NaN when either piece has no direction to give -- nothing arrives, or nothing leaves -- which
+     * is the same answer {@link #turnsAt} treats as "not a turn".
+     */
+    private static double turnDegrees(RoadSegment incoming, int atNode, RoadSegment outgoing) {
+        if (incoming == null || outgoing == null) {
+            // No way in means this is the first piece of the trip, and leaving a node is not a turn.
+            return Double.NaN;
+        }
+        double before = travelBearing(incoming, atNode);
+        double after = leaveBearing(outgoing, atNode);
+        if (Double.isNaN(before) || Double.isNaN(after)) {
+            return Double.NaN;
+        }
+        return Math.toDegrees(Math.atan2(Math.sin(after - before), Math.cos(after - before)));
+    }
+
+    /**
+     * Heading the traveller is moving in as they arrive at one of a segment's two nodes.
+     *
+     * <p>Read together with {@link #leaveBearing}, which answers for the piece being left: the angle
+     * between the two is the bend at the node, and the two are written as mirror images of each other
+     * so that a straight continuation comes out as no bend at all.
+     */
+    private static double travelBearing(RoadSegment segment, int arrivedAt) {
+        int last = segment.vertexCount() - 1;
+        if (last < 1) {
+            return Double.NaN;
+        }
+        if (segment.toNode() == arrivedAt) {
+            return bearing(segment.x(last - 1), segment.z(last - 1), segment.x(last), segment.z(last));
+        }
+        return bearing(segment.x(1), segment.z(1), segment.x(0), segment.z(0));
+    }
+
+    /** Heading the traveller sets off in when leaving one of a segment's two nodes. */
+    private static double leaveBearing(RoadSegment segment, int leftFrom) {
+        int last = segment.vertexCount() - 1;
+        if (last < 1) {
+            return Double.NaN;
+        }
+        if (segment.fromNode() == leftFrom) {
+            return bearing(segment.x(0), segment.z(0), segment.x(1), segment.z(1));
+        }
+        return bearing(segment.x(last), segment.z(last), segment.x(last - 1), segment.z(last - 1));
+    }
+
+    private static double bearing(int fromX, int fromZ, int toX, int toZ) {
+        return Math.atan2(toZ - fromZ, toX - fromX);
+    }
+
+    /**
      * Remaining cost, optimistic: the bound has to sit under what the search will really pay, or
      * A* stops being admissible and can return a route that is not the best one.
      *
-     * <p>For time that means the fastest pace any class in play offers, straight there; for
-     * distance it means the straight line, which no line of roads can be shorter than, times the
-     * cheapest penalty still on offer, which no road in play can beat.
+     * <p>For time that means the fastest pace any class in play offers, straight there; for distance
+     * it means the straight line itself, which no line of roads can be shorter than and which is
+     * exactly what the search pays per block -- the metre no longer carries a preference penalty, so
+     * the bound must not carry one either.
      */
     private static double heuristic(RoadNetwork network, int nodeId, RoadNode goal,
                                     TravelMode mode, RoutePreferences preferences) {
@@ -1034,7 +1653,7 @@ public final class RoadRouter {
         }
         double distance = Math.hypot(goal.x() - node.x(), goal.z() - node.z());
         if (preferences.metric() == RoutePreference.SHORTEST_DISTANCE) {
-            return distance * cheapestPenalty(mode, preferences);
+            return distance;
         }
         double fastest = fastestSpeed(mode, preferences);
         // Nothing in play means the graph is empty and the search is about to find nothing; the
@@ -1051,17 +1670,6 @@ public final class RoadRouter {
             }
         }
         return fastest;
-    }
-
-    /** Cheapest penalty on any class this trip may use. */
-    private static double cheapestPenalty(TravelMode mode, RoutePreferences preferences) {
-        double cheapest = Double.MAX_VALUE;
-        for (RoadClass roadClass : RoadClass.values()) {
-            if (usable(mode, preferences, roadClass)) {
-                cheapest = Math.min(cheapest, preferences.penalty(roadClass));
-            }
-        }
-        return cheapest == Double.MAX_VALUE ? 1.0 : cheapest;
     }
 
     // ------------------------------------------------------------------ output

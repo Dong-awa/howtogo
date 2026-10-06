@@ -52,10 +52,12 @@ public final class RideRoadsCheck {
                 roads.forLine(null) == plain);
 
         // The walking legs of a journey are the same either way -- a walk cannot take a rail or a
-        // waterway, so the marks are filtered out by the mode before they are looked at -- and taking
-        // the marked pair keeps the walking side of a journey out of a decision about riding.
-        expect("and a walk is offered the marked roads, which it cannot travel on anyway",
-                roads.forWalks() == marked);
+        // waterway, so the marks are filtered out by the mode before they are looked at -- and the pair
+        // without them is the one that is handed over, because the pair with them is the whole railway
+        // to copy and repair before a single walk can be answered. Measured, that was most of the frozen
+        // second a short journey still cost.
+        expect("and a walk is offered the roads without the marks, which it cannot travel on anyway",
+                roads.forWalks() == plain);
 
         // One network for every line when no line wants the difference: the second copy of the world is
         // only paid for when it is actually asked for.

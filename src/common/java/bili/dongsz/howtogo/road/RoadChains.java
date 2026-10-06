@@ -55,13 +55,24 @@ public final class RoadChains {
      *
      * <p>Asking for the chain of each segment in turn is the obvious way to label a route, and it
      * walks every road once per segment of it. This walks each road exactly once and hands back what
-     * the labelling needs: the key a whole road is identified by, the name it carries, and the
-     * junction degrees that say where it forks.
+     * the labelling needs: the key a whole road is identified by, the name it carries, the junction
+     * degrees that say where it forks, the segments each road is made of, and which one of them
+     * carries the road's label.
+     *
+     * <p>The last two are here rather than in the three views that draw a map -- the world map, the
+     * navigation panel and the picker -- because all three need them every frame, and every one of
+     * them used to ask {@link #chainContaining} once per named road to get them. That call builds a
+     * whole adjacency index before it answers, so a map pass cost the size of the network times the
+     * number of names on it per frame, and about a megabyte of short-lived garbage per frame on a
+     * network of a few hundred segments. Asking once per network revision instead is the whole point
+     * of this shape.
      */
     public static Grouping group(RoadNetwork network) {
         Index index = new Index(network);
         Map<Integer, Integer> keys = new HashMap<>();
         Map<Integer, String> names = new HashMap<>();
+        Map<Integer, int[]> chains = new HashMap<>();
+        Set<Integer> carriers = new HashSet<>();
         for (RoadSegment segment : network.segmentsSnapshot()) {
             if (keys.containsKey(segment.id())) {
                 continue;
@@ -80,9 +91,29 @@ public final class RoadChains {
                 keys.put(id, key);
                 names.put(id, name);
             }
+            chains.put(key, members(chain, segment));
+            // One label per road, at the middle of its chain. The same rule the label pass used to
+            // work out for itself, by walking the chain of every named segment it was about to draw.
+            int middle = middleSegment(chain);
+            if (middle != RoadSegment.NO_SEGMENT) {
+                carriers.add(middle);
+            }
         }
         return new Grouping(Collections.unmodifiableMap(keys),
-                Collections.unmodifiableMap(names), index.degrees());
+                Collections.unmodifiableMap(names), index.degrees(),
+                Collections.unmodifiableMap(chains), Collections.unmodifiableSet(carriers));
+    }
+
+    /** A chain as a plain array: the shape the per-frame callers can walk without allocating. */
+    private static int[] members(List<Integer> chain, RoadSegment seed) {
+        if (chain.isEmpty()) {
+            return new int[] {seed.id()};
+        }
+        int[] members = new int[chain.size()];
+        for (int i = 0; i < members.length; i++) {
+            members[i] = chain.get(i);
+        }
+        return members;
     }
 
     private static List<Integer> chainContaining(RoadNetwork network, Index index, RoadSegment seed) {
@@ -133,10 +164,45 @@ public final class RoadChains {
         return segment.fromNode() == nodeId ? segment.toNode() : segment.fromNode();
     }
 
-    /** How many segment endpoints each node carries. */
+    /**
+     * How many segment endpoints each node carries.
+     *
+     * <p>Cached against the network's revision, because of who asks: the navigation panel's wrong-way
+     * call walks from the road underfoot to the first junction that can be turned round at, and it
+     * asks this once per tick while the player is travelling the wrong way -- which is exactly when the
+     * panel must stay responsive. Built fresh each time, that was two hash maps and a list per node,
+     * twenty times a second, for an answer that only changes when the roads do.
+     */
     public static Map<Integer, Integer> degrees(RoadNetwork network) {
-        return new Index(network).degrees();
+        return indexFor(network).degrees();
     }
+
+    /**
+     * The segments meeting a node, which is what a walk along a road asks at every step it takes.
+     *
+     * <p>Out of the same cached reading as {@link #degrees}: the walk asks both, once per step, and
+     * building the reading twice would be building it for nothing. Answering "which other segment
+     * continues here" from this is a handful of lookups, where scanning every segment of the network
+     * per step was the same answer at a cost that grows with the map.
+     */
+    public static List<Integer> segmentsAt(RoadNetwork network, int nodeId) {
+        return indexFor(network).segmentsAt(nodeId);
+    }
+
+    /** The reading of the network both queries above come out of, kept while it is current. */
+    private static Index indexFor(RoadNetwork network) {
+        if (cachedIndex == null || cachedIndexNetwork != network
+                || cachedIndexRevision != network.revision()) {
+            cachedIndex = new Index(network);
+            cachedIndexNetwork = network;
+            cachedIndexRevision = network.revision();
+        }
+        return cachedIndex;
+    }
+
+    private static RoadNetwork cachedIndexNetwork;
+    private static int cachedIndexRevision = Integer.MIN_VALUE;
+    private static Index cachedIndex;
 
     /**
      * The segment at the middle of a chain, used to place one label per road rather than one per
@@ -188,6 +254,18 @@ public final class RoadChains {
         }
 
         /**
+         * The segments meeting a node, in the order the network keeps them, or none.
+         *
+         * <p>The order is the network's own, which is what makes an answer taken from here the same
+         * answer a scan of every segment would have given: the first stored against the node that is
+         * not the one arrived on. A caller that walks a road may rely on that.
+         */
+        List<Integer> segmentsAt(int nodeId) {
+            List<Integer> found = byNode.get(nodeId);
+            return found == null ? List.of() : found;
+        }
+
+        /**
          * The single other segment continuing through a pass-through node, or -1 when the node is a
          * junction, an endpoint, or a change of road class.
          *
@@ -213,22 +291,27 @@ public final class RoadChains {
     }
 
     /**
-     * One road per segment, as the three things the route needs to know about it.
+     * One road per segment, as the things a route and a map both need to know about it.
      *
-     * <p>A plain value computed once per network revision, so labelling a route is a map lookup
-     * rather than a walk of the road for every piece of it.
+     * <p>A plain value computed once per network revision, so labelling a route -- or drawing a map
+     * -- is a map lookup rather than a walk of the road for every piece of it.
      */
     public static final class Grouping {
 
         private final Map<Integer, Integer> keys;
         private final Map<Integer, String> names;
         private final Map<Integer, Integer> degrees;
+        private final Map<Integer, int[]> chains;
+        private final Set<Integer> carriers;
 
         private Grouping(Map<Integer, Integer> keys, Map<Integer, String> names,
-                         Map<Integer, Integer> degrees) {
+                         Map<Integer, Integer> degrees, Map<Integer, int[]> chains,
+                         Set<Integer> carriers) {
             this.keys = keys;
             this.names = names;
             this.degrees = degrees;
+            this.chains = chains;
+            this.carriers = carriers;
         }
 
         /**
@@ -244,6 +327,33 @@ public final class RoadChains {
         /** Name of the road a segment belongs to, or null when it has none. */
         public String nameOf(RoadSegment segment) {
             return names.get(segment.id());
+        }
+
+        /**
+         * Every segment of the road this one belongs to, in the order the chain walk gives them.
+         *
+         * <p>Handed out as an array rather than a list so a caller drawing a map can measure the road
+         * without allocating anything, and without walking its chain again -- which is what
+         * {@link #group(RoadNetwork)} exists to make unnecessary.
+         *
+         * <p>The array belongs to the grouping and must not be modified or kept across a rebuild of
+         * the network; both are why this is only ever read during the pass that asked for it.
+         */
+        public int[] chainOf(RoadSegment segment) {
+            int[] members = chains.get(keys.getOrDefault(segment.id(), segment.id()));
+            // Only reachable for a segment added since the grouping was built. Answering with the
+            // segment on its own is what the walk would have said about a road that is one piece.
+            return members == null ? new int[] {segment.id()} : members;
+        }
+
+        /**
+         * Whether this segment is the one that draws its road's label.
+         *
+         * <p>The middle of the chain, so a road drawn with bends is named once rather than at every
+         * corner. A property of the geometry, so a rename or a re-class does not move it.
+         */
+        public boolean carriesLabel(RoadSegment segment) {
+            return carriers.contains(segment.id());
         }
 
         /**
@@ -264,5 +374,61 @@ public final class RoadChains {
             }
             return nodeId != RoadSegment.NO_NODE && degrees.getOrDefault(nodeId, 0) >= 3;
         }
+    }
+
+    /**
+     * How many networks {@link #cachedGrouping} keeps a reading of.
+     *
+     * <p>More than one because a single frame of the world map labels three layers: the player's own
+     * roads, Create's rails and MTR's rails. One slot would rebuild a reading of the layer it is not
+     * currently holding on every pass, which on a large rail layer is the cost this cache exists to
+     * avoid. Four is every layer a frame can ask about at once, with room to spare.
+     */
+    private static final int CACHE_SLOTS = 4;
+
+    private static final RoadNetwork[] cachedNetworks = new RoadNetwork[CACHE_SLOTS];
+    private static final int[] cachedRevisions = new int[CACHE_SLOTS];
+    private static final Grouping[] cachedGroupings = new Grouping[CACHE_SLOTS];
+    private static int nextSlot;
+
+    /**
+     * The grouping of a network, rebuilt only when the network it describes has changed.
+     *
+     * <h2>What this is for</h2>
+     * The three maps this mod draws ask the same questions of the same networks every frame -- which
+     * road does this segment belong to, is it the piece that carries the name, how long is that road.
+     * Answering them by walking a chain per segment is quadratic in the size of the network and, worse,
+     * every one of those walks built a fresh adjacency index of the whole network: on a network of a
+     * few hundred segments that was megabytes of garbage per frame, and on a larger one it was the
+     * frame budget itself. The reading is a property of the geometry, so it is kept until the geometry
+     * changes.
+     *
+     * <h2>Why the revision and not just the reference</h2>
+     * The editor mutates one network in place for a whole session, so the same object is a different
+     * network after an edit. {@link RoadNetwork#revision()} is what says so, and it is deliberately
+     * left alone by the changes that cannot move anything -- a rename, a re-class, a one-way flag --
+     * which is exactly the set of changes this reading does not depend on.
+     *
+     * <p>Held on to until displaced, which is why the callers are the long-lived networks a session
+     * has: the player's roads and the two rail layers. A per-plan copy of a network is not asked for
+     * here and would only cost a rebuild.
+     *
+     * <h2>Threads</h2>
+     * The render thread, where every caller draws. Not synchronized on purpose: taking a lock on a
+     * per-frame path to guard a value recomputed once per edit is the wrong trade.
+     */
+    public static Grouping cachedGrouping(RoadNetwork network) {
+        for (int i = 0; i < CACHE_SLOTS; i++) {
+            if (cachedNetworks[i] == network && cachedRevisions[i] == network.revision()) {
+                return cachedGroupings[i];
+            }
+        }
+        Grouping built = group(network);
+        int slot = nextSlot;
+        nextSlot = (nextSlot + 1) % CACHE_SLOTS;
+        cachedNetworks[slot] = network;
+        cachedRevisions[slot] = network.revision();
+        cachedGroupings[slot] = built;
+        return built;
     }
 }

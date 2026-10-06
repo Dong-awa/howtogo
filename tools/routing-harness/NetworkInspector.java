@@ -19,9 +19,8 @@ import java.util.TreeMap;
 /**
  * Runs the real router over a real saved road network, outside the game.
  *
- * <p>In the route package on purpose: it needs {@link RoadConflation} and {@link RoadRouter.Workspace},
- * which are package-private. It is a diagnostic, not part of the mod -- it lives with the harness and
- * is compiled the same way.
+ * <p>In the route package on purpose: it needs {@link RoadRouter.Workspace}, which is package-private.
+ * It is a diagnostic, not part of the mod -- it lives with the harness and is compiled the same way.
  *
  * <p>Usage: NetworkInspector &lt;path to a saved network json&gt;
  */
@@ -177,25 +176,10 @@ public final class NetworkInspector {
         System.out.println("walkable components=" + sorted.size() + "  largest sizes="
                 + sorted.subList(0, Math.min(8, sorted.size())));
 
-        // Then the same graph after the repair, to see what the repair does to it.
-        RoadNetwork repaired = net.deepCopy();
-        int splits = RoadConflation.conflate(repaired, RoadEditor.withoutUndo(repaired));
-        Map<Integer, Integer> repairedComponents = walkComponents(repaired);
-        Map<Integer, Integer> repairedSizes = new HashMap<>();
-        for (int root : repairedComponents.values()) {
-            repairedSizes.merge(root, 1, Integer::sum);
-        }
-        List<Integer> repairedSorted = new ArrayList<>(repairedSizes.values());
-        repairedSorted.sort((a, b) -> b - a);
-        System.out.println("repair made " + splits + " splits; segments now " + repaired.segmentCount()
-                + ", nodes now " + repaired.nodeCount());
-        System.out.println("walkable components after repair=" + repairedSorted.size()
-                + "  largest sizes=" + repairedSorted.subList(0, Math.min(8, repairedSorted.size())));
-
+        // There is no second graph to compare against any more: the routing workspace used to be a
+        // repaired copy of this one, and the repair invented junctions where the drawing had none. What
+        // is inspected now is the network as drawn, which is also the network a route is planned on.
         probes(net, "as drawn", component);
-        if (splits > 0) {
-            probes(repaired, "as repaired", repairedComponents);
-        }
     }
 
     /** Routes between many pairs of nodes that are connected, and says how many come back empty. */

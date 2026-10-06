@@ -258,47 +258,90 @@ public final class HudDraw {
     }
 
     /**
-     * Liang-Barsky clip of a segment against a rectangle.
+     * Scratch for {@link #clip}: the two parameters of the surviving part, and the four edge tests.
+     *
+     * <p>Fields rather than arrays built per call because {@link #emitClipped} runs once per segment
+     * of every map this mod draws -- three thousand of them in a frame is ordinary -- and two small
+     * arrays per segment was the largest single source of garbage in a map pass. Confined to the
+     * render thread, which is the only thread that draws; {@link #clipToRect} is the allocating
+     * wrapper for anything that wants the points rather than the drawn line.
+     */
+    private static final double[] CLIP_T = new double[2];
+    private static final double[] CLIP_P = new double[4];
+    private static final double[] CLIP_Q = new double[4];
+
+    /**
+     * Liang-Barsky clip of a segment against a rectangle, as parameters along the segment.
      *
      * <p>Useful because vertices go through a batched buffer, so whether a GPU scissor is still in
      * effect when they are finally flushed is not something to rely on for correctness.
      *
-     * @return {@code {x1, y1, x2, y2}} clipped to the rect, or null when wholly outside
+     * @return whether anything survived; the two parameters are then in {@link #CLIP_T}, as the
+     *     fractions of the segment from its first point to its last
      */
-    public static double[] clipToRect(double x1, double y1, double x2, double y2,
-                                      double minX, double minY, double maxX, double maxY) {
+    private static boolean clip(double x1, double y1, double x2, double y2,
+                                double minX, double minY, double maxX, double maxY) {
         double dx = x2 - x1;
         double dy = y2 - y1;
         double t0 = 0;
         double t1 = 1;
-        double[] p = {-dx, dx, -dy, dy};
-        double[] q = {x1 - minX, maxX - x1, y1 - minY, maxY - y1};
+        CLIP_P[0] = -dx;
+        CLIP_P[1] = dx;
+        CLIP_P[2] = -dy;
+        CLIP_P[3] = dy;
+        CLIP_Q[0] = x1 - minX;
+        CLIP_Q[1] = maxX - x1;
+        CLIP_Q[2] = y1 - minY;
+        CLIP_Q[3] = maxY - y1;
 
         for (int i = 0; i < 4; i++) {
-            if (Math.abs(p[i]) < 1.0E-12) {
-                if (q[i] < 0) {
-                    return null;
+            double p = CLIP_P[i];
+            double q = CLIP_Q[i];
+            if (Math.abs(p) < 1.0E-12) {
+                if (q < 0) {
+                    return false;
                 }
                 continue;
             }
-            double t = q[i] / p[i];
-            if (p[i] < 0) {
+            double t = q / p;
+            if (p < 0) {
                 if (t > t1) {
-                    return null;
+                    return false;
                 }
                 if (t > t0) {
                     t0 = t;
                 }
             } else {
                 if (t < t0) {
-                    return null;
+                    return false;
                 }
                 if (t < t1) {
                     t1 = t;
                 }
             }
         }
-        return new double[]{x1 + t0 * dx, y1 + t0 * dy, x1 + t1 * dx, y1 + t1 * dy};
+        CLIP_T[0] = t0;
+        CLIP_T[1] = t1;
+        return true;
+    }
+
+    /**
+     * The segment clipped to the rectangle, as end points.
+     *
+     * <p>Allocates, deliberately: it is the readable form of the clip for a caller that wants the
+     * points, and the per-frame callers use {@link #emitClipped} instead.
+     *
+     * @return {@code {x1, y1, x2, y2}} clipped to the rect, or null when wholly outside
+     */
+    public static double[] clipToRect(double x1, double y1, double x2, double y2,
+                                      double minX, double minY, double maxX, double maxY) {
+        if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
+            return null;
+        }
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        return new double[] {x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
+                x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy};
     }
 
     /** Clips a segment to a rectangle and emits it if anything survives. */
@@ -306,10 +349,12 @@ public final class HudDraw {
                                    double x1, double y1, double x2, double y2,
                                    double halfWidth, int argb, int alpha,
                                    double minX, double minY, double maxX, double maxY) {
-        double[] clipped = clipToRect(x1, y1, x2, y2, minX, minY, maxX, maxY);
-        if (clipped != null) {
-            emitLine(pose, vc, clipped[0], clipped[1], clipped[2], clipped[3],
-                    halfWidth, argb, alpha);
+        if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
+            return;
         }
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
+                x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
     }
 }

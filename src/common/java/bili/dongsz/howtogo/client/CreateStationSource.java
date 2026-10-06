@@ -33,9 +33,16 @@ public final class CreateStationSource implements DestinationSource {
         return ID;
     }
 
+    /**
+     * Whether the layer has any station at all.
+     *
+     * <p>Asked of the layer rather than of {@link #destinations()}, which builds one destination per
+     * station to answer a question about an empty list: this is called by {@link Destinations#places()}
+     * on every frame a map is drawn, where a town's worth of stations made it worth asking directly.
+     */
     @Override
     public boolean isAvailable() {
-        return !destinations().isEmpty();
+        return !RailTrackStore.stations().isEmpty();
     }
 
     @Override

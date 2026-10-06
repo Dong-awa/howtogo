@@ -76,6 +76,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /** Circle resolution for round joins and caps. */
     private static final int DISC_SEGMENTS = 10;
+
+    /**
+     * How much a polyline has to bend at a vertex before the joint needs a round cap, in degrees.
+     *
+     * <p>Low enough that any corner a player draws gets one -- the shallowest bend that reads as a
+     * corner is far above this -- and high enough that the per-block wobble of a sampled curve does
+     * not: those vertices are a fraction of a degree apart and their strokes overlap completely.
+     */
+    private static final double JOINT_MIN_DEGREES = 20.0;
+
     private static final double TWO_PI = Math.PI * 2.0;
 
     // Editing HUD.
@@ -207,6 +217,24 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         double screenZ(double worldZ) {
             return (worldZ - anchorZ) * scale * m11 + m31;
+        }
+
+        /**
+         * The same arithmetic backwards: the world x a screen column is showing.
+         *
+         * <p>What the line pass culls with. Taking the view from the cached view state instead would be
+         * a second reading of the frame, which is the thing this record exists to avoid -- see the
+         * warning on the class about the map moving between the two.
+         */
+        double worldX(double screenX) {
+            double perBlock = scale * m00;
+            return Math.abs(perBlock) > 1.0E-9 ? (screenX - m30) / perBlock + anchorX : anchorX;
+        }
+
+        /** The same for a screen row and world z. */
+        double worldZ(double screenY) {
+            double perBlock = scale * m11;
+            return Math.abs(perBlock) > 1.0E-9 ? (screenY - m31) / perBlock + anchorZ : anchorZ;
         }
     }
 
@@ -343,6 +371,23 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return true;
         }
 
+        if (element.kind() == RoadElement.Kind.MARKS) {
+            // The track MTR's lines run along, drawn as polylines: its own pass, because what is under
+            // it (the roads) and what is over it (the route, then the lines) are decided by where this
+            // element sits in the map's own order. Not while one of this mod's panels is up, for the
+            // reason the labels pass gives: this pass draws over the map, and a panel is not the map.
+            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (!(minecraft.screen instanceof TransitLineScreen)
+                    && !(minecraft.screen instanceof RoadNameScreen)) {
+                int markMargin = 64;
+                Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
+                        m00, m.m11(), m.m30(), m.m31());
+                drawMarks(pose, vc, markMargin, graphics.guiWidth() + markMargin,
+                        graphics.guiHeight() + markMargin, Math.abs(info.scale), projection);
+            }
+            return true;
+        }
+
         if (element.kind() == RoadElement.Kind.LABELS) {
             // Reached once per frame, from the trailing element. Previously the names were drawn in
             // the edit branch, so turning editing off made every label vanish.
@@ -382,6 +427,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // emitted, because those are written through this renderer's own vertex buffers and the
                 // game flushes them when it flushes them. They are a screen overlay and are drawn from
                 // the screen's render event, after the map has finished -- see MapFilterOverlay.
+                //
+                // This is the last of the mod's own passes in a frame, which is why the report of what
+                // the frame cost is written from here.
+                MapPassReport.endOfFrame();
             }
             return true;
         }
@@ -445,7 +494,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         // Round joins (and round caps at the ends). Without these, consecutive segments leave a
         // wedge-shaped gap on the outside of every corner and the road looks broken.
+        //
+        // Only where a joint is actually needed: the two ends of the polyline, and the vertices where
+        // it genuinely bends. A disc at *every* vertex was ten quads for a joint the two strokes
+        // already meet at, and an automatically read railway has a vertex every block or two -- so most
+        // of the geometry the map emitted was circles nobody could see, drawn along straight runs at
+        // eleven times the vertex cost of the road itself. The threshold is well below any bend a
+        // player draws and well above the wobble of a sampled curve, so the corners that do leave a
+        // notch all still get one.
         for (int i = 0; i < segment.vertexCount(); i++) {
+            if (i > 0 && i < segment.vertexCount() - 1 && !bendsAt(segment, i)) {
+                continue;
+            }
             emitDisc(last, vc,
                     localX(segment.x(i), anchorX, fracX, p10),
                     localY(segment.z(i), anchorZ, fracY, p10),
@@ -593,6 +653,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // font's own size at the reference scale, shrinking or growing with the map either side of it.
         float labelFactor = labelScale(info.scale);
         if (Math.abs(info.scale) >= LABEL_MIN_SCALE) {
+            // Which road each segment belongs to, and which piece of it carries the name, read once
+            // for the whole pass: the same reading serves every name below and every frame until the
+            // roads change. Asking for a chain per named road instead -- which is what this pass used
+            // to do -- rebuilt an adjacency index of the whole network per name, per frame.
+            RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
             for (RoadSegment segment : network.segments()) {
                 String name = segment.name();
                 if (name == null) {
@@ -605,11 +670,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (!MapFilter.shows(segment.roadClass(), info.scale)) {
                     continue;
                 }
-                // Culled before the chain walk, not after. Walking the chain is the expensive part
-                // -- RoadChains finds the continuation through a node by scanning the whole network,
-                // so it is linear in the size of the network per step -- and doing it for a road that
-                // is off screen is work whose result is thrown away one line later. On a large
-                // network this was the label pass's dominant cost.
+                // Culled before the name question, not after: a road off screen has no name to read,
+                // and this pass runs on every frame the map draws.
                 double[] mid = segment.midpoint();
                 int x = (int) Math.round(projection.screenX(mid[0]));
                 int y = (int) Math.round(projection.screenZ(mid[1]));
@@ -618,13 +680,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 }
                 // One label per road. A road with bends is several segments all carrying the same
                 // name, so without this the label would repeat at every corner.
-                List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-                if (RoadChains.middleSegment(chain) != segment.id()) {
+                if (!grouping.carriesLabel(segment)) {
                     continue;
                 }
                 // A name longer than the road it belongs to would hang off both its ends and read as
                 // a label for whatever is beside it, so it is dropped rather than written.
-                if (font.width(name) * labelFactor > chainLengthPx(network, chain, projection)) {
+                if (font.width(name) * labelFactor
+                        > chainLengthPx(network, grouping.chainOf(segment), projection)) {
                     continue;
                 }
                 drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_ROAD, projection,
@@ -638,11 +700,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     continue;
                 }
                 RoadNetwork layer = RailTrackStore.network();
-                // The same rule as for a road, over the whole railway. The chain is walked here rather
-                // than remembered: only the one segment per railway that carries the label gets this
-                // far, so it runs for a handful of segments a frame and not for the whole layer.
+                // The same rule as for a road, over the whole railway. Only the one segment per
+                // railway that carries the label gets this far, so the layer's grouping -- which is
+                // cached per rebuild -- is asked for here rather than by every rail segment: building
+                // it costs the size of the layer, and the layer is every piece of track Create has
+                // within its read radius.
                 if (font.width(name) * labelFactor > chainLengthPx(layer,
-                        RoadChains.chainContaining(layer, segment.id()), projection)) {
+                        RoadChains.cachedGrouping(layer).chainOf(segment), projection)) {
                     continue;
                 }
                 double[] mid = segment.midpoint();
@@ -698,8 +762,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * a road with bends is several segments sharing one name, and a name that reaches across two of
      * its own pieces is exactly right. Measuring a single piece would drop the name of a road drawn
      * with many short clicks even though there is plenty of road to write it on.
+     *
+     * <p>The run arrives as the grouping's own array rather than as a chain walked here: the lengths
+     * are needed once per name drawn, and a walk costs the size of the whole network.
      */
-    private static double chainLengthPx(RoadNetwork network, List<Integer> chain,
+    private static double chainLengthPx(RoadNetwork network, int[] chain,
                                      Projection projection) {
         double total = 0;
         for (int id : chain) {
@@ -790,6 +857,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double MIN_LINE_STROKE_PX = 0.9;
     /** Map scale at which a line is drawn at its full width: below it, the stroke thins with the map. */
     private static final double FULL_LINE_STROKE_SCALE = 0.5;
+    /**
+     * How many bands of zoom one line's thinned geometry is kept for.
+     *
+     * <p>The zoom moves in steps and a band is a power of two pixels per block (see {@link PathRuns}),
+     * so the band a view is in changes when the player zooms and not when they pan. A handful is enough
+     * to hold every band a session passes through twice over; the oldest is displaced, and a band asked
+     * for again costs one walk of the line's points.
+     */
+    private static final int BANDS = 6;
     private static final double LINE_STOP_PX = 5.0;
     /**
      * The map scale at which a marker is drawn at {@link HudDraw#PLACE_MARKER_PX} across, and the bounds
@@ -841,19 +917,99 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     /** The path each line actually runs along, one shape per line, and the lines it was built for. */
     private static String lineShapeSignature = "";
-    private static List<List<double[]>> lineShapes = List.of();
+    private static List<LineShape> lineShapes = List.of();
     /** The line count the diagnostic last reported, so it speaks when that changes and not per frame. */
     private static int reportedLineCount = -1;
     /**
-     * One line's shape, kept until that line's own stops or kind change.
+     * One line's shape, kept until that line's own stops, kind or track change.
      *
      * <p>Per line rather than for all of them, because the lines are no longer all the player's: the
      * ones read out of MTR arrive a window at a time and change as the player walks, and rebuilding
      * every line's shape because one imported line gained a stop would be a hitch in the middle of
      * walking -- on the render thread, which is the worst place for one.
      */
-    private static final java.util.Map<String, List<double[]>> lineShapeCache =
+    private static final java.util.Map<String, LineShape> lineShapeCache =
             new java.util.HashMap<>();
+
+    /**
+     * One line's drawn shape: the stretches of its path that are known, each with the box it fits in,
+     * thinned once per zoom band and kept for the frames that follow.
+     *
+     * <p>A line of several stretches is several polylines and not one. Joining them would draw a
+     * straight line across every gap between them, and a gap is either track the reading does not have
+     * or a pair of stops the router could not join -- see {@link TrackRuns}, which is where the
+     * stretches come from and where the reasoning lives.
+     *
+     * <p>No straight hop between a line's own ends is drawn for a line with no stretch at all. It was,
+     * on the argument that a line nobody can ride should be visible as a line rather than as nothing;
+     * what that is on a map is a straight line across everything between two stations, belonging to no
+     * path. Its stops are marked either way.
+     *
+     * <h2>Why the thinning is kept per band of zoom</h2>
+     * A line read out of MTR is sampled every few blocks and is tens of thousands of points long, and
+     * every frame draws it again at the zoom the player has chosen. Emitting a stroke per step of that
+     * sampling is a cost that grows with the railway rather than with what is on the screen -- and at
+     * any zoom a map is readable at, most of those steps are a fraction of a pixel, so the strokes are
+     * paid for and not seen. So each stretch is thinned to the zoom (see {@link PathRuns}) and the
+     * result is kept: the zoom moves in steps, and every frame between two of them asks for exactly the
+     * geometry that was worked out the first time.
+     */
+    private static final class LineShape {
+
+        private final List<PathRuns.Run> runs;
+        private final Band[] bands = new Band[BANDS];
+        private int nextBand;
+
+        static final LineShape EMPTY = new LineShape(List.of());
+
+        private LineShape(List<PathRuns.Run> runs) {
+            this.runs = runs;
+        }
+
+        /** A shape over bare stretches of points, each wrapped with the box it fits in. */
+        static LineShape of(List<List<double[]>> runs) {
+            List<PathRuns.Run> wrapped = new java.util.ArrayList<>(runs.size());
+            for (List<double[]> run : runs) {
+                if (run.size() >= 2) {
+                    wrapped.add(PathRuns.of(run));
+                }
+            }
+            return wrapped.isEmpty() ? EMPTY : new LineShape(List.copyOf(wrapped));
+        }
+
+        /** Every stretch as the reading gave it, before any thinning: what the diagnostics measure. */
+        List<PathRuns.Run> runs() {
+            return runs;
+        }
+
+        /**
+         * The stretches as this zoom draws them.
+         *
+         * @param pixelsPerBlock how many screen pixels one block covers, which is the zoom the thinning
+         *                       has to be fine enough for
+         */
+        List<PathRuns.Run> runsAt(double pixelsPerBlock) {
+            int band = PathRuns.bandOf(pixelsPerBlock);
+            for (Band kept : bands) {
+                if (kept != null && kept.band() == band) {
+                    return kept.runs();
+                }
+            }
+            double tolerance = PathRuns.toleranceFor(pixelsPerBlock);
+            List<PathRuns.Run> thinned = new java.util.ArrayList<>(runs.size());
+            for (PathRuns.Run run : runs) {
+                thinned.add(PathRuns.thinned(run, tolerance));
+            }
+            Band made = new Band(band, List.copyOf(thinned));
+            bands[nextBand] = made;
+            nextBand = (nextBand + 1) % bands.length;
+            return made.runs();
+        }
+    }
+
+    /** One band of zoom, with the stretches thinned for it. */
+    private record Band(int band, List<PathRuns.Run> runs) {
+    }
 
     /**
      * Works out the path each line runs along, by planning each pair of neighbouring stops exactly as
@@ -877,29 +1033,112 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
         lineShapeSignature = signature.toString();
 
-        // One workspace per network rather than per line: a workspace copies the network and repairs
-        // its joins before the first query through it, and every line that routes on the same roads --
+        // One workspace per network rather than per line: a workspace copies the network before the
+        // first query through it, and every line that routes on the same roads --
         // the same kind, and with or without the imported rails -- reuses one.
         java.util.Map<String, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
                 new java.util.HashMap<>();
-        java.util.Map<String, List<double[]>> rebuilt = new java.util.HashMap<>();
-        List<List<double[]>> shapes = new java.util.ArrayList<>(lines.size());
+        java.util.Map<String, LineShape> rebuilt = new java.util.HashMap<>();
+        List<LineShape> shapes = new java.util.ArrayList<>(lines.size());
         for (TransitLine line : lines) {
             String key = shapeKey(line);
-            List<double[]> points = lineShapeCache.get(key);
-            if (points == null) {
-                points = planLine(line, workspaces);
+            LineShape shape = lineShapeCache.get(key);
+            if (shape == null) {
+                shape = planLine(line, workspaces);
             }
-            rebuilt.put(key, points);
-            shapes.add(points);
+            rebuilt.put(key, shape);
+            shapes.add(shape);
         }
         // Only what this pass asked for is kept, so a line that is gone does not keep its shape alive.
         lineShapeCache.clear();
         lineShapeCache.putAll(rebuilt);
         lineShapes = shapes;
+        reportLongSteps(lines, shapes);
     }
 
-    /** What makes a line's shape its own: which line, of which kind, calling where, over which roads. */
+    /**
+     * How long a step between two neighbouring points of a drawn line has to be before it is worth
+     * saying out loud, in blocks.
+     *
+     * <p>A railway's own geometry is a run of points a few blocks apart: a rail is sampled along its
+     * curve. A step of this length inside a stretch is therefore either a rail that really is that
+     * long and straight, or a straight line drawn between two places the geometry does not join --
+     * and the two look identical on the map. This is the number that tells them apart without a guess,
+     * and the coordinates say which stretch of which line to look at.
+     */
+    private static final double LONG_STEP_BLOCKS = 64.0;
+
+    /** How many lines one rebuild may name, so a map of broken geometry cannot fill the log. */
+    private static final int MAX_REPORTED_LONG_STEPS = 12;
+
+    /**
+     * Names the lines whose drawn shape takes a long step between two of its own points.
+     *
+     * <p>Written when the shapes are rebuilt -- on a change of the lines, not per frame -- and only
+     * for the lines that have such a step, so a healthy map says nothing at all. A line whose stretch
+     * is two points a kilometre apart is a straight line drawn across everything between two stops; a
+     * line whose stretch is a hundred points with a twenty-block longest step is a railway. The
+     * difference is not visible on the map, which is exactly why it is worth a log line.
+     */
+    private static void reportLongSteps(List<TransitLine> lines, List<LineShape> shapes) {
+        int offenders = 0;
+        int named = 0;
+        for (int index = 0; index < lines.size() && index < shapes.size(); index++) {
+            LineShape shape = shapes.get(index);
+            double longest = 0;
+            double[] from = null;
+            double[] to = null;
+            int points = 0;
+            for (PathRuns.Run run : shape.runs()) {
+                List<double[]> runPoints = run.points();
+                points = Math.max(points, runPoints.size());
+                for (int i = 1; i < runPoints.size(); i++) {
+                    double[] before = runPoints.get(i - 1);
+                    double[] here = runPoints.get(i);
+                    double step = Math.hypot(here[0] - before[0], here[1] - before[1]);
+                    if (step > longest) {
+                        longest = step;
+                        from = before;
+                        to = here;
+                    }
+                }
+            }
+            if (longest <= LONG_STEP_BLOCKS) {
+                continue;
+            }
+            offenders++;
+            if (named >= MAX_REPORTED_LONG_STEPS) {
+                continue;
+            }
+            named++;
+            TransitLine line = lines.get(index);
+            HowToGo.LOGGER.info("[HowToGo] line '{}' ({}) draws a straight step of {} blocks, from "
+                            + "({}, {}) to ({}, {}), in a stretch of {} point(s) of {} in all; {} "
+                            + "stop(s), {}",
+                    line.id(), line.kind(), Math.round(longest),
+                    Math.round(from[0]), Math.round(from[1]), Math.round(to[0]), Math.round(to[1]),
+                    points, shape.runs().size(), line.stopCount(),
+                    MtrTransit.isImported(line) ? "read out of MTR" : "the player's own");
+        }
+        if (offenders > 0) {
+            HowToGo.LOGGER.info("[HowToGo] {} of {} line(s) draw a step longer than {} blocks",
+                    offenders, lines.size(), Math.round(LONG_STEP_BLOCKS));
+        }
+    }
+
+    /**
+     * What makes a line's shape its own: which line, of which kind, calling where, over which roads,
+     * and along which track.
+     *
+     * <h2>Why the track is part of it</h2>
+     * A windowed reading does not hand a line's track over in one piece: it marks the stretch near the
+     * player, and every second the window slides it adds another piece to the same line. The stops do
+     * not change while that happens, so a key built from the stops alone goes on saying "the same
+     * line" while the track under it fills in -- and the shape worked out from the first window's
+     * worth of rails is drawn for the rest of the session, straight hops and all, over track that has
+     * since arrived. The track's own reading is therefore part of the key: its segment count and its
+     * revision, which the network moves on every time a piece is added to it.
+     */
     private static String shapeKey(TransitLine line) {
         StringBuilder key = new StringBuilder();
         key.append(line.id()).append(line.kind().name());
@@ -909,6 +1148,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         for (LineStop stop : line.stops()) {
             key.append('|').append(stop.x()).append(',').append(stop.z());
         }
+        bili.dongsz.howtogo.road.RoadNetwork track = MtrTransit.trackOf(line);
+        key.append("*/").append(track == null
+                ? "none"
+                : track.segmentCount() + ":" + track.revision());
         return key.toString();
     }
 
@@ -923,20 +1166,34 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * is what this used to do, is what made a line switched off collapse into straight hops between its
      * stops and read as having gone missing.
      *
-     * <p>A line of the player's own has no track of its own, so it keeps the planning it always had: the
-     * pairs of neighbouring stops are planned over the network the line is ridden on, and a pair that
-     * cannot be planned gets its straight hop so that a mis-typed line is visible as a line rather than as
-     * a gap.
+     * <p>An imported line whose track is not known is therefore drawn as nothing at all: its stations are
+     * still marked, and a straight hop from one to the next would be a claim about ground the line may not
+     * cross. It is the same answer {@link TrackRuns} gives to a gap inside a track that is partly known,
+     * taken to its end -- the map shows the track it has and invents none. Such a line is not lost: a
+     * window that brings its rails is a window that draws it, and until then its stops are on the map.
+     *
+     * <p>A line of the player's own has no track of its own, so what is drawn is the route the mod
+     * plans between each neighbouring pair of its stops -- and a pair that cannot be planned is left as
+     * a gap rather than drawn as a straight hop, which is the same rule an imported line follows and
+     * the same reason. It used to be drawn as a hop, so that a mis-typed line was visible as a line
+     * rather than as a gap; on a world with a city's worth of lines that produced a web of straight
+     * lines across the whole map, each one claiming ground the line does not run over, and the real
+     * lines lost in it. A gap says what is true: the path is not known here. Every stop of every line
+     * is still marked, below, so a line whose path cannot be worked out at all is not a line nobody can
+     * find.
      */
-    private static List<double[]> planLine(TransitLine line,
-                                           java.util.Map<String,
+    private static LineShape planLine(TransitLine line,
+                                      java.util.Map<String,
                                                    bili.dongsz.howtogo.route.RoadRouter.Workspace>
                                                    workspaces) {
-        List<double[]> track = ownTrack(line);
-        if (!track.isEmpty()) {
-            return track;
+        List<List<double[]>> runs = TrackRuns.of(MtrTransit.trackOf(line));
+        if (!runs.isEmpty()) {
+            return LineShape.of(runs);
         }
-        List<double[]> points = new java.util.ArrayList<>();
+        if (MtrTransit.isImported(line)) {
+            return LineShape.EMPTY;
+        }
+        List<List<double[]>> stretches = new java.util.ArrayList<>();
         RoadClass kind = line.kind();
         bili.dongsz.howtogo.route.TravelMode mode =
                 bili.dongsz.howtogo.route.LinePlanner.rideMode(kind);
@@ -956,36 +1213,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             LineStop to = line.stops().get(i);
             bili.dongsz.howtogo.route.Route ride = bili.dongsz.howtogo.route.RoadRouter.findRoute(
                     workspace, from.x(), from.z(), to.x(), to.z(), "", mode, policy);
-            if (ride.isPresent()) {
-                points.addAll(ride.points());
-            } else {
-                points.add(new double[]{from.x(), from.z()});
-                points.add(new double[]{to.x(), to.z()});
-            }
+            // Null for a pair with no route: a gap in the drawing, not a straight line across it.
+            stretches.add(ride.isPresent() ? ride.points() : null);
         }
-        return points;
-    }
-
-    /**
-     * The track of an imported line, as one polyline, or an empty list for a line that has none.
-     *
-     * <p>The pieces are walked one after another rather than in any order of the line's stops, because
-     * drawing does not care: a pair whose track is missing leaves the two pieces on either side of it
-     * joined by the straight hop between them, which is the same thing the planning fallback draws and is
-     * the honest answer for a stretch whose track is not known.
-     */
-    private static List<double[]> ownTrack(TransitLine line) {
-        bili.dongsz.howtogo.road.RoadNetwork track = MtrTransit.trackOf(line);
-        if (track == null || track.segmentCount() == 0) {
-            return List.of();
-        }
-        List<double[]> points = new java.util.ArrayList<>();
-        for (RoadSegment segment : track.segmentsSnapshot()) {
-            for (int i = 0; i < segment.vertexCount(); i++) {
-                points.add(new double[]{segment.x(i), segment.z(i)});
-            }
-        }
-        return points.size() >= 2 ? points : List.of();
+        return LineShape.of(TrackRuns.ofPlanned(stretches));
     }
 
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
@@ -995,11 +1226,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                              Projection projection) {
         List<LineLabel> labels = new java.util.ArrayList<>();
         // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
-        // a line whose route the map should show, whichever of the two it came from. Never shed by zoom:
-        // a line is what this map is for, and it is the one thing on it the roads do not already imply.
-        if (!MapFilter.showsLines()) {
-            return labels;
-        }
+        // a line whose route the map should show, whichever of the two it came from.
         List<TransitLine> lines = Navigation.linesInPlay();
         reportLines(lines);
         if (lines.isEmpty()) {
@@ -1014,46 +1241,65 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.last().normal().identity();
         PoseStack.Pose screenPose = pose.last();
 
-        // Which of these stops are places two lines meet at, handed in rather than worked out here:
-        // the place markers stand aside for exactly the same set, so the two passes have to be looking
-        // at one answer. See TransitInterchanges, which carries the rule itself.
-        refreshLineShapes(lines);
-        if (lineShapes.size() != lines.size()) {
-            // Should not happen -- the shapes are rebuilt whenever the lines change -- and it is checked
-            // because the failure it would cause is silent and total: indexing past the end throws, the
-            // whole overlay is lost for that frame, and what the player sees is every line disappearing
-            // at once, which reads as the mod having forgotten them. Rebuilding is cheap next to that.
-            lineShapeSignature = "";
-            refreshLineShapes(lines);
-        }
+        // The shapes the lines are drawn from, as they stand: what each line's own track is, stretched
+        // into the polylines the map draws. Brought up to date here rather than kept by the line list,
+        // because the track under a line arrives a window at a time and a shape built from the first
+        // window's worth of it would be drawn for the rest of the session.
+        shapeLines(lines);
+
+        // The zoom, and the piece of the world the screen is showing: the scale a stretch is thinned
+        // for, and the box it has to overlap to be drawn at all. Both are read from this frame's own
+        // projection, so the culling and the drawing cannot disagree about where the map is -- which is
+        // the same reason the coordinates below come from it rather than from the cached view state.
+        double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
+                Math.abs(projection.scale() * projection.m11()));
+        double leftEdge = projection.worldX(-margin);
+        double rightEdge = projection.worldX(viewRight);
+        double topEdge = projection.worldZ(-margin);
+        double bottomEdge = projection.worldZ(viewBottom);
+        double minWorldX = Math.min(leftEdge, rightEdge);
+        double maxWorldX = Math.max(leftEdge, rightEdge);
+        double minWorldZ = Math.min(topEdge, bottomEdge);
+        double maxWorldZ = Math.max(topEdge, bottomEdge);
+        int[] culled = {0};
+
+        long startedAt = System.nanoTime();
+        int sourcePoints = 0;
         for (int index = 0; index < lines.size(); index++) {
-            TransitLine line = lines.get(index);
-            List<double[]> shape = index < lineShapes.size() ? lineShapes.get(index) : List.of();
-            if (shape.size() < 2) {
-                // A line is drawn as a line: a pair that could not be planned at all still gets the
-                // straight hop between its ends, so a line nobody can ride is visible as a line rather
-                // than as nothing at all.
-                shape = hop(line);
+            for (PathRuns.Run run : shapeAt(index).runs()) {
+                sourcePoints += run.size();
             }
-            for (int i = 1; i < shape.size(); i++) {
-                double x1 = projection.screenX(shape.get(i - 1)[0]);
-                double y1 = projection.screenZ(shape.get(i - 1)[1]);
-                double x2 = projection.screenX(shape.get(i)[0]);
-                double y2 = projection.screenZ(shape.get(i)[1]);
-                if (Math.max(x1, x2) < -margin || Math.min(x1, x2) > viewRight
-                        || Math.max(y1, y2) < -margin || Math.min(y1, y2) > viewBottom) {
-                    continue;
-                }
-                HudDraw.emitLine(screenPose, vc, x1, y1, x2, y2, lineStrokePx(scale), lineColour(line),
-                        0xFF);
+        }
+
+        // The lines. Never shed by zoom: a line is what this map is for, and it is the one thing on it
+        // the roads do not already imply -- so the thinning above is what keeps a whole railway's worth
+        // of them affordable, and it is the only thing that does.
+        int stroked = 0;
+        if (MapFilter.showsLines()) {
+            for (int index = 0; index < lines.size(); index++) {
+                TransitLine line = lines.get(index);
+                // Each stretch on its own: the gaps between them are track this client has not been
+                // sent, or a pair of stops the router could not join, and a line drawn across one is a
+                // line drawn over ground the line does not cover. A line with no stretch at all is
+                // therefore drawn as nothing rather than as a straight line between its ends -- its
+                // stops are marked below, which is what makes it findable.
+                stroked += drawRuns(screenPose, vc, shapeAt(index).runsAt(pixelsPerBlock), projection,
+                        margin, viewRight, viewBottom, minWorldX, minWorldZ, maxWorldX, maxWorldZ,
+                        lineStrokePx(scale), lineColour(line), culled);
             }
-            if (shape.size() >= 2) {
-                // No name on the map. It was tried at the middle stop and at the middle of the path and
-                // was wrong in both places -- on a line that curves or loops, no single point along it is
-                // the middle a reader means, and a name written over the stroke or beside a station
-                // marker is worse than no name. Read off the line editor instead, which lists a line's
-                // stops in order and has room to say what it is called.
-            }
+        }
+        MapPassReport.lines(System.nanoTime() - startedAt, lines.size(), stroked, sourcePoints, culled[0]);
+        // No name is drawn along a line. It was tried at the middle stop and at the middle of the path
+        // and was wrong in both places -- on a line that curves or loops, no single point along it is
+        // the middle a reader means, and a name written over the stroke or beside a station marker is
+        // worse than no name. Read off the line editor instead, which lists a line's stops in order and
+        // has room to say what it is called.
+        if (!MapFilter.showsLines()) {
+            // The lines, their stops and the interchanges two of them meet at are what this switch
+            // turns off. The railway they run on is not theirs -- it answers to the switches beside
+            // roads and railways -- so it stays, and so does everything below this.
+            pose.popPose();
+            return labels;
         }
 
         // The stops, each at the size a place on the ground covers at this zoom, and each only while the
@@ -1123,6 +1369,146 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return labels;
     }
 
+    /** One line's shape, or nothing when the shapes and the lines have somehow come apart. */
+    private static LineShape shapeAt(int index) {
+        return index < lineShapes.size() ? lineShapes.get(index) : LineShape.EMPTY;
+    }
+
+    /**
+     * Brings the line shapes up to date, and leaves them in step with the lines they were built for.
+     *
+     * <p>Asked from two passes now -- the marks and the lines -- so it is one call with the check that
+     * the two lists agree, rather than the same guard written twice. The check is not paranoia: the
+     * failure it would cause is silent and total, since indexing past the end throws, the whole overlay
+     * is lost for that frame, and what the player sees is every line disappearing at once, which reads
+     * as the mod having forgotten them. Rebuilding is cheap next to that.
+     */
+    private static void shapeLines(List<TransitLine> lines) {
+        refreshLineShapes(lines);
+        if (lineShapes.size() != lines.size()) {
+            lineShapeSignature = "";
+            refreshLineShapes(lines);
+        }
+    }
+
+    /**
+     * MTR's marks: the track each line read out of MTR runs along, as polylines thinned to the zoom.
+     *
+     * <h2>Why this is not the map's element list</h2>
+     * It was: one map element per rail of every line whose marks are switched on, which on a whole
+     * railway is tens of thousands of elements, each drawn as a quad per vertex of its own sampling and
+     * most of them a fraction of a pixel at any zoom a map is readable at. A cost that grows with the
+     * railway while what is on the screen does not, which is what made a map of a whole railway slow to
+     * draw. Here they are instead drawn from the very polylines the lines themselves are drawn from --
+     * a line's marks <em>are</em> its own track, cut by the same code -- so the drawing is thinned,
+     * culled by the box each stretch fits in, and paid for once per line rather than once per rail.
+     *
+     * <p>A line's own switch decides whether its track is here at all, and the class's switch (and the
+     * zoom) decides whether it is drawn: a mark is rail for a train and water for a boat, so the two
+     * questions are asked of the line's kind rather than of one class for all of them.
+     */
+    private void drawMarks(PoseStack pose, VertexConsumer vc, int margin, int viewRight, int viewBottom,
+                           double scale, Projection projection) {
+        // A line whose marks are off is not drawn here, and one whose kind has no class at all is not a
+        // line this mod has -- see buildLines, which refuses those. Nothing to ask of the switch above
+        // that: marksEnabled is the one place the answer lives.
+        List<TransitLine> lines = Navigation.linesInPlay();
+        if (lines.isEmpty()) {
+            return;
+        }
+        shapeLines(lines);
+
+        double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
+                Math.abs(projection.scale() * projection.m11()));
+        double leftEdge = projection.worldX(-margin);
+        double rightEdge = projection.worldX(viewRight);
+        double topEdge = projection.worldZ(-margin);
+        double bottomEdge = projection.worldZ(viewBottom);
+        double minWorldX = Math.min(leftEdge, rightEdge);
+        double maxWorldX = Math.max(leftEdge, rightEdge);
+        double minWorldZ = Math.min(topEdge, bottomEdge);
+        double maxWorldZ = Math.max(topEdge, bottomEdge);
+
+        pose.pushPose();
+        pose.last().pose().identity();
+        pose.last().normal().identity();
+        PoseStack.Pose screenPose = pose.last();
+
+        long startedAt = System.nanoTime();
+        int sourcePoints = 0;
+        int stroked = 0;
+        int[] culled = {0};
+        for (int index = 0; index < lines.size(); index++) {
+            TransitLine line = lines.get(index);
+            if (!MtrTransit.isImported(line) || !MtrTransit.marksEnabled(line)) {
+                continue;
+            }
+            RoadClass kind = line.kind();
+            if (kind == null || !MapFilter.shows(kind, scale)) {
+                continue;
+            }
+            for (PathRuns.Run run : shapeAt(index).runs()) {
+                sourcePoints += run.size();
+            }
+            stroked += drawRuns(screenPose, vc, shapeAt(index).runsAt(pixelsPerBlock), projection,
+                    margin, viewRight, viewBottom, minWorldX, minWorldZ, maxWorldX, maxWorldZ,
+                    strokeHalfWidthPx(kind, scale), kind.color(), culled);
+        }
+        pose.popPose();
+        MapPassReport.marks(System.nanoTime() - startedAt, stroked, sourcePoints, culled[0]);
+    }
+
+    /**
+     * Draws the stretches of one shape that the screen can see, as strokes.
+     *
+     * <p>The culling is by the box each stretch fits in, which is why it is worth having: a whole
+     * railway's worth of lines is mostly off the screen, and a stretch nobody can see costs nothing to
+     * draw but still costs a walk of its points to find that out. Each stretch that survives is drawn
+     * in full, because a stretch that crosses the screen has both ends outside it and is exactly the
+     * one a per-point test would throw away.
+     *
+     * @param halfWidth half the stroke's width in screen pixels -- the marks and the lines themselves
+     *                  are the same drawing at two widths
+     * @param culled    a one-element counter, added to for every stretch the screen does not touch, so
+     *                  that the pass can report what the culling saved
+     * @return how many strokes were emitted
+     */
+    private static int drawRuns(PoseStack.Pose screenPose, VertexConsumer vc, List<PathRuns.Run> runs,
+                                Projection projection, int margin, int viewRight, int viewBottom,
+                                double minWorldX, double minWorldZ, double maxWorldX, double maxWorldZ,
+                                double halfWidth, int argb, int[] culled) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        if (a == 0) {
+            a = 0xC0;
+        }
+        int stroked = 0;
+        for (PathRuns.Run run : runs) {
+            if (!PathRuns.onScreen(run, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
+                culled[0]++;
+                continue;
+            }
+            List<double[]> points = run.points();
+            double previousX = 0;
+            double previousY = 0;
+            for (int i = 0; i < points.size(); i++) {
+                double[] point = points.get(i);
+                double x = projection.screenX(point[0]);
+                double y = projection.screenZ(point[1]);
+                if (i > 0 && Math.max(previousX, x) >= -margin && Math.min(previousX, x) <= viewRight
+                        && Math.max(previousY, y) >= -margin && Math.min(previousY, y) <= viewBottom) {
+                    emitStroke(screenPose, vc, previousX, previousY, x, y, halfWidth, r, g, b, a);
+                    stroked++;
+                }
+                previousX = x;
+                previousY = y;
+            }
+        }
+        return stroked;
+    }
+
     /**
      * Whether the place a stop stands at is being drawn, which is what the stop marker follows.
      *
@@ -1189,16 +1575,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         HowToGo.LOGGER.info("[HowToGo] drawing {} transit line(s), {} of them read out of MTR, "
                 + "{} stops between them; {} line(s) and {} station(s) remembered", lines.size(),
                 imported, stops, MtrTransit.rememberedLines(), MtrTransit.rememberedStations());
-    }
-
-    /** A line's two ends as a straight hop, for a line whose path could not be worked out at all. */
-    private static List<double[]> hop(TransitLine line) {
-        if (line.stopCount() < 2) {
-            return List.of();
-        }
-        LineStop first = line.stops().get(0);
-        LineStop last = line.stops().get(line.stopCount() - 1);
-        return List.of(new double[] {first.x(), first.z()}, new double[] {last.x(), last.z()});
     }
 
     /** Whether a place is one of the stops an interchange marker already stands for. */
@@ -1532,6 +1908,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 (int) Math.round(RoadEditSession.totalLength()),
                 RoadStore.get().nodeCount(),
                 RoadStore.get().segmentCount()).getString();
+        // The storey being drawn on, always shown rather than only when it is not the surface: it is
+        // invisible on a map that cannot show height, so a player who has moved one road and not the
+        // next has nothing else to tell them which is which.
+        stats = stats + "   " + Component.translatable("hud.howtogo.layer",
+                Navigation.roadLayerLabel(RoadEditSession.activeLayer())).getString();
         if (RoadEditSession.isFreePlacementActive()) {
             // The mode being on is state, while the control hint only says the key exists.
             stats = stats + "   " + Component.translatable("hud.howtogo.free").getString();
@@ -1741,6 +2122,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 tipX, tipY,
                 backX + wingX, backY + wingY,
                 backX - wingX, backY - wingY, COLOR_ARROW);
+    }
+
+    /**
+     * Whether the polyline bends at this vertex by enough to leave a visible notch.
+     *
+     * <p>The angle between the vertex's two spans, with a straight-through vertex -- the common case on
+     * any sampled line -- answering no. A vertex whose neighbours are on top of it answers yes, because
+     * there the two strokes meet at no angle at all and the cap is the only thing closing the joint.
+     */
+    private static boolean bendsAt(RoadSegment segment, int index) {
+        double inX = segment.x(index) - segment.x(index - 1);
+        double inZ = segment.z(index) - segment.z(index - 1);
+        double outX = segment.x(index + 1) - segment.x(index);
+        double outZ = segment.z(index + 1) - segment.z(index);
+        if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
+            return true;
+        }
+        double cross = inX * outZ - inZ * outX;
+        double dot = inX * outX + inZ * outZ;
+        return Math.abs(Math.toDegrees(Math.atan2(cross, dot))) >= JOINT_MIN_DEGREES;
     }
 
     /**

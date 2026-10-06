@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.PlaceKind;
+import bili.dongsz.howtogo.road.RoadSegment;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -54,6 +55,8 @@ public final class RoadNameScreen extends Screen {
     private static final int TYPE_GAP = 3;
     /** Always reserved in the place editor, so the panel does not jump when a refusal appears. */
     private static final int ERROR_HEIGHT = 10;
+    /** The storey's own box: three characters wide is enough for "-32" and keeps the row one line. */
+    private static final int LAYER_FIELD_WIDTH = 42;
 
     private final Screen parent;
     private final String titleKey;
@@ -67,11 +70,17 @@ public final class RoadNameScreen extends Screen {
     private final Predicate<PlaceKind> kindAllowed;
     private final BiConsumer<String, PlaceKind> onAcceptPlace;
 
+    // The road editor's extra part: the storey, given with the name because they are edited together.
+    private final int initialLayer;
+    private final BiConsumer<String, Integer> onAcceptRoad;
+
     private PlaceKind selectedKind;
-    /** The message key shown when the chosen kind was refused, or null. */
-    private String errorKey;
+    /** The message shown when the last attempt was refused, or null. */
+    private Component error;
 
     private EditBox field;
+    /** The storey box, present only in the road editor. */
+    private EditBox layerField;
     private int panelX;
     private int panelY;
     private int panelW;
@@ -93,6 +102,35 @@ public final class RoadNameScreen extends Screen {
         this.initialKind = null;
         this.kindAllowed = null;
         this.onAcceptPlace = null;
+        this.initialLayer = 0;
+        this.onAcceptRoad = null;
+    }
+
+    /**
+     * A road: its name and which storey it is on, edited as one thing.
+     *
+     * <p>Together because they are one gesture -- point at a road, say what it is -- and because the
+     * storey is invisible on a map that cannot show height: a player who had to remember a second key
+     * for it would name the road and never find the other half. The storey field is checked before
+     * anything is applied, so a mistyped level leaves the panel up with the reason on it rather than
+     * closing on a change that did not happen.
+     *
+     * @param initialLayer the storey the road is on now, which the field starts at
+     */
+    public RoadNameScreen(Screen parent, String titleKey, String initialValue, int initialLayer,
+                          double anchorX, double anchorY, BiConsumer<String, Integer> onAcceptRoad) {
+        super(Component.translatable(titleKey));
+        this.parent = parent;
+        this.titleKey = titleKey;
+        this.initialValue = initialValue;
+        this.anchorX = anchorX;
+        this.anchorY = anchorY;
+        this.onAccept = null;
+        this.initialKind = null;
+        this.kindAllowed = null;
+        this.onAcceptPlace = null;
+        this.initialLayer = initialLayer;
+        this.onAcceptRoad = onAcceptRoad;
     }
 
     /**
@@ -115,15 +153,40 @@ public final class RoadNameScreen extends Screen {
         this.kindAllowed = kindAllowed;
         this.onAcceptPlace = onAcceptPlace;
         this.selectedKind = this.initialKind;
+        this.initialLayer = 0;
+        this.onAcceptRoad = null;
     }
 
     private boolean isPlaceEditor() {
         return onAcceptPlace != null;
     }
 
+    /** Whether this panel is editing a road: a name and a storey. */
+    private boolean isRoadEditor() {
+        return onAcceptRoad != null;
+    }
+
+    /** Whether the panel has a row under the name, of either kind. */
+    private boolean hasExtraRow() {
+        return isPlaceEditor() || isRoadEditor();
+    }
+
+    /**
+     * Not a pause screen, which is the same trade the destination picker makes.
+     *
+     * <p>This panel is a small field beside the map: naming a road, setting a storey, typing a kind.
+     * Freezing the world for it stops the player mid-step, stops the mobs, and stops the trip they
+     * were in the middle of -- for a text field they will be done with in two seconds. Names are not
+     * multiplayer-synchronised, so the host is not waiting either.
+     */
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
     @Override
     protected void init() {
-        int extra = isPlaceEditor() ? TYPE_HEIGHT + PANEL_PAD + ERROR_HEIGHT : 0;
+        int extra = hasExtraRow() ? TYPE_HEIGHT + PANEL_PAD + ERROR_HEIGHT : 0;
 
         // Sit just to the right of the anchor, then keep the panel fully on screen. The extra height
         // is part of the clamp, or the type row would push the buttons off the bottom on a short window.
@@ -143,6 +206,14 @@ public final class RoadNameScreen extends Screen {
         addRenderableWidget(field);
         setInitialFocus(field);
 
+        if (isRoadEditor()) {
+            layerField = new EditBox(this.font, fieldX, extraRowY(), LAYER_FIELD_WIDTH, FIELD_HEIGHT,
+                    Component.translatable("screen.howtogo.road_layer"));
+            layerField.setMaxLength(3);
+            layerField.setValue(String.valueOf(initialLayer));
+            addRenderableWidget(layerField);
+        }
+
         buttonY = fieldY + FIELD_HEIGHT + PANEL_PAD + extra;
         int half = (FIELD_WIDTH - PANEL_PAD) / 2;
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> accept())
@@ -152,6 +223,23 @@ public final class RoadNameScreen extends Screen {
     }
 
     private void accept() {
+        if (isRoadEditor()) {
+            // Asked before applying, and the panel stays up when the answer is no: a storey outside the
+            // range, or something that is not a number at all, is a keystroke away from being right.
+            Integer layer = parseLayer(layerField.getValue());
+            if (layer == null) {
+                error = Component.translatable("screen.howtogo.layer.bad_number", layerField.getValue());
+                return;
+            }
+            if (layer < RoadSegment.MIN_LAYER || layer > RoadSegment.MAX_LAYER) {
+                error = Component.translatable("screen.howtogo.layer.out_of_range",
+                        RoadSegment.MIN_LAYER, RoadSegment.MAX_LAYER);
+                return;
+            }
+            onAcceptRoad.accept(field.getValue(), layer);
+            onClose();
+            return;
+        }
         if (!isPlaceEditor()) {
             onAccept.accept(field.getValue());
             onClose();
@@ -160,17 +248,60 @@ public final class RoadNameScreen extends Screen {
         // Asked before applying. A refusal leaves the panel up with the reason on it, so the player
         // can pick another kind instead of losing the edit and wondering what happened.
         if (kindAllowed != null && !kindAllowed.test(selectedKind)) {
-            errorKey = "screen.howtogo.station_needs_road";
+            error = Component.translatable("screen.howtogo.station_needs_road");
             return;
         }
         onAcceptPlace.accept(field.getValue(), selectedKind);
         onClose();
     }
 
+    /** The typed storey, or null when the text is not a number. */
+    private static Integer parseLayer(String typed) {
+        String trimmed = typed == null ? "" : typed.trim();
+        try {
+            return Integer.valueOf(trimmed);
+        } catch (NumberFormatException notANumber) {
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------- type row
 
-    private int typeY() {
+    /** Where the row under the name sits, whichever kind of row it is. */
+    private int extraRowY() {
         return fieldY + FIELD_HEIGHT + PANEL_PAD;
+    }
+
+    /**
+     * The storey row: the box, and beside it either the name of the storey typed in it or, while the
+     * text is not a number, the range the box takes.
+     *
+     * <p>Live rather than as a second label, because the number is the thing being chosen and "2"
+     * tells a player nothing about whether they have the second overpass or the second basement.
+     */
+    private void drawLayerRow(GuiGraphics graphics) {
+        int y = extraRowY();
+        Integer typed = parseLayer(layerField.getValue());
+        String beside;
+        int colour;
+        if (typed == null) {
+            beside = Component.translatable("screen.howtogo.road_layer").getString();
+            colour = 0xFF808A96;
+        } else if (typed < RoadSegment.MIN_LAYER || typed > RoadSegment.MAX_LAYER) {
+            beside = Component.translatable("screen.howtogo.layer.out_of_range",
+                    RoadSegment.MIN_LAYER, RoadSegment.MAX_LAYER).getString();
+            colour = 0xFFFF8060;
+        } else {
+            beside = Navigation.roadLayerLabel(typed);
+            colour = 0xFFA8D8FF;
+        }
+        graphics.drawString(this.font, this.font.plainSubstrByWidth(beside,
+                        FIELD_WIDTH - LAYER_FIELD_WIDTH - 4), fieldX + LAYER_FIELD_WIDTH + 4, y + 4,
+                colour, false);
+    }
+
+    private int typeY() {
+        return extraRowY();
     }
 
     private int typeWidth() {
@@ -213,7 +344,7 @@ public final class RoadNameScreen extends Screen {
                         && mouseY < y + TYPE_HEIGHT) {
                     selectedKind = kinds[i];
                     // The old refusal was about the old choice, so it goes as soon as the choice does.
-                    errorKey = null;
+                    error = null;
                     return true;
                 }
             }
@@ -225,10 +356,17 @@ public final class RoadNameScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // Enter confirms, so a name can be typed and committed without reaching for the mouse.
+        // Enter confirms, so a road can be named and given a storey without reaching for the mouse.
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
                 || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER) {
             accept();
+            return true;
+        }
+        // Tab between the two fields of the road editor. A plain Screen has no tab order of its own, so
+        // without this the storey box could only be reached with the mouse -- the wrong half of the
+        // panel to make the player reach for, and the one an input method does not help with either.
+        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_TAB && layerField != null) {
+            setFocused(getFocused() == layerField ? field : layerField);
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -263,10 +401,12 @@ public final class RoadNameScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
         if (isPlaceEditor()) {
             drawTypes(graphics, mouseX, mouseY);
-            if (errorKey != null) {
-                graphics.drawString(this.font, Component.translatable(errorKey).getString(), fieldX,
-                        typeY() + TYPE_HEIGHT + 1, 0xFFFF6B6B, false);
-            }
+        } else if (isRoadEditor()) {
+            drawLayerRow(graphics);
+        }
+        if (error != null) {
+            graphics.drawString(this.font, error.getString(), fieldX, extraRowY() + TYPE_HEIGHT + 1,
+                    0xFFFF6B6B, false);
         }
     }
 }

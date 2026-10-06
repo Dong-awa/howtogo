@@ -8,10 +8,12 @@ import bili.dongsz.howtogo.road.RoadSegment;
  * <p>Normally this wraps a single road polyline, so a whole road is drawn in one call and the
  * per-element overhead is paid once per road rather than once per vertex.
  *
- * <p>There are also three singleton overlays. Xaero calls renderers in order and we are the only
+ * <p>There are also four singleton overlays. Xaero calls renderers in order and we are the only
  * renderer in our layer, so appending these last draws them on top of the roads without needing a
  * second renderer/reader pair:
  * <ul>
+ *   <li>{@link #MARKS} - the track MTR's lines run along, drawn as the polylines the lines are drawn
+ *       from rather than as one element per rail</li>
  *   <li>{@link #EDIT_UI} - node handles, snap indicator and rubber band, only while editing</li>
  *   <li>{@link #ROUTE} - the active navigation route, drawn whenever a destination is set</li>
  *   <li>{@link #LABELS} - road and place names, always, and last so text is never painted over</li>
@@ -21,6 +23,7 @@ public final class RoadElement {
 
     public enum Kind {
         ROAD,
+        MARKS,
         EDIT_UI,
         ROUTE,
         LABELS
@@ -42,6 +45,7 @@ public final class RoadElement {
         return new RoadElement(Kind.ROAD, segment);
     }
 
+    public static final RoadElement MARKS = new RoadElement(Kind.MARKS, null);
     public static final RoadElement EDIT_UI = new RoadElement(Kind.EDIT_UI, null);
     public static final RoadElement ROUTE = new RoadElement(Kind.ROUTE, null);
     public static final RoadElement LABELS = new RoadElement(Kind.LABELS, null);

@@ -45,6 +45,12 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Navigation.tick());
+        // The commands' own deferral: a screen cannot be opened from inside the command that asked for
+        // it, so the work is run on the tick after.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> HowToGoCommand.tick());
+        // Client commands: opening the terminal, ending the trip and switching travel mode are all
+        // client state, so they run here with no server involved and no permission needed.
+        NeoForge.EVENT_BUS.addListener(HowToGoCommand::onRegisterClientCommands);
         // Ticked rather than drawn: the readout is recomputed per frame, so deciding what to say
         // there would repeat the same instruction continuously, and the HUD does not run at all
         // while a screen is open. The speaking itself is on the narration thread; this only feeds it.
@@ -67,6 +73,15 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onMouseReleased);
 
         modEventBus.addListener(RoadEditHandler::onRegisterKeyMappings);
+        // A config screen's save has to reach the values this mod holds rather than reads where it
+        // uses them. Almost every key is read at the point of use and needs nothing; the route
+        // preferences and the default travel mode are seeded once, so saving the screen used to leave
+        // them with no effect until the game was restarted -- while the keys beside them in the same
+        // screen took effect at once, which is what made it read as a broken screen.
+        modEventBus.addListener((net.neoforged.fml.event.config.ModConfigEvent.Reloading event) -> {
+            Navigation.reloadConfiguredMode();
+            RoutePreferenceStore.load();
+        });
         // Client setup runs after the config files have been read, so this is the first point at
         // which the configured travel mode is genuinely available -- and the only point at which
         // the saved route preferences sit in front of config values that are known to be loaded.

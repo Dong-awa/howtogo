@@ -4,7 +4,6 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.RoadClass;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonSyntaxException;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -38,6 +37,12 @@ public final class TransitLineStorage {
 
     public static final int FORMAT_VERSION = 1;
 
+    /** The half-written file a save goes through, beside the real one. Never read. */
+    private static final String PARTIAL_SUFFIX = ".part";
+
+    /** What an unreadable file is renamed to instead of being overwritten with nothing. */
+    private static final String CORRUPT_SUFFIX = ".corrupt";
+
     private static final Gson GSON = new GsonBuilder()
             .setPrettyPrinting()
             .disableHtmlEscaping()
@@ -58,9 +63,20 @@ public final class TransitLineStorage {
                 return lines;
             }
             for (LineDto l : dto.lines) {
+                if (l == null) {
+                    // Gson hands over a null element for a null entry in the array rather than
+                    // refusing the file, and dereferencing it threw a NullPointerException that the
+                    // catch below -- IOException and a syntax error, not this -- let through. See the
+                    // same guard in RoadStorage: a file that half-parses must not take the client
+                    // down, and must not be overwritten with nothing either.
+                    continue;
+                }
                 TransitLine line = new TransitLine(l.id, l.name, parseClass(l.kind));
                 if (l.stops != null) {
                     for (StopDto s : l.stops) {
+                        if (s == null) {
+                            continue;
+                        }
                         // A stop already at that block is refused by the line, so a file that lists
                         // one twice -- hand-edited, or written by a version that allowed it -- loads
                         // as a line that calls there once.
@@ -72,16 +88,41 @@ public final class TransitLineStorage {
             }
             HowToGo.LOGGER.info("[HowToGo] loaded {} line(s) from {}", lines.size(),
                     file.getFileName());
-        } catch (IOException | JsonSyntaxException e) {
+        } catch (IOException | RuntimeException e) {
+            // RuntimeException rather than JsonSyntaxException alone, because a file can be malformed
+            // in ways the parser accepts and the reader does not -- a null element in an array is one,
+            // and it threw a NullPointerException straight out of load() and past every guard. A file
+            // that cannot be read is a file that must be set aside, whatever the reason turned out to
+            // be.
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting with no lines", file, e);
+            // Starting with no lines is the only thing to be done with a file that does not parse, but
+            // it must not also be the end of that data: the store autosaves three seconds after any
+            // edit, and would write the empty list over the top of a file whose lines are still in
+            // there, in part. Moving it aside keeps the salvageable remainder. The road network has done
+            // this from the start; lines are the same kind of hand-entered work and were not.
+            quarantine(file);
         }
         return lines;
+    }
+
+    /** Renames an unreadable lines file aside so that starting empty does not destroy it. */
+    private static void quarantine(Path file) {
+        Path salvaged = file.resolveSibling(file.getFileName() + CORRUPT_SUFFIX);
+        try {
+            Files.move(file, salvaged, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            HowToGo.LOGGER.error("[HowToGo] kept the unreadable file as {} -- "
+                    + "part of it may still be recoverable by hand", salvaged);
+        } catch (IOException moveFailed) {
+            HowToGo.LOGGER.error("[HowToGo] could not set {} aside either; it will be overwritten",
+                    file, moveFailed);
+        }
     }
 
     public static boolean save(Path file, List<TransitLine> lines) {
         if (file == null) {
             return false;
         }
+        Path partial = file.resolveSibling(file.getFileName() + PARTIAL_SUFFIX);
         try {
             Files.createDirectories(file.getParent());
             LinesDto dto = new LinesDto();
@@ -103,12 +144,26 @@ public final class TransitLineStorage {
                 }
                 dto.lines.add(l);
             }
-            try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            try (Writer writer = Files.newBufferedWriter(partial, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);
+            }
+            try {
+                Files.move(partial, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
+                // Atomic moves are a filesystem capability rather than a guarantee; a network share
+                // can refuse one. The plain replace is the honest fallback on those, and is still no
+                // worse than what this did before.
+                Files.move(partial, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             return true;
         } catch (IOException e) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", file, e);
+            try {
+                Files.deleteIfExists(partial);
+            } catch (IOException cleanupFailed) {
+                HowToGo.LOGGER.warn("[HowToGo] left a half-written {} behind", partial);
+            }
             return false;
         }
     }

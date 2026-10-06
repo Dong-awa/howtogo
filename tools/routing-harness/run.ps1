@@ -86,16 +86,26 @@ if ($LASTEXITCODE -ne 0) { throw "javac failed on the mod with $LASTEXITCODE" }
 
 # MTR itself is added after the mod has been compiled, and only for the harness: with its jar on the
 # classpath the harness checks that every class, field and method the reader looks up is one MTR
-# actually has, which is the one part of the integration no made-up reading can test.
+# actually has, which is the one part of the integration no made-up reading can test. MTR Map Overlay
+# is added the same way for the same check of its own reader; neither is a dependency of the mod, so a
+# machine that has never seen either simply skips that check.
 $mtr = (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.FullName }) -join ';'
+$overlay = (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
     ForEach-Object { $_.FullName }) -join ';'
 if ($mtr) {
     Write-Host 'an MTR jar is present: the reflection handshake will be checked'
-    $harnessPath = "$compilePath;$mtr"
 } else {
     Write-Host 'no MTR jar in run/mods: the handshake check will be skipped'
-    $harnessPath = $compilePath
 }
+if ($overlay) {
+    Write-Host 'an MTR Map Overlay jar is present: its reflection handshake will be checked'
+} else {
+    Write-Host 'no MTR Map Overlay jar in run/mods: its handshake check will be skipped'
+}
+$harnessPath = $compilePath
+if ($mtr) { $harnessPath = "$harnessPath;$mtr" }
+if ($overlay) { $harnessPath = "$harnessPath;$overlay" }
 
 Write-Host 'compiling the harness...'
 # The freshly compiled classes come before the ones gradle built, so what runs is the working tree

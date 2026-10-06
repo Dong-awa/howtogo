@@ -81,6 +81,12 @@ public final class RoadStore {
                 boundLevel = null;
                 boundPath = null;
                 network = new RoadNetwork();
+                // The editing session outlives a world -- it is process-wide state -- so it has to be
+                // told the world it was editing is gone. Left alone, the next world opened in edit
+                // mode with a handle still held: the panel was already up, the first R turned editing
+                // off instead of on, and moving the mouse dragged whatever node now carried that id,
+                // marking the roads dirty as it went.
+                RoadEditSession.setActive(false);
             }
             return;
         }

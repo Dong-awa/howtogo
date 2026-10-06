@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.route;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.transit.TransitLine;
 
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
@@ -22,22 +23,45 @@ import java.util.function.Predicate;
  *
  * <p>The pair are the same object when nothing wants the difference, so a plan over lines that all
  * agree never pays for a second copy of the world.
+ *
+ * <h2>And the line's own track, which is the third answer</h2>
+ * The layer above is shared: every switched-on line of a kind rides the same rails, so a ride is planned
+ * over all of them at once. That is the only answer there was while nothing said which rails belonged to
+ * which line -- but a reading that names them does, and the mod keeps each line's own track for drawing
+ * it (see {@code MtrTransit.trackOf}). Planning over that instead is the same ride and two things more:
+ *
+ * <ul>
+ *   <li><b>it is the line's own track</b>, so a ride cannot take a stretch of another line's railway
+ *       because it happened to be shorter;</li>
+ *   <li><b>it is affordable</b>. A ride is planned per pair of neighbouring stops, and a whole railway
+ *       read from a server is hundreds of lines and thousands of stops. Searching a layer holding every
+ *       line's track costs the size of that layer per plan; searching one line's own track costs the
+ *       size of that line. This is the difference between planning a journey over a railway in a few
+ *       milliseconds and in several seconds, which is what happened when the whole network first
+ *       arrived and every ride was planned over all of it.</li>
+ * </ul>
+ *
+ * <p>Asked only of lines that want the marks: a line whose marks are switched off is planned on the
+ * plain network, and its own track is part of the marks it has declined.
  */
 public final class RideRoads {
 
     private final RoadNetwork marked;
     private final RoadNetwork plain;
     private final Predicate<TransitLine> usesMarks;
+    private final Function<TransitLine, RoadNetwork> ownTrack;
 
-    private RideRoads(RoadNetwork marked, RoadNetwork plain, Predicate<TransitLine> usesMarks) {
+    private RideRoads(RoadNetwork marked, RoadNetwork plain, Predicate<TransitLine> usesMarks,
+                      Function<TransitLine, RoadNetwork> ownTrack) {
         this.marked = marked;
         this.plain = plain;
         this.usesMarks = usesMarks;
+        this.ownTrack = ownTrack;
     }
 
     /** One network for every line, marks and all. */
     public static RideRoads of(RoadNetwork network) {
-        return new RideRoads(network, network, line -> true);
+        return new RideRoads(network, network, line -> true, line -> null);
     }
 
     /**
@@ -47,22 +71,44 @@ public final class RideRoads {
      */
     public static RideRoads of(RoadNetwork marked, RoadNetwork plain,
                                Predicate<TransitLine> usesMarks) {
-        return new RideRoads(marked, plain, usesMarks);
+        return new RideRoads(marked, plain, usesMarks, line -> null);
+    }
+
+    /**
+     * The same, for a caller that also knows what each line runs along.
+     *
+     * @param ownTrack the track one line runs along, or null for a line whose track is not known -- the
+     *                 shared layer is used for those, which is what every line was planned over before
+     *                 a reading could name them
+     */
+    public static RideRoads of(RoadNetwork marked, RoadNetwork plain,
+                               Predicate<TransitLine> usesMarks,
+                               Function<TransitLine, RoadNetwork> ownTrack) {
+        return new RideRoads(marked, plain, usesMarks, ownTrack);
     }
 
     /** The roads a ride along this line may use. */
     RoadNetwork forLine(TransitLine line) {
-        return line != null && usesMarks.test(line) ? marked : plain;
+        if (line == null || !usesMarks.test(line)) {
+            return plain;
+        }
+        RoadNetwork own = ownTrack.apply(line);
+        return own == null || own.segmentCount() == 0 ? marked : own;
     }
 
     /**
-     * The roads the walking legs use, which is always the marked pair.
+     * The roads the walking legs use, which is the pair without the marks.
      *
-     * <p>A walk cannot use a rail or a waterway, so both networks answer it identically -- the marks
-     * are filtered out by the mode before they are ever looked at. Taking the marked one keeps the
-     * walking side of a journey out of a decision that is only about riding.
+     * <p>A walk cannot use a rail or a waterway, so both networks answer it identically: the marks are
+     * filtered out by the mode before they are ever looked at. What is not identical is what they cost.
+     * Handing the router the network with the marks in it makes it copy that network before it can
+     * answer the first walk -- and a whole-network reading's marks are the whole railway, so the walking
+     * legs of a journey are planned over a copy of the railway they cannot walk on. Measured, that was
+     * most of the frozen second a short journey still cost: a plan that answered in a hundred
+     * milliseconds answered in a quarter of a second, for the same legs, because of the network the
+     * walking side was given and never used.
      */
     RoadNetwork forWalks() {
-        return marked;
+        return plain;
     }
 }

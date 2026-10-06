@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.RouteFailure;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
@@ -19,6 +20,7 @@ import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
@@ -69,6 +71,14 @@ public final class Navigation {
     private static TravelMode mode = TravelMode.WALK;
     /** Set once the client config has actually been read; until then the default stands. */
     private static boolean modeLoaded;
+    /**
+     * Set once the player has picked a mode themselves, in the picker or by command.
+     *
+     * <p>What a config reload must not do is take that choice away: the config declares a *default*,
+     * and a default that overwrites an answer the player gave this session is not a default. Read
+     * only by {@link #reloadConfiguredMode}.
+     */
+    private static boolean modeChosen;
 
     /**
      * Where the trip began, pinned for the whole session.
@@ -85,6 +95,19 @@ public final class Navigation {
     private static long arrivedAtMillis;
     /** When the player was first seen off route, or 0 when they are currently on it. */
     private static long offRouteSince;
+
+    /**
+     * The dimension the trip was planned in, or null when no trip is active.
+     *
+     * <p>A destination is a pair of coordinates and a name, and coordinates only mean anything inside
+     * one dimension: the road network is per dimension, and every number the session holds -- the
+     * route line, the distance left, the road underfoot, whether the player is off route -- belongs to
+     * the world it was built in. Nothing used to notice a change of world. Walking through a portal
+     * therefore left the panel guiding a route from the world the player had left, and standing at the
+     * same x and z in the new world was read as arriving at the destination, which then cleared the
+     * trip.
+     */
+    private static String tripDimension;
 
     /**
      * The mode the last plan gave up on, or null when the mode that was asked for was kept.
@@ -164,6 +187,21 @@ public final class Navigation {
     }
 
     /**
+     * Re-reads the configured default after the config file has been reloaded.
+     *
+     * <p>The mode is latched rather than read where it is used, because a route is planned for it and
+     * the two must not change under a trip. That latch is why saving the config screen used to leave
+     * a corrected default_travel_mode with no effect until the game was restarted. Does nothing when
+     * the player has chosen a mode of their own this session, since a reload is about the default.
+     */
+    public static void reloadConfiguredMode() {
+        if (modeChosen) {
+            return;
+        }
+        loadConfiguredMode();
+    }
+
+    /**
      * Switches travel mode, re-planning the current route straight away.
      *
      * <p>A mode is not a label on the estimate: the route itself differs, because a driver must not
@@ -174,6 +212,7 @@ public final class Navigation {
     public static void setMode(TravelMode newMode) {
         mode = newMode == null ? TravelMode.WALK : newMode;
         modeLoaded = true;
+        modeChosen = true;
         HowToGo.LOGGER.info("[HowToGo] travel mode: {}", mode.id());
         announceMode();
         if (target != null) {
@@ -200,6 +239,8 @@ public final class Navigation {
         arrived = false;
         offRouteSince = 0L;
         clearWrongWay();
+        // Pinned with the destination: a trip is this destination, in this world.
+        tripDimension = currentDimension();
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null) {
             // Pinned here and never updated again: this is the start of the trip.
@@ -221,9 +262,16 @@ public final class Navigation {
         tripOriginZ = Double.NaN;
         arrived = false;
         offRouteSince = 0L;
+        tripDimension = null;
         clearFallback();
         clearWrongWay();
-        takenManeuverAt = Double.NaN;
+        turns.reset();
+    }
+
+    /** The dimension the player is in, or null when no world is loaded. */
+    private static String currentDimension() {
+        net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
+        return level == null ? null : level.dimension().location().toString();
     }
 
     /** Where the trip started; stays fixed even after the route is re-planned. */
@@ -246,6 +294,18 @@ public final class Navigation {
         }
         double x = player.getX();
         double z = player.getZ();
+
+        // A trip belongs to the world it was planned in; see tripDimension. Checked before anything
+        // else, because every reading below is taken against that world's road network.
+        String dimension = currentDimension();
+        if (tripDimension != null && dimension != null && !tripDimension.equals(dimension)) {
+            HowToGo.LOGGER.info("[HowToGo] the trip was planned in {} and the player is now in {}; "
+                    + "ending it rather than guiding the wrong world's roads", tripDimension, dimension);
+            player.displayClientMessage(
+                    Component.translatable("hud.howtogo.dimension_changed"), true);
+            clear();
+            return;
+        }
 
         // Kept current before anything below can return early: the readout asks for it every frame,
         // and a call left over from before an arrival would outlive the trip it belonged to. It also
@@ -327,13 +387,19 @@ public final class Navigation {
     }
 
     /**
-     * Estimated seconds left, at the pace of the mode the route was planned for.
+     * Estimated seconds left, at the pace of the part of the route that is still ahead.
      *
      * <p>No base speed is passed in on purpose: the walking constant that used to be applied here
-     * would quietly restate every drive and every bus ride as a walk.
+     * would quietly restate every drive and every bus ride as a walk. Nor is a single pace used for
+     * the whole route: the road's pieces differ, so the number is read from the route itself -- see
+     * {@link Route#remainingSeconds}, which also carries the waiting that is still to come.
      */
     public static double remainingSeconds() {
-        return remainingLength() * route.secondsPerBlock();
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player == null || !route.isPresent()) {
+            return 0;
+        }
+        return route.remainingSeconds(player.getX(), player.getZ());
     }
 
     /**
@@ -350,39 +416,14 @@ public final class Navigation {
     }
 
     /**
-     * How far a heading may differ from the route leaving a junction and still count as turning.
+     * Which turn is current, and which junctions have already been judged taken.
      *
-     * <p>Generous on purpose: a player halfway through a turn, or cutting the corner, is not yet
-     * pointing down the new road, and holding the instruction back through that would flicker. It
-     * still excludes carrying straight on through a right-angled junction, which is ninety degrees
-     * out. The two do overlap on the shallowest manoeuvres -- a turn of twenty-five degrees, the
-     * threshold for one existing at all, is barely different from not turning -- but there the two
-     * directions mean nearly the same thing, so getting it wrong costs nothing.
+     * <p>The state machine is a class of its own so that the part that was wrong can be driven
+     * outside the game: every reading it needs is a route, a distance along it, a position and a
+     * heading. See {@link TurnCursor}, which also carries the constants and the argument for the
+     * frontier it keeps.
      */
-    private static final double TURN_TAKEN_ARC_DEGREES = 45.0;
-
-    /**
-     * How far past a junction the player may get without turning before the turn is given up on.
-     *
-     * <p>Straight-line distance from the junction, not distance along the route: a player walking
-     * away down the road they were already on stops making progress along the route as soon as they
-     * pass the corner, so a route-distance rule would never fire on the case it exists for. In
-     * practice the off-route re-plan fires first, within a couple of seconds, and rebuilds the whole
-     * trip; this is the backstop for a player who stays inside the road's tolerance the whole way,
-     * where nothing else would ever move the instruction on.
-     */
-    private static final double TURN_GIVE_UP_DISTANCE = 60.0;
-
-    /** Blocks behind a junction that still count as level with it, so a corner does not flicker. */
-    private static final double MANEUVER_PASSED_SLACK = 2.0;
-
-    /**
-     * Where along the route the last manoeuvre judged taken sits, or NaN when none has been.
-     *
-     * <p>See {@link #taken}: the verdict is latched so a wandering heading cannot un-take a junction
-     * the player has already turned at. Cleared with the route it refers to.
-     */
-    private static double takenManeuverAt = Double.NaN;
+    private static final TurnCursor turns = new TurnCursor();
 
     /** At or beyond this turn angle the instruction is a U-turn rather than a turn. */
     private static final double UTURN_DEGREES = 135.0;
@@ -519,6 +560,24 @@ public final class Navigation {
      *
      * <p>Off the route the answer is zero rather than NaN: the re-plan is what deals with that, and a
      * player who has left the route is not travelling against it so much as no longer on it.
+     *
+     * <h2>Where a route passes over the same ground twice</h2>
+     * The reading is taken from the nearest point of the route, and a route that doubles back makes
+     * that point ambiguous: a road that loops back, a divided highway whose carriageways are a lane
+     * apart, a destination on the piece of road the trip set off along, or a connector lying along
+     * the road it joins all put two opposite directions within a few blocks of each other. The scan
+     * takes the earlier of the two, and the direction it reports is then the direction of the pass
+     * the player has already made -- exactly reversed -- so a player driving correctly is read as
+     * having turned round and is called a U-turn.
+     *
+     * <p>What settles it is the player rather than the route: a route has no way to tell its two
+     * passes apart, but a player driving along it is plainly following one of them. So when the
+     * nearest direction says the player is going backwards, every other direction the route has here
+     * is offered the chance to disagree -- and if one of them agrees with the way the player is
+     * actually travelling, the route is being followed and the reading is stood down. A player who
+     * has genuinely turned round agrees with none of them, and keeps the reading.
+     *
+     * <p>See {@link Route#bearingsNear}, which is the other directions.
      */
     private static double wrongWayGap(double x, double z) {
         LocalPlayer player = Minecraft.getInstance().player;
@@ -536,7 +595,34 @@ public final class Navigation {
             return 0;
         }
         double alongRoute = route.bearingAt(x, z);
-        return Double.isNaN(alongRoute) ? 0 : MovementState.bearingGap(travel, alongRoute);
+        double nearest = Double.isNaN(alongRoute) ? 0 : MovementState.bearingGap(travel, alongRoute);
+        if (nearest < WRONG_WAY_ENTER_DEGREES) {
+            return nearest;
+        }
+        // The nearest direction says the player is going backwards. Only over the ground the route
+        // doubles back on is that worth checking, so the extra walk is paid on the reading that is
+        // about to call a U-turn rather than on every step of every trip.
+        double best = nearest;
+        for (double other : route.bearingsNear(x, z, wrongWayReadingRadius())) {
+            best = Math.min(best, MovementState.bearingGap(travel, other));
+        }
+        return best;
+    }
+
+    /**
+     * How far from the player the route's other directions still count as being "here".
+     *
+     * <p>Wide enough to take in the opposite carriageway of a divided highway and the return pass of
+     * a loop, which is what the reading exists to disambiguate. Tied to the widest on-road tolerance
+     * the mod allows, so any road the mod would still call the player's own is a road whose direction
+     * they are judged by -- and no wider, because a road beyond that is one the player is not on.
+     */
+    private static double wrongWayReadingRadius() {
+        double widest = 0;
+        for (RoadClass roadClass : RoadClass.values()) {
+            widest = Math.max(widest, RoadConfig.onRoadTolerance(roadClass));
+        }
+        return widest;
     }
 
     /**
@@ -643,14 +729,18 @@ public final class Navigation {
         wrongWayDistance = Double.NaN;
     }
 
-    /** The other segment meeting a node, or null when the only one there is {@code excludeId}. */
+    /**
+     * The other segment meeting a node, or null when the only one there is {@code excludeId}.
+     *
+     * <p>Answered from the cached adjacency reading rather than by scanning every segment in the
+     * network, which is what this did -- once per step of a walk that takes up to sixty-four of them,
+     * once per tick, while the player is going the wrong way. The order is the network's own, so the
+     * answer is the one the scan gave. See {@link RoadChains#segmentsAt}.
+     */
     private static RoadSegment otherSegmentAt(RoadNetwork network, int nodeId, int excludeId) {
-        for (RoadSegment segment : network.segments()) {
-            if (segment.id() == excludeId) {
-                continue;
-            }
-            if (segment.fromNode() == nodeId || segment.toNode() == nodeId) {
-                return segment;
+        for (int id : RoadChains.segmentsAt(network, nodeId)) {
+            if (id != excludeId) {
+                return network.segment(id);
             }
         }
         return null;
@@ -782,6 +872,22 @@ public final class Navigation {
     }
 
     /**
+     * Localised name of a storey: the surface for zero, an overpass above it and an underpass below.
+     *
+     * <p>A whole phrase rather than a number with a sign, because the number is a thing the player
+     * typed into a field and the phrase is what the road is: "高架2层" is a place in the world and
+     * "+2" is a datum. The two are the same value; only one of them belongs on the HUD.
+     */
+    public static String roadLayerLabel(int layer) {
+        if (layer == 0) {
+            return Component.translatable("hud.howtogo.layer.surface").getString();
+        }
+        return layer > 0
+                ? Component.translatable("hud.howtogo.layer.overpass", layer).getString()
+                : Component.translatable("hud.howtogo.layer.underpass", -layer).getString();
+    }
+
+    /**
      * The next turn ahead, or null when nothing is coming up.
      *
      * <p>{@link Route#maneuvers()} reports each turn's position along the whole route. That is not
@@ -791,9 +897,13 @@ public final class Navigation {
      * <p>Being level with a junction by distance is not the same as having taken it. A player who
      * walks straight past a corner is still level with it, and calling the turn done there would
      * swap the instruction for the next one while they are standing at the wrong road. So a
-     * manoeuvre that is behind by distance is only passed if the player's heading has come round to
-     * the road leaving the junction; otherwise it stays current, at a distance of zero, which the
-     * readout and the announcement both show as "now".
+     * manoeuvre that is behind by distance is only passed once it has been judged taken; until then
+     * it stays current, at a distance of zero, which the readout and the announcement both show as
+     * "now".
+     *
+     * <p>Which one that is, and whether it has been taken, is {@link TurnCursor}'s: the verdict has
+     * to be remembered, and remembering it wrongly is what showed a junction the player had already
+     * left behind as the next instruction.
      */
     public static Instruction nextManeuver() {
         if (!route.isPresent()) {
@@ -804,46 +914,13 @@ public final class Navigation {
         double heading = player == null ? Double.NaN : MovementState.facingBearing(player);
         double x = player == null ? 0 : player.getX();
         double z = player == null ? 0 : player.getZ();
-        for (Route.Maneuver maneuver : route.maneuvers()) {
-            if (maneuver.distanceFromStart() > travelled + MANEUVER_PASSED_SLACK
-                    || !taken(maneuver, heading, x, z)) {
-                return new Instruction(maneuver.distanceFromStart() - travelled,
-                        maneuver.turnDegrees(), maneuver.roadName(), maneuver.namesTheRoad());
-            }
+        int index = turns.nextIndex(route, travelled, heading, x, z);
+        if (index < 0) {
+            return null;
         }
-        return null;
-    }
-
-    /**
-     * Whether a manoeuvre the player is already level with has actually been taken.
-     *
-     * <p>The verdict is latched once it is reached. It is re-made every tick out of the player's
-     * heading, and a heading wanders: a bend in the new road, a glance sideways, a step around a
-     * corner all take it outside the arc. Without the latch a junction the player had already turned
-     * at comes back as the current instruction -- at a distance of zero, so it is shown and spoken as
-     * "now" -- and then disappears again when the heading swings back. That is the unexplained "now
-     * turn left" at junctions, and it needs no reversal to happen, only a few degrees of drift.
-     *
-     * <p>The latch is cleared whenever the route is re-planned, because a new plan renumbers every
-     * junction along it and a verdict about the old numbering means nothing.
-     *
-     * @param heading the player's facing bearing, or NaN when there is no player to judge by
-     */
-    private static boolean taken(Route.Maneuver maneuver, double heading, double x, double z) {
-        if (Math.abs(maneuver.distanceFromStart() - takenManeuverAt) <= MANEUVER_PASSED_SLACK) {
-            return true;
-        }
-        if (Double.isNaN(heading)
-                // Nothing to judge a heading against -- no player yet -- so the distance rule stands
-                // alone rather than every turn being held open forever.
-                || Math.hypot(x - maneuver.junctionX(), z - maneuver.junctionZ())
-                        > TURN_GIVE_UP_DISTANCE
-                || MovementState.bearingGap(heading, maneuver.bearingAfter())
-                        <= TURN_TAKEN_ARC_DEGREES) {
-            takenManeuverAt = maneuver.distanceFromStart();
-            return true;
-        }
-        return false;
+        Route.Maneuver maneuver = route.maneuvers().get(index);
+        return new Instruction(maneuver.distanceFromStart() - travelled,
+                maneuver.turnDegrees(), maneuver.roadName(), maneuver.namesTheRoad());
     }
 
     /**
@@ -1402,8 +1479,12 @@ public final class Navigation {
         double x = player != null ? player.getX() : destination.x();
         double z = player != null ? player.getZ() : destination.z();
         // The plan and the explanation are made on one and the same network, so a preview cannot be
-        // refused for something the network it was refused on did not contain.
-        RoadNetwork network = RailTrackStore.forRouting(active, policy);
+        // refused for something the network it was refused on did not contain -- and the network is the
+        // one the live route will be planned on, which for a transit journey over lines that know their
+        // own track is the world without MTR's shared layer. See recomputeFrom.
+        boolean wantsMarks = active != TravelMode.TRANSIT
+                || !MtrTransit.everyLineRidesItsOwnTrack(linesInPlay());
+        RoadNetwork network = RailTrackStore.forRouting(active, policy, wantsMarks);
 
         Route planned = planRoute(network, active, policy, x, z, destination);
         if (!planned.isPresent() && active != TravelMode.WALK
@@ -1421,13 +1502,45 @@ public final class Navigation {
             // trace in the log and the only report of it is "it does not work". The reason names the
             // branch -- no road of that class near an end, the nearest one past the mode's connector
             // distance, two fragments that do not meet -- and that is what makes it answerable.
-            String why = RoadRouter.explainFailure(network, x, z, destination.x(), destination.z(),
-                    active, policy);
+            //
+            // Named as a translation key in the log and as a sentence in the picker: the log is read
+            // while diagnosing a report, and there the key is what can be searched for in the source.
+            RouteFailure why = RoadRouter.explainFailure(network, x, z, destination.x(),
+                    destination.z(), active, policy);
             HowToGo.LOGGER.info("[HowToGo] no route to {} for {} from ({}, {}): {}",
                     destination.name(), active.id(), Math.round(x), Math.round(z), why);
-            return new RoutePreview(planned, x, z, destination, why);
+            return new RoutePreview(planned, x, z, destination, failureText(why));
         }
         return new RoutePreview(planned, x, z, destination, null);
+    }
+
+    /**
+     * A routing failure in the language the client is running in.
+     *
+     * <p>The one place a {@link RouteFailure} becomes text. The route package cannot translate -- it is
+     * pure Java shared by every branch -- so the reason it hands back is a key and its arguments, and
+     * this is where the picker's line is built from them.
+     *
+     * <p>An argument that is itself a {@link RouteFailure} is resolved the same way, so a message may
+     * carry a clause of its own. The avoided classes are the case that needs it: whether the clause
+     * belongs in the sentence, and where, is a question for the translation rather than for the router,
+     * so the router hands over the key for the clause and lets the translation place it.
+     */
+    public static String failureText(RouteFailure failure) {
+        if (failure == null || !failure.isPresent()) {
+            return null;
+        }
+        return resolvable(failure).getString();
+    }
+
+    /** A translatable for one reason, with any reason it carries resolved as well. */
+    private static Component resolvable(RouteFailure failure) {
+        Object[] args = new Object[failure.args().size()];
+        for (int i = 0; i < args.length; i++) {
+            Object arg = failure.args().get(i);
+            args[i] = arg instanceof RouteFailure nested ? resolvable(nested) : arg;
+        }
+        return Component.translatable(failure.key(), args);
     }
 
     private static void recompute() {
@@ -1446,12 +1559,19 @@ public final class Navigation {
         routeOriginZ = z;
         // A new plan renumbers every junction along it, so a verdict about whether one of the old
         // ones was taken means nothing and must not suppress a turn on the new line.
-        takenManeuverAt = Double.NaN;
+        turns.reset();
         // The store, not the config directly: the picker's buttons change the policy between two
         // plans, and a re-plan made after such a change has to see the new one.
         RoutePreferences preferences = RoutePreferenceStore.preferences();
         TravelMode active = mode();
-        RoadNetwork usable = RailTrackStore.forRouting(active, preferences);
+        // The shared layer of everything read out of MTR is one network holding the whole railway, and a
+        // transit plan over lines that each know their own track makes no use of it -- so it is left out
+        // of the world the plan runs on, and the copy of the railway that merging it costs is not paid.
+        // Asked before the network is built rather than after, because the copy is what is being avoided.
+        // See MtrTransit.everyLineRidesItsOwnTrack.
+        boolean wantsMarks = active != TravelMode.TRANSIT
+                || !MtrTransit.everyLineRidesItsOwnTrack(linesInPlay());
+        RoadNetwork usable = RailTrackStore.forRouting(active, preferences, wantsMarks);
         // Public transport first, as a journey of legs: a single route in one mode cannot say where the
         // riding begins, and the requirement is that it begins and ends at a station. The plain route
         // is still the fallback, so a world with no station near either end behaves as it did before
@@ -1539,12 +1659,17 @@ public final class Navigation {
             // line with its own marks switched off has to be given the network that never had them,
             // rather than one that merely declined to add them. The second copy of the world is made
             // only when a line actually wants the difference, which keeps the ordinary case free.
-            RoadNetwork plain = MtrTransit.anyLineRefusesMarks(lines)
-                    ? RailTrackStore.forRouting(mode, preferences, false)
-                    : network;
+            //
+            // And a line whose own track is known rides on that and nothing else, in which case the
+            // shared layer is of no use to any of them and the network handed in is already the world
+            // without it -- see the caller, which leaves it out for exactly this case. The walking
+            // legs never want it either, because a walk cannot use a rail; see RideRoads.
+            boolean ownTracksOnly = MtrTransit.everyLineRidesItsOwnTrack(lines);
+            RoadNetwork plain = ownTracksOnly ? network
+                    : RailTrackStore.forRouting(mode, preferences, false);
             Route byTransit = TransitPlanner.planRoute(
-                    RideRoads.of(network, plain, MtrTransit::marksEnabled), lines, x, z, target.x(),
-                    target.z(), target.name(), preferences);
+                    RideRoads.of(network, plain, MtrTransit::marksEnabled, MtrTransit::trackOf), lines,
+                    x, z, target.x(), target.z(), target.name(), preferences);
             if (!byTransit.isPresent()) {
                 HowToGo.LOGGER.info("[HowToGo] public transport: no journey over {} line(s)",
                         lines.size());

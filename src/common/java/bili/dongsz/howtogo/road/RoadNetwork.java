@@ -27,9 +27,12 @@ public final class RoadNetwork {
      * check is not enough on its own: the editor mutates one network in place for the whole session,
      * so a cache keyed on the reference alone would serve a reading of roads that have since moved.
      *
-     * <p>Deliberately not bumped for a change that cannot move geometry: a rename, a re-class, a
-     * one-way flag. Those are read through the same objects a cache already holds, so the cache stays
-     * correct and a rebuild would be wasted work.
+     * <p>Deliberately not bumped for a change that cannot move geometry and cannot change any reading
+     * of it: a rename, or a one-way flag -- the latter has its own counter, on the segment, because a
+     * cached graph has to know the direction changed. A <em>re-class</em> is not in that list even
+     * though it moves nothing: which pieces of road count as one road is a question about their class,
+     * so a class change is a change to a grouping and to the graph built from it, and both are cached
+     * against this counter.
      */
     private int revision;
 

@@ -530,7 +530,11 @@ public final class DestinationPickerPage implements IPhonePage {
     private void drawRoadNames(GuiGraphics graphics, Font font, int minX, int minY, int maxX,
                                int maxY) {
         RoadNetwork network = RoadStore.get();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
+        // One reading of the roads for the whole pass: which road each piece belongs to, and which
+        // piece carries the name. Asking for a chain per named road walks the network per name, and
+        // this page redraws on every frame the phone app is open.
+        RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             if (name == null || segment.vertexCount() < 2) {
                 continue;
@@ -541,11 +545,10 @@ public final class DestinationPickerPage implements IPhonePage {
             if (outside(x, z, minX, minY, maxX, maxY, 4.0)) {
                 continue;
             }
-            List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-            if (RoadChains.middleSegment(chain) != segment.id()) {
+            if (!grouping.carriesLabel(segment)) {
                 continue;
             }
-            if (font.width(name) > chainScreenPx(network, chain)) {
+            if (font.width(name) > chainScreenPx(network, grouping.chainOf(segment))) {
                 continue;
             }
             drawAlongLine(graphics, font, name, segment, x, z, 0xFFF0F0F0);
@@ -564,7 +567,7 @@ public final class DestinationPickerPage implements IPhonePage {
             }
             RoadNetwork layer = RailTrackStore.network();
             if (font.width(name)
-                    > chainScreenPx(layer, RoadChains.chainContaining(layer, segment.id()))) {
+                    > chainScreenPx(layer, RoadChains.cachedGrouping(layer).chainOf(segment))) {
                 continue;
             }
             drawAlongLine(graphics, font, name, segment, x, z, 0xFF9FD2FF);
@@ -586,7 +589,7 @@ public final class DestinationPickerPage implements IPhonePage {
     }
 
     /** The on-screen length of a run of segments, which is what a name has to fit inside. */
-    private double chainScreenPx(RoadNetwork network, List<Integer> chain) {
+    private double chainScreenPx(RoadNetwork network, int[] chain) {
         double total = 0;
         for (int id : chain) {
             RoadSegment member = network.segment(id);

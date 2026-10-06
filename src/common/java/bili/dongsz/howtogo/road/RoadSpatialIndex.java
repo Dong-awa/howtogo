@@ -48,12 +48,36 @@ public final class RoadSpatialIndex {
      */
     private static final double CELL = 24.0;
 
+    /**
+     * The most cells one axis pair may ask for, together.
+     *
+     * <p>A cell is one reference to a list, and there are two arrays of them, so four million of them
+     * is about sixty-four megabytes of empty array -- already more than a map should cost, and far more
+     * than the array of lists a network that sparse could ever need. It was unbounded, and the grid's
+     * size is the network's bounding box over the cell size: a network whose roads ended a million
+     * blocks apart -- which a player reaches by clicking twice at the world map's widest zoom -- asked
+     * for 1.7 billion cells and the allocation failed on a path the client runs every frame. Larger
+     * spans overflowed the multiplication instead and asked for an array of negative length.
+     */
+    private static final long MAX_CELLS = 4_000_000L;
+
     private final double originX;
     private final double originZ;
     private final int dimX;
     private final int dimZ;
     private final List<RoadNode>[] nodeCells;
     private final List<Edge>[] edgeCells;
+
+    /**
+     * Whether this index is one bucket rather than a grid, because the network was too spread out to
+     * file into cells.
+     *
+     * <p>Every query then reads the whole network, which is what the exhaustive walk this class
+     * replaced did -- slower than a grid and exactly as correct, which is the right way round: a
+     * network nobody can afford to index is still a network whose roads must be found. The alternative
+     * was the failure above, on the frame the player happened to point at the map.
+     */
+    private final boolean flat;
 
     /** One vertex-to-vertex piece of a segment, with its endpoints kept for the projection. */
     private static final class Edge {
@@ -78,13 +102,14 @@ public final class RoadSpatialIndex {
     }
 
     private RoadSpatialIndex(double originX, double originZ, int dimX, int dimZ,
-                             List<RoadNode>[] nodeCells, List<Edge>[] edgeCells) {
+                             List<RoadNode>[] nodeCells, List<Edge>[] edgeCells, boolean flat) {
         this.originX = originX;
         this.originZ = originZ;
         this.dimX = dimX;
         this.dimZ = dimZ;
         this.nodeCells = nodeCells;
         this.edgeCells = edgeCells;
+        this.flat = flat;
     }
 
     /** An index over the network as it is right now. */
@@ -119,12 +144,20 @@ public final class RoadSpatialIndex {
         double originZ = minZ - CELL;
         int dimX = (int) Math.floor((maxX - originX) / CELL) + 2;
         int dimZ = (int) Math.floor((maxZ - originZ) / CELL) + 2;
+        // One bucket for a network too spread out to file; see MAX_CELLS. The multiplication is done
+        // in long so that the very case this guards against -- a span whose cell count overflows an
+        // int -- is the one that is measured rather than the one that wraps.
+        boolean flat = (long) dimX * (long) dimZ > MAX_CELLS;
+        if (flat) {
+            dimX = 1;
+            dimZ = 1;
+        }
 
         List<RoadNode>[] nodeCells = newCells(dimX, dimZ);
         List<Edge>[] edgeCells = newCells(dimX, dimZ);
 
         for (RoadNode node : network.nodes()) {
-            int index = indexOf(node.x() - originX, node.z() - originZ, dimX, dimZ);
+            int index = flat ? 0 : indexOf(node.x() - originX, node.z() - originZ, dimX, dimZ);
             if (index < 0) {
                 continue;
             }
@@ -144,6 +177,13 @@ public final class RoadSpatialIndex {
             // reject one it has already found: being in the bucket is the box test.
             for (int i = 1; i < segment.vertexCount(); i++) {
                 Edge edge = new Edge(segment, i);
+                if (flat) {
+                    if (edgeCells[0] == null) {
+                        edgeCells[0] = new ArrayList<>(4);
+                    }
+                    edgeCells[0].add(edge);
+                    continue;
+                }
                 int fromX = cellOf(Math.min(edge.ax, edge.bx) - originX);
                 int toX = cellOf(Math.max(edge.ax, edge.bx) - originX);
                 int fromZ = cellOf(Math.min(edge.az, edge.bz) - originZ);
@@ -180,7 +220,7 @@ public final class RoadSpatialIndex {
                         : Integer.compare(left.index, right.index));
             }
         }
-        return new RoadSpatialIndex(originX, originZ, dimX, dimZ, nodeCells, edgeCells);
+        return new RoadSpatialIndex(originX, originZ, dimX, dimZ, nodeCells, edgeCells, flat);
     }
 
     /**
@@ -224,6 +264,13 @@ public final class RoadSpatialIndex {
      * decides a winner, and could drift apart.
      */
     private List<RoadNode> gatherNodes(double x, double z, double radius) {
+        // A flat index holds the whole network in its one bucket, and the grid walk below cannot
+        // reach it: the query's own cell is a number far outside a one-cell grid, so the "outside"
+        // branch would look for cells between there and cell zero and find none. Read the bucket.
+        if (flat) {
+            List<RoadNode> only = nodeCells[0];
+            return only == null ? new ArrayList<>() : new ArrayList<>(only);
+        }
         List<RoadNode> found = new ArrayList<>();
         int cx = cellOf(x - originX);
         int cz = cellOf(z - originZ);
@@ -334,6 +381,11 @@ public final class RoadSpatialIndex {
      * grid, and the whole grid once it is outside it and the radius has therefore reached all of it.
      */
     private List<Edge> gatherEdges(double x, double z, double radius) {
+        // See gatherNodes: a flat index has no rings to widen from.
+        if (flat) {
+            List<Edge> only = edgeCells[0];
+            return only == null ? new ArrayList<>() : new ArrayList<>(only);
+        }
         List<Edge> found = new ArrayList<>();
         int cx = cellOf(x - originX);
         int cz = cellOf(z - originZ);
@@ -436,6 +488,6 @@ public final class RoadSpatialIndex {
     }
 
     private static RoadSpatialIndex empty() {
-        return new RoadSpatialIndex(0, 0, 0, 0, newCells(0, 0), newCells(0, 0));
+        return new RoadSpatialIndex(0, 0, 0, 0, newCells(0, 0), newCells(0, 0), false);
     }
 }

@@ -69,6 +69,8 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
     @Override
     public void begin(ElementRenderLocation location, RoadRenderContext context) {
         buffer.clear();
+        int roads = 0;
+        int rails = 0;
 
         // Where the view is looking, in world blocks, with a generous margin. Everything outside it
         // is dropped here instead of being wrapped in an element, handed to Xaero and discarded
@@ -93,6 +95,7 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
                 continue;
             }
             buffer.add(RoadElement.of(segment));
+            roads++;
         }
         // Create's tracks go in with the roads rather than behind a second renderer: they are rails
         // of the same class, drawn in the same colour with the same code, so the map shows one kind
@@ -109,26 +112,26 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
                 continue;
             }
             buffer.add(RoadElement.of(segment));
+            rails++;
             // TEMPORARY rail diagnostic: one element of the layer offered in this pass.
             RailTrackStore.noteElementOffered();
         }
 
-        // MTR's marks, drawn as the same kind of line and for the same reason: a line read out of MTR
-        // brings its track with it as rail or water roads, the switch beside the line decides whether
-        // that line's stretch of it is marked at all, and a road nobody can see is a road the player
-        // cannot account for. Appended as its own pass rather than folded into the one above, because
-        // that one counts what it hands over and the layer's diagnostic is read against those counters
-        // -- MTR's segments are not that layer's and must not be counted as it.
+        // MTR's marks, as their own pass and before everything that is drawn over them.
         //
-        // Painted before the lines themselves, which come with the LABELS element: the line's stroke is
-        // planned over these very marks, so the road reads as what the line runs on rather than as a
-        // second line drawn beside it.
-        for (RoadSegment segment : MtrTransit.railLayer().segmentsSnapshot()) {
-            if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
-                continue;
-            }
-            buffer.add(RoadElement.of(segment));
+        // This is where the one thing that made the map slow used to be: the marks are the track each
+        // line read out of MTR runs along, they were handed over as one map element per rail, and a
+        // whole railway's worth of rails is tens of thousands of elements each a quad per vertex of its
+        // own sampling -- most of them a fraction of a pixel at any zoom a map is readable at. They are
+        // drawn by RoadElementRenderer instead, from the same polylines the lines themselves are drawn
+        // from (a line's marks are its own track), thinned to the zoom and culled by the box each
+        // stretch fits in. Their own pass rather than the labels pass because of what is under and over
+        // them: the roads are under, the navigation route and the lines are over.
+        MapPassReport.elements(roads, rails);
+        if (haveView) {
+            RoadElement.MARKS.setOverlayAnchor(MapViewState.cameraX(), MapViewState.cameraZ());
         }
+        buffer.add(RoadElement.MARKS);
 
         if (Navigation.target() != null) {
             // Added whenever a destination is set, not just when a route was found, so the HUD can

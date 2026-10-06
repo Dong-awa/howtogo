@@ -830,23 +830,42 @@ public final class DestinationScreen extends Screen {
      *
      * <p>Named roads only, and dropped on collision: the map is a couple of hundred pixels wide and
      * a dense network would otherwise overprint into an unreadable smear.
+     *
+     * <h2>What this pass used to cost</h2>
+     * Every named road was asked for its chain -- {@link RoadChains#chainContaining} -- to find out
+     * whether it was the piece that carries the name, and that call builds an adjacency index of the
+     * whole network before it answers. One per named road, per frame, before any check that the road
+     * was anywhere near this little map: on a network of a few hundred segments with fifty names that
+     * was about a millisecond of work and five megabytes of garbage every frame, and it grew with the
+     * product of the two (a network of three thousand segments with seven hundred names measured at a
+     * hundred and twenty milliseconds a frame). The answer is a property of the geometry, so it now
+     * comes from the grouping, which is rebuilt only when the roads change -- and the roads are culled
+     * against the map before they are asked about at all.
      */
     private void drawMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network, double scale,
                                double centerX, double centerY,
                                double minX, double minY, double maxX, double maxY) {
         List<double[]> placed = new ArrayList<>();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
+        RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        // A label that fits inside the map is at most as large as the map, so a road whose midpoint is
+        // a whole map's dimension away from it cannot produce a box that passes the test below. Wider
+        // than any label, and no assumption about the font: a cheap guard, not the rule.
+        double padX = maxX - minX;
+        double padY = maxY - minY;
+        for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             if (name == null) {
-                continue;
-            }
-            List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-            if (RoadChains.middleSegment(chain) != segment.id()) {
                 continue;
             }
             double[] mid = segment.midpoint();
             double x = centerX + (mid[0] - mapCenterX) * scale;
             double y = centerY + (mid[1] - mapCenterZ) * scale;
+            if (x < minX - padX || x > maxX + padX || y < minY - padY || y > maxY + padY) {
+                continue;
+            }
+            if (!grouping.carriesLabel(segment)) {
+                continue;
+            }
 
             // Along the line, from the road's own world direction. This map is north-up, so the world
             // direction is the screen direction and no rotation of the map has to be undone first.
@@ -914,8 +933,13 @@ public final class DestinationScreen extends Screen {
         double maxY = mapY + mapH;
         double reach = viewRadius * 1.5;
 
+        // Where every place sits on this map, worked out once and handed to both the marker pass and
+        // the hover readout below. The two used to ask for it separately, which meant asking every
+        // source -- a town's worth of stations among them -- for its destinations twice a frame.
+        List<PlaceHit> places = placeHits();
+
         RoadNetwork network = RoadStore.get();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
+        for (RoadSegment segment : network.segments()) {
             for (int i = 1; i < segment.vertexCount(); i++) {
                 double ax = segment.x(i - 1);
                 double az = segment.z(i - 1);
@@ -1018,7 +1042,7 @@ public final class DestinationScreen extends Screen {
 
         // Every place gets its marker on the preview as well, so the list and the map agree about
         // where the places are: drawn through the same hit list the hover and double click use.
-        drawPlaceMarkers(last, vc, minX, minY, maxX, maxY);
+        drawPlaceMarkers(places, last, vc, minX, minY, maxX, maxY);
 
         // Names go last, after every quad: GuiGraphics.drawString flushes the batch it writes to,
         // which ends the QUADS BufferBuilder behind vc. Emitting even one more quad after this
@@ -1044,7 +1068,7 @@ public final class DestinationScreen extends Screen {
             // Pointing at a place marker names it. The list can be long and the map crowded, so this
             // is how a marker is tied to the entry it stands for without having to click it. The
             // coordinates stay, because they are what makes a point choosable precisely.
-            PlaceHit hovered = placeAt(mouseX, mouseY);
+            PlaceHit hovered = placeAt(places, mouseX, mouseY);
             String label = hovered == null
                     ? coordinates
                     : Component.translatable("screen.howtogo.hover_place",
@@ -1131,9 +1155,18 @@ public final class DestinationScreen extends Screen {
      *
      * <p>A generous catch area on purpose: the marker is under four pixels across, and a hit test
      * that matched it exactly would make the feature unusable without a steady hand.
+     *
+     * <p>Asks for the positions itself, for the input handlers: a click and a release arrive on their
+     * own, and neither has a frame's worth of positions to hand. The drawing passes hold the list they
+     * already built and use the overload below.
      */
     private PlaceHit placeAt(double mouseX, double mouseY) {
-        for (PlaceHit hit : placeHits()) {
+        return placeAt(placeHits(), mouseX, mouseY);
+    }
+
+    /** The same test against positions the caller has already worked out for this frame. */
+    private static PlaceHit placeAt(List<PlaceHit> places, double mouseX, double mouseY) {
+        for (PlaceHit hit : places) {
             if (Math.abs(mouseX - hit.x()) <= PLACE_HIT_PX
                     && Math.abs(mouseY - hit.y()) <= PLACE_HIT_PX) {
                 return hit;
@@ -1147,10 +1180,14 @@ public final class DestinationScreen extends Screen {
      * the places are. Before the name pass, for the reason the whole quad sequence is: a string
      * flushes the batch these were written into. Same list, colour and shape as the other two maps,
      * at this map's smaller size.
+     *
+     * <p>The positions come from the caller: they are the same ones the hover readout below is
+     * measured against, and working them out again here would be the second answer the class's own
+     * rule about one set of numbers exists to prevent.
      */
-    private void drawPlaceMarkers(PoseStack.Pose pose, VertexConsumer vc,
+    private void drawPlaceMarkers(List<PlaceHit> places, PoseStack.Pose pose, VertexConsumer vc,
                                   double minX, double minY, double maxX, double maxY) {
-        for (PlaceHit hit : placeHits()) {
+        for (PlaceHit hit : places) {
             emitPlaceMarker(pose, vc, hit.x(), hit.y(), minX, minY, maxX, maxY);
         }
     }

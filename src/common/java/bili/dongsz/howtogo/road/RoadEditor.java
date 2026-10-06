@@ -76,6 +76,54 @@ public final class RoadEditor {
         this.activeClass = activeClass;
     }
 
+    /**
+     * The storey a newly drawn road goes on.
+     *
+     * <p>Carried on the editor rather than asked for per road, for the same reason the drawing class
+     * is: a tunnel is a dozen pieces of road, and setting the storey on each of them as it is laid
+     * would be a thing to remember rather than a way to draw. Setting it on a road the player already
+     * has moves that road, and *also* becomes the storey of what is drawn next -- so the gesture is
+     * "put this road on the second basement level", then carry on drawing there.
+     */
+    private int activeLayer;
+
+    public int activeLayer() {
+        return activeLayer;
+    }
+
+    /** The storey new roads are drawn on, clamped to what a road may be. */
+    public void setActiveLayer(int layer) {
+        this.activeLayer = Math.max(RoadSegment.MIN_LAYER, Math.min(RoadSegment.MAX_LAYER, layer));
+    }
+
+    /**
+     * Moves the whole road the given segment belongs to onto the given storey.
+     *
+     * <p>Whole road rather than one piece, for the reason {@link #setSegmentClass} gives: a street that
+     * bends is several pieces, and a storey that changed halfway along one of them would be a bridge
+     * whose far end is on the ground. The drawing storey follows it, which is what makes "make this
+     * the tunnel, then keep drawing the tunnel" one gesture.
+     */
+    public boolean setChainLayer(int segmentId, int layer) {
+        if (network.segment(segmentId) == null) {
+            return false;
+        }
+        pushUndo();
+        for (int id : RoadChains.chainContaining(network, segmentId)) {
+            RoadSegment segment = network.segment(id);
+            if (segment != null) {
+                segment.setLayer(layer);
+            }
+        }
+        setActiveLayer(layer);
+        // Storeys decide which joins exist, so the graph built from them is stale now -- see
+        // RoadSegment.layerChanges, which is what tells the router's caches.
+        return true;
+    }
+
+    /** Moves a stored place onto a storey, for the road a picked destination stands beside. */
+
+
     /** Re-classes the whole road the given segment belongs to, leaving the drawing class alone. */
     public boolean setSegmentClass(int segmentId, RoadClass roadClass) {
         if (network.segment(segmentId) == null) {
@@ -88,6 +136,12 @@ public final class RoadEditor {
                 segment.setRoadClass(roadClass);
             }
         }
+        // A class is not geometry, but it is not invisible to the caches either: "one road" is a
+        // grouping of pieces of the same class, so re-classing a road changes which pieces belong
+        // together, and the router builds its graph by class. Without this the map kept labelling the
+        // road as it used to be and -- worse -- the graph kept serving the old class, so a footpath
+        // turned into a road was still not drivable for the rest of the session.
+        network.touch();
         return true;
     }
 
@@ -339,6 +393,31 @@ public final class RoadEditor {
         return true;
     }
 
+    /**
+     * Names the whole road and puts it on a storey, as one edit.
+     *
+     * <p>One undo step rather than two, because it is one visit to one panel: a player who named a road
+     * and set its storey and then pressed undo twice to get back where they were would be undoing two
+     * halves of a single answer. See {@link #setChainLayer} for what the storey decides.
+     */
+    public boolean setRoadNameAndLayer(int segmentId, String name, int layer) {
+        if (network.segment(segmentId) == null) {
+            return false;
+        }
+        pushUndo();
+        for (int id : RoadChains.chainContaining(network, segmentId)) {
+            RoadSegment segment = network.segment(id);
+            if (segment != null) {
+                segment.setName(name);
+                segment.setLayer(layer);
+            }
+        }
+        // The storey just given is the one the next road drawn goes on, which is what makes a tunnel
+        // one visit to this panel rather than one per piece.
+        setActiveLayer(layer);
+        return true;
+    }
+
     public int chainNodeId() {
         return chainNodeId;
     }
@@ -385,6 +464,7 @@ public final class RoadEditor {
             RoadNode to = network.node(nodeId);
             if (from != null && to != null) {
                 RoadSegment segment = network.newSegment(activeClass, y, 2);
+                segment.setLayer(activeLayer);
                 segment.addVertex(from.x(), from.z());
                 segment.addVertex(to.x(), to.z());
                 segment.setFromNode(from.id());
@@ -470,6 +550,40 @@ public final class RoadEditor {
             return false;
         }
         pushUndo();
+        place(nodeId, node, x, y, z);
+        return true;
+    }
+
+    /**
+     * Moves a node without recording it, for a drag already in progress.
+     *
+     * <p>A drag is one edit, not one per frame. Recording each frame put sixty snapshots a second on
+     * a stack that holds sixty-four of them, so a second of dragging on a handle threw away every
+     * edit the player had made before it -- roads, names, places, one-way markings -- and left them
+     * with a history that could only step back through the pixels of the drag they had just done. The
+     * caller records the state once, with {@link #beginHistory}, and then moves the handle.
+     */
+    public boolean moveNodeLive(int nodeId, int x, int y, int z) {
+        RoadNode node = network.node(nodeId);
+        if (node == null) {
+            return false;
+        }
+        place(nodeId, node, x, y, z);
+        return true;
+    }
+
+    /**
+     * Records the state a run of edits is about to change, once.
+     *
+     * <p>For anything that edits in steps -- a drag, or a road being drawn point by point -- where the
+     * unit the player would undo is the whole gesture rather than each step of it.
+     */
+    public void beginHistory() {
+        pushUndo();
+    }
+
+    /** The geometry of a move: the node, every segment endpoint on it, and the network's revision. */
+    private void place(int nodeId, RoadNode node, int x, int y, int z) {
         node.moveTo(x, y, z);
         for (RoadSegment segment : network.segments()) {
             if (segment.fromNode() == nodeId && segment.vertexCount() > 0) {
@@ -481,7 +595,6 @@ public final class RoadEditor {
         }
         // The vertices were written through the segments, which the network cannot see.
         network.touch();
-        return true;
     }
 
     /**
@@ -535,6 +648,7 @@ public final class RoadEditor {
         first.setToNode(junction.id());
         first.setName(original.name());
         first.setDirection(original.direction());
+        first.setLayer(original.layer());
 
         RoadSegment second = network.newSegment(original.roadClass(), y,
                 original.vertexCount() - vertexIndex + 1);
@@ -546,6 +660,7 @@ public final class RoadEditor {
         second.setToNode(original.toNode());
         second.setName(original.name());
         second.setDirection(original.direction());
+        second.setLayer(original.layer());
 
         network.removeSegment(segmentId);
         network.addSegment(first);

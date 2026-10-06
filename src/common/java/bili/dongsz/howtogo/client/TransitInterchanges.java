@@ -25,13 +25,19 @@ import java.util.Set;
  * of a single line that happened to stand near each other, which is not a change of lines at all, and
  * which no amount of cancelling lines would clear, because no second line was ever involved.
  *
- * <h2>Why nothing is remembered between frames</h2>
- * The answer is worked out from the lines in play on every call. A remembered one would have to be
- * invalidated by every way a line can change -- deleted, renamed, dropped by MTR as the player walks
- * out of range, or rebuilt from a fresh reading -- and the way that gets forgotten is a marker left
- * standing for a line that is gone. The lines in play are a handful, and the grid below makes the pass
- * cheap enough to repeat: a stop is only compared against the stops in its own cell and the eight
- * around it, so the cost follows the number of stops rather than the square of it.
+ * <h2>Why the answer is remembered, and what invalidates it</h2>
+ * This used to be worked out afresh on every call, on the grounds that a remembered answer would have
+ * to be invalidated by every way a line can change -- deleted, renamed, dropped by MTR as the player
+ * walks out of range, or rebuilt from a fresh reading -- and the way that gets forgotten is a marker
+ * left standing for a line that is gone. That reasoning is right, and it is what the signature below
+ * is for: the answer stands while the lines are the same lines calling at the same stops in the same
+ * order, and the signature is built from exactly those things, so every one of those changes changes
+ * it. What the memory buys is the frame: the map asks this once per frame with every stop of every
+ * line in play, and the pass below asks every stop about every other.
+ *
+ * <p>The pass is not the grid this comment used to promise. It compares each stop against all of them,
+ * which is the square of the stop count -- tolerable once when the lines change, and not tolerable
+ * sixty times a second, which is the difference the signature makes.
  */
 final class TransitInterchanges {
 
@@ -50,6 +56,46 @@ final class TransitInterchanges {
      * lines call there, which is what makes a three-line interchange one marker rather than two pairs.
      */
     static List<Interchange> of(List<TransitLine> lines) {
+        long signature = signatureOf(lines);
+        if (cached != null && signature == cachedSignature) {
+            return cached;
+        }
+        List<Interchange> found = compute(lines);
+        cached = List.copyOf(found);
+        cachedSignature = signature;
+        return cached;
+    }
+
+    /** The last answer, with the reading of the lines it was worked out from. */
+    private static long cachedSignature = Long.MIN_VALUE;
+    private static List<Interchange> cached;
+
+    /**
+     * A number standing for the lines and the stops they call at, in order.
+     *
+     * <p>Deliberately not a count of anything: a line renamed, or one stop replaced by another at the
+     * same place, would leave a count unchanged and a stale marker standing. Hashed rather than kept as
+     * a string because it is built once per frame over every stop; where the hash collides, the cost is
+     * one frame of a marker that has not moved yet.
+     */
+    private static long signatureOf(List<TransitLine> lines) {
+        long hash = 1125899906842597L;
+        if (lines == null) {
+            return hash;
+        }
+        for (TransitLine line : lines) {
+            hash = hash * 31 + line.id().hashCode();
+            hash = hash * 31 + line.kind().ordinal();
+            hash = hash * 31 + line.stopCount();
+            for (LineStop stop : line.stops()) {
+                hash = hash * 31 + stop.x();
+                hash = hash * 31 + stop.z();
+            }
+        }
+        return hash;
+    }
+
+    private static List<Interchange> compute(List<TransitLine> lines) {
         List<StopRef> stops = new ArrayList<>();
         if (lines != null) {
             for (TransitLine line : lines) {

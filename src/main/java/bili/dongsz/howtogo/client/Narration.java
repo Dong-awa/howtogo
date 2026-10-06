@@ -27,6 +27,17 @@ import net.minecraft.network.chat.Component;
  * but that is a fault rather than a setting, so it is reported once in the log and stated in the
  * readout instead of being left as unexplained silence.
  *
+ * <h2>Why the opening line is left alone, and nothing else is</h2>
+ * Guidance supersedes guidance: a turn prompt that arrives after the turn is noise, so the newest
+ * phrase replaces whatever is waiting and the engine is told to purge whatever is being said. The
+ * trip's opening line is the one phrase that is not guidance and never goes out of date, so for about
+ * as long as it takes to say, nothing else is announced at all -- neither handed over nor allowed to
+ * set the latches that decide what has been announced. That is what makes the road notice and the
+ * first junction follow it rather than talk over it, which is what they were doing: the engine says a
+ * phrase without waiting for it, and the next phrase purges it, so a line handed over one tick later
+ * cuts the opening words off mid-word and the two are heard as one sentence. See
+ * {@link #spokenTicks} for why "as long as it takes" has to be estimated rather than asked for.
+ *
  * <h2>Why the speaking happens on another thread</h2>
  * The engine is a native one whose {@code clear()} and {@code say()} block until it has finished:
  * measured in play, a single call held the client thread for up to half a second. That is the stutter
@@ -59,6 +70,22 @@ public final class Narration {
 
     /** How far two readings of a manoeuvre's position may differ and still be the same manoeuvre. */
     private static final double MANEUVER_ID_SLACK = 2.0;
+
+    /**
+     * What a phrase is taken to cost before it is worth saying anything else over it.
+     *
+     * <p>See {@link #spokenTicks}: the engine says a phrase asynchronously and purges whatever is
+     * still being said when the next one arrives, so the only way to let a phrase finish is to wait
+     * for about as long as it takes.
+     */
+    private static final int SPOKEN_BASE_MS = 400;
+    private static final int SPOKEN_SYLLABLE_MS = 200;
+    private static final int SPOKEN_LETTER_MS = 60;
+    private static final int SPOKEN_MIN_MS = 600;
+    private static final int SPOKEN_MAX_MS = 6_000;
+
+    /** One client tick, which is the clock {@link #tick()} runs on. */
+    private static final double MILLIS_PER_TICK = 50.0;
 
     /**
      * Guards {@link #pending}, and is the monitor the speaking thread waits on.
@@ -119,6 +146,15 @@ public final class Narration {
     private static boolean unavailableLogged;
     /** Whether the readout should carry the "no speech engine" hint. */
     private static boolean unavailable;
+    /** The client tick this update is on, so that a phrase can be held for a length of time. */
+    private static int ticks;
+    /**
+     * The tick the trip's opening line is being left to say itself until, or a tick already past.
+     *
+     * <p>See {@link #update()}, which says why the opening line is the one phrase nothing is allowed
+     * to talk over.
+     */
+    private static int openingUntil;
 
     private Narration() {
     }
@@ -165,6 +201,7 @@ public final class Narration {
     // ------------------------------------------------------------------ update
 
     private static void update() {
+        ticks++;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || !RoutePreferenceStore.voiceAnnouncements()) {
             reset();
@@ -187,11 +224,48 @@ public final class Narration {
             offRouteAnnounced = false;
             forgetManeuver();
             resetUturn();
+            openingUntil = 0;
             // The road class count is the session's, not the notice's: baseline it so a change that
             // happened before this trip began is not announced at its start.
             roadClassChanges = Navigation.classChangeCount();
+            if (target != null) {
+                // The trip's opening line, and the first thing heard after a destination is picked.
+                //
+                // Said here rather than where the destination is set, because this branch is the one
+                // place that knows a trip has just begun -- and because it has cleared lastSpoken a
+                // line earlier, so a trip whose opening words are the same as the last trip's closing
+                // ones is still heard. It is not said twice for one trip either: picking the
+                // destination already being navigated to is the same trip, leaves the session alone,
+                // and has nothing new to announce.
+                //
+                // The switch is respected without a second test, because everything below the guard at
+                // the top of this method is only reached with announcements on.
+                String opening = Component.translatable("hud.howtogo.speak_start").getString();
+                announce(opening);
+                // And then left alone for about as long as it takes to say. This line is a preamble
+                // rather than guidance: nothing about it goes out of date, so the one thing that must
+                // not happen to it is being talked over -- and the engine would do exactly that. It
+                // says a phrase without waiting for it (the Windows voice is handed the text with
+                // SPF_ASYNC) and purges whatever is still being said when the next phrase arrives, so
+                // a road-surface word or a junction prompt coming one tick later does not queue behind
+                // this line, it cuts it off mid-word and the two are heard as one sentence. Reported in
+                // play as "问道地图为您导航" and the road notice run together.
+                //
+                // Nothing below runs while this holds, which is the half that matters: the latches are
+                // untouched rather than set, so a junction that comes due inside the hold is announced
+                // when it lifts, with the distance it has by then, instead of being swallowed for
+                // having been spoken over. The road class count is untouched for the same reason, and
+                // its notice therefore follows the opening line as the player asked.
+                //
+                // Skipped when the engine is known to be dead, where there is nothing to talk over and
+                // holding the guidance back would only be silence.
+                openingUntil = unavailable ? 0 : ticks + spokenTicks(opening);
+            }
         }
         if (target == null) {
+            return;
+        }
+        if (ticks < openingUntil) {
             return;
         }
 
@@ -204,8 +278,12 @@ public final class Narration {
                 arrivalAnnounced = true;
                 // Nothing else is worth saying over the arrival, and the readout has stopped
                 // showing turns by this point.
-                announce(Component.translatable("hud.howtogo.speak_arrived", target.name())
-                        .getString());
+                //
+                // The closing line names no destination, deliberately: the banner on screen already
+                // says which place this is, and a phrase read out at the end of a trip is heard once,
+                // on the move, with nothing to compare it against -- where "the destination" is the
+                // one thing the player already knows.
+                announce(Component.translatable("hud.howtogo.speak_arrived").getString());
             }
             return;
         }
@@ -245,6 +323,62 @@ public final class Narration {
         // its own beyond the junction it points at.
         resetUturn();
         announceTurn(Navigation.nextManeuver());
+    }
+
+    /**
+     * About how long a phrase takes to say, in client ticks.
+     *
+     * <h2>Why this has to be a guess</h2>
+     * The speech library exposes no way to ask. Its whole API is {@code say}, {@code clear},
+     * {@code active} and {@code destroy}; on Windows {@code say} hands the text to the SAPI voice with
+     * {@code SPF_ASYNC} and returns without waiting, and the only thing that says a phrase is over is
+     * the next one arriving -- which carries {@code SPF_PURGEBEFORESPEAK} and cuts it off. There is no
+     * queue to inspect and no "is speaking" to read, so a caller that wants a phrase to finish has to
+     * allow it the time, and the time has to come from the text.
+     *
+     * <h2>The text is all there is to go on</h2>
+     * A phrase's length is the only thing about it that says anything, and it says different things in
+     * different scripts: a Han character is a syllable, a Latin one is a fraction of a word. So the
+     * count is per script -- Han, kana and Hangul counted as syllables, everything else as letters --
+     * and the two are priced differently. Digits are counted with the letters, which is neither right
+     * nor badly wrong: they are read as words, and the voice doing it has a language of its own that
+     * this mod cannot see. See the class comment.
+     *
+     * <p>A floor and a ceiling, because the estimate is used to hold other announcements back: too
+     * short and the phrase it is protecting still gets cut, too long and the guidance arrives late for
+     * no reason. The floor is also what gives the next phrase its pause, which is what "one after the
+     * other" has to sound like rather than two sentences run together.
+     *
+     * <p>Package-private rather than private so that the harness can check it: this is the only part
+     * of the hold that is a decision rather than a clock, and getting it wrong is not visible in the
+     * game -- a hold that is too short sounds exactly like the bug it exists to fix.
+     */
+    static int spokenTicks(String phrase) {
+        if (phrase == null || phrase.isBlank()) {
+            return ticksFor(SPOKEN_MIN_MS);
+        }
+        int syllables = 0;
+        int letters = 0;
+        for (int i = 0; i < phrase.length(); ) {
+            int character = phrase.codePointAt(i);
+            i += Character.charCount(character);
+            switch (Character.UnicodeScript.of(character)) {
+                case HAN, HIRAGANA, KATAKANA, HANGUL -> syllables++;
+                default -> {
+                    if (Character.isLetterOrDigit(character)) {
+                        letters++;
+                    }
+                }
+            }
+        }
+        long millis = (long) SPOKEN_BASE_MS + (long) syllables * SPOKEN_SYLLABLE_MS
+                + (long) letters * SPOKEN_LETTER_MS;
+        return ticksFor(Math.clamp(millis, SPOKEN_MIN_MS, SPOKEN_MAX_MS));
+    }
+
+    /** A length of time as client ticks, never less than one. */
+    private static int ticksFor(long millis) {
+        return Math.max(1, (int) Math.round(millis / MILLIS_PER_TICK));
     }
 
     /**
@@ -565,6 +699,9 @@ public final class Narration {
         offRouteAnnounced = false;
         forgetManeuver();
         resetUturn();
+        // Any hold goes with the trip it was for. A hold that outlived its destination would silence
+        // the guidance of the next one for a second or two, for a phrase nobody heard.
+        openingUntil = 0;
         // Baseline the class count too: changes that passed while announcements were off are not news
         // when they come back on.
         roadClassChanges = Navigation.classChangeCount();

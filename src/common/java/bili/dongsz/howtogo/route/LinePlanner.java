@@ -90,17 +90,38 @@ public final class LinePlanner {
     }
 
     /**
+     * The cell the transfer pass files a stop under, which is the radius itself.
+     *
+     * <p>Not a constant of its own: nine cells of this size around a stop is exactly the neighbourhood a
+     * transfer may be found in, and a size that did not match the radius would either miss stops that
+     * are within it or search cells that reach further than it does.
+     */
+    private static final double TRANSFER_CELL = TRANSFER_RADIUS;
+
+    /**
      * Ceiling on the number of ride legs planned in one search.
      *
-     * <p>A safety valve, not a design: each leg is an A* over the road network, so a pathological
-     * network should not hang the client. It is applied while the graph is built, before the search,
-     * so tripping it drops the lines at the end of the list rather than removing edges from a search
-     * that is already running, and it is always reported in the log. It was 48, which a network of
-     * five lines and ten stops each already exceeds -- so on any real network the tail of the graph
-     * was being cut away mid-search and the journey that came out was the best of what happened to
-     * have been planned, not the best there was.
+     * <p>A safety valve, not a design: each leg is a route planned over some network, so a pathological
+     * one should not hang the client. It is applied while the graph is built, before the search, so
+     * tripping it drops the lines at the end of the list rather than removing edges from a search that
+     * is already running, and it is always reported in the log. It was 48, which a network of five lines
+     * and ten stops each already exceeds -- so on any real network the tail of the graph was being cut
+     * away mid-search and the journey that came out was the best of what happened to have been planned,
+     * not the best there was.
+     *
+     * <p><b>Why it is no longer 512.</b> A ride used to be an A* over every rail in the world at once,
+     * which is what the number was sized for: a handful of lines around the player, each ride searching
+     * a layer that served every line of its kind. A reading that names each line's rails changes what a
+     * ride costs -- it is a search over <em>that line's own track</em> and nothing else, see
+     * {@link RideRoads} -- and a whole railway read from a server is hundreds of lines and thousands of
+     * stops, which is three and a half thousand rides rather than the hundreds a window holds. At 512
+     * the graph was cut off after the first few lines and every journey across the network answered "no
+     * journey", which is the failure this number was meant to be a guard against rather than the cause
+     * of. The per-ride cost is what makes raising it safe, and the check in the regression harness is
+     * what keeps that true: it plans over a hundred and sixty lines and asserts both that a journey
+     * comes out and that the whole plan is quick.
      */
-    private static final int MAX_RIDE_PLANS = 512;
+    private static final int MAX_RIDE_PLANS = 20_000;
 
     /**
      * How far the player may be asked to walk to reach a stop, in blocks.
@@ -191,18 +212,13 @@ public final class LinePlanner {
         int count = nodes.size();
         Map<Long, Integer> byPosition = positions(nodes);
         Map<String, Route> cache = new HashMap<>();
-        // One workspace for the whole plan, and one per distinct network the plan runs on: every ride
-        // and every transfer is an endpoint that has to be anchored onto a network, and the anchoring
-        // splits are the same few stops over and over. A line with the marks switched off routes on the
-        // other network, so the two are kept apart rather than sharing a set of splits -- and when no
-        // line wants the difference the two are the same object and there is only ever one.
-        Map<RoadNetwork, RoadRouter.Workspace> workspaces = new java.util.IdentityHashMap<>();
-        int[] rideBudget = {MAX_RIDE_PLANS};
         double wait = RoadConfig.transitWaitSeconds();
 
-        List<List<Link>> links = buildLinks(roads, workspaces, lines, nodes, byPosition,
-                destinationName, preferences, cache, rideBudget, wait);
-        RoadRouter.Workspace workspace = workspaceOf(workspaces, roads.forWalks());
+        // The graph is worked out a stop at a time as the search reaches it. See Links: it is the same
+        // graph, and building all of it first is what a whole-network reading made unaffordable, because
+        // it is every ride of every line however short the journey asked for is.
+        Links links = new Links(roads, lines, nodes, byPosition, destinationName, preferences, wait);
+        RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forWalks());
 
         double[] dist = new double[count];
         int[] fromNode = new int[count];
@@ -233,14 +249,58 @@ public final class LinePlanner {
             }
         }
 
-        // Dijkstra over the stops. The graph is fixed by now, so this is the whole of the search.
+        // The stops a journey may finish at, which is where the search learns how well it is doing: the
+        // destination is not one of the graph's stops, so the cost of getting off has to be added to a
+        // stop's own cost to make a whole journey, and until that has been done there is nothing for the
+        // search to stop at.
+        List<Integer> alighting = nearest(nodes, goalX, goalZ);
+        boolean[] mayAlight = new boolean[count];
+        for (int index : alighting) {
+            mayAlight[index] = true;
+        }
+        int bestEnd = -1;
+        double bestTotal = Double.MAX_VALUE;
+        Route bestFinish = null;
+
+        // Dijkstra over the stops, ended as soon as nothing left could beat the best journey already
+        // found.
+        //
+        // <h2>Why the early end is not an optimisation</h2>
+        // This used to run the queue to exhaustion and work the alighting out afterwards, which settles
+        // every stop the network can reach however short the journey is. That is invisible on a handful
+        // of lines and it is the whole of the cost on a whole railway: measured against a network of
+        // four hundred lines, a journey two stops long settled all sixteen hundred stations and planned
+        // three thousand two hundred rides, exactly as many as a journey clean across it. "It is slow
+        // even though the distance is small" is this loop, and building the graph a stop at a time
+        // underneath it cannot help while the search visits every stop anyway.
+        //
+        // The queue is ordered by cost, so the cheapest unsettled stop is a lower bound on the cost of
+        // every journey through any of them -- including the walk off at the far end, which only ever
+        // adds. Once that bound reaches the best journey already found, nothing further can improve it,
+        // and the rest of the queue is stops the answer does not go through.
         while (!frontier.isEmpty()) {
-            int current = (int) frontier.poll()[1];
+            double[] next = frontier.poll();
+            int current = (int) next[1];
             if (settled[current]) {
                 continue;
             }
+            if (next[0] >= bestTotal) {
+                break;
+            }
             settled[current] = true;
-            for (Link link : links.get(current)) {
+            if (mayAlight[current]) {
+                // Getting off here: the walk from this stop to the destination, which is the same walk
+                // the alighting pass used to make from every candidate at the end.
+                Node node = nodes.get(current);
+                Route walk = walk(workspace, node.at().x(), node.at().z(), goalX, goalZ,
+                        destinationName, preferences, cache);
+                if (walk.isPresent() && dist[current] + walk.estimatedSeconds() < bestTotal) {
+                    bestTotal = dist[current] + walk.estimatedSeconds();
+                    bestEnd = current;
+                    bestFinish = walk;
+                }
+            }
+            for (Link link : links.outgoing(current)) {
                 if (settled[link.target()]) {
                     continue;
                 }
@@ -255,27 +315,9 @@ public final class LinePlanner {
             }
         }
 
-        // Alighting: a walk from one of the nearest stops to the destination.
-        int bestEnd = -1;
-        double bestTotal = Double.MAX_VALUE;
-        Route bestFinish = null;
-        for (int index : nearest(nodes, goalX, goalZ)) {
-            if (dist[index] == Double.MAX_VALUE) {
-                continue;
-            }
-            Node node = nodes.get(index);
-            Route walk = walk(workspace, node.at().x(), node.at().z(), goalX, goalZ,
-                    destinationName, preferences, cache);
-            if (!walk.isPresent()) {
-                continue;
-            }
-            double total = dist[index] + walk.estimatedSeconds();
-            if (total < bestTotal) {
-                bestTotal = total;
-                bestEnd = index;
-                bestFinish = walk;
-            }
-        }
+        // The valve is about the graph the search was over, and every answer below -- including "no
+        // journey" -- was reached on that graph.
+        links.reportUnplanned();
         if (bestEnd < 0) {
             return Trip.empty();
         }
@@ -313,17 +355,6 @@ public final class LinePlanner {
     // ------------------------------------------------------------------- graph
 
     /**
-     * The workspace for a network, made the first time that network is asked for.
-     *
-     * <p>Keyed by identity, so two networks that are the same object share one and a plan that runs on
-     * only one of them never makes the other.
-     */
-    private static RoadRouter.Workspace workspaceOf(
-            Map<RoadNetwork, RoadRouter.Workspace> workspaces, RoadNetwork network) {
-        return workspaces.computeIfAbsent(network, RoadRouter.Workspace::new);
-    }
-
-    /**
      * Every way out of every stop, planned before the search runs.
      *
      * <p>Rides first, then transfers: the rides are the expensive plans, and if the ride budget is
@@ -332,7 +363,6 @@ public final class LinePlanner {
      * journey with a single-line detour, which is the failure this class was rewritten to remove.
      */
     private static List<List<Link>> buildLinks(RideRoads roads,
-                                               Map<RoadNetwork, RoadRouter.Workspace> workspaces,
                                                List<TransitLine> lines, List<Node> nodes,
                                                Map<Long, Integer> byPosition,
                                                String destinationName, RoutePreferences preferences,
@@ -356,7 +386,7 @@ public final class LinePlanner {
                 RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
                 // And the network the line asked for: this is where a line with its marks switched off
                 // is kept off them, rather than merely not adding a layer another line has added.
-                RoadRouter.Workspace workspace = workspaceOf(workspaces, roads.forLine(line));
+                RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
                 for (int step = -1; step <= 1; step += 2) {
                     int next = at + step;
                     if (next < 0 || next >= line.stopCount()) {
@@ -404,39 +434,309 @@ public final class LinePlanner {
                             + "Connect the lines' stops to the network, or raise the budget in code.",
                     MAX_RIDE_PLANS, unplanned);
         }
+        return links;
+    }
 
-        // Transfers are walks, so they use the walking network whatever the lines asked for: a change
-        // of lines is not a ride and must not depend on whether either line brought its marks.
-        RoadRouter.Workspace walkWorkspace = workspaceOf(workspaces, roads.forWalks());
-        for (int index = 0; index < count; index++) {
+    /**
+     * Every way out of a stop, worked out when the search reaches it rather than before it starts.
+     *
+     * <h2>Why this is not done up front</h2>
+     * It was, and the reason was sound while a plan ran over a handful of lines: the links are the
+     * expensive part, planning them all first makes the search a plain Dijkstra over a graph that does
+     * not move, and the budget that used to guard the planning could then only ever drop the tail of
+     * the list rather than remove edges from a search already running.
+     *
+     * <p>What a reading of a whole railway changed is the arithmetic. The graph is every neighbouring
+     * pair of stops of every line, in both directions, and it has nothing to do with the journey asked
+     * for: a two-hundred-block trip across a network of three hundred lines plans twelve thousand rides,
+     * every one of them a route the road router has to work out, and the player sees the map freeze
+     * while it happens. Journey length not mattering was the symptom, and this is the cause.
+     *
+     * <p>Dijkstra does not need the whole graph. It needs the edges out of each stop at the moment it
+     * settles that stop, because an edge is only ever relaxed from a settled node. So a stop's links are
+     * planned when it is settled and kept for the one time they are asked for, and a short journey plans
+     * the stops it actually reaches -- which is bounded by the cost of the answer rather than by the
+     * size of the railway.
+     *
+     * <p>This is sound in a way the old lazy attempt was not: nothing here is capped per stop, so a
+     * stop's links are always all of them, and the graph a running search sees never changes underneath
+     * it. What is left of the budget is a budget on the whole plan, reported out loud if it is ever
+     * reached, and reaching it now means a search that genuinely explored the network rather than one
+     * that was asked a short question about it.
+     */
+    private static final class Links {
+
+        private final RideRoads roads;
+        private final List<TransitLine> lines;
+        private final List<Node> nodes;
+        private final Map<Long, Integer> byPosition;
+        private final String destinationName;
+        private final RoutePreferences preferences;
+        private final double wait;
+
+        /** The stops of the network filed by cell, for the transfer neighbourhood query. */
+        private final Map<Long, List<Integer>> cells = new HashMap<>();
+        /** The rides already planned, by line and direction, so a pair is planned once. */
+        private final Map<String, Route> rides = new HashMap<>();
+        /** One entry per stop: its links once worked out, or null while they have not been. */
+        private final List<List<Link>> planned;
+        private int budget = MAX_RIDE_PLANS;
+        private int unplanned;
+
+        Links(RideRoads roads, List<TransitLine> lines, List<Node> nodes,
+              Map<Long, Integer> byPosition, String destinationName, RoutePreferences preferences,
+              double wait) {
+            this.roads = roads;
+            this.lines = lines;
+            this.nodes = nodes;
+            this.byPosition = byPosition;
+            this.destinationName = destinationName;
+            this.preferences = preferences;
+            this.wait = wait;
+            for (int index = 0; index < nodes.size(); index++) {
+                cells.computeIfAbsent(cellOf(nodes.get(index)), key -> new ArrayList<>()).add(index);
+            }
+            this.planned = new ArrayList<>(nodes.size());
+            for (int index = 0; index < nodes.size(); index++) {
+                planned.add(null);
+            }
+        }
+
+        /**
+         * Every way out of one stop: a ride to each neighbour on each line calling there, and a walk to
+         * every other stop of a different line that stands near enough to be the same interchange.
+         */
+        List<Link> outgoing(int index) {
+            List<Link> known = planned.get(index);
+            if (known != null) {
+                return known;
+            }
+            List<Link> links = new ArrayList<>();
+            ridesFrom(index, links);
+            transfersFrom(index, links);
+            planned.set(index, links);
+            return links;
+        }
+
+        /** The rides: one per direction, per line calling at this stop. */
+        private void ridesFrom(int index, List<Link> links) {
+            for (int[] call : nodes.get(index).calls()) {
+                TransitLine line = lines.get(call[0]);
+                int at = call[1];
+                TravelMode mode = rideMode(line.kind());
+                // The line's own class and nothing else. A mode is a set of classes, so the mode alone
+                // would let a water line's ride come back along a rail; the policy is what makes the
+                // type a player chose for a line mean something.
+                RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
+                // And the network the line asked for: this is where a line with its marks switched off
+                // is kept off them, rather than merely not adding a layer another line has added.
+                RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
+                for (int step = -1; step <= 1; step += 2) {
+                    int next = at + step;
+                    if (next < 0 || next >= line.stopCount()) {
+                        continue;
+                    }
+                    LineStop to = line.stops().get(next);
+                    Integer target = byPosition.get(positionKey(to.x(), to.z()));
+                    if (target == null || target == index) {
+                        continue;
+                    }
+                    // Keyed by direction, and planned from the end being travelled from: a stretch
+                    // ridden the other way is not the same route reversed, because its turn-by-turn
+                    // instructions have to point the way the rider is actually going.
+                    String key = "R|" + line.id() + "|" + at + "|" + next;
+                    Route ride = rides.get(key);
+                    if (ride == null) {
+                        if (budget <= 0) {
+                            unplanned++;
+                            continue;
+                        }
+                        budget--;
+                        LineStop from = line.stops().get(at);
+                        ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(),
+                                destinationName, mode, ridePolicy);
+                        rides.put(key, ride);
+                        if (!ride.isPresent()) {
+                            // Named, because "no journey over 1 line(s)" cannot say which stretch of
+                            // which line is the one that could not be ridden, and that is the only
+                            // question worth asking.
+                            HowToGo.LOGGER.info(
+                                    "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
+                                    from.label(), to.label(), line.kind().name());
+                        }
+                    }
+                    if (!ride.isPresent()) {
+                        continue;
+                    }
+                    links.add(new Link(target, ride.estimatedSeconds(), ride, mode));
+                }
+            }
+        }
+
+        /**
+         * The transfers out of one stop: a measured hop to every other stop of the interchange it is in.
+         *
+         * <h2>Why a transfer is measured rather than planned</h2>
+         * A transfer is a change of lines at one interchange, and an interchange is by definition two
+         * stops within {@link #TRANSFER_RADIUS} of each other -- a platform and the stop beside it, not a
+         * walk across town. Planning one is therefore asking the road router for a route it almost never
+         * has an answer to: there are no roads inside a station, so the answer is absent or a detour, and
+         * it is thrown away for the straight hop this builds anyway. What it cost to ask is the whole of
+         * the world scanned, because the router finds its nearest road by walking every segment of the
+         * network -- once for the start, once for the goal, and again on its fallback search. The legs
+         * where following the roads does matter -- the walk from the player to the first stop and from the
+         * last stop to the destination -- are still planned; see {@link #walk}.
+         *
+         * <h2>And why the near stops are found through a grid</h2>
+         * A transfer is two stops within the radius, so the pairs that could be one are a neighbourhood
+         * question, and asking it of every pair was the square of the network: invisible on the handful of
+         * lines MTR's own client data can produce, and most of a second on the thousands a whole-network
+         * reading brings. The grid is the same trick the road network's own spatial index uses, for the
+         * same reason -- the pairs worth measuring are the pairs that are near each other, and finding
+         * them should not cost the size of the world.
+         */
+        private void transfersFrom(int index, List<Link> links) {
             Node node = nodes.get(index);
-            for (int other = 0; other < count; other++) {
+            for (int other : interchangeGroup(index)) {
                 if (other == index) {
                     continue;
                 }
                 Node target = nodes.get(other);
-                if (!touchesOtherLine(node, target)) {
+                // The hop the router would have fallen back to, built directly: the same shape,
+                // the same pace, and no search of the world to arrive at it.
+                Route hop = straightWalk(node.at().x(), node.at().z(), target.at().x(),
+                        target.at().z(), destinationName);
+                if (!hop.isPresent()) {
                     continue;
                 }
-                double dx = target.at().x() - node.at().x();
-                double dz = target.at().z() - node.at().z();
-                if (dx * dx + dz * dz > TRANSFER_RADIUS * TRANSFER_RADIUS) {
-                    continue;
-                }
-                // The same walk the boarding and alighting legs use, so a change of lines that the
-                // router would answer with a straight hop is not refused here for want of a road --
-                // which is how a perfectly good interchange used to disappear from the graph and
-                // leave every journey through it unroutable.
-                Route walk = walk(walkWorkspace, node.at().x(), node.at().z(), target.at().x(),
-                        target.at().z(), destinationName, preferences, cache);
-                if (!walk.isPresent()) {
-                    continue;
-                }
-                links.get(index).add(new Link(other, walk.estimatedSeconds() + wait,
-                        walk.plusFixedSeconds(wait), TravelMode.WALK));
+                links.add(new Link(other, hop.estimatedSeconds() + wait,
+                        hop.plusFixedSeconds(wait), TravelMode.WALK));
             }
         }
-        return links;
+
+        /**
+         * Every stop of the interchange this one stands in, itself included.
+         *
+         * <h2>Why a group rather than the stops within the radius</h2>
+         * "Within the radius" is not a statement about a place, it is a statement about a pair, and a
+         * place is what an interchange is. A platform, the stop beside it and the stop beside that are
+         * one place to walk through even when the two ends of it are more than the radius apart, which is
+         * why the map draws one orange marker for them rather than two -- see
+         * {@code TransitInterchanges}, which grows its groups the same way. The planner used to allow
+         * only the pairs that were directly within the radius, so a journey could change lines onto the
+         * middle stop of such a place and then not onto the far one, while the map went on drawing the
+         * whole of it as a single place to change at. The two now answer the same question the same way.
+         *
+         * <p>Started from a stop and grown while it keeps finding stops near one already in: the same
+         * walk the map does, and only over the stops the budget below cares about -- the grid keeps it to
+         * the neighbourhood rather than to every pair of stops on the railway.
+         */
+        private List<Integer> interchangeGroup(int index) {
+            Map<Integer, List<Integer>> groups = interchangeGroups();
+            List<Integer> group = groups.get(index);
+            return group == null ? List.of(index) : group;
+        }
+
+        /**
+         * The stops of this network grouped into interchanges, worked out once per plan.
+         *
+         * <p>Lazily, because a plan that never asks for a transfer out of a stop never needs it, and
+         * built in one pass rather than per stop: the growth is a walk over the whole group, so doing it
+         * per stop would make a hub of a hundred stops cost a hundred walks of a hundred.
+         */
+        private Map<Integer, List<Integer>> interchangeGroups() {
+            if (interchangeGroups != null) {
+                return interchangeGroups;
+            }
+            Map<Integer, List<Integer>> built = new HashMap<>();
+            boolean[] grouped = new boolean[nodes.size()];
+            for (int seed = 0; seed < nodes.size(); seed++) {
+                if (grouped[seed]) {
+                    continue;
+                }
+                List<Integer> group = new ArrayList<>();
+                group.add(seed);
+                grouped[seed] = true;
+                for (int at = 0; at < group.size(); at++) {
+                    for (int other : neighboursOf(group.get(at))) {
+                        if (!grouped[other]) {
+                            grouped[other] = true;
+                            group.add(other);
+                        }
+                    }
+                }
+                if (group.size() > 1) {
+                    for (int member : group) {
+                        built.put(member, group);
+                    }
+                }
+            }
+            interchangeGroups = built;
+            return built;
+        }
+
+        /** The stops one stop could change lines at: near enough, and call at another line. */
+        private List<Integer> neighboursOf(int index) {
+            Node node = nodes.get(index);
+            int cellX = (int) Math.floor(node.at().x() / TRANSFER_CELL);
+            int cellZ = (int) Math.floor(node.at().z() / TRANSFER_CELL);
+            List<Integer> found = new ArrayList<>();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    List<Integer> nearby = cells.get(cellKey(cellX + dx, cellZ + dz));
+                    if (nearby == null) {
+                        continue;
+                    }
+                    for (int other : nearby) {
+                        if (other == index) {
+                            continue;
+                        }
+                        Node target = nodes.get(other);
+                        // The distance first, because it is two subtractions and it is what most pairs
+                        // fail: the call lists are only worth reading once the two stops are close
+                        // enough to be one interchange at all.
+                        double dx2 = target.at().x() - node.at().x();
+                        double dz2 = target.at().z() - node.at().z();
+                        if (dx2 * dx2 + dz2 * dz2 > TRANSFER_RADIUS * TRANSFER_RADIUS
+                                || !touchesOtherLine(node, target)) {
+                            continue;
+                        }
+                        found.add(other);
+                    }
+                }
+            }
+            return found;
+        }
+
+        /** The interchanges, worked out the first time a transfer is asked for. */
+        private Map<Integer, List<Integer>> interchangeGroups;
+
+        /** Says so, once, if the plan ever asked for more rides than the valve allows. */
+        void reportUnplanned() {
+            if (unplanned > 0) {
+                HowToGo.LOGGER.warn("[HowToGo] ride budget of {} plans exhausted: {} ride leg(s) were "
+                                + "not planned, so the lines they belong to cannot be used at all. "
+                                + "Connect the lines' stops to the network, or raise the budget in code.",
+                        MAX_RIDE_PLANS, unplanned);
+            }
+        }
+    }
+
+    /**
+     * The cell a stop is filed under for the transfer pass.
+     *
+     * <p>The size is the transfer radius, so looking at the nine cells around a stop reaches every stop
+     * within it and no further: one cell size smaller would miss the corners of the neighbourhood, and
+     * one larger would put stops in the same cell that are further apart than any transfer.
+     */
+    private static long cellOf(Node node) {
+        return cellKey((int) Math.floor(node.at().x() / TRANSFER_CELL),
+                (int) Math.floor(node.at().z() / TRANSFER_CELL));
+    }
+
+    /** A grid cell as one key. */
+    private static long cellKey(int x, int z) {
+        return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
     }
 
     private static Route walk(RoadRouter.Workspace workspace, double startX, double startZ,

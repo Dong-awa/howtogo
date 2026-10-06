@@ -203,7 +203,7 @@ public final class NavHudRenderer {
         // corner of the panel was thrown away for being too far from the player.
         double reach = VIEW_RADIUS * Math.sqrt(2.0) + 8;
         RoadNetwork network = RoadStore.get();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
+        for (RoadSegment segment : network.segments()) {
             for (int i = 1; i < segment.vertexCount(); i++) {
                 double ax = segment.x(i - 1);
                 double az = segment.z(i - 1);
@@ -336,23 +336,28 @@ public final class NavHudRenderer {
      * would bury the names that exist. Labels that do not fit inside the panel, or that would
      * overprint one already placed, are dropped -- the map is 120 px across and two names in the
      * same corner would smear into each other.
+     *
+     * <p>Whether a road is the piece that carries the name comes from the grouping, and the road is
+     * culled against the panel before it is asked: this pass runs every frame the panel is up, and
+     * asking {@link RoadChains#chainContaining} per named road -- which builds an adjacency index of
+     * the whole network to answer -- was the panel's dominant cost and its largest source of garbage.
      */
     private static void drawMiniMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network,
                                           double playerX, double playerZ, double cos, double sin,
                                           double scale, double centerX, double centerY,
                                           double minX, double minY, double maxX, double maxY) {
         List<double[]> placed = new ArrayList<>();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
+        RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             if (name == null) {
                 continue;
             }
-            List<Integer> chain = RoadChains.chainContaining(network, segment.id());
-            if (RoadChains.middleSegment(chain) != segment.id()) {
-                continue;
-            }
             double[] mid = segment.midpoint();
             if (Math.abs(mid[0] - playerX) > VIEW_RADIUS || Math.abs(mid[1] - playerZ) > VIEW_RADIUS) {
+                continue;
+            }
+            if (!grouping.carriesLabel(segment)) {
                 continue;
             }
             double x = screenX(mid[0] - playerX, mid[1] - playerZ, cos, sin, scale, centerX);

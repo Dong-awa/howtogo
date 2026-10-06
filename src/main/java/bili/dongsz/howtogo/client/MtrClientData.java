@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,8 +22,16 @@ import java.util.Map;
  * a {@code requestRadius} of 192 blocks by default and a list of the ids the client already holds, so
  * the answer is "the stations, platforms, routes and rails around you", not the whole network. That is
  * the shape of this reading: whatever is in range now, re-read as the player moves, never a complete
- * picture of the railway. The mod's own documentation says so in as many words, and it is why
- * {@link #tick()} re-reads rather than reading once.
+ * picture of the railway on its own. The mod's own documentation says so in as many words, and it is
+ * why {@link #tick()} re-reads rather than reading once.
+ *
+ * <p>It is not, however, the only thing that can be read. When the player is the one hosting the world
+ * -- single player, or a world opened to LAN -- MTR's server is a thread in this very process, and its
+ * copy of the network is the whole railway. {@link MtrWholeMap} reaches it, on MTR's own thread and
+ * with MTR's own shapes, and {@link #merge} puts the two readings together: the window for the track
+ * the marks are cut from, the whole map for the stations and lines a journey can be planned to. With a
+ * remote server, or with {@code mtr_full_map} switched off, there is no second reading and this class
+ * behaves exactly as it did.
  *
  * <h2>Why nothing here is a dependency</h2>
  * MTR documents this class as internal working with no stable API, changing between versions, and the
@@ -95,8 +104,14 @@ public final class MtrClientData {
     private static final int MAX_TRACK_VERTICES = 64;
     /** How often the client's data is re-read, in client ticks. */
     private static final int REREAD_TICKS = 20;
-    /** How many unreadable elements are named before the rest are only counted. */
-    private static final int MAX_REPORTED_FAILURES = 4;
+    /**
+     * How many unreadable elements are named before the rest are only counted.
+     *
+     * <p>Shared with {@link MtrMapOverlay}, whose reading is converted from another mod's shapes in
+     * the same way and owes the log the same courtesy: one budget for the whole integration rather
+     * than one per reader, so a session that has said its four says no more.
+     */
+    static final int MAX_REPORTED_FAILURES = 4;
 
     private static boolean resolved;
     private static boolean available;
@@ -105,6 +120,7 @@ public final class MtrClientData {
     private static Method getInstanceMethod;
     private static Field stationsField;
     private static Field platformsField;
+    private static Field routesField;
     private static Field simplifiedRoutesField;
     private static Field railWrapperListField;
     private static Field savedRailAreaField;
@@ -170,8 +186,30 @@ public final class MtrClientData {
     public record Stop(long platformId, long stationId, String stationName, String destination) {
     }
 
-    /** A line as the client has it, with its kind deduced from the stations it calls at. */
-    public record Line(long id, String name, String mode, int color, List<Stop> stops) {
+    /**
+     * A line as a reading has it, with its kind deduced where the reading does not say.
+     *
+     * @param rails MTR's own ids for the rails this line runs along, in the order it runs along them,
+     *              or an empty list when the reading does not say. See {@link #rails()}.
+     */
+    public record Line(long id, String name, String mode, int color, List<Stop> stops,
+                       List<String> rails) {
+
+        /** The rails are absent more often than not, and an absent list is not a null one. */
+        public Line {
+            rails = rails == null ? List.of() : List.copyOf(rails);
+        }
+
+        /**
+         * A line from a reading that does not say which rails it runs along.
+         *
+         * <p>Which is most of them, and is why this exists: MTR's own client data joins a route to
+         * its platforms and to nothing else, so what a line runs along has always had to be worked
+         * out here. See {@link MtrLineTracks}.
+         */
+        public Line(long id, String name, String mode, int color, List<Stop> stops) {
+            this(id, name, mode, color, stops, List.of());
+        }
 
         /** The kind of this mod's line this one becomes, or null when it becomes no line. */
         public RoadClass kind() {
@@ -216,8 +254,19 @@ public final class MtrClientData {
          * platforms is on the railway, which is where a stop has to be for a route to reach it. With no
          * platform in range there is nothing better than the area's own centre, which is what MTR
          * itself draws the station's label at.
+         *
+         * <p>An id of zero is not a station. A platform's station is resolved by MTR against the
+         * stations that client currently holds, so a platform sent on its own -- its station out of
+         * range, which happens at the edge of the window and for every platform of a station whose area
+         * the client has not been sent -- belongs to no station at all and carries zero. Zero is not a
+         * station id, so treating it as one gathered every such orphan platform together and answered
+         * with the middle of a scattered field of them, which is a stop placed in open country and a
+         * line that appeared to call at a station nobody had ever built. Nothing is a better answer.
          */
         public int[] stopPosition(long stationId) {
+            if (stationId == 0) {
+                return null;
+            }
             long sumX = 0;
             long sumZ = 0;
             int count = 0;
@@ -269,13 +318,25 @@ public final class MtrClientData {
     }
 
     /**
-     * Re-reads the client's data once a second, and reports it when it changes.
+     * Re-reads the network once a second, and reports it when it changes.
      *
      * <p>On the tick rather than in a plan because the answer changes as the player moves: MTR sends
      * what is near them, so a reading is a reading of a place, and there is nothing to be gained by
      * making a plan wait for one. Reported only when it changes, because the one thing worse than no
      * diagnostic is a diagnostic that fills the log -- which is what this mod's own rail report did
      * once a second until it was noticed.
+     *
+     * <p>Two readings become one here: the window MTR has sent this client, and -- through
+     * {@link MtrWholeMap} -- the whole railway the local server is simulating, when the player is the
+     * one hosting it. The window is what has the rails in it, so it is still what the marks are cut
+     * from; the whole map is what has every station and every line, so it is what the picker, the map
+     * and the planner are offered.
+     *
+     * <p>A third reading joins them when {@code mtrmap} is installed -- see {@link MtrMapOverlay} --
+     * and it is the one that answers for a server somebody else is running, where there is no local
+     * simulation to read: MTR Map Overlay fetches the whole railway from the server itself. It is
+     * offered the same way the whole map is, and preferred over it where both have something to say,
+     * because it is the one taken from the authoritative copy rather than from a copy of it.
      */
     public static void tick() {
         if (++ticks % REREAD_TICKS != 0) {
@@ -284,7 +345,14 @@ public final class MtrClientData {
         if (!mtrLoaded() || !RoadConfig.mtrTransit()) {
             return;
         }
-        Snapshot reading = read();
+        if (!RoadConfig.mtrFullMap()) {
+            // Switched off means forgotten rather than merely not read again: a reading of the whole
+            // railway left lying about would go on being offered after the player asked for it not to.
+            MtrWholeMap.reset();
+        } else {
+            MtrWholeMap.poll();
+        }
+        Snapshot reading = merge(read(), MtrWholeMap.snapshot(), MtrMapOverlay.read());
         String signature = signatureOf(reading);
         if (signature.equals(reported)) {
             return;
@@ -292,6 +360,123 @@ public final class MtrClientData {
         reported = signature;
         latest = reading;
         HowToGo.LOGGER.info("[HowToGo] MTR | {} | {}", signature, summaryOf(reading));
+        // Handed to the conversion now rather than left for whoever first asks for it: see
+        // MtrTransit.warmUp, which is what keeps a reading that has just changed from being answered
+        // with the one before it in the middle of a map draw.
+        MtrTransit.warmUp();
+    }
+
+    /**
+     * The readings there are, side by side, as one.
+     *
+     * <p>By MTR's own ids, so the same thing cannot be told apart twice: a station in two of them is
+     * one station. Which of them is kept where they disagree is decided per kind, and deliberately.
+     * The order the three arrive in is the order of their authority, weakest first, so each rule
+     * below is read off the parameter names rather than off a chain of ifs:
+     * <ul>
+     *   <li><b>the window</b> -- what MTR sent this client, which is the part of the railway around
+     *       the player and is the only one of the three that carries rails with their real heights
+     *       and their transport modes;</li>
+     *   <li><b>the whole map</b> -- the railway this process is simulating, when the player hosts the
+     *       world. Every station and every line, and no rails at all;</li>
+     *   <li><b>the fetched snapshot</b> -- the whole railway MTR Map Overlay asked the server for.
+     *       Every station, every line, and the rails of the whole network, though flattened into X
+     *       and Z. See {@link MtrMapOverlay}.</li>
+     * </ul>
+     *
+     * <p>What each kind keeps, and why:
+     * <ul>
+     *   <li><b>stations and platforms</b> -- the strongest reading's, because the strongest is the
+     *       complete one. A platform is the clearest case: the client resolves a platform's station
+     *       against the stations it holds, so a platform whose station is out of its window belongs to
+     *       none, and a fuller reading's copy of the same platform says which station it is actually
+     *       in.</li>
+     *   <li><b>lines</b> -- whichever placed more of its stops, and the strongest of those on a tie. A
+     *       window holds part of a long line, and the whole of it is the better answer; a line MTR has
+     *       only ever sent part of keeps the part that has stops in it.</li>
+     *   <li><b>rails</b> -- the window's first and any other reading's only where the window has not
+     *       sent that rail, matched by MTR's own rail id. The window's copy is the one with a real
+     *       height and a transport mode on it, and the others' are flattened; a rail both have is
+     *       therefore the window's, and the rest are what the other readings add -- which is how a
+     *       railway the player has never been near gets its track drawn at all.</li>
+     * </ul>
+     */
+    static Snapshot merge(Snapshot window, Snapshot whole, Snapshot overlay) {
+        boolean noWhole = whole.isEmpty();
+        boolean noOverlay = overlay.isEmpty();
+        if (noWhole && noOverlay) {
+            return window;
+        }
+        Map<Long, Station> stations = new LinkedHashMap<>();
+        Map<Long, Platform> platforms = new LinkedHashMap<>();
+        Map<Long, Line> lines = new LinkedHashMap<>();
+        Map<String, Track> rails = new LinkedHashMap<>();
+        List<Track> unnamedRails = new ArrayList<>();
+        for (Snapshot source : List.of(window, whole, overlay)) {
+            for (Station station : source.stations()) {
+                stations.put(station.id(), station);
+            }
+            for (Platform platform : source.platforms()) {
+                platforms.put(platform.id(), platform);
+            }
+            for (Line line : source.lines()) {
+                // Weakest first and "at least as many stops wins", so a later reading takes a tie --
+                // which is what makes the fuller readings outrank the window on everything they hold.
+                lines.merge(line.id(), line, MtrClientData::better);
+            }
+            for (Track rail : source.tracks()) {
+                // First reading to name a rail wins it, which is the window whenever the window has
+                // it: MTR's own copy of a rail carries the height and the transport mode that
+                // MtrMapOverlay's flattened one does not. A rail whose id could not be read cannot be
+                // matched against another reading's at all, so it is kept rather than dropped and
+                // never deduplicated.
+                if (rail.hexId() == null) {
+                    unnamedRails.add(rail);
+                } else {
+                    rails.putIfAbsent(rail.hexId(), rail);
+                }
+            }
+        }
+        List<Track> tracks = new ArrayList<>(rails.values());
+        tracks.addAll(unnamedRails);
+        return new Snapshot(List.copyOf(stations.values()), List.copyOf(platforms.values()),
+                List.copyOf(lines.values()), List.copyOf(tracks));
+    }
+
+    /**
+     * The same merge without the fetched snapshot, for a caller that has only the other two.
+     *
+     * <p>Kept because the two-reading case is the one the conversion has always been checked
+     * against, and a check that has to name an empty third reading to reach it says less about what
+     * it is checking.
+     */
+    static Snapshot merge(Snapshot window, Snapshot whole) {
+        return merge(window, whole, Snapshot.EMPTY);
+    }
+
+    /**
+     * Which of two readings' copies of one line to keep.
+     *
+     * <p>The one with more of its stops placed, and the later of the two on a tie -- which is the one
+     * whose reading is stronger, since they are merged weakest first.
+     *
+     * <p>The rails are knowledge about a line rather than about its stops, and the stronger reading is
+     * not always the one that has them: MTR's own window never says which rails a line runs along, and
+     * the fetched snapshot always does. So a winner with no rails takes the other copy's, and one that
+     * has its own keeps them -- a line's rails are what it is drawn along, and dropping them for being
+     * on the weaker copy is what would draw the line as straight hops between its stations.
+     */
+    private static Line better(Line kept, Line offered) {
+        Line winner = offered.stops().size() >= kept.stops().size() ? offered : kept;
+        if (!winner.rails().isEmpty()) {
+            return winner;
+        }
+        Line other = winner == offered ? kept : offered;
+        if (other.rails().isEmpty()) {
+            return winner;
+        }
+        return new Line(winner.id(), winner.name(), winner.mode(), winner.color(), winner.stops(),
+                other.rails());
     }
 
     /**
@@ -360,7 +545,15 @@ public final class MtrClientData {
 
     // ------------------------------------------------------------------ elements
 
-    private static Station station(Object raw) {
+    /**
+     * One station, with the extent MTR gave it.
+     *
+     * <p>Package-private because the same elements are read from two places: the client's own copy of
+     * the network, and -- through {@link MtrWholeMap} -- the one the local server is simulating. Both
+     * hold the same classes with the same shapes, so the reading of one is the reading of the other,
+     * and there is deliberately no second copy of it to drift out of step.
+     */
+    static Station station(Object raw) {
         try {
             // The centre is a Position, whose coordinates are whole blocks as longs; the rail sampling
             // below reads a Vector, whose coordinates are doubles. Two types, two sets of accessors.
@@ -387,8 +580,11 @@ public final class MtrClientData {
      * <p>A platform reaches its station through the {@code area} field every saved rail carries, which
      * is the station object itself rather than an id -- so the id is read back off it. That is the only
      * link the client data has between the two.
+     *
+     * <p>Package-private for the same reason {@link #station} is: the local server's platforms are read
+     * by the very same code.
      */
-    private static Platform platform(Object raw) {
+    static Platform platform(Object raw) {
         try {
             Object area = savedRailAreaField.get(raw);
             Object mid = getMidPositionMethod.invoke(raw);
@@ -461,16 +657,16 @@ public final class MtrClientData {
     }
 
     /** A collection as an iterable of its elements, or nothing when it is not one. */
-    private static Iterable<?> elements(Object collection) {
+    static Iterable<?> elements(Object collection) {
         return collection instanceof Collection<?> items ? items : List.of();
     }
 
-    private static long number(Object target, Method method) throws ReflectiveOperationException {
+    static long number(Object target, Method method) throws ReflectiveOperationException {
         Object value = method.invoke(target);
         return value instanceof Number counted ? counted.longValue() : 0;
     }
 
-    private static String text(Object target, Method method) throws ReflectiveOperationException {
+    static String text(Object target, Method method) throws ReflectiveOperationException {
         Object value = method.invoke(target);
         return value instanceof String string ? string : null;
     }
@@ -481,8 +677,80 @@ public final class MtrClientData {
     }
 
     /** The name of an enum constant, or null when the value is not one. */
-    private static String modeName(Object value) {
+    static String modeName(Object value) {
         return value instanceof Enum<?> constant ? constant.name() : null;
+    }
+
+    // -------------------------------------------------- what the whole-map read shares
+
+    /**
+     * Whether MTR's client data can be read at all, resolving it first.
+     *
+     * <p>Asked by {@link MtrWholeMap} before it looks anything up of its own: with MTR absent, or with
+     * shapes this mod has never seen, the whole-map read has nothing to reach for either and does not
+     * try.
+     */
+    static boolean ready() {
+        resolve();
+        return available;
+    }
+
+    /** MTR's own id for a station, platform or line of its client data. */
+    static long idOf(Object nameColorData) {
+        try {
+            return number(nameColorData, getIdMethod);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /** What MTR calls it, or null when it has no name. */
+    static String nameOf(Object nameColorData) {
+        try {
+            return text(nameColorData, getNameMethod);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The station area a saved rail belongs to, or null when the data does not resolve one.
+     *
+     * <p>The one link between a platform and its station, and the reason a platform whose station the
+     * client was never sent reads as belonging to no station rather than to station zero.
+     */
+    static Object areaOf(Object savedRail) {
+        try {
+            return savedRailAreaField.get(savedRail);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** One field of the network, as an iterable of its elements. */
+    static Iterable<?> stationsOf(Object data) {
+        return elementsOf(stationsField, data);
+    }
+
+    /** The same, for the platforms. */
+    static Iterable<?> platformsOf(Object data) {
+        return elementsOf(platformsField, data);
+    }
+
+    /** The same, for the routes -- empty on the client, every line of the railway on the server. */
+    static Iterable<?> routesOf(Object data) {
+        return elementsOf(routesField, data);
+    }
+
+    private static Iterable<?> elementsOf(Field field, Object data) {
+        if (field == null) {
+            return List.of();
+        }
+        try {
+            return elements(field.get(data));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return List.of();
+        }
     }
 
     /**
@@ -513,6 +781,17 @@ public final class MtrClientData {
                 .append(reading.platforms().size()).append('/')
                 .append(reading.lines().size()).append('/')
                 .append(reading.tracks().size());
+        // Which stations and which platforms, not only how many: the whole railway arriving at once
+        // changes the answer without changing the count of anything, and a reading that is not noticed
+        // is a reading that is not offered. Names are left out on purpose -- a reading is compared to
+        // decide whether to rebuild, and a rename costs one rebuild that the ids alone would miss, which
+        // the station count would catch anyway.
+        for (Station station : reading.stations()) {
+            signature.append(',').append(station.id());
+        }
+        for (Platform platform : reading.platforms()) {
+            signature.append(',').append(platform.id()).append(':').append(platform.stationId());
+        }
         for (Line line : reading.lines()) {
             signature.append('|').append(line.id()).append(':').append(line.stops().size())
                     .append(':').append(line.mode());
@@ -616,6 +895,18 @@ public final class MtrClientData {
             platformsField = clientData.getField("platforms");
             simplifiedRoutesField = clientData.getField("simplifiedRoutes");
             railWrapperListField = clientData.getField("railWrapperList");
+            try {
+                // Declared on the simulation core's Data, which both the client's copy of the network and
+                // the server's simulator extend -- so the one handle reads either. The client's own routes
+                // are always empty; the simulator's are the whole railway. See MtrWholeMap.
+                //
+                // Asked for apart from the four above, and allowed to be missing: only the whole-map read
+                // wants it, and a version that had renamed it would be a version whose whole-map read is
+                // unavailable rather than one whose stations and lines cannot be read at all.
+                routesField = clientData.getField("routes");
+            } catch (NoSuchFieldException | RuntimeException absent) {
+                routesField = null;
+            }
 
             // Every handle below is taken from the class it will actually be invoked on, and never from
             // a base class it merely shares. getMethod finds inherited methods, so a lookup from the

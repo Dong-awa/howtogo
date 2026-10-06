@@ -179,4 +179,27 @@ public enum TravelMode {
         }
         return WALK;
     }
+
+    /**
+     * Whether one and the same mode can travel on both classes.
+     *
+     * <p>The answer to "may these two roads be one place", asked where the router decides whether two
+     * nodes close together are worth an edge between them: a highway end and a road end are one place
+     * to a driver, and a road end and a rail end are not.
+     *
+     * <p>Not the same question as "are they the same class", which is what the router used to ask: two
+     * roads the same class can still be two roads no mode drives over both of at once, and a highway
+     * and the road it was drawn up against are one place to every driver.
+     */
+    public static boolean shareAMode(RoadClass a, RoadClass b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        for (TravelMode mode : VALUES) {
+            if (mode.allows(a) && mode.allows(b)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

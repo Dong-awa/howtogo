@@ -59,7 +59,21 @@ public final class MtrMarks {
     private static boolean loaded;
     private static boolean dirty;
 
+    /**
+     * How many times the answers have changed since the game started.
+     *
+     * <p>For anything that caches a reading of them -- the signature MtrTransit decides whether to
+     * rebuild the railway from, which asks about every line -- so that a switch the player has just
+     * flipped counts as a change even when the reading from MTR has not moved.
+     */
+    private static int version;
+
     private MtrMarks() {
+    }
+
+    /** @see #version */
+    public static int version() {
+        return version;
     }
 
     /**
@@ -104,6 +118,7 @@ public final class MtrMarks {
             ON.add(mtrLineId);
         }
         dirty = true;
+        version++;
         save();
     }
 
@@ -118,6 +133,7 @@ public final class MtrMarks {
         ensureLoaded();
         if (ON.remove(mtrLineId) | OFF.remove(mtrLineId)) {
             dirty = true;
+            version++;
             save();
         }
     }
@@ -127,6 +143,9 @@ public final class MtrMarks {
             return;
         }
         loaded = true;
+        // Counted as a change: the answers have just arrived from disk, and a reading of them taken
+        // before this ran was taken with none of them.
+        version++;
         Path file = file();
         if (file == null || !Files.isRegularFile(file)) {
             return;

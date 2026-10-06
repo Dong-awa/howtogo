@@ -32,7 +32,6 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
     private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
     private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
-    private static final ModConfigSpec.BooleanValue REPAIR_ROAD_JOINS;
     private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
     private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
@@ -41,6 +40,9 @@ public final class RoadConfig {
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
     private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
+    private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
+    private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
+    private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
 
     static {
@@ -93,18 +95,6 @@ public final class RoadConfig {
                         "is offered as an alternative, not as a substitution.")
                 .define("fall_back_to_walking_when_slower", true);
 
-        REPAIR_ROAD_JOINS = builder.comment(
-                        "Whether roads that only look joined are joined up for routing.",
-                        "Two roads drawn through the same node are one road; two drawn across each",
-                        "other, or stopped a block short of each other, are two, and the router will",
-                        "not go from one to the other. With this on, the routing network is repaired",
-                        "first: a node that sits on a segment breaks it, two roads that cross break",
-                        "each other, and the near-coincident nodes at each join are then one junction.",
-                        "Only roads some one vehicle can travel on both of are joined, and only at",
-                        "roughly the same height, so a bridge stays a bridge.",
-                        "Turn this off to route on the roads exactly as drawn.")
-                .define("repair_road_joins", true);
-
         TRANSIT_WAIT_SECONDS = builder.comment(
                         "Seconds spent waiting for a service, charged once at every boarding -- the",
                         "first one included -- and again at every change of lines.",
@@ -117,13 +107,13 @@ public final class RoadConfig {
                 .defineInRange("transit_wait_seconds", 60.0, 0.0, 3600.0);
 
         VOICE_ANNOUNCEMENTS = builder.comment(
-                        "Whether navigation events -- the turn ahead, the turn now, arrival and going",
-                        "off route -- are spoken aloud. Off by default: speech talks over whatever the",
-                        "client is already playing, and a phrase read out at every junction is a taste",
-                        "not everyone shares. This is the only switch: the client's own narrator",
-                        "setting is deliberately not consulted, so turning it on is enough to hear",
-                        "something. The destination picker carries the same switch, for players who",
-                        "never open this file.")
+                        "Whether navigation events -- the trip being started, the turn ahead, the turn",
+                        "now, arrival and going off route -- are spoken aloud. Off by default: speech",
+                        "talks over whatever the client is already playing, and a phrase read out at",
+                        "every junction is a taste not everyone shares. This is the only switch: the",
+                        "client's own narrator setting is deliberately not consulted, so turning it on",
+                        "is enough to hear something. The destination picker carries the same switch,",
+                        "for players who never open this file.")
                 .define("voice_announcements", false);
 
         CREATE_TRAIN_TRACKS = builder.comment(
@@ -180,11 +170,62 @@ public final class RoadConfig {
                         "Read reflectively and only on the client, so with MTR absent nothing here does",
                         "anything at all and no dependency is needed in either direction.",
                         "MTR keeps its world on its own server and sends a client only what is near it,",
-                        "so what is offered is the part of the network around the player, refreshed as",
-                        "they move -- not the whole railway. Lines are read by type: a train or cable car",
-                        "becomes a rail line and a boat becomes a water line, and anything else -- an",
-                        "aeroplane, or a type a later MTR adds -- is left alone rather than guessed at.")
+                        "so a reading on its own is the part of the network around the player, refreshed",
+                        "as they move. That window is folded into what the earlier ones taught, and",
+                        "mtr_full_map asks the whole network for the rest -- see below. Lines are read by",
+                        "type: a train or cable car becomes a rail line and a boat becomes a water line,",
+                        "and anything else -- an aeroplane, or a type a later MTR adds -- is left alone",
+                        "rather than guessed at.")
                 .define("mtr_transit", true);
+
+        MTR_FULL_MAP = builder.comment(
+                        "Whether MTR's whole railway is read, rather than only the part of it the client",
+                        "has been sent. MTR's server sends a client the stations and lines within a",
+                        "couple of hundred blocks of it, which is why a network read a window at a time",
+                        "is missing every station the player has not walked to yet.",
+                        "On: while the player hosts the world -- single player, or a world opened to LAN",
+                        "-- the railway MTR is simulating is read directly out of the process the game is",
+                        "already running, so every station and every line is known at once, for every",
+                        "player in that world.",
+                        "Off, or connected to somebody else's server: nothing changes, and the mod offers",
+                        "what it has been sent, kept and added to as the player travels.",
+                        "Nothing is ever written to MTR's data either way: this is a read of a live",
+                        "simulation, taken on MTR's own thread, and the railway stays MTR's.")
+                .define("mtr_full_map", true);
+
+        MTR_MAP_OVERLAY = builder.comment(
+                        "Whether the whole railway MTR Map Overlay has fetched from the server is read",
+                        "and offered as this mod's own. That mod (id \"mtrmap\") asks the server for a",
+                        "snapshot of every line, station and rail of MTR's network and keeps it on the",
+                        "client, so with it installed -- and with it installed on the server too, which",
+                        "is what the snapshot needs -- the whole railway is known here whatever the",
+                        "player is connected to. mtr_full_map can only reach the copy of the network",
+                        "this process happens to be simulating, which is nothing at all on somebody",
+                        "else's server; this is the answer for that case, and the two are independent.",
+                        "It is also the only reading that says which rails each line runs along, so it",
+                        "is the only one that draws a line along its railway rather than between its",
+                        "stations -- and a line drawn from it is drawn that way across the whole",
+                        "network, not only where the player has been.",
+                        "Read reflectively, so with the mod absent nothing here does anything at all and",
+                        "no dependency is needed in either direction; a server that does not have it",
+                        "leaves the client's own copy of the mod with nothing but the radius-limited",
+                        "data MTR already sends, which this ignores rather than reads twice.")
+                .define("mtr_map_overlay", true);
+
+        MTR_STATION_MERGE_BLOCKS = builder.comment(
+                        "How far apart two of MTR's stations may be and still be one station here,",
+                        "in blocks. MTR makes a separate station of every area the player draws, so a",
+                        "station built a platform at a time arrives as several stations with the same",
+                        "name -- and a destination picker listing the same station four times, with a",
+                        "line calling at whichever of them it happens to stop in, is no use to anyone.",
+                        "Two MTR stations whose names match, ignoring case and surrounding spaces, and",
+                        "whose boarding points are within this distance, are therefore offered as one",
+                        "place: one entry in the picker, one marker on the map, one stop for a line to",
+                        "call at, placed between their platforms.",
+                        "Stations with no name of their own are never merged, because every nameless",
+                        "station would then be one place. Zero turns the rule off and offers MTR's",
+                        "stations exactly as MTR has them.")
+                .defineInRange("mtr_station_merge_blocks", 256, 0, 4096);
 
         MTR_AUTO_ROUTE_MARKS = builder.comment(
                         "Whether a line read out of MTR brings its own track with it, as a line of this",
@@ -298,18 +339,6 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether the routing network is repaired where the drawing left two roads looking joined but not
-     * actually joined, on before the config loads since that is the declared default.
-     */
-    public static boolean repairRoadJoins() {
-        try {
-            return REPAIR_ROAD_JOINS.get();
-        } catch (IllegalStateException notLoadedYet) {
-            return true;
-        }
-    }
-
-    /**
      * Seconds of waiting one boarding of a service costs, or the declared default before the config
      * has been read.
      */
@@ -402,6 +431,39 @@ public final class RoadConfig {
             return MTR_TRANSIT.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
+        }
+    }
+
+    /** Whether MTR's whole railway is read rather than only the window around the player. */
+    public static boolean mtrFullMap() {
+        try {
+            return MTR_FULL_MAP.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether the whole railway MTR Map Overlay fetched is read, on before the config loads. */
+    public static boolean mtrMapOverlay() {
+        try {
+            return MTR_MAP_OVERLAY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * How far apart two of MTR's stations may be and still be one place here, in blocks.
+     *
+     * <p>The declared default stands in wherever the config has not been read, including in the
+     * regression harness, which has no config file at all -- so a reading of MTR's own shapes is
+     * converted the same way there as it is in a running game.
+     */
+    public static int mtrStationMergeBlocks() {
+        try {
+            return MTR_STATION_MERGE_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 256;
         }
     }
 

@@ -377,6 +377,19 @@ public final class TransitLineScreen extends Screen {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     }
 
+    /**
+     * Not a pause screen, for the same reason the destination picker and the name prompt are not.
+     *
+     * <p>This panel is drawn over the map, and the map keeps moving under it: freezing the world to
+     * arrange a line's stops stops the player, the mobs and whatever trip they were in the middle of.
+     * Laying out a line is a thing done while standing still, not a thing that requires the world to
+     * stand still with it.
+     */
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         if (parent != null) {
@@ -528,8 +541,8 @@ public final class TransitLineScreen extends Screen {
         for (int row = 0; row < visible && stopsScroll + row < line.stopCount(); row++) {
             int i = stopsScroll + row;
             int y = listY + row * ROW_HEIGHT;
-            int nameColour = i > 0 && i - 1 < rideable.length && !rideable[i - 1] ? 0xFFFF8060
-                    : 0xFFD0D8E0;
+            int nameColour = i > 0 && i - 1 < rideable.length
+                    && rideable[i - 1] == RIDE_BROKEN ? 0xFFFF8060 : 0xFFD0D8E0;
             drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
             // Four controls at the right edge: rename, earlier, later, remove. Drawn per row rather than
             // as widgets so that a long line does not create four buttons per stop. The rename one is
@@ -669,7 +682,36 @@ public final class TransitLineScreen extends Screen {
 
     /** Which neighbouring stops a ride can connect, with the line state they were computed for. */
     private String rideSignature = "";
-    private boolean[] rideable = new boolean[0];
+    /**
+     * Whether each neighbouring pair of stops can be ridden, one entry per gap.
+     *
+     * <p>Three states rather than two, because the answer is now worked out over several frames: a pair
+     * nobody has planned yet is not a pair that cannot be ridden, and marking it red would be the one
+     * readout on this screen that says a line is broken saying it about a line that is fine so far.
+     */
+    private byte[] rideable = new byte[0];
+    /** The next gap to plan, so the work is picked up where the last frame left it. */
+    private int rideCursor;
+    /** What the planning in progress is using, kept across frames because it is not per gap. */
+    private RoadRouter.Workspace rideWorkspace;
+    private TravelMode rideMode;
+    private RoutePreferences ridePolicy;
+    private TransitLine rideLine;
+
+    private static final byte RIDE_UNKNOWN = 0;
+    private static final byte RIDE_OK = 1;
+    private static final byte RIDE_BROKEN = 2;
+
+    /**
+     * How many pairs of neighbouring stops one frame may plan.
+     *
+     * <p>Each pair is a route over the world, so a line of forty stops is forty routes, and doing them
+     * all inside the frame that noticed the edit is a frozen picture for as long as they take -- on a
+     * whole-railway network, seconds. Four per frame fills a screenful of stop rows in about a tenth of
+     * a second and never blocks; the red marks appear as they are worked out rather than all at once,
+     * which is also the honest order for them to appear in.
+     */
+    private static final int RIDE_PLANS_PER_FRAME = 4;
 
     /**
      * Marks which neighbouring stops a ride can actually connect, so that a wrong line type is visible
@@ -686,49 +728,80 @@ public final class TransitLineScreen extends Screen {
      */
     private void refreshRideable() {
         TransitLine line = selected();
+        RoadClass kind = line == null ? null : line.kind();
+        TravelMode mode = kind == null ? null : LinePlanner.rideMode(kind);
+        RoutePreferences policy = kind == null ? null
+                : LinePlanner.ridePreferences(kind, RoutePreferenceStore.preferences());
+        // The roads the pairs are planned on, resolved before the signature rather than after it: the
+        // signature has to name the version of those roads as well as the line's own shape, or a pair
+        // the player has just connected stays red until the line itself is edited -- the road they have
+        // just drawn is not part of a signature made of stop coordinates.
+        RoadNetwork network = kind == null ? null
+                : RailTrackStore.forRouting(mode, policy, MtrTransit.marksEnabled(line));
+
         StringBuilder signature = new StringBuilder();
         if (line != null) {
-            signature.append(line.id()).append(line.kind().name());
+            signature.append(line.id()).append(kind.name());
             // Whether the line rides its own marks decides which roads the pairs are planned on, so a
             // switch that changed the answer has to re-plan them.
             signature.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
             for (LineStop stop : line.stops()) {
                 signature.append('|').append(stop.x()).append(',').append(stop.z());
             }
+            // The version of the road network, which is what makes the player's own repair visible here.
+            // Same pair of numbers the map layers key their own caches on.
+            signature.append('#').append(network.segmentCount()).append(':').append(network.revision());
         }
         if (signature.toString().equals(rideSignature)) {
+            // The same line over the same roads: carry on with the pairs the last frames had not got
+            // to, and do nothing at all once there are none.
+            planSomeGaps();
             return;
         }
         rideSignature = signature.toString();
-        rideable = new boolean[0];
+        rideable = new byte[0];
+        rideCursor = 0;
+        rideWorkspace = null;
+        rideLine = null;
         if (line == null || line.stopCount() < 2) {
             return;
         }
-        RoadClass kind = line.kind();
-        TravelMode mode = LinePlanner.rideMode(kind);
-        RoutePreferences policy = LinePlanner.ridePreferences(kind,
-                RoutePreferenceStore.preferences());
-        // On the same roads the router will ride it on, marks switch included: a red "cannot ride this
-        // pair" that the route then manages anyway, or the reverse, would make the one readout on this
-        // screen that says a line is broken say it about a line that is not.
-        RoadNetwork network = RailTrackStore.forRouting(mode, policy, MtrTransit.marksEnabled(line));
         // One workspace for the whole line: every pair is anchored to the same handful of stops, and a
         // shared workspace means the segment splits behind those anchors are paid once rather than
-        // once per pair.
-        RoadRouter.Workspace workspace = new RoadRouter.Workspace(network);
-        rideable = new boolean[line.stopCount() - 1];
-        for (int i = 0; i < rideable.length; i++) {
-            LineStop from = line.stops().get(i);
-            LineStop to = line.stops().get(i + 1);
-            rideable[i] = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(), "", mode,
-                    policy).isPresent();
+        // once per pair. Built once and kept, because the pairs are now planned across frames.
+        rideWorkspace = new RoadRouter.Workspace(network);
+        rideMode = mode;
+        ridePolicy = policy;
+        rideLine = line;
+        rideable = new byte[line.stopCount() - 1];
+        planSomeGaps();
+    }
+
+    /**
+     * Works out a few more neighbouring pairs, or none when there are no pairs left.
+     *
+     * <p>Called from the render pass, which is why it is bounded: see {@link #RIDE_PLANS_PER_FRAME}.
+     */
+    private void planSomeGaps() {
+        if (rideLine == null || rideWorkspace == null || rideCursor >= rideable.length) {
+            return;
+        }
+        int planned = 0;
+        while (rideCursor < rideable.length && planned < RIDE_PLANS_PER_FRAME) {
+            int i = rideCursor++;
+            LineStop from = rideLine.stops().get(i);
+            LineStop to = rideLine.stops().get(i + 1);
+            boolean canRide = RoadRouter.findRoute(rideWorkspace, from.x(), from.z(), to.x(), to.z(),
+                    "", rideMode, ridePolicy).isPresent();
+            rideable[i] = canRide ? RIDE_OK : RIDE_BROKEN;
+            planned++;
         }
     }
 
     /** Whether any neighbouring pair on this line cannot be ridden. */
     private boolean hasBrokenPair() {
-        for (boolean canRide : rideable) {
-            if (!canRide) {
+        for (byte state : rideable) {
+            if (state == RIDE_BROKEN) {
                 return true;
             }
         }

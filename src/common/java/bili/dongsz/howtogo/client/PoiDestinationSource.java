@@ -23,9 +23,20 @@ public final class PoiDestinationSource implements DestinationSource {
         return ID;
     }
 
+    /**
+     * Whether the player has placed any named landmark.
+     *
+     * <p>Stops at the first one rather than building every destination to ask whether the list is
+     * empty: this is called by {@link Destinations#places()} on every frame a map is drawn.
+     */
     @Override
     public boolean isAvailable() {
-        return !destinations().isEmpty();
+        for (RoadNode node : RoadStore.get().nodes()) {
+            if (node.type() == RoadNode.Type.POI && node.name() != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
