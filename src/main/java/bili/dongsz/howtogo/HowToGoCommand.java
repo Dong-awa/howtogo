@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.client.DestinationScreen;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.SelfTest;
@@ -132,12 +133,19 @@ public final class HowToGoCommand {
      *
      * <p>The report goes to the log in full and to chat one line at a time, so a finding can be read
      * without alt-tabbing and quoted from the log afterwards.
+     *
+     * <p>Checks contributed by other mods run after this mod's own and land in the same report, in the
+     * same shape: whether what is in this world is what the mod thinks is in it is the same question
+     * for a source another mod contributed, and the player asking it is already here.
      */
     private static int selfTest(CommandContext<CommandSourceStack> context) {
         List<String> lines;
         int failed = 0;
         try {
-            List<SelfTest.Result> results = SelfTest.run();
+            List<SelfTest.Result> results = new ArrayList<>(SelfTest.run());
+            for (SelfChecks.Outcome outcome : SelfChecks.runAll()) {
+                results.add(new SelfTest.Result(outcome.name(), outcome.ok(), outcome.detail()));
+            }
             lines = new ArrayList<>(results.size() + 2);
             for (SelfTest.Result result : results) {
                 if (!result.ok()) {

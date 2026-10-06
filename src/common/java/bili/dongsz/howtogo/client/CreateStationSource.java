@@ -50,6 +50,18 @@ public final class CreateStationSource implements DestinationSource {
         return "hud.howtogo.source.create";
     }
 
+    /** A station is a place the player can see and travel to, so it is marked on every map. */
+    @Override
+    public boolean marksPlaces() {
+        return true;
+    }
+
+    /** After the player's own places and before MTR's, which is where the two have always sat. */
+    @Override
+    public int priority() {
+        return 10;
+    }
+
     @Override
     public List<Destination> destinations() {
         List<RailTrackStore.Station> stations = RailTrackStore.stations();

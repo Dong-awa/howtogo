@@ -44,6 +44,23 @@ public final class PoiDestinationSource implements DestinationSource {
         return "hud.howtogo.source.poi";
     }
 
+    /** The player's own places are places: they get a marker on every map this mod draws. */
+    @Override
+    public boolean marksPlaces() {
+        return true;
+    }
+
+    /**
+     * First in the list.
+     *
+     * <p>The mod's own places come before anything read out of another mod: they are the ones the
+     * player put there deliberately, and the ones a journey most often ends at.
+     */
+    @Override
+    public int priority() {
+        return 0;
+    }
+
     @Override
     public List<Destination> destinations() {
         List<Destination> result = new ArrayList<>();

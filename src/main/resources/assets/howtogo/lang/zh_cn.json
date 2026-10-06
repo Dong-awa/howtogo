@@ -142,6 +142,8 @@
   "hud.howtogo.station.name": "车站 %s, %s",
   "hud.howtogo.source.xaero": "Xaero 路标点",
   "hud.howtogo.source.xaero.short": "（来自 XMM）",
+  "hud.howtogo.raillayer.create": "机械动力轨道",
+  "hud.howtogo.raillayer.mtr": "MTR 轨道",
   "screen.howtogo.lines": "线路配置",
   "screen.howtogo.line_list": "线路",
   "screen.howtogo.line_new": "新建",

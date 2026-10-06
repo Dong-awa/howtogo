@@ -43,6 +43,18 @@ public final class MtrStationSource implements DestinationSource {
         return "hud.howtogo.source.mtr";
     }
 
+    /** Read-only or not, a station MTR owns stands somewhere and is worth marking. */
+    @Override
+    public boolean marksPlaces() {
+        return true;
+    }
+
+    /** After Create's stations, as it has always been listed. */
+    @Override
+    public int priority() {
+        return 20;
+    }
+
     @Override
     public List<Destination> destinations() {
         List<MtrTransit.Station> stations = MtrTransit.stations();

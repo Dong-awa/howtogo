@@ -24,8 +24,14 @@ import java.nio.file.Path;
  * <h2>Why the config directory</h2>
  * Not the save folder: on a multiplayer server the client has no access to the save at all. The
  * dimension is part of the file name because coordinates are only meaningful within one dimension.
+ *
+ * <h2>Why this is public</h2>
+ * Because an addon storing a little of its own data has exactly the same problem, and the same
+ * answer: per world, per dimension, beside the roads rather than in a directory it invented. It gets
+ * there through {@code HowToGoApi.dataFile(suffix)}, which is the documented way in; this class is
+ * public only so that entry point does not have to be a second copy of these four lines.
  */
-final class WorldFiles {
+public final class WorldFiles {
 
     /** Names the world a directory was made for; see {@link #worldDirectory}. */
     private static final String WORLD_MARKER = ".world";
@@ -37,9 +43,11 @@ final class WorldFiles {
      * {@code config/howtogo/<world>/<dimension><suffix>.json} for the level now loaded.
      *
      * @param suffix distinguishes the files stored for one dimension; the road network passes
-     *               {@code ""}, which keeps its path exactly what it was before this class existed
+     *               {@code ""}, which keeps its path exactly what it was before this class existed.
+     *               Anything unsafe in a file name is replaced, so a suffix can lengthen the name but
+     *               never move the file out of the world's directory
      */
-    static Path of(String suffix) {
+    public static Path of(String suffix) {
         Minecraft mc = Minecraft.getInstance();
         Object level = mc.level;
 
@@ -49,7 +57,26 @@ final class WorldFiles {
         }
         Path root = FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID);
         return root.resolve(worldDirectory(root, worldKey(mc)))
-                .resolve(sanitize(dimension) + suffix + ".json");
+                .resolve(sanitize(dimension) + safeSuffix(suffix) + ".json");
+    }
+
+    /**
+     * The suffix with anything unsafe in a file name replaced.
+     *
+     * <p>Not {@link #sanitize}, which turns a blank name into "unknown" and would therefore turn the
+     * road network's empty suffix into {@code unknownownknown.json}. An empty suffix is not a missing
+     * one here -- it is the oldest file this mod has.
+     *
+     * <p>Package-private rather than private so the harness can assert the boundary directly: what an
+     * addon passes through {@code HowToGoApi.dataFile} must lengthen the file name and must not be
+     * able to move it out of the world's directory, and {@link #of} itself cannot be called without a
+     * running game.
+     */
+    static String safeSuffix(String suffix) {
+        if (suffix == null || suffix.isEmpty()) {
+            return "";
+        }
+        return suffix.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     /**

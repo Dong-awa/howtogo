@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.api.DestinationSources;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -639,12 +640,21 @@ public final class DestinationScreen extends Screen {
      * gives {@code hud.howtogo.source.xaero.short}, matching the full label's
      * {@code hud.howtogo.source.xaero} -- so a new source brings its own note simply by shipping that
      * key, and one without the key gets nothing drawn.
+     *
+     * <p>A registered source may name its own key instead, through
+     * {@link bili.dongsz.howtogo.route.DestinationSource#noteKey()}: the convention is keyed on the
+     * first word of the id, which is a fact about this mod's own ids rather than about anybody's. The
+     * source's own answer wins where it gave one; the convention is what the four built-in sources
+     * were built with and what an id that owns no source at all falls back to.
      */
     private static String sourceNote(String source) {
         if (source == null || source.isEmpty()) {
             return "";
         }
-        String key = "hud.howtogo.source." + noteSuffix(source) + ".short";
+        String key = DestinationSources.noteKey(source);
+        if (key.isEmpty()) {
+            key = "hud.howtogo.source." + noteSuffix(source) + ".short";
+        }
         String note = Component.translatable(key).getString();
         // Component.translatable falls back to the key itself when nothing is defined for it, and a
         // raw key printed at the end of a name is worse than printing nothing at all.
@@ -776,6 +786,12 @@ public final class DestinationScreen extends Screen {
         } else {
             List<Destination> matches = new ArrayList<>();
             for (Destination destination : all) {
+                // A source may ask not to be searched: its list is long, untyped and better browsed
+                // by hand, and matching it would bury the names the player meant to find. Not being
+                // searchable is not being hidden -- with an empty query the list is shown whole.
+                if (!DestinationSources.searchable(destination.source())) {
+                    continue;
+                }
                 if (destination.name().toLowerCase(Locale.ROOT).contains(query)
                         || destination.coordinates().contains(query)) {
                     matches.add(destination);

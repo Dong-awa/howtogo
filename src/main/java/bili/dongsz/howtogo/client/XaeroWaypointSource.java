@@ -96,6 +96,24 @@ public final class XaeroWaypointSource implements DestinationSource {
         return "hud.howtogo.source.xaero";
     }
 
+    /**
+     * Waypoints are destinations, not places, and are deliberately not marked.
+     *
+     * <p>They belong to Xaero and carry Xaero's own colours, so drawing one in this mod's place colour
+     * would contradict the list it appears in. Stated rather than left to the interface default: the
+     * default exists for sources that have not thought about it, and this one has.
+     */
+    @Override
+    public boolean marksPlaces() {
+        return false;
+    }
+
+    /** Last of the mod's own sources: waypoints are the least like what this mod is about. */
+    @Override
+    public int priority() {
+        return 30;
+    }
+
     @Override
     public List<Destination> destinations() {
         // Never throws: this runs while the picker is open, so anything unexpected has to come back

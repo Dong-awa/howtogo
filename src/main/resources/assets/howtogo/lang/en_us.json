@@ -142,6 +142,8 @@
   "hud.howtogo.source.mtr.short": " (MTR)",
   "hud.howtogo.source.xaero": "Xaero waypoints",
   "hud.howtogo.source.xaero.short": " (From XMM)",
+  "hud.howtogo.raillayer.create": "Create tracks",
+  "hud.howtogo.raillayer.mtr": "MTR tracks",
   "screen.howtogo.lines": "Transit lines",
   "screen.howtogo.line_list": "Line",
   "screen.howtogo.line_new": "New",

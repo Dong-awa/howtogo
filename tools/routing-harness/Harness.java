@@ -101,6 +101,12 @@ public final class Harness {
         int[] turns = bili.dongsz.howtogo.client.TurnCursorCheck.run();
         checks += turns[0];
         failures += turns[1];
+        int[] addonApi = bili.dongsz.howtogo.api.AddonApiCheck.run();
+        checks += addonApi[0];
+        failures += addonApi[1];
+        int[] addonPath = bili.dongsz.howtogo.client.AddonDataFileCheck.run();
+        checks += addonPath[0];
+        failures += addonPath[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");

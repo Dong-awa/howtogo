@@ -1,5 +1,7 @@
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.api.ApiBootstrap;
+import bili.dongsz.howtogo.api.ClientScheduler;
 import bili.dongsz.howtogo.client.Narration;
 import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
@@ -61,6 +63,12 @@ public final class HowToGo {
         // Registration into Xaero's render pipeline has to wait until Xaero has built its
         // handler, so we poll from the client tick instead of doing it here.
         NeoForge.EVENT_BUS.addListener(RoadLayer::onClientTick);
+        // The addon API's two tick jobs, and in this order: the deferred queue is drained before the
+        // registration event is posted, so work queued by a registration handler waits for the next
+        // tick and ClientScheduler's promise -- "the tick after the one that queued it" -- holds for
+        // addons exactly as it does for this mod's own commands. See ApiBootstrap and ClientScheduler.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> ClientScheduler.tick());
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> ApiBootstrap.fireOnce());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());

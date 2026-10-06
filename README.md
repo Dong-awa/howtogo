@@ -301,6 +301,9 @@ bili.dongsz.howtogo
 ├── HowToGo.java          模组入口、事件注册、配置注册
 ├── HowToGoCommand.java   客户端指令：终端 / 结束导航 / 切换出行方式
 ├── RoadConfig.java       客户端配置
+├── api/                  附属模组 API：HowToGoApi（入口）、DestinationSources（目的地源注册表）、
+│                         WorldDataApi（世界数据快照）、SelfChecks（自检注册表）、
+│                         ClientScheduler（延后一个客户端刻执行）、HowToGoRegistrationEvent
 ├── client/               界面与渲染
 │   ├── DestinationScreen / Destinations / PoiDestinationSource
 │   │   / CreateStationSource / MtrStationSource / XaeroWaypointSource
@@ -332,6 +335,32 @@ bili.dongsz.howtogo
 ```
 
 渲染通过 Xaero 的公开扩展点 `WorldMap.mapElementRenderHandler` 注册，**没有使用 mixin**。
+
+---
+
+## 附属模组 API
+
+给别的模组用的一层，入口是 `bili.dongsz.howtogo.api.HowToGoApi`。纯客户端：附属的 `neoforge.mods.toml` 里按 `modId = "howtogo"`、`type = "required"`、`side = "CLIENT"` 声明依赖，事件订阅用 `Dist.CLIENT`。API 版本是 `HowToGoApi.API_VERSION`：**新增方法不升版本号**，只有「删方法 / 改语义 / 改默认答案」才升——这样「编译时用的 API」和「运行时装的模组」之间的兼容性是一个可以检查的事实。
+
+| 想做的事            | 入口                                                        |
+| --------------- | --------------------------------------------------------- |
+| 提供目的地           | `HowToGoApi.registerDestinationSource(new MySource())`     |
+| 读这一局世界的道路/线路/车站 | `WorldDataApi.roadsSnapshot()` / `linesSnapshot()` / `stations()` |
+| 读自动识别的轨道层       | `WorldDataApi.railLayers()` / `railLayerSegments(id)`      |
+| 存一份自己的数据        | `HowToGoApi.dataFile("-mydata")`                           |
+| 让 `/howtogo selftest` 也检查自己 | `HowToGoApi.registerSelfCheck(...)`              |
+| 在下一个客户端刻做事      | `HowToGoApi.runNextClientTick(...)`                        |
+
+- **目的地源**。实现 `DestinationSource` 即可，注册时机有两个：直接调 `registerDestinationSource`，或在 `HowToGoRegistrationEvent` 里注册——后者在**第一次客户端刻**发出，因为模组构造顺序不是契约：在自己构造器里注册只在「恰好后构造」时成立，否则静默地得到一个空列表。注册表拒绝重复 id（记日志），也拒绝空 id；没有反注册，因为源是「进程里的一个调用方」，不是有生命周期的资源。
+  - `marksPlaces()` 默认 **false**：为 true 的源，它的条目会在**世界地图、导航 HUD 小地图、选择界面地图**三处都画标记，而这三处必须画同一批东西。「是不是地点」以前是本模组里写死的一串 id，所以别的模组的源只会出现在列表里、地图上一个标记也没有——现在这是源自己的答案。`priority()` 排序（内置四个是 0/10/20/30，默认 100 排在它们后面），`searchable()` 管搜索框是否搜它，`noteKey()` 是列表行尾那条灰色小注的翻译键。
+- **世界数据全是快照**。两个 store 换维度/换服务器时是**替换**自己持有的对象，跨维度持有一个引用会指向上一局的数据；所以交出去的只能是调用者独占的那一份。`stations()` 把三种车站（玩家标为「站点」的地点、机械动力车站、MTR 车站）合成同一种 `StationRef`——这是唯一一处「我能从哪儿出发」只需要问一次的地方。机器读来的轨道层**只读**：列出时 `editable` 为 false，写路径拒绝它们，段对象属于那个模组，画它，别改它。
+- **数据文件**。`dataFile(suffix)` 给出 `config/howtogo/<存档>/<维度><suffix>.json`，和本模组自己的数据放在一起，理由也完全相同：联机时客户端根本读不到存档目录，而坐标只在单一维度里才有意义。后缀里任何不适合做文件名的字符会被替换，所以后缀能让文件名变长、不能让文件离开这个存档的目录；空后缀的路径就是路网自己的那份文件，而那份文件按原样保留。
+- **自检**。注册的检查出现在 `/howtogo selftest` 里（抛异常变成一行失败，不会吃掉整份报告）。**不进**启动器驱动的自动化自检（`run-user-test.ps1 -Auto`）：那是本模组自己的构建检查，它的通过与否是个退出码，让别的模组的源把本模组的检查变红是在报告错的模组。
+- **延后一刻执行**。指令是在聊天界面处理那一行的过程中跑的，在那里直接开界面会被旧界面的关闭流程顶掉，看起来像指令没生效。本模组自己为这件事延后过两次，所以把机制交出来，而不是让每个附属再踩一遍。
+
+编译依赖：本模组尚未发布到 Maven，附属目前只能把构建产物 `build/libs/howtogo-<版本>.jar` 以 `compileOnly` 方式参与编译——和本模组对 Xaero 地图 jar 的做法一样。
+
+**这一批还没有的**：注册自己的铁路图层、往地图显示面板加开关、加 HUD 控件、以及新增道路等级/出行方式（后两者是枚举，动它们会碰到存档与配置按名字序列化的契约）。
 
 ---
 
