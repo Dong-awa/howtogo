@@ -68,6 +68,12 @@ public final class Harness {
         int[] rideRoads = bili.dongsz.howtogo.route.RideRoadsCheck.run();
         checks += rideRoads[0];
         failures += rideRoads[1];
+        int[] connectivity = bili.dongsz.howtogo.route.LineConnectivityCheck.run();
+        checks += connectivity[0];
+        failures += connectivity[1];
+        int[] guidance = bili.dongsz.howtogo.route.TransitGuidanceCheck.run();
+        checks += guidance[0];
+        failures += guidance[1];
         int[] oneWay = bili.dongsz.howtogo.road.OneWayCheck.run();
         checks += oneWay[0];
         failures += oneWay[1];

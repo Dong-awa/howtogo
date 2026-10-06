@@ -33,11 +33,13 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
     private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
     private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
+    private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
     private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
+    private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
     private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
     private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
@@ -60,6 +62,17 @@ public final class RoadConfig {
                     defaultTolerance(roadClass), 1.0, 128.0));
         }
         builder.pop();
+
+        STATION_SNAP_BLOCKS = builder.comment(
+                        "How close to a stop of the journey still counts as being at that stop, in",
+                        "blocks. A station is a place and not a point: the platform a player waits on can",
+                        "be a good many blocks from the track's centreline, and an interchange is several",
+                        "such stops standing together. Inside this radius of any stop the journey calls",
+                        "at, the player is treated as being at the station rather than off the route,",
+                        "which is what keeps a platform, a car park and a connecting footbridge from",
+                        "reading as a wrong turn. It is also the radius the station announcements are",
+                        "measured against.")
+                .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
 
         DEFAULT_TRAVEL_MODE = builder.comment(
                         "Travel mode navigation starts in, and the one the estimates are made for.",
@@ -105,6 +118,15 @@ public final class RoadConfig {
                         "anyone would take. Zero is a valid answer for a network where the vehicles are",
                         "always there.")
                 .defineInRange("transit_wait_seconds", 60.0, 0.0, 3600.0);
+
+        TRANSIT_BOARD_ONLY = builder.comment(
+                        "Whether a public transport journey is guided by boarding and alighting only:",
+                        "the readout and the voice name the station to get on at and the one to get off",
+                        "at, and never call a turn. Off by default, because a journey that rides",
+                        "something is still walked to and from it, and the default should be the",
+                        "guidance that says the most. The destination picker carries the same switch,",
+                        "for players who never open this file.")
+                .define("transit_board_only", false);
 
         VOICE_ANNOUNCEMENTS = builder.comment(
                         "Whether navigation events -- the trip being started, the turn ahead, the turn",
@@ -250,11 +272,31 @@ public final class RoadConfig {
     }
 
     /**
-     * Default tolerance before any configuration: proportional to the class's nominal width, since
-     * a road twice as wide is twice as forgiving about where "on it" ends.
+     * Default tolerance before any configuration, per class.
+     *
+     * <h2>Why these are bigger than a road is wide</h2>
+     * A tolerance is not the width of the road, it is how far off the drawn line still counts as being
+     * on it -- and the drawn line is one polyline through the middle of a road the player built, not the
+     * road itself. Getting this too tight is the expensive mistake: a driver on the far carriageway of a
+     * divided highway, a walker on the pavement beside the street, a boat that has drifted off the
+     * centreline of a canal are all still travelling the road they were sent along, and being told they
+     * have left the route every few hundred blocks is a navigation that fights the player. Too wide is
+     * the cheaper mistake: the reading is a little vague about which road is underfoot, and the next
+     * re-plan sorts it out.
+     *
+     * <p>Water is the widest of all, deliberately: a boat is not tied to a line at all, and a canal is
+     * wider than any street. Footpaths stay the tightest because a footpath <em>is</em> narrow, and a
+     * walker who is eight blocks off it has genuinely left it.
      */
     private static double defaultTolerance(RoadClass roadClass) {
-        return Math.max(4.0, Math.round(roadClass.width() * 1.6));
+        return switch (roadClass) {
+            case HIGHWAY -> 24.0;
+            case ROAD -> 16.0;
+            case PATH -> 8.0;
+            case RAIL -> 16.0;
+            case WATER -> 32.0;
+            case ICE -> 12.0;
+        };
     }
 
     /** Tolerance for the given class, falling back to a sane value before configs have loaded. */
@@ -361,6 +403,36 @@ public final class RoadConfig {
             return VOICE_ANNOUNCEMENTS.get();
         } catch (IllegalStateException notLoadedYet) {
             return false;
+        }
+    }
+
+    /**
+     * Whether a transit journey is guided by boarding and alighting only, off before the config loads.
+     *
+     * <p>Only the declared default, like the voice switch beside it: the picker's own switch keeps the
+     * player's answer in the preference store, which falls back to this whenever there is none.
+     */
+    public static boolean transitBoardOnly() {
+        try {
+            return TRANSIT_BOARD_ONLY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+
+    /**
+     * How close to a stop of the journey counts as being at that stop, in blocks.
+     *
+     * <p>Read by the navigation when it decides whether the player has left the route: inside this
+     * radius of any stop the journey calls at -- a platform, a second platform at the same interchange,
+     * the forecourt -- the player is at the station and not off the route. See the class's own note on
+     * why a station is a place rather than a point.
+     */
+    public static double stationSnapBlocks() {
+        try {
+            return STATION_SNAP_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 32.0;
         }
     }
 

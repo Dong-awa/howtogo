@@ -4,7 +4,9 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
+import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.LinePlanner;
+import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
@@ -433,6 +435,13 @@ public final class TransitLineScreen extends Screen {
             graphics.drawString(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_broken").getString(), noteRoom),
                     noteX, panelY + PAD, 0xFFFF8060, false);
+        } else if (hasUnjudgedPair()) {
+            // Not silence, because "the mod cannot tell" is itself worth saying -- a line of a kind the
+            // world has no roads of is the case this catches -- and not the red note either, which would
+            // be an accusation the network does not support.
+            graphics.drawString(this.font, this.font.plainSubstrByWidth(
+                            Component.translatable("screen.howtogo.line_unjudged").getString(), noteRoom),
+                    noteX, panelY + PAD, 0xFFFFC060, false);
         }
 
         super.render(graphics, mouseX, mouseY, partialTick);
@@ -680,14 +689,17 @@ public final class TransitLineScreen extends Screen {
         return candidates;
     }
 
-    /** Which neighbouring stops a ride can connect, with the line state they were computed for. */
+    /** The line and the world the verdicts in {@link #rideable} were worked out for. */
     private String rideSignature = "";
     /**
-     * Whether each neighbouring pair of stops can be ridden, one entry per gap.
+     * How each neighbouring pair of stops stands to the line, one entry per gap.
      *
-     * <p>Three states rather than two, because the answer is now worked out over several frames: a pair
-     * nobody has planned yet is not a pair that cannot be ridden, and marking it red would be the one
-     * readout on this screen that says a line is broken saying it about a line that is fine so far.
+     * <p>Four states rather than two, because two different things must not read the same. A pair
+     * nobody has judged yet is not a pair that is broken, and a pair the network cannot judge at all --
+     * no road of the line's kind anywhere near it -- is not broken either; only
+     * {@link #RIDE_BROKEN} is, and only a pair whose two stops really are on separate pieces of the
+     * roads this line runs on. Everything else would be the one readout on this screen that says a line
+     * is broken saying it about a line that is fine.
      */
     private byte[] rideable = new byte[0];
     /** The next gap to plan, so the work is picked up where the last frame left it. */
@@ -700,65 +712,55 @@ public final class TransitLineScreen extends Screen {
 
     private static final byte RIDE_UNKNOWN = 0;
     private static final byte RIDE_OK = 1;
+    /** The two stops are on separate pieces of the roads this line runs on: the one red state. */
     private static final byte RIDE_BROKEN = 2;
+    /**
+     * No road of this line's kind is near enough to one of the two stops to judge, so the screen says
+     * nothing about this pair rather than calling it broken.
+     *
+     * <p>The commonest cause is a line whose kind is simply not there -- a water line over a world with
+     * no waterways, an imported line whose own track has not been read yet -- and the second is a
+     * station whose representative point stands well off the track it serves. Neither is a
+     * disconnection, and a red mark on either is the false alarm this state exists to remove.
+     */
+    private static final byte RIDE_UNJUDGED = 3;
 
     /**
-     * How many pairs of neighbouring stops one frame may plan.
+     * How many pairs of neighbouring stops one frame may judge.
      *
-     * <p>Each pair is a route over the world, so a line of forty stops is forty routes, and doing them
-     * all inside the frame that noticed the edit is a frozen picture for as long as they take -- on a
-     * whole-railway network, seconds. Four per frame fills a screenful of stop rows in about a tenth of
-     * a second and never blocks; the red marks appear as they are worked out rather than all at once,
-     * which is also the honest order for them to appear in.
+     * <p>Each pair is a reading of the world's roads, and the first one pays for building the graph
+     * they are all read from, so a line of forty stops is forty of those work; doing them all inside
+     * the frame that noticed the edit is a frozen picture for as long as it takes. Four per frame fills
+     * a screenful of stop rows in about a tenth of a second and never blocks; the red marks appear as
+     * they are worked out rather than all at once, which is also the honest order for them to appear in.
      */
     private static final int RIDE_PLANS_PER_FRAME = 4;
 
     /**
-     * Marks which neighbouring stops a ride can actually connect, so that a wrong line type is visible
-     * instead of mysterious.
+     * Marks the stops that are genuinely not connected to the one above, so that a real break in a line
+     * is visible instead of mysterious.
      *
-     * <p>Each pair is planned exactly as the router will plan it later -- the line's own class and
-     * nothing else -- so what the editor marks broken is what the router will refuse. Without it the
-     * only symptom of a mis-typed line is "public transport has no route", which says nothing about
-     * which line, or which stretch of it, is at fault.
+     * <p>What is asked is whether the two stops are connected on the roads this line runs on, not
+     * whether a ride between them can be planned. The two answers differ, and reading the second as the
+     * first is what this screen used to do: a plan is refused for a connector longer than the mode
+     * allows, for a one-way facing the way the journey has to go, for an endpoint the router's own
+     * fallback declines to reach -- and none of those is a disconnection, so a line that runs perfectly
+     * well came out red. See {@link RoadRouter.Connection}.
      *
-     * <p>Recomputed only when the kind or the stops change, because each pair costs one route. The
-     * signature is what notices the change, which is cheaper and less forgetful than calling this from
-     * every place that can edit a line.
+     * <p>Recomputed only when {@link #rideSignature} says the line or the world under it has moved,
+     * because each pair costs one reading of the roads. The signature is what notices the change, which
+     * is cheaper and less forgetful than calling this from every place that can edit a line or a road.
      */
     private void refreshRideable() {
         TransitLine line = selected();
-        RoadClass kind = line == null ? null : line.kind();
-        TravelMode mode = kind == null ? null : LinePlanner.rideMode(kind);
-        RoutePreferences policy = kind == null ? null
-                : LinePlanner.ridePreferences(kind, RoutePreferenceStore.preferences());
-        // The roads the pairs are planned on, resolved before the signature rather than after it: the
-        // signature has to name the version of those roads as well as the line's own shape, or a pair
-        // the player has just connected stays red until the line itself is edited -- the road they have
-        // just drawn is not part of a signature made of stop coordinates.
-        RoadNetwork network = kind == null ? null
-                : RailTrackStore.forRouting(mode, policy, MtrTransit.marksEnabled(line));
-
-        StringBuilder signature = new StringBuilder();
-        if (line != null) {
-            signature.append(line.id()).append(kind.name());
-            // Whether the line rides its own marks decides which roads the pairs are planned on, so a
-            // switch that changed the answer has to re-plan them.
-            signature.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
-            for (LineStop stop : line.stops()) {
-                signature.append('|').append(stop.x()).append(',').append(stop.z());
-            }
-            // The version of the road network, which is what makes the player's own repair visible here.
-            // Same pair of numbers the map layers key their own caches on.
-            signature.append('#').append(network.segmentCount()).append(':').append(network.revision());
-        }
-        if (signature.toString().equals(rideSignature)) {
+        String signature = rideSignature(line);
+        if (signature.equals(rideSignature)) {
             // The same line over the same roads: carry on with the pairs the last frames had not got
             // to, and do nothing at all once there are none.
             planSomeGaps();
             return;
         }
-        rideSignature = signature.toString();
+        rideSignature = signature;
         rideable = new byte[0];
         rideCursor = 0;
         rideWorkspace = null;
@@ -766,9 +768,20 @@ public final class TransitLineScreen extends Screen {
         if (line == null || line.stopCount() < 2) {
             return;
         }
-        // One workspace for the whole line: every pair is anchored to the same handful of stops, and a
-        // shared workspace means the segment splits behind those anchors are paid once rather than
-        // once per pair. Built once and kept, because the pairs are now planned across frames.
+        RoadClass kind = line.kind();
+        TravelMode mode = LinePlanner.rideMode(kind);
+        RoutePreferences policy = LinePlanner.ridePreferences(kind, RoutePreferenceStore.preferences());
+        // The very network the planner will ride this line on, asked of the same class that answers the
+        // planner: a line whose marks are switched off is judged on the roads without them, and an
+        // imported line whose own track is known is judged on that track rather than on the shared
+        // layer of every line's rails. Building a network here instead was how an imported line whose
+        // own track the mod has in hand came out red on a railway it plainly runs along.
+        RoadNetwork network = RideRoads.of(
+                RailTrackStore.forRouting(mode, policy, true),
+                RailTrackStore.forRouting(mode, policy, false),
+                MtrTransit::marksEnabled, MtrTransit::trackOf).forLine(line);
+        // One workspace for the whole line, kept across frames: the first pair pays for building the
+        // graph every pair is read from, and the workspace holds it for the rest.
         rideWorkspace = new RoadRouter.Workspace(network);
         rideMode = mode;
         ridePolicy = policy;
@@ -778,7 +791,46 @@ public final class TransitLineScreen extends Screen {
     }
 
     /**
-     * Works out a few more neighbouring pairs, or none when there are no pairs left.
+     * What the verdicts were worked out for: the line as it stands, and the world under it.
+     *
+     * <h2>Why the world's own versions are named here</h2>
+     * The line's own shape -- its id, its kind, where its stops are -- is the obvious half, and the
+     * flags that decide which roads it rides are in it because turning one of them changes the answer.
+     * The other half was there before and did not work: it used the merged network's segment count and
+     * revision, and a merged network is built by copying the world's elements into a fresh one, so its
+     * revision described the copy's own numbering rather than the world's edits. Moving a rail so two
+     * ends met, changing a road's class to rail, or marking a street one-way therefore left the
+     * signature unchanged and the red mark standing on a line the player had just repaired.
+     *
+     * <p>What is named instead is each thing that can move the answer, from its own source: the
+     * hand-drawn network's revision, which moves for every edit that can change a route; the two
+     * counters that move for the two things a revision deliberately does not count, a one-way flag and
+     * a storey (see {@link RoadSegment#directionChanges} and {@link RoadSegment#layerChanges}); the
+     * version of the layer of rails read out of the world, which is rebuilt whole rather than edited;
+     * and the version of the tracks read out of MTR, which arrive a reading at a time.
+     */
+    private String rideSignature(TransitLine line) {
+        if (line == null) {
+            return "";
+        }
+        StringBuilder signature = new StringBuilder();
+        signature.append(line.id()).append(line.kind().name());
+        // Whether the line rides its own marks decides which roads the pairs are judged on, so a
+        // switch that changed the answer has to judge them again.
+        signature.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
+        for (LineStop stop : line.stops()) {
+            signature.append('|').append(stop.x()).append(',').append(stop.z());
+        }
+        signature.append('#').append(RoadStore.get().revision())
+                .append(':').append(RoadSegment.directionChanges())
+                .append(':').append(RoadSegment.layerChanges())
+                .append(':').append(RailTrackStore.layerVersion())
+                .append(':').append(MtrTransit.tracksVersion());
+        return signature.toString();
+    }
+
+    /**
+     * Judges a few more neighbouring pairs, or none when there are no pairs left.
      *
      * <p>Called from the render pass, which is why it is bounded: see {@link #RIDE_PLANS_PER_FRAME}.
      */
@@ -786,22 +838,41 @@ public final class TransitLineScreen extends Screen {
         if (rideLine == null || rideWorkspace == null || rideCursor >= rideable.length) {
             return;
         }
-        int planned = 0;
-        while (rideCursor < rideable.length && planned < RIDE_PLANS_PER_FRAME) {
+        int judged = 0;
+        while (rideCursor < rideable.length && judged < RIDE_PLANS_PER_FRAME) {
             int i = rideCursor++;
             LineStop from = rideLine.stops().get(i);
             LineStop to = rideLine.stops().get(i + 1);
-            boolean canRide = RoadRouter.findRoute(rideWorkspace, from.x(), from.z(), to.x(), to.z(),
-                    "", rideMode, ridePolicy).isPresent();
-            rideable[i] = canRide ? RIDE_OK : RIDE_BROKEN;
-            planned++;
+            rideable[i] = switch (RoadRouter.connection(rideWorkspace, from.x(), from.z(),
+                    to.x(), to.z(), rideMode, ridePolicy)) {
+                case CONNECTED -> RIDE_OK;
+                case SEPARATE -> RIDE_BROKEN;
+                case UNJUDGED -> RIDE_UNJUDGED;
+            };
+            judged++;
         }
     }
 
-    /** Whether any neighbouring pair on this line cannot be ridden. */
+    /** Whether any neighbouring pair on this line is genuinely not connected. */
     private boolean hasBrokenPair() {
         for (byte state : rideable) {
             if (state == RIDE_BROKEN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether any neighbouring pair could not be judged at all.
+     *
+     * <p>Shown as its own note rather than as a red mark: a stop the network cannot judge has no road
+     * of the line's kind near it, which is a thing worth saying -- a water line over a world with no
+     * waterways is exactly this -- but it is not a disconnection and must not be painted as one.
+     */
+    private boolean hasUnjudgedPair() {
+        for (byte state : rideable) {
+            if (state == RIDE_UNJUDGED) {
                 return true;
             }
         }

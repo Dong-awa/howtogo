@@ -15,6 +15,7 @@ import bili.dongsz.howtogo.route.RouteFailure;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.route.Trip;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
@@ -46,6 +47,18 @@ public final class Navigation {
     private static final double ARRIVAL_DISTANCE = 12.0;
 
     /**
+     * How close to a stop the player has to be for the vehicle to count as standing at it.
+     *
+     * <p>The same order of size as the destination's own arrival distance, and for the same reason: a
+     * platform is a place a dozen blocks across, and the drawn line runs through the middle of the
+     * station rather than along the edge of the platform a player steps onto. This is what the "get off
+     * here" call is measured by -- see {@link #arrivedAt} -- and it is deliberately smaller than the
+     * station snap the off-route test uses: standing somewhere in the station's grounds is being at the
+     * station, but arriving is being on the platform.
+     */
+    private static final double STOP_ARRIVAL_DISTANCE = 12.0;
+
+    /**
      * How long the player must stay off route before it is re-planned.
      *
      * <p>A single sample is not enough. Crossing a junction, clipping a corner or cutting a bend
@@ -59,6 +72,16 @@ public final class Navigation {
 
     private static Destination target;
     private static Route route = Route.empty();
+    /**
+     * The journey the live route was flattened from, or null when the live route is not a public
+     * transport one.
+     *
+     * <p>Kept beside the route rather than inside it because a route is one path in one mode and cannot
+     * say where the riding begins -- see {@link Trip}. Without it, a transit trip can be guided only by
+     * the turns of its walking legs, because the boarding and alighting points were flattened away.
+     * Written by {@link #recomputeFrom} alone, and cleared whenever the route stops being that journey.
+     */
+    private static Trip transitTrip;
     private static double routeOriginX = Double.NaN;
     private static double routeOriginZ = Double.NaN;
 
@@ -256,6 +279,7 @@ public final class Navigation {
     public static void clear() {
         target = null;
         route = Route.empty();
+        transitTrip = null;
         routeOriginX = Double.NaN;
         routeOriginZ = Double.NaN;
         tripOriginX = Double.NaN;
@@ -359,6 +383,7 @@ public final class Navigation {
             arrivedAtMillis = System.currentTimeMillis();
             HowToGo.LOGGER.info("[HowToGo] arrived at {}", target.name());
             route = Route.empty();
+            transitTrip = null;
             return true;
         }
         return false;
@@ -960,7 +985,42 @@ public final class Navigation {
      * values are configurable per class.
      */
     private static boolean isOffRoute(double x, double z) {
-        return route.isPresent() && route.distanceTo(x, z) > route.toleranceNear(x, z);
+        if (!route.isPresent()) {
+            return false;
+        }
+        if (route.distanceTo(x, z) <= route.toleranceNear(x, z)) {
+            return false;
+        }
+        // A station is a place, not a point: standing on the platform, in the forecourt or on the
+        // footbridge of a stop the journey calls at is being where the journey asked, however far that
+        // is from the track's centreline. Without this, every station the route serves re-planned the
+        // trip out from under the player the moment they stepped off the line's own tolerance.
+        return !atAJourneyStop(x, z);
+    }
+
+    /**
+     * Whether the position is within the station snap of any stop the journey calls at.
+     *
+     * <p>Every stop of every ride, so the several stops that make up an interchange are all covered:
+     * an interchange is one place assembled out of two or more lines' stops, and a player standing at
+     * the far platform of it is at the station just as much as at the near one.
+     */
+    private static boolean atAJourneyStop(double x, double z) {
+        if (transitTrip == null) {
+            return false;
+        }
+        double snap = RoadConfig.stationSnapBlocks();
+        double snapSq = snap * snap;
+        for (Trip.Ride ride : transitTrip.rides()) {
+            for (Trip.RideStop stop : ride.stops()) {
+                double dx = stop.x() - x;
+                double dz = stop.z() - z;
+                if (dx * dx + dz * dz <= snapSq) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** True when the player has currently strayed further from the line than the tolerance. */
@@ -1342,6 +1402,10 @@ public final class Navigation {
      * straight on", which is the one answer that is actively wrong for a player going the wrong way.
      */
     public static String instructionText() {
+        TransitStep transit = transitStep();
+        if (transit != null) {
+            return transitSentence(transit);
+        }
         Uturn uturn = wrongWayUturn();
         if (uturn != null) {
             return uturnSentence(uturn.distanceAhead(),
@@ -1353,6 +1417,183 @@ public final class Navigation {
             return uturnSentence(Double.NaN, true, onHighway());
         }
         return maneuverInstruction(nextManeuver());
+    }
+
+    /**
+     * Whether the station-style transit guidance is in force at all: the player has asked for it, the
+     * route being navigated is a public transport journey, and that journey rides something.
+     *
+     * <p>Only the riding is governed by it. A journey is walked to its first stop and away from its
+     * last, and those legs are ordinary walking -- turns and all -- because that is what they are. What
+     * the switch changes is what is said <em>while there is a line to be on</em>.
+     */
+    public static boolean transitGuidance() {
+        return RoutePreferenceStore.transitBoardOnly() && route.isPresent() && transitTrip != null
+                && transitTrip.ridesAnything();
+    }
+
+    /**
+     * What the transit guidance is about at this moment.
+     */
+    public enum TransitCue {
+
+        /** Walking to a line's first stop of this boarding: say which line and which way. */
+        BOARD,
+
+        /** On board, between two stops: say which stop is coming and what is left. */
+        RIDE,
+
+        /** On board and one stop from getting off: say it is time to get ready. */
+        ALIGHT,
+
+        /** The same, at a stop where the journey changes lines. */
+        TRANSFER,
+
+        /** Standing at the stop this ride is left at: get off here. */
+        ARRIVE
+    }
+
+    /**
+     * One thing the transit guidance has to say: which line and direction are in force, the stations
+     * being named, the stop being run to, and what is left of the ride.
+     *
+     * @param cue            what kind of moment this is
+     * @param line           the line ridden, or the one about to be boarded
+     * @param terminus       the stop at the far end of that line in the direction of travel
+     * @param station        the stop this cue is about: the one boarded at, or the one left at
+     * @param reached        the last stop the ride has called at, which is where the vehicle is now
+     * @param next           the stop being run to, or null when there is none
+     * @param stopsRemaining how many stops are left before the one this ride is left at
+     * @param distanceAhead  blocks along the journey to the point this cue is about
+     * @param rideIndex      which ride of the journey this is, or -1 when it has not begun
+     * @param stopIndex      which stop of that ride the reading is at, so a repeat can be told from a
+     *                       new stop
+     */
+    public record TransitStep(TransitCue cue, String line, String terminus, String station,
+                              String reached, String next, int stopsRemaining, double distanceAhead,
+                              int rideIndex, int stopIndex) {
+    }
+
+    /** What the transit guidance is saying now, or null when the ordinary guidance is in force. */
+    public static TransitStep transitStep() {
+        if (!transitGuidance()) {
+            return null;
+        }
+        Trip trip = transitTrip;
+        List<Trip.Ride> rides = trip.rides();
+        double travelled = travelled();
+        LocalPlayer player = Minecraft.getInstance().player;
+        double x = player == null ? Double.NaN : player.getX();
+        double z = player == null ? Double.NaN : player.getZ();
+
+        // Arriving at the stop being got off at comes first, and outranks "still on the way to it":
+        // this is the moment the player has to act, and it is the one moment the guidance used to miss
+        // -- the approach line had already been said, and the ride's own readout stops the instant the
+        // stop is reached.
+        int arrived = arrivedAt(rides, travelled, x, z);
+        if (arrived >= 0) {
+            Trip.Ride ride = rides.get(arrived);
+            Trip.RideStop stop = ride.stops().get(ride.stops().size() - 1);
+            return new TransitStep(TransitCue.ARRIVE, ride.line(), ride.terminus(), stop.name(),
+                    stop.name(), null, 0, 0, arrived, ride.stops().size() - 1);
+        }
+
+        int index = trip.rideIndexAt(travelled);
+        if (index >= 0) {
+            Trip.Ride ride = rides.get(index);
+            int last = ride.stops().size() - 1;
+            int passed = Math.max(0, ride.stopPassed(travelled));
+            String left = ride.stops().get(last).name();
+            String reached = ride.stops().get(passed).name();
+            if (ride.approachingAlighting(travelled)) {
+                Trip.Ride next = index + 1 < rides.size() ? rides.get(index + 1) : null;
+                return next == null
+                        ? new TransitStep(TransitCue.ALIGHT, ride.line(), ride.terminus(), left,
+                                reached, null, ride.stopsRemaining(travelled),
+                                ride.alightAt() - travelled, index, passed)
+                        : new TransitStep(TransitCue.TRANSFER, next.line(), next.terminus(), left,
+                                reached, null, ride.stopsRemaining(travelled),
+                                ride.alightAt() - travelled, index, passed);
+            }
+            Trip.RideStop upcoming = ride.nextStop(travelled);
+            return new TransitStep(TransitCue.RIDE, ride.line(), ride.terminus(), left, reached,
+                    upcoming == null ? left : upcoming.name(), ride.stopsRemaining(travelled),
+                    upcoming == null ? 0 : upcoming.at() - travelled, index, passed);
+        }
+        // On foot. The next boarding is worth saying once it is close enough to act on, and the rest of
+        // the walk is the ordinary walking guidance.
+        Trip.Ride next = trip.nextRide(travelled);
+        if (next != null && next.boardAt() - travelled <= turnNowDistance()) {
+            return new TransitStep(TransitCue.BOARD, next.line(), next.terminus(), next.boardedAt(),
+                    next.boardedAt(), null, Math.max(0, next.stops().size() - 1),
+                    Math.max(0, next.boardAt() - travelled), trip.indexOfRide(next), 0);
+        }
+        return null;
+    }
+
+    /**
+     * The ride whose stop being got off at the player is standing at, or -1.
+     *
+     * <p>By position rather than by distance along the route, because the ride is over the instant its
+     * last stop is reached: the distance comparison that says "on the vehicle" stops being true exactly
+     * where this question begins. A platform is a place, so the test is the same one the rest of the
+     * navigation makes about being at a stop -- how close the player is to it.
+     *
+     * <p>The newest such ride wins, so a journey that has just changed lines reports the platform it is
+     * standing on rather than the one it left several stops ago.
+     */
+    private static int arrivedAt(List<Trip.Ride> rides, double travelled, double x, double z) {
+        if (Double.isNaN(x) || Double.isNaN(z)) {
+            return -1;
+        }
+        for (int i = rides.size() - 1; i >= 0; i--) {
+            Trip.Ride ride = rides.get(i);
+            if (ride.alightAt() > travelled + 1.0) {
+                // Not reached yet, so this is a stop still to come rather than one to get off at.
+                continue;
+            }
+            if (travelled - ride.alightAt() > STOP_ARRIVAL_DISTANCE) {
+                // Reached, and the walk away from it has begun: the next thing is boarding, not getting
+                // off, and holding this cue any longer would keep the readout on the platform the player
+                // has already left.
+                continue;
+            }
+            Trip.RideStop stop = ride.stops().get(ride.stops().size() - 1);
+            if (Math.hypot(stop.x() - x, stop.z() - z) <= STOP_ARRIVAL_DISTANCE) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The readout line for a transit cue, for the panel and the map label alike.
+     *
+     * <p>No distance is in the words: both readouts have a slot of their own for the number. The
+     * spoken form carries it, because a phrase is heard on its own -- see Narration.
+     */
+    public static String transitSentence(TransitStep step) {
+        if (step == null) {
+            return "";
+        }
+        return switch (step.cue()) {
+            case BOARD -> Component.translatable("hud.howtogo.transit_board_line",
+                    named(step.line()), named(step.terminus())).getString();
+            case RIDE -> Component.translatable("hud.howtogo.transit_riding", named(step.next()),
+                    step.stopsRemaining(), named(step.station())).getString();
+            case ALIGHT -> Component.translatable("hud.howtogo.transit_approach",
+                    named(step.station())).getString();
+            case TRANSFER -> Component.translatable("hud.howtogo.transit_approach_transfer",
+                    named(step.station()), named(step.line()), named(step.terminus())).getString();
+            case ARRIVE -> Component.translatable("hud.howtogo.transit_arrive",
+                    named(step.station())).getString();
+        };    }
+
+    /** What a name that may be missing is called, so a sentence never quietly loses its subject. */
+    public static String named(String name) {
+        return name == null || name.isBlank()
+                ? Component.translatable("hud.howtogo.unnamed_station").getString()
+                : name;
     }
 
     /**
@@ -1486,7 +1727,7 @@ public final class Navigation {
                 || !MtrTransit.everyLineRidesItsOwnTrack(linesInPlay());
         RoadNetwork network = RailTrackStore.forRouting(active, policy, wantsMarks);
 
-        Route planned = planRoute(network, active, policy, x, z, destination);
+        Route planned = planRoute(network, active, policy, x, z, destination).route();
         if (!planned.isPresent() && active != TravelMode.WALK
                 && RoadConfig.fallBackToWalkingWhenSlower()) {
             // The same comparison the live route makes, so that the line the picker draws is the line
@@ -1576,7 +1817,12 @@ public final class Navigation {
         // riding begins, and the requirement is that it begins and ends at a station. The plain route
         // is still the fallback, so a world with no station near either end behaves as it did before
         // rather than reporting that there is no way to go.
-        Route planned = planRoute(usable, active, preferences, x, z, target);
+        Planned planned = planRoute(usable, active, preferences, x, z, target);
+        Route plannedRoute = planned.route();
+        // The journey behind the route, when there is one: what the board-and-alight guidance reads.
+        // Taken before the walking comparison below, because a route that turns out to be a walk is not
+        // that journey and must not be guided as one.
+        transitTrip = planned.trip();
         clearFallback();
 
         // Walking is the comparison every mode has to beat, so it is planned whenever the player
@@ -1587,7 +1833,7 @@ public final class Navigation {
             Route onFoot = RoadRouter.findRoute(
                     RailTrackStore.forRouting(TravelMode.WALK, preferences),
                     x, z, target.x(), target.z(), target.name(), TravelMode.WALK, preferences);
-            if (onFoot.isPresent() && losesToWalking(planned, onFoot)) {
+            if (onFoot.isPresent() && losesToWalking(plannedRoute, onFoot)) {
                 // A public transport journey that exists is not taken away from the player because
                 // the walk is quicker. They asked to go by line, and a route that quietly becomes a
                 // walk down the road is indistinguishable from the mode being broken -- which is
@@ -1596,21 +1842,24 @@ public final class Navigation {
                 // offer, not a replacement. A journey the lines cannot carry at all is still
                 // answered with the walk, and every other mode keeps the old rule -- that is what
                 // stops a drive being planned as a walk across a field.
-                if (active == TravelMode.TRANSIT && planned.isPresent()) {
+                if (active == TravelMode.TRANSIT && plannedRoute.isPresent()) {
                     HowToGo.LOGGER.info(
                             "[HowToGo] transit is slower than walking ({} vs {}); keeping transit, "
                                     + "the walk is an alternative rather than a replacement",
-                            Route.formatDuration(planned.estimatedSeconds()),
+                            Route.formatDuration(plannedRoute.estimatedSeconds()),
                             Route.formatDuration(onFoot.estimatedSeconds()));
                 } else {
-                    noteFallback(active, planned, onFoot, preferences);
+                    noteFallback(active, plannedRoute, onFoot, preferences);
                     route = onFoot;
+                    // A walk is not the journey the transit guidance is about, even when the mode
+                    // still says public transport: the boarding it would name is not on this route.
+                    transitTrip = null;
                     logRoute(preferences);
                     return;
                 }
             }
         }
-        route = planned;
+        route = plannedRoute;
         logRoute(preferences);
     }
 
@@ -1634,6 +1883,17 @@ public final class Navigation {
     }
 
     /**
+     * A plan: the route to draw and follow, and the journey it was flattened from.
+     *
+     * <p>The journey travels with the route because the route cannot say where the riding begins -- see
+     * {@link Trip} -- and the two must be the same plan: a caller that planned twice, once for each,
+     * could guide a journey it is not navigating. Null for every mode but public transport, which is
+     * the only one whose plan is a journey of legs at all.
+     */
+    private record Planned(Route route, Trip trip) {
+    }
+
+    /**
      * Plans a route in one mode, as a public transport journey when that is the mode.
      *
      * <p>One place, because the preview and the live route must agree. The picker draws this plan and
@@ -1646,8 +1906,9 @@ public final class Navigation {
      * unreachable, or which has none, behaves as it did before instead of reporting that there is no
      * way to go.
      */
-    private static Route planRoute(RoadNetwork network, TravelMode mode, RoutePreferences preferences,
-                                   double x, double z, Destination target) {
+    private static Planned planRoute(RoadNetwork network, TravelMode mode,
+                                     RoutePreferences preferences, double x, double z,
+                                     Destination target) {
         if (mode == TravelMode.TRANSIT) {
             // No fallback of any kind. Public transport is the lines in play -- the player's own and
             // the ones read out of MTR -- and a route that boards at the nearest point of a line nobody
@@ -1667,17 +1928,22 @@ public final class Navigation {
             boolean ownTracksOnly = MtrTransit.everyLineRidesItsOwnTrack(lines);
             RoadNetwork plain = ownTracksOnly ? network
                     : RailTrackStore.forRouting(mode, preferences, false);
-            Route byTransit = TransitPlanner.planRoute(
+            // Planned as a journey and then flattened, rather than asked for as a route: the boarding
+            // and alighting stations are what the board-and-alight guidance names, and they exist only
+            // on the journey. Both callers therefore go through the same two calls, so the route the
+            // picker previews and the route the HUD follows cannot come from different plans.
+            Trip trip = TransitPlanner.plan(
                     RideRoads.of(network, plain, MtrTransit::marksEnabled, MtrTransit::trackOf), lines,
                     x, z, target.x(), target.z(), target.name(), preferences);
-            if (!byTransit.isPresent()) {
+            if (!trip.isPresent()) {
                 HowToGo.LOGGER.info("[HowToGo] public transport: no journey over {} line(s)",
                         lines.size());
+                return new Planned(Route.empty(), null);
             }
-            return byTransit;
+            return new Planned(TransitPlanner.asRoute(trip, target.name()), trip);
         }
-        return RoadRouter.findRoute(network, x, z, target.x(), target.z(), target.name(), mode,
-                preferences);
+        return new Planned(RoadRouter.findRoute(network, x, z, target.x(), target.z(), target.name(),
+                mode, preferences), null);
     }
 
     /**

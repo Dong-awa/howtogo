@@ -585,6 +585,21 @@ public final class RailTrackStore {
         return stations;
     }
 
+    /**
+     * Bumped whenever the layer is replaced.
+     *
+     * <p>The layer is rebuilt whole rather than edited, so its own revision says nothing a reader can
+     * use: every build numbers its segments from scratch, which is why a caller caching something
+     * worked out from the layer needs a version of the layer itself. Both accessors below are on the
+     * render thread, where every build is adopted.
+     */
+    private static int layerStamp;
+
+    /** A version of the layer, so a reader can tell one build from the next. */
+    public static int layerVersion() {
+        return layerStamp;
+    }
+
     /** Whether the layer has anything in it and is switched on. */
     public static boolean active() {
         return RoadConfig.createTrainTracks() && coarse.segmentCount() > 0;
@@ -624,6 +639,7 @@ public final class RailTrackStore {
      */
     private static void adopt(RoadNetwork built) {
         coarse = built;
+        layerStamp++;
         RailNameStore.apply(coarse);
     }
 

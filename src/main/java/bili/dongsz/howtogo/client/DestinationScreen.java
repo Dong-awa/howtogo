@@ -274,6 +274,8 @@ public final class DestinationScreen extends Screen {
     private int modeY;
     private int preferenceY;
     private int classY;
+    /** The transit guidance switch's own row, under the avoid-class row. */
+    private int transitY;
     private int footerY;
     private int previewY;
     /**
@@ -304,6 +306,8 @@ public final class DestinationScreen extends Screen {
     private int gap;
     private int preferenceRowHeight;
     private int classRowHeight;
+    /** Height of the transit guidance row, which follows the other two through the packing rule. */
+    private int transitRowHeight;
     private int visibleRows;
     /**
      * Height of one list row, which the band's remainder is shared out over.
@@ -374,7 +378,12 @@ public final class DestinationScreen extends Screen {
         modeY = previewY + PREVIEW_LINE_HEIGHT + gap;
         preferenceY = modeY + MODE_ROW_HEIGHT + gap;
         classY = preferenceY + preferenceRowHeight + gap;
-        footerY = classY + classRowHeight + gap;
+        // The transit guidance switch has a row of its own rather than a fourth chip beside the other
+        // three: at the panel's narrowest the three already only just fit, and a fourth would cut every
+        // label on the row down to two or three letters. One row of its own reads in both languages and
+        // leaves room for the next switch that belongs to one mode rather than to every plan.
+        transitY = classY + classRowHeight + gap;
+        footerY = transitY + transitRowHeight + gap;
 
         // The mode buttons share one row with a short caption; the widths are derived here, once,
         // so the drawing and the hit tests cannot disagree about where the controls are. The
@@ -481,13 +490,14 @@ public final class DestinationScreen extends Screen {
         gap = GAP;
         preferenceRowHeight = PREFERENCE_ROW_HEIGHT;
         classRowHeight = CLASS_ROW_HEIGHT;
+        transitRowHeight = PREFERENCE_ROW_HEIGHT;
         // The bottom group -- the readout and everything under it -- is measured first and then
         // anchored: the columns get whatever is left above it. That is what puts the controls against
         // the panel's bottom edge rather than just under the list, and it is also what keeps them on
-        // the panel, since the band they are subtracted from is the panel itself. Four gaps between
-        // the five elements of the group, and the footer's own padding below it.
+        // the panel, since the band they are subtracted from is the panel itself. Five gaps between
+        // the six elements of the group, and the footer's own padding below it.
         int bottomGroup = PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight
-                + classRowHeight + FOOTER_HEIGHT + PADDING + gap * 4;
+                + classRowHeight + transitRowHeight + FOOTER_HEIGHT + PADDING + gap * 5;
         int panel = clamp(height - MARGIN * 2, MIN_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, height));
         int band = panel - (headerHeight() + bottomGroup + gap);
         if (band < MIN_MAP_HEIGHT + MIN_LIST_ROW) {
@@ -496,8 +506,9 @@ public final class DestinationScreen extends Screen {
             gap = GAP_PACKED;
             preferenceRowHeight = PREFERENCE_ROW_PACKED;
             classRowHeight = CLASS_ROW_PACKED;
+            transitRowHeight = PREFERENCE_ROW_PACKED;
             bottomGroup = PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight
-                    + classRowHeight + FOOTER_HEIGHT + PADDING + gap * 4;
+                    + classRowHeight + transitRowHeight + FOOTER_HEIGHT + PADDING + gap * 5;
             band = panel - (headerHeight() + bottomGroup + gap);
         }
 
@@ -738,10 +749,10 @@ public final class DestinationScreen extends Screen {
         }
     }
 
-    /** The preview readout, the three control rows, the footer and the padding under them. */
+    /** The preview readout, the four control rows, the footer and the padding under them. */
     private int footerHeight() {
         return PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight + classRowHeight
-                + FOOTER_HEIGHT + PADDING;
+                + transitRowHeight + FOOTER_HEIGHT + PADDING;
     }
 
     /** Puts the player back in the middle of the picker map at the default zoom. */
@@ -799,6 +810,7 @@ public final class DestinationScreen extends Screen {
         drawModeSelector(graphics, mouseX, mouseY);
         drawPreferenceControls(graphics, mouseX, mouseY);
         drawClassControls(graphics, mouseX, mouseY);
+        drawTransitControls(graphics, mouseX, mouseY);
         drawFooter(graphics, mouseX, mouseY);
 
         super.render(graphics, mouseX, mouseY, partialTick);
@@ -1366,6 +1378,23 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
+     * The transit guidance switch: whether a public transport journey is guided by boarding and
+     * alighting rather than by turns.
+     *
+     * <p>Its own row rather than a chip on the preference row, and its own caption rather than a
+     * shorter label on one: the row is where a switch that belongs to one mode can say what it is,
+     * and the caption beside it is what says which mode that is. Like the voice switch it changes
+     * nothing about the route, so nothing is re-planned when it is pressed.
+     */
+    private void drawTransitControls(GuiGraphics graphics, int mouseX, int mouseY) {
+        graphics.drawString(font, transitCaption(), rowX,
+                transitY + (transitRowHeight - 8) / 2, COLOR_SECONDARY, false);
+        int[] rect = transitRect();
+        control(graphics, mouseX, mouseY, rect[0], rect[1], rect[2], transitRowHeight,
+                boardOnlyCaption(), RoutePreferenceStore.transitBoardOnly());
+    }
+
+    /**
      * Draws one toggle in its on or off state.
      *
      * <p>A plain button and its state rather than a checkbox: the same hover feedback as every
@@ -1393,6 +1422,20 @@ public final class DestinationScreen extends Screen {
 
     private static String voiceCaption() {
         return Component.translatable("screen.howtogo.voice").getString();
+    }
+
+    private static String transitCaption() {
+        return Component.translatable("screen.howtogo.transit_guidance").getString();
+    }
+
+    private static String boardOnlyCaption() {
+        return Component.translatable("screen.howtogo.transit_board_only").getString();
+    }
+
+    /** The rectangle of the transit guidance switch, as {@code {x, y, width}}. */
+    private int[] transitRect() {
+        int captionWidth = font.width(transitCaption()) + gap;
+        return new int[]{rowX + captionWidth, transitY, Math.max(30, rowW - captionWidth)};
     }
 
     /**
@@ -1434,6 +1477,12 @@ public final class DestinationScreen extends Screen {
     private boolean voiceAt(double mouseX, double mouseY) {
         return isInside((int) mouseX, (int) mouseY, preferenceButtonX(2), preferenceY,
                 preferenceButtonWidth, preferenceRowHeight);
+    }
+
+    /** True when the cursor is on the transit board-and-alight switch. */
+    private boolean transitAt(double mouseX, double mouseY) {
+        int[] rect = transitRect();
+        return isInside((int) mouseX, (int) mouseY, rect[0], rect[1], rect[2], transitRowHeight);
     }
 
     /**
@@ -1585,6 +1634,11 @@ public final class DestinationScreen extends Screen {
         if (voiceAt(mouseX, mouseY)) {
             // No re-plan: speech is not an input to a route, so the map has nothing to redraw.
             RoutePreferenceStore.toggleVoiceAnnouncements();
+            return true;
+        }
+        if (transitAt(mouseX, mouseY)) {
+            // No re-plan either: the guidance says different things about the same journey.
+            RoutePreferenceStore.toggleTransitBoardOnly();
             return true;
         }
         RoadClass clickedClass = classAt(mouseX, mouseY);

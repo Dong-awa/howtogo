@@ -184,6 +184,28 @@ one layer and "do not add them for this line" is not something the planner could
 that a walk is handed the pair *without* them: a walk cannot use a rail either way, and the pair with
 them is a copy of the whole railway to repair before a single walking leg can be answered.
 
+`LineConnectivityCheck.java` covers what the line editor calls "not connected", which is a different
+question from whether a ride can be planned and used to be answered as if it were the same one. A pair
+of stops two hundred blocks apart with one of them standing two hundred blocks off its own railway is
+connected -- the railway between them is one unbroken stretch -- while the planner refuses the ride
+outright, because the connector is past the mode's cap; a pair of rails sixty blocks short of each
+other is not connected, and that is the one the editor must keep painting red. It also pins the two
+answers that are neither: a stop with no road of the line's kind near it, and a line whose kind the
+world has no roads of at all, are unjudged rather than broken, so a screen can say nothing instead of
+accusing a healthy line. The one-way case is here too, in both directions, because the judgement is
+directed: a street that forbids the way the stop order goes is a disconnection, which is why this is
+reachability rather than connected components.
+
+`TransitGuidanceCheck.java` covers where a transit journey is boarded and left, which is what the
+board-and-alight guidance is built from. A journey is planned as legs and then flattened into one
+route, and the flattening is lossy on purpose: a route carries one mode and cannot say where the
+riding begins. The two stations that matter therefore survive as distances along the whole journey,
+and the check pins that arithmetic to the route's own: the boarding is exactly as far along as the
+walking legs before it are long, the alighting is that plus the ride, the stage at a distance is
+board, alight or walking accordingly, and the flattened route is the same length as the legs put
+together. An off-by-one-leg mistake here is invisible until it is heard at the wrong station, which
+is why the numbers are held rather than the sentences.
+
 `TrackRunsCheck.java` covers how a line's track becomes the polylines the map draws, which is the one
 place a network of pieces can still come out as a straight line: a track known in several places is
 drawn as several stretches and never across the places that are missing, a piece stored the other way

@@ -344,6 +344,23 @@ public final class DestinationPickerPage implements IPhonePage {
                 : new int[] {cellX(1, 2), prefY() + CTRL_H + GAP, cellW(2)};
     }
 
+    /**
+     * The transit guidance switch, on a line of its own under the preference block.
+     *
+     * <p>Its own line because it is the only switch here that belongs to one mode: the three above are
+     * what any plan is made of, and this one changes only what a public transport journey is told
+     * about itself. A fourth cell on their row would cut every label on it, and the phone's sheet is
+     * fixed at a height that already has room for one more line -- see {@link #sheetHeight()}.
+     */
+    private int[] transitRect() {
+        return new int[] {contentLeft(), transitY(), contentWidth()};
+    }
+
+    /** The first row under the preference block, whatever shape that block ended up taking. */
+    private int transitY() {
+        return prefY() + (controlRows == 2 ? CTRL_H + GAP : 2 * (CTRL_H + GAP));
+    }
+
     // ------------------------------------------------------------------ render
 
     @Override
@@ -734,6 +751,12 @@ public final class DestinationPickerPage implements IPhonePage {
         drawSwitch(graphics, font, voice[0], voice[1], voice[2],
                 Component.translatable("screen.howtogo.voice").getString(),
                 RoutePreferenceStore.voiceAnnouncements());
+
+        int[] transit = transitRect();
+        drawSwitch(graphics, font, transit[0], transit[1], transit[2],
+                Component.translatable("screen.howtogo.transit_guidance").getString() + " · "
+                        + Component.translatable("screen.howtogo.transit_board_only").getString(),
+                RoutePreferenceStore.transitBoardOnly());
     }
 
     private void drawSwitch(GuiGraphics graphics, Font font, int x, int y, int width, String label,
@@ -1036,6 +1059,11 @@ public final class DestinationPickerPage implements IPhonePage {
         if (inside(mouseX, mouseY, voiceRect())) {
             // No re-plan: speech is not an input to a route, so the map has nothing to redraw.
             RoutePreferenceStore.toggleVoiceAnnouncements();
+            return true;
+        }
+        if (inside(mouseX, mouseY, transitRect())) {
+            // And neither is the guidance: it says different things about the same journey.
+            RoutePreferenceStore.toggleTransitBoardOnly();
             return true;
         }
         return false;

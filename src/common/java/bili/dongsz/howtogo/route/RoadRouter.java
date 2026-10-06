@@ -333,6 +333,168 @@ public final class RoadRouter {
         return plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode, preferences);
     }
 
+    /**
+     * How two places stand to each other on a network, for a caller that has to say whether they are
+     * connected rather than whether a trip between them could be planned.
+     *
+     * <p>The two are not the same question, and the difference is the whole reason this exists. A plan
+     * is refused for reasons that are not about connection at all: a connector longer than the mode
+     * allows, a one-way street facing the wrong way, a destination beside the road whose last hop the
+     * fallback's own arithmetic declines. A line editor that reads "no plan" as "not connected" then
+     * marks a stop red on a line that runs perfectly well, which is the one readout on that screen that
+     * must never accuse a healthy line.
+     */
+    public enum Connection {
+
+        /** A path from the first place to the second exists on roads this mode and policy allow. */
+        CONNECTED,
+
+        /**
+         * Both places are tied to the network and no path runs from the first to the second.
+         *
+         * <p>This is the only answer that means "not connected": the two ends are on separate pieces of
+         * the roads being asked about, or a one-way restriction between them faces the way the journey
+         * has to go.
+         */
+        SEPARATE,
+
+        /**
+         * The question has no answer from this network: no road the mode may use and the policy allows
+         * exists at all, or none of them comes within {@link #JUDGEMENT_REACH} of one of the two places.
+         *
+         * <p>A caller must treat this as "cannot tell" rather than "broken". A station whose
+         * representative point stands well off its own track -- a large station, several platforms
+         * merged into one place -- is exactly this, and reporting it as a disconnection would be an
+         * accusation the network does not support.
+         */
+        UNJUDGED
+    }
+
+    /**
+     * How far from a place a road of the right kind may be and still be the road it is judged against,
+     * in blocks.
+     *
+     * <h2>Why this is not the connector cap</h2>
+     * {@link TravelMode#maxConnectorDistance()} says how far a traveller will walk to reach the
+     * network, and a trip whose connector is longer than that is refused. That is the right number for
+     * planning a journey and the wrong one for asking whether two places are connected: it made a
+     * station a hundred blocks off its own railway read as "not connected to the previous stop" when
+     * the railway between the two is one unbroken stretch. The distance of a station from the track is
+     * a fact about the station, not about the line.
+     *
+     * <p>What this number has to cover is how far a stop's own position can stand from the track it
+     * serves. A station is entered in the world as the middle of its platforms, and a station whose
+     * platforms have been drawn as several areas is kept as one place at the middle of all of them --
+     * so the point the line calls at can be well over a hundred blocks from any single piece of rail
+     * and still name a station on that rail. Two hundred and fifty-six blocks is the merge distance
+     * such a station is assembled under, and past it this class stops claiming to know: the answer is
+     * {@link Connection#UNJUDGED}, not a red mark.
+     */
+    private static final double JUDGEMENT_REACH = 256.0;
+
+    /**
+     * Whether the two places are connected on this network, which is not the same question as whether a
+     * trip between them can be planned -- see {@link Connection}.
+     *
+     * <h2>How the answer is reached</h2>
+     * Each place is joined to the network the way the planner joins it, by splitting the road it stands
+     * beside at the perpendicular foot, so a stop in the middle of a long straight rail is a node on
+     * that rail rather than a point two hundred blocks from the nearest end of it. Both joinings are
+     * made before the graph is read, because a split changes it.
+     *
+     * <p>Then a search -- not a plan: nothing is costed, no connector is timed and no destination is
+     * built -- asks whether a path runs from the first node to the second, in that direction, so a
+     * one-way facing the way the journey has to go is {@link Connection#SEPARATE}. The search starts
+     * from the whole neighbourhood of the first place as well as from its own node, because a place can
+     * stand beside more than one piece of road -- a stub end five blocks away and the through line
+     * sixty -- and only the further one need be part of the journey; the same reason
+     * {@link #findNodeRoute} tries more than one endpoint.
+     *
+     * <p>A place with no road of the wanted kind within {@link #JUDGEMENT_REACH} is not judged at all,
+     * which is the one answer that leaves a caller free to say nothing rather than accuse a line.
+     *
+     * @return {@link Connection#CONNECTED}, {@link Connection#SEPARATE} or {@link Connection#UNJUDGED}
+     */
+    public static Connection connection(Workspace workspace, double startX, double startZ,
+                                        double goalX, double goalZ, TravelMode mode,
+                                        RoutePreferences preferences) {
+        RoadNetwork network = workspace.routingNetwork();
+        RoadEditor editor = workspace.editor();
+        RoadPoint startRoad = nearestRoadPointWithin(network, startX, startZ, mode, preferences,
+                JUDGEMENT_REACH);
+        if (startRoad == null) {
+            return Connection.UNJUDGED;
+        }
+        int startNode = anchorNode(network, editor, startRoad);
+        if (startNode < 0) {
+            return Connection.UNJUDGED;
+        }
+        // Read after the first split rather than before it: splitting the segment one end stands on
+        // removes that segment, and the other end is very often on it. This is the same care
+        // findAnchoredRoute takes for the same reason.
+        RoadPoint goalRoad = nearestRoadPointWithin(network, goalX, goalZ, mode, preferences,
+                JUDGEMENT_REACH);
+        if (goalRoad == null) {
+            return Connection.UNJUDGED;
+        }
+        int goalNode = anchorNode(network, editor, goalRoad);
+        if (goalNode < 0) {
+            return Connection.UNJUDGED;
+        }
+        if (startNode == goalNode) {
+            // One place on the network, which is what two stops drawn on the same spot are.
+            return Connection.CONNECTED;
+        }
+        Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
+        if (graph.isEmpty()) {
+            return Connection.UNJUDGED;
+        }
+        List<Integer> starts = neighbourhood(network, graph, startNode, startX, startZ, mode);
+        List<Integer> goals = neighbourhood(network, graph, goalNode, goalX, goalZ, mode);
+        return reachesAny(graph, starts, goals) ? Connection.CONNECTED : Connection.SEPARATE;
+    }
+
+    /**
+     * The nodes one place could be travelling from or to: the node it was just anchored as, and every
+     * routable node within the mode's own connector reach of it.
+     *
+     * <p>The reach is the connector cap rather than {@link #JUDGEMENT_REACH}, because these are the
+     * endpoints a ride would really use: a second piece of road further away than a traveller will walk
+     * to it is not an endpoint of this ride, and offering every node within the much longer judging
+     * reach would let two stops on either side of a genuine gap answer connected through a node both
+     * of them merely stand near.
+     */
+    private static List<Integer> neighbourhood(RoadNetwork network, Map<Integer, List<Edge>> graph,
+                                               int anchor, double x, double z, TravelMode mode) {
+        List<Integer> nodes = new ArrayList<>();
+        if (graph.containsKey(anchor)) {
+            nodes.add(anchor);
+        }
+        nodes.addAll(nearestNodesWithin(network, graph, x, z, START_CANDIDATES,
+                mode.maxConnectorDistance()));
+        return nodes;
+    }
+
+    /** Whether a path runs from any of the sources to any of the targets, in that direction. */
+    private static boolean reachesAny(Map<Integer, List<Edge>> graph, List<Integer> starts,
+                                      List<Integer> goals) {
+        Set<Integer> targets = new HashSet<>(goals);
+        Set<Integer> seen = new HashSet<>(starts);
+        java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>(starts);
+        while (!queue.isEmpty()) {
+            int current = queue.poll();
+            if (targets.contains(current)) {
+                return true;
+            }
+            for (Edge edge : graph.getOrDefault(current, List.of())) {
+                if (seen.add(edge.toNode())) {
+                    queue.add(edge.toNode());
+                }
+            }
+        }
+        return false;
+    }
+
     /** One attempt: anchored if it can be, between the nearest nodes if it cannot. */
     private static Route plan(Workspace workspace, double startX, double startZ, double goalX,
                               double goalZ, String destinationName, TravelMode mode,
@@ -1157,6 +1319,18 @@ public final class RoadRouter {
     private static List<Integer> nearestRoutableNodes(RoadNetwork network, Map<Integer, List<Edge>> graph,
                                                       double x, double z, int limit,
                                                       TravelMode mode) {
+        return nearestNodesWithin(network, graph, x, z, limit, mode.maxConnectorDistance());
+    }
+
+    /**
+     * The nearest nodes the graph contains, within {@code radius} blocks.
+     *
+     * <p>The radius is the caller's, because the two questions this answers bound it differently: a
+     * plan may only reach as far as the mode's connector cap, while {@link #connection} asks whether
+     * the place is tied to this network at all and takes {@link #JUDGEMENT_REACH} for it.
+     */
+    private static List<Integer> nearestNodesWithin(RoadNetwork network, Map<Integer, List<Edge>> graph,
+                                                    double x, double z, int limit, double radius) {
         List<RoadNode> candidates = new ArrayList<>();
         for (RoadNode node : network.nodes()) {
             if (graph.containsKey(node.id())) {
@@ -1166,8 +1340,7 @@ public final class RoadRouter {
         candidates.sort(Comparator.comparingDouble(node -> node.distSq(x, z)));
 
         List<Integer> result = new ArrayList<>(limit);
-        double maxConnector = mode.maxConnectorDistance();
-        double maxSq = maxConnector * maxConnector;
+        double maxSq = radius * radius;
         for (RoadNode node : candidates) {
             if (node.distSq(x, z) > maxSq) {
                 break;

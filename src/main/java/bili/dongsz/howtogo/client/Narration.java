@@ -136,6 +136,19 @@ public final class Narration {
     private static boolean uturnNowAnnounced;
     /** Whether the distance-free U-turn has been spoken for a reading that named no junction. */
     private static boolean uturnPlainAnnounced;
+    /**
+     * The transit moment being announced: which ride, which stop of it, and whether the two lines a
+     * moment can have (the approach and the arrival) have been spoken.
+     *
+     * <p>Keyed on the ride and the stop rather than on the sentence, because the sentence for a moving
+     * vehicle changes with the distance and would otherwise look like news every tick.
+     */
+    private static int transitRide = Integer.MIN_VALUE;
+    private static int transitStop = Integer.MIN_VALUE;
+    private static boolean transitAheadAnnounced;
+    private static boolean transitNowAnnounced;
+    /** Whether the "this is your stop, get off here" line has been said for the ride in force. */
+    private static boolean transitArrivedAnnounced;
     /** The road class change count last spoken, so each change is said once and only once. */
     private static int roadClassChanges;
     /** Whether this arrival has already been announced. */
@@ -224,6 +237,7 @@ public final class Narration {
             offRouteAnnounced = false;
             forgetManeuver();
             resetUturn();
+            resetTransit();
             openingUntil = 0;
             // The road class count is the session's, not the notice's: baseline it so a change that
             // happened before this trip began is not announced at its start.
@@ -304,6 +318,18 @@ public final class Narration {
             resetUturn();
             return;
         }
+        // While there is a line to be on -- walking up to the stop of a boarding, or riding one -- what
+        // is announced is the transit cue and nothing else: a vehicle does the steering, so its turns
+        // are not news. Walking to and from the vehicle falls through to the ordinary guidance below,
+        // which is why the wrong-way and turn calls are still reachable on those legs. The off-route
+        // warning above still applies throughout: it is about having left the route, not about a
+        // junction on it.
+        Navigation.TransitStep transit = Navigation.transitStep();
+        if (transit != null) {
+            announceTransit(transit);
+            return;
+        }
+        resetTransit();
         // The wrong-way call takes precedence, and while it is up the ordinary turns are not
         // announced at all: the route's next turn is not what the player needs to hear while they are
         // travelling away from it.
@@ -527,6 +553,98 @@ public final class Narration {
         uturnPlainAnnounced = false;
     }
 
+    /**
+     * Announces the transit moment the guidance is on: the boarding, the stop just reached, or the stop
+     * about to be left.
+     *
+     * <h2>What is said, and when</h2>
+     * Three moments, each said once:
+     *
+     * <ul>
+     *   <li><b>Boarding</b>: on arriving at the stop, the line and which way along it, so the rider can
+     *       check they are on the right platform for the right direction before the vehicle comes.</li>
+     *   <li><b>A stop called at</b>: where the vehicle is now and how many stops are left to the one
+     *       being got off at. This is the one that repeats, once per stop, and it is driven by the stop
+     *       index rather than by a distance -- a distance would have it said over and over as the
+     *       vehicle crawled up to a platform.</li>
+     *   <li><b>The stop being got off at</b>: said on the approach, once. At a stop where the journey
+     *       changes lines it carries the change with it, so the rider hears one sentence rather than
+     *       two about the same platform.</li>
+     * </ul>
+     *
+     * <p>Identity is the ride and the stop within it, which is what makes a phrase that changes with
+     * the distance -- "still two stops" becoming "still one" -- read as the same moment rather than as
+     * news every tick.
+     */
+    private static void announceTransit(Navigation.TransitStep step) {
+        if (step.rideIndex() != transitRide) {
+            // A different ride: its stops are news again, and both lines are armed from scratch.
+            transitRide = step.rideIndex();
+            transitStop = Integer.MIN_VALUE;
+            transitAheadAnnounced = false;
+            transitNowAnnounced = false;
+            transitArrivedAnnounced = false;
+        }
+
+        // Standing at the stop this ride is left at: the one moment the player has to act, and the one
+        // the guidance used to miss -- the approach line had already been said by the time the vehicle
+        // got here.
+        if (step.cue() == Navigation.TransitCue.ARRIVE) {
+            if (!transitArrivedAnnounced) {
+                transitArrivedAnnounced = true;
+                announce(Component.translatable("hud.howtogo.transit_arrive",
+                        Navigation.named(step.station())).getString());
+            }
+            return;
+        }
+
+        // Arriving at a stop that is not the one this ride is left at: where we are and what is left.
+        // The boarding stop is skipped -- the boarding line has just named it -- and so is the stop
+        // being got off at, which the approach line covers.
+        if (step.stopIndex() > transitStop) {
+            transitStop = step.stopIndex();
+            if (step.stopIndex() > 0 && step.stopsRemaining() > 0) {
+                announce(Component.translatable("hud.howtogo.speak_stopped",
+                        Navigation.named(step.reached()), step.stopsRemaining(),
+                        Navigation.named(step.station())).getString());
+            }
+        }
+
+        if (step.cue() == Navigation.TransitCue.BOARD) {
+            if (step.distanceAhead() <= Navigation.turnNowDistance() && !transitNowAnnounced) {
+                transitNowAnnounced = true;
+                announce(Component.translatable("hud.howtogo.speak_board_line",
+                        Navigation.named(step.station()), Navigation.named(step.line()),
+                        Navigation.named(step.terminus())).getString());
+            }
+            return;
+        }
+        if (step.cue() == Navigation.TransitCue.ALIGHT
+                || step.cue() == Navigation.TransitCue.TRANSFER) {
+            // Said on the approach, once, and never made truer by saying it again closer in.
+            if (transitAheadAnnounced || step.distanceAhead() > Navigation.turnLeadDistance()) {
+                return;
+            }
+            transitAheadAnnounced = true;
+            boolean transfer = step.cue() == Navigation.TransitCue.TRANSFER;
+            announce((transfer
+                    ? Component.translatable("hud.howtogo.speak_alight_transfer",
+                            Navigation.named(step.station()), Navigation.named(step.line()),
+                            Navigation.named(step.terminus()))
+                    : Component.translatable("hud.howtogo.speak_alight",
+                            Navigation.named(step.station()))).getString());
+        }
+    }
+
+    /** Forgets the transit moment being announced, so the next one is armed from scratch. */
+    private static void resetTransit() {
+        transitRide = Integer.MIN_VALUE;
+        transitStop = Integer.MIN_VALUE;
+        transitAheadAnnounced = false;
+        transitNowAnnounced = false;
+        transitArrivedAnnounced = false;
+    }
+
     // ----------------------------------------------------------------- speaking
 
     /**
@@ -699,6 +817,7 @@ public final class Narration {
         offRouteAnnounced = false;
         forgetManeuver();
         resetUturn();
+        resetTransit();
         // Any hold goes with the trip it was for. A hold that outlived its destination would silence
         // the guidance of the next one for a second or two, for a phrase nobody heard.
         openingUntil = 0;

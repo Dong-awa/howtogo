@@ -176,7 +176,22 @@ public final class LinePlanner {
      * the route's own estimate. The search therefore minimises exactly the number the readout shows,
      * which is the only way the two can be trusted to agree.
      */
-    private record Link(int target, double seconds, Route route, TravelMode mode) {
+    private record Link(int target, double seconds, Route route, TravelMode mode, RideInfo info) {
+    }
+
+    /**
+     * The line and the two stops one ride link runs between.
+     *
+     * <p>Carried on the link because the search only ever sees costs: without it, the answer is a chain
+     * of routes that cannot say which line was ridden or where it was boarded, and the guidance would
+     * have nothing to name. The stop indices are into the line's own order, so the stops called at on
+     * the way are read off the line rather than guessed from geometry.
+     */
+    private record RideInfo(TransitLine line, int fromStop, int toStop) {
+    }
+
+    /** One leg of the answer before its distances are known, which are counted as the chain is walked. */
+    private record PendingLeg(Route route, TravelMode mode, RideInfo info) {
     }
 
     public static Trip plan(RoadNetwork network, List<TransitLine> lines, double startX, double startZ,
@@ -224,6 +239,7 @@ public final class LinePlanner {
         int[] fromNode = new int[count];
         Route[] fromRoute = new Route[count];
         TravelMode[] fromMode = new TravelMode[count];
+        Link[] fromLink = new Link[count];
         boolean[] settled = new boolean[count];
         Arrays.fill(dist, Double.MAX_VALUE);
         Arrays.fill(fromNode, -1);
@@ -310,6 +326,7 @@ public final class LinePlanner {
                     fromNode[link.target()] = current;
                     fromRoute[link.target()] = link.route();
                     fromMode[link.target()] = link.mode();
+                    fromLink[link.target()] = link;
                     frontier.add(new double[]{candidate, link.target()});
                 }
             }
@@ -322,13 +339,15 @@ public final class LinePlanner {
             return Trip.empty();
         }
 
-        List<Trip.Leg> reversed = new ArrayList<>();
+        List<PendingLeg> reversed = new ArrayList<>();
         boolean rode = false;
         // Bounded by the node count: a Dijkstra chain cannot loop, and this is here so that a
         // malformed one is a refused journey rather than a hang.
         int guard = count + 1;
         for (int at = bestEnd; at >= 0 && guard-- > 0; at = fromNode[at]) {
-            reversed.add(new Trip.Leg(fromRoute[at], fromMode[at]));
+            Link link = fromLink[at];
+            reversed.add(new PendingLeg(fromRoute[at], fromMode[at],
+                    link == null ? null : link.info()));
             rode |= fromMode[at] != TravelMode.WALK;
         }
         if (!rode) {
@@ -341,7 +360,40 @@ public final class LinePlanner {
             return Trip.empty();
         }
         java.util.Collections.reverse(reversed);
-        reversed.add(new Trip.Leg(bestFinish, TravelMode.WALK));
+        reversed.add(new PendingLeg(bestFinish, TravelMode.WALK, null));
+
+        // The legs are rebuilt in travelling order with what each one rides, and the distance each
+        // ride's stops stand at is counted as the chain is walked: only here is it known how much of
+        // the journey comes before a ride, which is what every stop's own distance is measured from.
+        //
+        // The planner's ride edges run between neighbouring stops, so a rider who stays on through
+        // three stations is three legs -- and one ride. The run is what the announcements are about:
+        // "get on at A, three stops to D" is not three boardings. Every leg of a run therefore carries
+        // the same ride, and {@link Trip#rides()} reads a run as the one ride it is.
+        List<Double> offsets = new ArrayList<>(reversed.size());
+        double travelled = 0;
+        for (PendingLeg leg : reversed) {
+            offsets.add(travelled);
+            travelled += leg.route().totalLength();
+        }
+        List<Trip.Leg> legs = new ArrayList<>(reversed.size());
+        int at = 0;
+        while (at < reversed.size()) {
+            if (reversed.get(at).info() == null) {
+                legs.add(new Trip.Leg(reversed.get(at).route(), reversed.get(at).mode(), null));
+                at++;
+                continue;
+            }
+            int end = at;
+            while (end + 1 < reversed.size() && continues(reversed.get(end), reversed.get(end + 1))) {
+                end++;
+            }
+            Trip.Ride ride = rideOf(reversed, at, end, offsets);
+            for (int i = at; i <= end; i++) {
+                legs.add(new Trip.Leg(reversed.get(i).route(), reversed.get(i).mode(), ride));
+            }
+            at = end + 1;
+        }
 
         // The first and last stops of the chain, which are where the player boards and gets off. The
         // legs before and after them are walks, so the chain's ends are exactly the stations.
@@ -349,7 +401,74 @@ public final class LinePlanner {
         while (fromNode[first] >= 0) {
             first = fromNode[first];
         }
-        return Trip.of(reversed, nodes.get(first).at().label(), nodes.get(bestEnd).at().label());
+        return Trip.of(legs, nodes.get(first).at().label(), nodes.get(bestEnd).at().label());
+    }
+
+    /**
+     * Whether the second leg is the first one continued: one line, one way along it, and the very next
+     * stop.
+     *
+     * <p>A change of line breaks the run, and so does a change of direction -- riding out to the end of
+     * a line and back is two rides however much the line is one, because the rider has to be told twice
+     * which way the vehicle is going.
+     */
+    private static boolean continues(PendingLeg here, PendingLeg next) {
+        RideInfo before = here.info();
+        RideInfo after = next.info();
+        if (before == null || after == null || before.line() != after.line()) {
+            return false;
+        }
+        if (before.toStop() != after.fromStop()) {
+            return false;
+        }
+        return Integer.signum(before.toStop() - before.fromStop())
+                == Integer.signum(after.toStop() - after.fromStop());
+    }
+
+    /**
+     * The ride a run of hops is, or null for a run that goes nowhere.
+     *
+     * <p>Every hop runs between neighbouring stops of the line, so the stops of the run are exactly its
+     * ends: the first stop it is boarded at and, after each hop, the stop that hop arrives at. Their
+     * distances are therefore the legs' own offsets, exactly -- no projecting of platform corners onto
+     * a polyline, and nothing that can drift from the distance the navigation measures along the
+     * flattened route.
+     *
+     * <p>The direction is the line's own order: the terminus named is the end of the line this run is
+     * travelling towards, which is what "towards such-and-such" means and is the opposite end for the
+     * ride back.
+     *
+     * @param legs    every leg of the journey, in travelling order
+     * @param from    the first leg of the run
+     * @param to      the last leg of the run
+     * @param offsets where each leg begins along the whole journey
+     */
+    private static Trip.Ride rideOf(List<PendingLeg> legs, int from, int to, List<Double> offsets) {
+        RideInfo first = legs.get(from).info();
+        RideInfo last = legs.get(to).info();
+        if (first == null || last == null) {
+            return null;
+        }
+        TransitLine line = first.line();
+        if (!line.stops().isEmpty() && (first.fromStop() < 0 || last.toStop() < 0
+                || first.fromStop() >= line.stopCount() || last.toStop() >= line.stopCount())) {
+            return null;
+        }
+        List<Trip.RideStop> stops = new ArrayList<>();
+        for (int i = from; i <= to; i++) {
+            RideInfo info = legs.get(i).info();
+            LineStop boarded = line.stops().get(info.fromStop());
+            stops.add(new Trip.RideStop(boarded.label(), boarded.x(), boarded.z(), offsets.get(i)));
+            if (i == to) {
+                LineStop left = line.stops().get(info.toStop());
+                stops.add(new Trip.RideStop(left.label(), left.x(), left.z(),
+                        offsets.get(i) + legs.get(i).route().totalLength()));
+            }
+        }
+        int terminusIndex = last.toStop() >= first.fromStop() ? line.stopCount() - 1 : 0;
+        return new Trip.Ride(line.label(), line.stops().get(terminusIndex).label(),
+                line.stops().get(first.fromStop()).label(),
+                line.stops().get(last.toStop()).label(), stops);
     }
 
     // ------------------------------------------------------------------- graph
@@ -424,7 +543,8 @@ public final class LinePlanner {
                     if (!ride.isPresent()) {
                         continue;
                     }
-                    links.get(index).add(new Link(target, ride.estimatedSeconds(), ride, mode));
+                    links.get(index).add(new Link(target, ride.estimatedSeconds(), ride, mode,
+                            new RideInfo(line, at, next)));
                 }
             }
         }
@@ -568,7 +688,8 @@ public final class LinePlanner {
                     if (!ride.isPresent()) {
                         continue;
                     }
-                    links.add(new Link(target, ride.estimatedSeconds(), ride, mode));
+                    links.add(new Link(target, ride.estimatedSeconds(), ride, mode,
+                            new RideInfo(line, at, next)));
                 }
             }
         }
@@ -610,7 +731,7 @@ public final class LinePlanner {
                     continue;
                 }
                 links.add(new Link(other, hop.estimatedSeconds() + wait,
-                        hop.plusFixedSeconds(wait), TravelMode.WALK));
+                        hop.plusFixedSeconds(wait), TravelMode.WALK, null));
             }
         }
 

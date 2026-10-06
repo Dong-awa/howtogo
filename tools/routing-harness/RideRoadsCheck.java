@@ -9,10 +9,11 @@ import bili.dongsz.howtogo.transit.TransitLine;
 /**
  * Checks which network a plan runs a line on.
  *
- * <p>In the {@code route} package because {@link RideRoads#forLine} is package-private: which roads a
- * line rides is a decision the planner makes, so the seam is internal to the package and cannot be
- * reached from outside it. It lives with the harness and is compiled the same way; nothing in the mod
- * calls it.
+ * <p>In the {@code route} package because {@link RideRoads#forWalks} is package-private: which roads a
+ * walking leg is offered is a decision the planner makes, so that half of the seam is internal to the
+ * package and cannot be reached from outside it. ({@link RideRoads#forLine} is public, because the line
+ * editor has to ask the planner's own question about a ride rather than work out its own answer.) It
+ * lives with the harness and is compiled the same way; nothing in the mod calls it.
  *
  * <p>The property being pinned down is the one that makes a per-line switch real rather than decorative:
  * a line whose marks are off is handed a network that never had them, not the marked network with a

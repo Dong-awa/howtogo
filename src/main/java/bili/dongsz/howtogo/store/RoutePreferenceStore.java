@@ -60,6 +60,13 @@ public final class RoutePreferenceStore {
      * default and is reloaded by the mod config UI, not written to by the game.
      */
     private static boolean voiceAnnouncements = RoadConfig.voiceAnnouncements();
+    /**
+     * Whether a public transport journey is guided by boarding and alighting rather than by turns.
+     *
+     * <p>Another switch that is not an input to a route, so it lives beside the voice one for the same
+     * reason: a plan is the same plan either way, and what changes is what the guidance says about it.
+     */
+    private static boolean transitBoardOnly = RoadConfig.transitBoardOnly();
     private static boolean loaded;
 
     private RoutePreferenceStore() {
@@ -100,6 +107,7 @@ public final class RoutePreferenceStore {
             preferences = new RoutePreferences(RoadConfig.routePreference(),
                     RoadConfig.avoidedRoadClasses(), RoadConfig.preferMajorRoads());
             voiceAnnouncements = RoadConfig.voiceAnnouncements();
+            transitBoardOnly = RoadConfig.transitBoardOnly();
             HowToGo.LOGGER.info("[HowToGo] no saved route preferences; using the config");
             return;
         }
@@ -124,10 +132,13 @@ public final class RoutePreferenceStore {
             voiceAnnouncements = dto.voiceAnnouncements == null
                     ? RoadConfig.voiceAnnouncements()
                     : dto.voiceAnnouncements;
+            transitBoardOnly = dto.transitBoardOnly == null
+                    ? RoadConfig.transitBoardOnly()
+                    : dto.transitBoardOnly;
             HowToGo.LOGGER.info(
-                    "[HowToGo] route preferences: metric {} avoid [{}] major {} voice {}",
+                    "[HowToGo] route preferences: metric {} avoid [{}] major {} voice {} boardOnly {}",
                     preferences.metric().id(), preferences.avoidedSummary(),
-                    preferences.preferMajorRoads(), voiceAnnouncements);
+                    preferences.preferMajorRoads(), voiceAnnouncements, transitBoardOnly);
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; using the config", file, e);
         }
@@ -172,6 +183,28 @@ public final class RoutePreferenceStore {
     }
 
     /**
+     * Turns the board-and-alight-only transit guidance on or off.
+     *
+     * <p>No re-plan is asked for by the callers that draw this switch, for the same reason the voice
+     * switch asks for none: a plan is the same plan whatever the guidance says about it.
+     */
+    public static void toggleTransitBoardOnly() {
+        transitBoardOnly = !transitBoardOnly();
+        persist();
+    }
+
+    /**
+     * Whether a public transport journey is guided by boarding and alighting rather than by turns,
+     * read from disk on first use.
+     */
+    public static boolean transitBoardOnly() {
+        if (!loaded || configValueMissing()) {
+            load();
+        }
+        return transitBoardOnly;
+    }
+
+    /**
      * Whether navigation is spoken aloud, read from disk on first use.
      *
      * <p>Separate from {@link #preferences()} because it is not part of the routing policy, but it
@@ -199,12 +232,15 @@ public final class RoutePreferenceStore {
             }
             dto.preferMajorRoads = preferences.preferMajorRoads();
             dto.voiceAnnouncements = voiceAnnouncements();
+            dto.transitBoardOnly = transitBoardOnly();
             try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);
             }
             HowToGo.LOGGER.info(
-                    "[HowToGo] saved route preferences: metric {} avoid [{}] major {} voice {}",
-                    dto.metric, dto.avoidedRoadClasses, dto.preferMajorRoads, dto.voiceAnnouncements);
+                    "[HowToGo] saved route preferences: metric {} avoid [{}] major {} voice {} "
+                            + "boardOnly {}",
+                    dto.metric, dto.avoidedRoadClasses, dto.preferMajorRoads, dto.voiceAnnouncements,
+                    dto.transitBoardOnly);
         } catch (IOException e) {
             // Worth saying out loud: the buttons have visibly done their job even though the choice
             // will be gone next launch, which is the one failure the player cannot see coming.
@@ -227,5 +263,7 @@ public final class RoutePreferenceStore {
         boolean preferMajorRoads;
         /** Boxed so a file predating the switch leaves the configured default in force. */
         Boolean voiceAnnouncements;
+        /** Boxed for the same reason: a file written before the switch reads as the config's answer. */
+        Boolean transitBoardOnly;
     }
 }

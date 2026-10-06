@@ -469,6 +469,14 @@ public final class NavHudRenderer {
     /** The turn, the distance, the progress bar and the remaining line: the live trip readout. */
     private static void drawRouteReadout(GuiGraphics graphics, Minecraft mc, int x, int y) {
         Font font = mc.font;
+        // While there is a line to be on -- walking up to the stop of a boarding, or riding one -- the
+        // readout is the transit one: which line and which way, or which stop is coming and how many
+        // are left. Walking to and from the vehicle keeps the ordinary turn readout, because that is
+        // what those legs are. See Navigation#transitStep.
+        if (Navigation.transitStep() != null) {
+            drawTransitReadout(graphics, font, x, y);
+            return;
+        }
         // The wrong-way call takes the readout over when it is up: a player going the wrong way has
         // no use for the turn the route was going to give them next, and turning round at the next
         // junction is the instruction that actually gets them moving again.
@@ -532,7 +540,46 @@ public final class NavHudRenderer {
                 font.plainSubstrByWidth(instruction, MAP_SIZE - READOUT_TEXT_X - 2),
                 x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
 
-        int barY = y + 30;
+        drawTripProgress(graphics, font, x, y, y + 30);
+    }
+
+    /**
+     * The readout for a transit cue: the line and the way it runs, or the stop being run to and what
+     * is left of the ride.
+     *
+     * <p>A square in place of the turn arrow, because an arrow would be a claim about a junction and
+     * there is no junction being asked about -- the marker says "a stop" and nothing more. The words
+     * come from the same {@code TransitStep} the voice reads, so what is heard and what is seen cannot
+     * be about different lines or different stops.
+     */
+    private static void drawTransitReadout(GuiGraphics graphics, Font font, int x, int y) {
+        Navigation.TransitStep step = Navigation.transitStep();
+        if (step == null) {
+            return;
+        }
+        int markerX = x + 11;
+        int markerY = y + 12;
+        graphics.fill(markerX - 4, markerY - 4, markerX + 4, markerY + 4, COLOR_ACCENT);
+        graphics.fill(markerX - 2, markerY - 2, markerX + 2, markerY + 2, 0xFF10161E);
+
+        String distance = step.distanceAhead() <= Navigation.turnNowDistance()
+                ? Component.translatable("hud.howtogo.hud_now").getString()
+                : Route.formatDistance(step.distanceAhead());
+        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
+
+        graphics.drawString(font,
+                font.plainSubstrByWidth(Navigation.transitSentence(step),
+                        MAP_SIZE - READOUT_TEXT_X - 2),
+                x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
+
+        drawTripProgress(graphics, font, x, y, y + 30);
+    }
+
+    /**
+     * The progress bar, the remaining line and the walking-fallback note: everything under the
+     * instruction, shared by the two readouts so the two cannot report the trip differently.
+     */
+    private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY) {
         drawProgressBar(graphics, x, barY, MAP_SIZE, 5);
 
         String remaining = Component.translatable("hud.howtogo.hud_remaining_short",

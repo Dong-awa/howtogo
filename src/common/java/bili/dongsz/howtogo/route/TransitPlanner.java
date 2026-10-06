@@ -61,18 +61,7 @@ public final class TransitPlanner {
     }
 
     /**
-     * The whole journey as one route, for the map, the readout and the estimate.
-     *
-     * <p>One route rather than a chain of them because that is what everything downstream
-     * understands: the map draws {@code points()}, the readout measures along it, the estimate sums
-     * it. Each leg's own pace travels with it inside the route's per-piece paces, so a walked stretch
-     * is timed as a walk and a ridden one as a ride without any of those callers knowing there was
-     * more than one mode involved.
-     *
-     * <p>What is lost by flattening is the ability to say <em>which</em> line is in force at a given
-     * moment -- a route carries one mode, so the panel says "public transport" while the player walks
-     * to a stop. The boarding, alighting and interchange points are unaffected: they were fixed when
-     * the legs were planned, from stop coordinates.
+     * The journey as one route, for the map, the readout and the estimate. See {@link #asRoute}.
      *
      * @return the journey, or {@link Route#empty()} when no line can carry it
      */
@@ -87,7 +76,31 @@ public final class TransitPlanner {
     public static Route planRoute(RideRoads roads, List<TransitLine> lines, double startX,
                                   double startZ, double goalX, double goalZ, String destinationName,
                                   RoutePreferences preferences) {
-        Trip trip = plan(roads, lines, startX, startZ, goalX, goalZ, destinationName, preferences);
+        return asRoute(plan(roads, lines, startX, startZ, goalX, goalZ, destinationName, preferences),
+                destinationName);
+    }
+
+    /**
+     * The whole journey as one route, for the map, the readout and the estimate.
+     *
+     * <p>One route rather than a chain of them because that is what everything downstream
+     * understands: the map draws {@code points()}, the readout measures along it, the estimate sums
+     * it. Each leg's own pace travels with it inside the route's per-piece paces, so a walked stretch
+     * is timed as a walk and a ridden one as a ride without any of those callers knowing there was
+     * more than one mode involved.
+     *
+     * <p>What is lost by flattening is the ability to say <em>which</em> line is in force at a given
+     * moment -- a route carries one mode, so the panel says "public transport" while the player walks
+     * to a stop. The boarding, alighting and interchange points are unaffected: they were fixed when
+     * the legs were planned, from stop coordinates, and they survive as distances in {@link Trip#ride()}.
+     * That is what lets a caller keep the journey beside the route rather than throwing it away, which
+     * is what the board-and-alight guidance needs -- so this is public, and the navigation plans the
+     * journey itself and flattens it here rather than paying for a second flattening of its own.
+     *
+     * @param trip the journey, or {@link Trip#empty()} when no line can carry it
+     * @return the journey as one route, or {@link Route#empty()} when there is none
+     */
+    public static Route asRoute(Trip trip, String destinationName) {
         if (!trip.isPresent()) {
             return Route.empty();
         }

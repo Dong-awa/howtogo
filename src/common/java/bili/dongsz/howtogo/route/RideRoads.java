@@ -87,8 +87,15 @@ public final class RideRoads {
         return new RideRoads(marked, plain, usesMarks, ownTrack);
     }
 
-    /** The roads a ride along this line may use. */
-    RoadNetwork forLine(TransitLine line) {
+    /**
+     * The roads a ride along this line may use.
+     *
+     * <p>Public because it is the answer two callers have to agree on rather than a detail of one: the
+     * planner rides the network this returns, and the line editor judges the same line by it. A screen
+     * that built its own network for the question instead marked stops red against rails the planner
+     * would never have used, which is the whole failure this accessor closes.
+     */
+    public RoadNetwork forLine(TransitLine line) {
         if (line == null || !usesMarks.test(line)) {
             return plain;
         }

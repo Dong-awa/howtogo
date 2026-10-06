@@ -98,6 +98,15 @@ public final class MtrTransit {
     private static volatile List<TransitLine> lines = List.of();
     private static volatile RoadNetwork rails = new RoadNetwork();
     private static volatile Map<Long, RoadNetwork> tracksById = Map.of();
+    /**
+     * Bumped whenever a reading publishes new tracks.
+     *
+     * <p>Published beside {@link #tracksById} and after it, so a reader that sees the new version sees
+     * the tracks that go with it. A network read out of MTR is rebuilt whole rather than edited, so its
+     * own revision describes the build's own numbering and nothing a caller can compare across builds;
+     * this is the version a caller caching something worked out from the tracks has to key on.
+     */
+    private static volatile int trackStamp;
     private static volatile int imported;
     private static volatile int skipped;
     private static volatile int unplaced;
@@ -250,6 +259,18 @@ public final class MtrTransit {
         refresh();
         Long id = lineId(line);
         return id == null ? null : tracksById.get(id);
+    }
+
+    /**
+     * A version of the tracks the newest finished build published, for a caller caching a reading of
+     * them -- the line editor keys what it worked out about a line's connectivity on this.
+     *
+     * <p>Refreshed first, like {@link #trackOf}, so the version names the same build the tracks beside
+     * it do.
+     */
+    public static int tracksVersion() {
+        refresh();
+        return trackStamp;
     }
 
     /** How many lines MTR offered that this mod has no kind for. */
@@ -637,6 +658,7 @@ public final class MtrTransit {
             lines = List.of();
             rails = new RoadNetwork();
             tracksById = Map.of();
+            trackStamp++;
             imported = 0;
             skipped = 0;
             unplaced = 0;
@@ -664,6 +686,7 @@ public final class MtrTransit {
         lines = keptLines;
         rails = marks;
         tracksById = known.tracks();
+        trackStamp++;
         stops = keptStops;
         imported = built.imported();
         skipped = built.skipped();
