@@ -1,6 +1,6 @@
 plugins {
     id 'java'
-    id 'net.neoforged.moddev' version '2.0.78'
+    id 'net.neoforged.moddev' version '2.0.148'
 }
 
 version = project.mod_version
@@ -46,19 +46,31 @@ neoForge {
 // Xaero import at all, so the same files can be shared verbatim by every loader/version branch
 // instead of being forked and left to drift. src/main holds everything that has to know which
 // Minecraft and which loader it is running on.
+
 sourceSets {
     main {
         java.srcDirs = ['src/main/java', 'src/common/java']
     }
 }
 
+//repositories.clear()
+
 repositories {
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+        content {
+            includeGroup "maven.modrinth"
+        }
+    }
     flatDir { dirs 'libs' }
 }
 
 dependencies {
     // Xaero's World Map is closed-source and not published to any Maven repo.
     // We compile against the actual shipped jar (official Mojang mappings, no reobf needed).
+    compileOnly "maven.modrinth:NcUtCpym:SnQ4SoDe"
+
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
 
