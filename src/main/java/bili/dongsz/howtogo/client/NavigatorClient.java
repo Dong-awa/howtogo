@@ -20,7 +20,7 @@ import java.util.List;
  * <p>That puts {@code NavigatorItem} on the server, where it must not reach for anything that only
  * exists on a client: no {@code Minecraft}, no screens, no navigation readout. Those live here, and the
  * item calls in only after asking which side it is on -- the answer is asked of the level or of
- * {@link net.neoforged.fml.loading.FMLEnvironment}, never by assuming.
+ * {@link net.fabricmc.loader.api.FabricLoader}, never by assuming.
  */
 public final class NavigatorClient {
 

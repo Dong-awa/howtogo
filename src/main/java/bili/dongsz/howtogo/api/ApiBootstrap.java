@@ -1,7 +1,6 @@
 package bili.dongsz.howtogo.api;
 
 import bili.dongsz.howtogo.HowToGo;
-import net.neoforged.neoforge.common.NeoForge;
 
 /**
  * Posts {@link HowToGoRegistrationEvent} once, on the first client tick.
@@ -14,6 +13,12 @@ import net.neoforged.neoforge.common.NeoForge;
  * handler sixty times a second -- which the id checks would turn into a log full of refusals rather
  * than into a bug, but a log full of refusals is a bug of its own. The guard is a plain field read and
  * write on the client thread, which is the only thread that calls it.
+ *
+ * <h2>What the Fabric port had to change</h2>
+ * On NeoForge this was a single {@code NeoForge.EVENT_BUS.post(event)}. Fabric has no central bus: the
+ * event owns its own {@code Event} instance and is dispatched through its invoker, so the line reads
+ * {@code HowToGoRegistrationEvent.EVENT.invoker().onRegistration(...)} instead. The guard, the timing
+ * and the error handling are unchanged.
  */
 public final class ApiBootstrap {
 
@@ -29,14 +34,15 @@ public final class ApiBootstrap {
         }
         fired = true;
         try {
-            NeoForge.EVENT_BUS.post(new HowToGoRegistrationEvent());
+            HowToGoRegistrationEvent.EVENT.invoker().onRegistration(new HowToGoRegistrationEvent());
             HowToGo.LOGGER.info("[HowToGo] api | v{} ready; {} destination source(s) and {} self "
                             + "check(s) contributed by other mods",
                     HowToGoApi.API_VERSION, DestinationSources.registeredCount(),
                     SelfChecks.count());
         } catch (Throwable threw) {
-            // The event bus reports listener failures itself; this catch is for the bus failing, and
-            // either way a broken addon handler must not take the client down on its first tick.
+            // A throwing handler is reported by the event itself; this catch is for the dispatch
+            // failing, and either way a broken addon handler must not take the client down on its
+            // first tick.
             HowToGo.LOGGER.error("[HowToGo] api | posting the registration event failed", threw);
         }
     }

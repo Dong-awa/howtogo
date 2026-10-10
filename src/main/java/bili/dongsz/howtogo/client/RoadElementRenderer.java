@@ -124,7 +124,37 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_ROUTE_DONE = 0xFF6E6E6E;
     private static final int COLOR_ROUTE_START = 0xFF44FF88;
     private static final int COLOR_ROUTE_END = 0xFFFF4444;
+    /**
+     * The route's stroke width in pixels, at or above {@link #ROUTE_FULL_WIDTH_SCALE}.
+     *
+     * <p>It is not a fixed width, and that was the whole of the problem with it: roads thin as the
+     * map is pulled back (see {@link #strokeHalfWidthPx}) while the route stayed the same four-pixel
+     * band at every zoom, so the further out the player looked the more the route looked like the one
+     * wrong thing on the map. The route now scales the same way, on the same {@code info.scale}.
+     *
+     * <p>Three numbers decide the shape of it, and they are the three to reach for when it still
+     * reads wrong at some zoom: this one is the width when the map is close, the scale below is how
+     * close that has to be, and the floor is how thin it is allowed to get at the far end.
+     */
     private static final double ROUTE_STROKE_PX = 4.0;
+    /**
+     * The zoom at which the route reaches its full width.
+     *
+     * <p>Above {@code 1.0} on purpose: the map's scale is pixels per block, and a route that only
+     * starts thinning below one pixel per block still looks like a band across the whole of the
+     * zoomed-out range, which is the range most of a journey is read at. At 1.5 the stroke is already
+     * down to two thirds of its width by the time the map is at one pixel per block.
+     */
+    private static final double ROUTE_FULL_WIDTH_SCALE = 1.5;
+    /** Floor on the route's stroke, in pixels -- the same floor the roads are held to. */
+    private static final double ROUTE_MIN_STROKE_PX = 1.0;
+    /**
+     * Floor on the route's endpoints, as a share of their full size.
+     *
+     * <p>Held higher than the stroke's floor: the two dots are how a player finds the ends of a trip
+     * at a glance, and a dot scaled down as far as the line would be a dot nobody can see.
+     */
+    private static final double ROUTE_MARKER_MIN_FACTOR = 0.5;
     private static final double ROUTE_MARKER_PX = 5.0;
 
     /**
@@ -845,9 +875,19 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      *
      * <p>Shapes before text: see the warning on HudDraw.
      */
-    private static final double LINE_STROKE_PX = 2.5;
+    /**
+     * How wide a transit line is drawn, in GUI pixels, at or above {@link #FULL_LINE_STROKE_SCALE}.
+     *
+     * <p>Kept in proportion with the road strokes rather than chosen on its own: a line and the roads
+     * it runs beside are read together, so thinning the roads without thinning the lines leaves the
+     * lines reading as the fat thing on the map instead. The road ceiling is now
+     * {@code width * 1.0} pixels -- a highway at 7, a path at 3, each reaching it at one pixel per
+     * block -- and a line is a different kind of object with no width of its own to be true to, so it
+     * is held to a flat value below the narrowest road rather than growing with the zoom.
+     */
+    private static final double LINE_STROKE_PX = 1.3;
     /** Narrowest a line is drawn at, so a line never disappears however far the map is zoomed out. */
-    private static final double MIN_LINE_STROKE_PX = 0.9;
+    private static final double MIN_LINE_STROKE_PX = 0.5;
     /** Map scale at which a line is drawn at its full width: below it, the stroke thins with the map. */
     private static final double FULL_LINE_STROKE_SCALE = 0.5;
     /**
@@ -1657,7 +1697,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         Route route = Navigation.route();
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
-        double marker = ROUTE_MARKER_PX * posePerPixel;
+        // The route's share of the map's zoom: 1 at or above ROUTE_FULL_WIDTH_SCALE, falling with the
+        // map below it and never under the stroke's floor. p10 is info.scale -- the map's pixels per
+        // block -- so this needs no extra argument, and it is the same quantity the roads are sized by.
+        double routeZoom = Math.max(ROUTE_MIN_STROKE_PX / ROUTE_STROKE_PX,
+                Math.min(1.0, Math.abs(p10) / ROUTE_FULL_WIDTH_SCALE));
+        double marker = ROUTE_MARKER_PX * Math.max(ROUTE_MARKER_MIN_FACTOR, routeZoom) * posePerPixel;
 
         if (!route.isPresent()) {
             // Still show where the trip started and where it is trying to get to, so a failed
@@ -1673,7 +1718,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         List<double[]> points = route.points();
-        double halfWidth = ROUTE_STROKE_PX * 0.5 * posePerPixel;
+        double halfWidth = ROUTE_STROKE_PX * 0.5 * routeZoom * posePerPixel;
         double travelled = Navigation.travelled();
 
         int aheadR = (COLOR_ROUTE >> 16) & 0xFF;
@@ -1974,9 +2019,33 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * stays metrically honest when zoomed out. Above it the stroke stops widening, which keeps
      * high zoom levels readable instead of turning every road into a solid band.
      */
+    /**
+     * How wide a stroke may get, in pixels per block of the road's own width.
+     *
+     * <p>A road is true to scale until it reaches this and stops widening: below the ceiling a highway
+     * draws seven tenths of a pixel per block of its seven, at it a highway is 4.55 pixels wide, and
+     * further in it stays there. Two things are being balanced and they pull opposite ways -- the
+     * ceiling has to be low enough that a close-up is not a plate of coloured ribbon, and the widening
+     * below it has to be real enough that zooming in visibly thickens a road, which is what the
+     * published widths in {@link RoadClass} are for.
+     *
+     * <p>The zooms the map is actually read at are the ones that decide it: those sit near or above the
+     * ceiling, so this number is very nearly "how thick a road is", and the classes keep their ratios
+     * because it multiplies each class's own width rather than adding to it. The value is the one left
+     * after tuning it against the map by eye: 0.7 and 0.65 both read heavy in game, 0.55 reads thin at a
+     * close zoom, and this sits between them. That is a taste rather than a measurement, so the ladder
+     * to reach for is 0.6 (here), 0.55, 0.5 -- each roughly a tenth thinner than the last.
+     *
+     * <p>The widths are GUI pixels: the pose Xaero leaves for an element renderer carries no zoom
+     * ({@link MapProjection} records the measurement -- its {@code m00} is a constant
+     * {@code 1/guiScale}), so a value here is that many GUI pixels on screen whatever the map is doing,
+     * and a player on a large GUI scale sees the same band several physical pixels wider.
+     */
+    private static final double STROKE_MAX_PX_PER_BLOCK = 0.6;
+
     private static double strokeHalfWidthPx(RoadClass roadClass, double scale) {
         double naturalHalf = roadClass.width() * 0.5 * Math.abs(scale);
-        double cappedHalf = (3.0 + roadClass.width() * 0.7) * 0.5;
+        double cappedHalf = roadClass.width() * 0.5 * STROKE_MAX_PX_PER_BLOCK;
         return Math.max(MIN_STROKE_PX * 0.5, Math.min(naturalHalf, cappedHalf));
     }
 
@@ -2166,6 +2235,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
+        // The same three porting facts as HudDraw's twin of this method, and the same consequence if
+        // the last call is dropped: 1.20.1's BufferBuilder counts a vertex only in endVertex(), which
+        // 1.21 removed. Without it every road, route, marker and label this renderer builds for
+        // Xaero's world map is constructed and then thrown away, silently.
+        vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
     }
 }

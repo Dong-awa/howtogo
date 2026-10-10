@@ -522,8 +522,14 @@ public final class SelfTest {
                     network);
 
             server = WebMapServer.start(() -> snapshot, freePort());
-            try (HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10)).build()) {
+            // Java 17's HttpClient is not AutoCloseable -- it became so in Java 21 -- so it cannot be a
+            // try-with-resources resource on a 1.20.1 (Java 17) build. The block is kept as it was.
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10)).build();
+            // A plain block rather than a try: the client needs no closing on Java 17, and the braces
+            // are kept so the body -- which returns from inside -- sits exactly where it did. The
+            // outer try below still owns the server's lifetime.
+            {
                 Reply page = fetch(client, server.url());
                 Reply script = fetch(client, server.url() + "js/app.js");
                 Reply library = fetch(client, server.url() + "vendor/html2canvas.min.js");

@@ -4,7 +4,7 @@ import bili.dongsz.howtogo.HowToGo;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ServerData;
-import net.neoforged.fml.loading.FMLPaths;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -55,7 +55,7 @@ public final class WorldFiles {
         if (level instanceof ClientLevel clientLevel) {
             dimension = clientLevel.dimension().location().toString();
         }
-        Path root = FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID);
+        Path root = FabricLoader.getInstance().getConfigDir().resolve(HowToGo.MODID);
         return root.resolve(worldDirectory(root, worldKey(mc)))
                 .resolve(sanitize(dimension) + safeSuffix(suffix) + ".json");
     }

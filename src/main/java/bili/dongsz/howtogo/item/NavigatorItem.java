@@ -8,9 +8,9 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.world.level.Level;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.fml.loading.FMLEnvironment;
 
 import java.util.List;
 
@@ -44,11 +44,14 @@ public final class NavigatorItem extends Item {
     }
 
     @Override
-    public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
+    public void appendHoverText(ItemStack stack, Level level, List<Component> tooltip,
                                 TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.
-        if (FMLEnvironment.dist == Dist.CLIENT) {
+        // 1.20.1 hands this method the level the stack is being described in; 1.20.5 replaced that
+        // parameter with a TooltipContext, which is the one signature change this class needed.
+        // On NeoForge the side came from FMLEnvironment.dist; on Fabric it comes from the loader.
+        if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
             NavigatorClient.appendTooltip(tooltip);
         }
     }

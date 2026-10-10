@@ -1,52 +1,57 @@
 # libs/
 
-This directory is **empty in the repository on purpose**. Two jars have to be supplied by you
-before this project will compile:
+This directory is **empty in the repository on purpose**. One jar has to be supplied by you before
+this project will compile:
 
 ```
-libs/xaeroworldmap-neoforge-1.21.1-<version>.jar     # required: everything renders through it
-libs/mcphone-1.21.1-neoforge-<version>.jar           # required to compile: optional integration
+libs/xaeroworldmap-fabric-1.20.1-<version>.jar     # required: everything renders through it
 ```
 
-The build fails with an unresolved-reference error until both are present. That is expected, not a
-broken checkout. `libs/*.jar` is in `.gitignore`, so neither jar is ever committed.
+The build fails with an unresolved-reference error until it is present. That is expected, not a
+broken checkout. `libs/*.jar` is in `.gitignore`, so the jar is never committed.
 
-Get them from their official CurseForge or Modrinth pages. This project develops against
-Xaero's World Map 1.40.16 and MCphone 1.10.2.
+Get it from its official Modrinth or CurseForge page, or from the author's own developer Maven
+(`https://chocolateminecraft.com/maven`, artifact `xaero.map:xaeroworldmap-fabric-1.20.1`). This
+branch develops against Xaero's World Map 1.47.0.
 
-## Why neither is redistributed
+## Why it is not redistributed
 
-Both are other people's work:
+Xaero's World Map is closed-source commercial software: it may not be redistributed, bundled, or
+jar-in-jarred, so this repository is not a mirror of it. It is a compile-time dependency only --
+this project is compiled *against* it and never packages it, so the mod this produces contains no
+code of its own. The `libs/` directory exists so the compiler can see its public API and nothing
+more.
 
-- **Xaero's World Map** is closed-source commercial software.
-- **MCphone** publishes its own source, but its jar is still its author's to distribute, and this
-  repository is not a mirror of it.
+## Why the jar is remapped here and was not on NeoForge
 
-Both are `compileOnly`: this project is compiled *against* them and never bundles them, so the mod
-this produces contains no code of theirs. The `libs/` directory exists so the compiler can see their
-public APIs and nothing more.
+The NeoForge branch needed no remapping step: NeoForge runs on the official (Mojang) mappings, which
+is what that jar is published with, and `src/common` and `src/main` are both written in those names.
 
-## Why no reobfuscation
+Fabric is different: its mods are published against **intermediary** names, so the shipped jar
+cannot be compiled against directly. Loom remaps it into the development environment's mappings,
+which is why the dependency is declared `modCompileOnly` and not `compileOnly`. This branch still
+uses `loom.officialMojangMappings()` for the same reason the other branch uses official mappings --
+so that the source keeps its `net.minecraft.*` names and `src/common` can be shared between branches
+verbatim.
 
-Both jars use the official (Mojang) mappings, which is what a NeoForge development environment
-already uses, so no remapping step is needed.
+## What is not needed here
 
-## How the two integrations differ
+Only Xaero's World Map is a compile-time dependency. MTR (`org.mtr.*`), Create
+(`com.simibubi.create.*`), Xaero's Minimap (`xaero.common.*`) and MTR Map Overlay
+(`com.lx862.mtrmap.*`) are reached purely by reflection -- `Class.forName` plus `getMethod` behind a
+`FabricLoader.isModLoaded` guard -- so their jars are runtime mods rather than build inputs.
 
-They are not the same kind of dependency, and the difference matters when reading the code:
-
-- **Xaero is required at build time and at run time.** Every road and route is drawn through its map
-  layer, and `neoforge.mods.toml` declares it as a hard dependency.
-- **MCphone is optional at run time and only present for compilation.** Nothing in this mod refers to
-  it except one class under `bili.dongsz.howtogo.compat.mcphone`, which MCphone discovers through
-  `META-INF/services`. With MCphone absent that class is never loaded and the mod behaves exactly as
-  it did before. See that package's javadoc for the invariant that keeps this true.
+MCphone is **not** part of this branch. Its 1.20.1 build is Forge-only and no Fabric build for
+1.20.1 exists, so `bili.dongsz.howtogo.compat.mcphone` and its `META-INF/services` entry are absent
+here; the NeoForge branch keeps that integration. Nothing else refers to that package, so no other
+class changed as a result.
 
 ## Version notes
 
-- Xaero's World Map: the declared range in `neoforge.mods.toml` is `[1.40.0,)`. If you substitute a
-  much newer jar than 1.40.16, check the log for the layer registration line before assuming a
-  rendering problem is a bug in this mod.
-- MCphone: the app API is versioned and MCphone logs `MCphoneApi.VERSION`. It also logs an
-  `App 已登记: howtogo:navigator` line when the integration registers — if that line is missing while
-  MCphone is installed, the service file or the app class is the place to look.
+- Xaero's World Map: 1.47.0 is what this branch was built and tested against. `fabric.mod.json`
+  declares it under `suggests` rather than as a hard dependency, and every use is guarded by
+  `FabricLoader.isModLoaded("xaeroworldmap")`; with the mod absent this one loads and logs that the
+  road layer is disabled.
+- If you substitute a much newer jar, check the log for the registration line
+  (`[HowToGo] road layer registered with Xaero's World Map`) before assuming a rendering problem is
+  a bug in this mod.

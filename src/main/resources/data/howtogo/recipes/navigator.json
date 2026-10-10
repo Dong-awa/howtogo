@@ -18,7 +18,6 @@
     }
   },
   "result": {
-    "id": "howtogo:navigator",
-    "count": 1
+    "item": "howtogo:navigator"
   }
 }

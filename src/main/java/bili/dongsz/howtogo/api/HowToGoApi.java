@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.api;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.WorldFiles;
 import bili.dongsz.howtogo.route.DestinationSource;
-import net.neoforged.fml.ModList;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.nio.file.Path;
 import java.util.Objects;
@@ -28,8 +28,11 @@ import java.util.Objects;
  *
  * <h2>Client side only</h2>
  * This mod is a client mod: every method here is meaningful only where the game runs, and calling it
- * from a dedicated server would fail at class loading rather than answer anything. Addons should
- * declare the dependency with {@code side = "CLIENT"} and subscribe on {@code Dist.CLIENT}.
+ * from a dedicated server would fail at class loading rather than answer anything. On NeoForge an addon
+ * said so with {@code side = "CLIENT"} in its mods.toml and subscribed on {@code Dist.CLIENT}; on Fabric
+ * the equivalent is declaring this mod as a dependency and doing the work from the addon's
+ * {@code client} entry point, which Fabric skips on a dedicated server. The entry point that registers
+ * the item ({@code main}) never touches this class.
  */
 public final class HowToGoApi {
 
@@ -68,8 +71,8 @@ public final class HowToGoApi {
      */
     public static String version() {
         try {
-            return ModList.get().getModContainerById(HowToGo.MODID)
-                    .map(container -> container.getModInfo().getVersion().toString())
+            return FabricLoader.getInstance().getModContainer(HowToGo.MODID)
+                    .map(container -> container.getMetadata().getVersion().getFriendlyString())
                     .orElse("");
         } catch (Throwable notLoadedYet) {
             return "";

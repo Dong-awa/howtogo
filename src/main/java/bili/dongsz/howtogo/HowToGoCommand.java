@@ -11,18 +11,17 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.webmap.WebMapService;
-import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
-import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
-import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -64,14 +63,19 @@ public final class HowToGoCommand {
      *
      * <p>On the client's own dispatcher, so the tree is rebuilt whenever the client is -- a reconnect,
      * or a change of server -- and never goes stale.
+     *
+     * <p>Here that dispatcher is Fabric's: the callback is handed a fresh client dispatcher every time
+     * the client joins, so the tree has to be -- and is -- built again on each one. Called once from
+     * the client's own initialisation, so the callback is in place before the first join.
      */
-    public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
-        CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
-        // Registered twice rather than redirected: a redirect would put one node in two trees, and the
-        // client's dispatcher is rebuilt from scratch each time, so building the tree again costs
-        // nothing and keeps the two spellings genuinely independent.
-        dispatcher.register(tree(ROOT));
-        dispatcher.register(tree(ALIAS));
+    public static void register() {
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            // Registered twice rather than redirected: a redirect would put one node in two trees, and
+            // the client's dispatcher is rebuilt from scratch each time, so building the tree again costs
+            // nothing and keeps the two spellings genuinely independent.
+            dispatcher.register(tree(ROOT));
+            dispatcher.register(tree(ALIAS));
+        });
     }
 
     /** Runs whatever a command had to leave for the next tick. */
@@ -90,26 +94,28 @@ public final class HowToGoCommand {
         }
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> tree(String name) {
-        return Commands.literal(name)
+    private static LiteralArgumentBuilder<FabricClientCommandSource> tree(String name) {
+        // ClientCommandManager, not Commands: the vanilla builders make a node for the server's source
+        // type, which a client dispatcher will not take.
+        return ClientCommandManager.literal(name)
                 .executes(HowToGoCommand::help)
-                .then(Commands.literal("terminal")
+                .then(ClientCommandManager.literal("terminal")
                         .executes(HowToGoCommand::terminal))
-                .then(Commands.literal("stop")
+                .then(ClientCommandManager.literal("stop")
                         .executes(HowToGoCommand::stop))
-                .then(Commands.literal("selftest")
+                .then(ClientCommandManager.literal("selftest")
                         .executes(HowToGoCommand::selfTest))
-                .then(Commands.literal("webmap")
+                .then(ClientCommandManager.literal("webmap")
                         .executes(HowToGoCommand::webMapStart)
-                        .then(Commands.literal("start")
+                        .then(ClientCommandManager.literal("start")
                                 .executes(HowToGoCommand::webMapStart))
-                        .then(Commands.literal("stop")
+                        .then(ClientCommandManager.literal("stop")
                                 .executes(HowToGoCommand::webMapStop))
-                        .then(Commands.literal("status")
+                        .then(ClientCommandManager.literal("status")
                                 .executes(HowToGoCommand::webMapStatus)))
-                .then(Commands.literal("mode")
+                .then(ClientCommandManager.literal("mode")
                         .executes(HowToGoCommand::cycleMode)
-                        .then(Commands.argument("mode", StringArgumentType.word())
+                        .then(ClientCommandManager.argument("mode", StringArgumentType.word())
                                 .suggests((context, builder) -> {
                                     for (TravelMode mode : TravelMode.values()) {
                                         builder.suggest(mode.id());
@@ -120,7 +126,7 @@ public final class HowToGoCommand {
     }
 
     /** Says what the command does, rather than doing something surprising with no arguments. */
-    private static int help(CommandContext<CommandSourceStack> context) {
+    private static int help(CommandContext<FabricClientCommandSource> context) {
         // One argument per placeholder, all of them the same string: the lang line spells each
         // subcommand out in full, and a shortfall here does not strip the extra placeholders, it
         // makes the whole line fail to format and the player read the raw pattern instead.
@@ -135,7 +141,7 @@ public final class HowToGoCommand {
      * <p>The parent screen is asked for on the tick the screen is built and not here, so that whatever
      * the player is looking at when the command runs is the screen it comes back to.
      */
-    private static int terminal(CommandContext<CommandSourceStack> context) {
+    private static int terminal(CommandContext<FabricClientCommandSource> context) {
         pending = () -> {
             Minecraft minecraft = Minecraft.getInstance();
             minecraft.setScreen(new DestinationScreen(minecraft.screen));
@@ -159,7 +165,7 @@ public final class HowToGoCommand {
      * same shape: whether what is in this world is what the mod thinks is in it is the same question
      * for a source another mod contributed, and the player asking it is already here.
      */
-    private static int selfTest(CommandContext<CommandSourceStack> context) {
+    private static int selfTest(CommandContext<FabricClientCommandSource> context) {
         List<String> lines;
         int failed = 0;
         try {
@@ -202,7 +208,7 @@ public final class HowToGoCommand {
      * makes a feature not get used. The link opens the default browser through the game's own
      * platform helper, which is the same path the chat's other links take.
      */
-    private static int webMapStart(CommandContext<CommandSourceStack> context) {
+    private static int webMapStart(CommandContext<FabricClientCommandSource> context) {
         String running = WebMapService.url();
         if (running != null) {
             say(context, Component.translatable("command.howtogo.webmap.running", urlLink(running)));
@@ -216,14 +222,14 @@ public final class HowToGoCommand {
             // Reported rather than logged and forgotten: the usual cause is a port the player could
             // change, and a failure they cannot see is one they cannot fix.
             HowToGo.LOGGER.warn("[HowToGo] webmap | could not start: {}", failed.toString());
-            context.getSource().sendFailure(Component.translatable("command.howtogo.webmap.failed",
+            context.getSource().sendError(Component.translatable("command.howtogo.webmap.failed",
                     String.valueOf(failed.getMessage())));
             return 0;
         }
     }
 
     /** Stops the server, and says whether there was one. */
-    private static int webMapStop(CommandContext<CommandSourceStack> context) {
+    private static int webMapStop(CommandContext<FabricClientCommandSource> context) {
         if (WebMapService.stop()) {
             say(context, Component.translatable("command.howtogo.webmap.stopped"));
             return 1;
@@ -238,7 +244,7 @@ public final class HowToGoCommand {
      * <p>Run on the client thread, which is why it may read {@link RoadStore} directly: a command is
      * executed on the client's own thread, so this needs none of the hand-off the HTTP side does.
      */
-    private static int webMapStatus(CommandContext<CommandSourceStack> context) {
+    private static int webMapStatus(CommandContext<FabricClientCommandSource> context) {
         String url = WebMapService.url();
         if (url == null) {
             say(context, Component.translatable("command.howtogo.webmap.not_running"));
@@ -280,7 +286,7 @@ public final class HowToGoCommand {
     }
 
     /** Ends the trip, if there is one. */
-    private static int stop(CommandContext<CommandSourceStack> context) {
+    private static int stop(CommandContext<FabricClientCommandSource> context) {
         Destination target = Navigation.target();
         if (target == null) {
             say(context, Component.translatable("command.howtogo.stop.none"));
@@ -292,11 +298,11 @@ public final class HowToGoCommand {
     }
 
     /** Switches to the named travel mode, refusing a name that is not one. */
-    private static int setMode(CommandContext<CommandSourceStack> context) {
+    private static int setMode(CommandContext<FabricClientCommandSource> context) {
         String asked = StringArgumentType.getString(context, "mode");
         TravelMode mode = byId(asked);
         if (mode == null) {
-            context.getSource().sendFailure(
+            context.getSource().sendError(
                     Component.translatable("command.howtogo.mode.unknown", asked, modeIds()));
             return 0;
         }
@@ -311,7 +317,7 @@ public final class HowToGoCommand {
      * <p>The same order the hotkey walks them in, so the two ways of doing it cannot disagree about
      * what "next" means.
      */
-    private static int cycleMode(CommandContext<CommandSourceStack> context) {
+    private static int cycleMode(CommandContext<FabricClientCommandSource> context) {
         Navigation.setMode(Navigation.mode().next());
         return 1;
     }
@@ -343,7 +349,8 @@ public final class HowToGoCommand {
     }
 
     /** Says something to the player who asked. */
-    private static void say(CommandContext<CommandSourceStack> context, Component message) {
-        context.getSource().sendSuccess(() -> message, false);
+    private static void say(CommandContext<FabricClientCommandSource> context, Component message) {
+        // The client source has no sendSuccess: Fabric spells the same thing sendFeedback.
+        context.getSource().sendFeedback(message);
     }
 }

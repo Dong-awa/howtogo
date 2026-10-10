@@ -17,7 +17,6 @@ import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
-import net.neoforged.neoforge.client.event.RenderGuiEvent;
 
 import static bili.dongsz.howtogo.client.HudDraw.*;
 
@@ -97,7 +96,16 @@ public final class NavHudRenderer {
     private NavHudRenderer() {
     }
 
-    public static void onRenderGui(RenderGuiEvent.Post event) {
+    /**
+     * Draws the readout over the world.
+     *
+     * <p>On NeoForge this took a {@code RenderGuiEvent.Post} and read the graphics object out of it;
+     * on Fabric it is the {@code HudRenderCallback} signature -- the graphics object and the partial
+     * tick come in as arguments. The callback fires inside the same HUD pass, though not at precisely
+     * the same point as the NeoForge event did, which is why the panel's own state is recomputed here
+     * rather than accumulated.
+     */
+    public static void onRenderGui(GuiGraphics graphics, float tickDelta) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen != null || mc.player == null || mc.level == null) {
             return;
@@ -105,7 +113,7 @@ public final class NavHudRenderer {
         if (Navigation.target() == null) {
             return;
         }
-        draw(event.getGuiGraphics(), mc);
+        draw(graphics, mc);
     }
 
     // -------------------------------------------------------------------- panel

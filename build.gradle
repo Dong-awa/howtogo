@@ -1,84 +1,82 @@
 plugins {
+    id 'fabric-loom' version '1.9.2'
     id 'java'
-    id 'net.neoforged.moddev' version '2.0.78'
 }
 
 version = project.mod_version
 group = project.maven_group
 base.archivesName = project.archives_name
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
-
-neoForge {
-    version = project.neoforge_version
-
-    runs {
-        client {
-            client()
-            systemProperty 'forge.logging.markers', 'REGISTRIES'
-            // The in-game self-test, for tools/user-test/run-user-test.ps1: the rig runs the client with
-            // -PhtgSelftest=<seconds> (and optionally -PhtgSelftestQuit=1) so the checks run themselves
-            // once a world is loaded and the report lands in the log for the rig to grade. Empty -- the
-            // default -- means the client behaves exactly as a player's does.
-            systemProperty 'howtogo.selftest', project.findProperty('htgSelftest') ?: ''
-            systemProperty 'howtogo.selftest.quit', project.findProperty('htgSelftestQuit') ?: ''
-            // -PhtgQuickPlay=<world name> opens that world on start, which is what makes the rig a single
-            // command: without it the client sits on the title screen and the checks, which are all about
-            // a world, have nothing to read. Passing it through the run config because Gradle's own
-            // --args replaces the launcher's arguments rather than adding to them.
-            if (project.hasProperty('htgQuickPlay')) {
-                programArgument '--quickPlaySingleplayer'
-                programArgument project.property('htgQuickPlay')
-            }
-        }
-    }
-
-    mods {
-        howtogo {
-            sourceSet sourceSets.main
-        }
-    }
-}
-
-// The mod is split across two source roots so that the parts which are genuinely portable stay
-// portable. Anything under src/common is pure Java -- the road network, the routing engine, the
-// transit model, the reflective bridges to other mods -- and contains no Minecraft, loader or
-// Xaero import at all, so the same files can be shared verbatim by every loader/version branch
-// instead of being forked and left to drift. src/main holds everything that has to know which
-// Minecraft and which loader it is running on.
-sourceSets {
-    main {
-        java.srcDirs = ['src/main/java', 'src/common/java']
-    }
-}
+// Minecraft 1.20.1 is a Java 17 game. (The NeoForge original targeted Java 21.)
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 repositories {
+    mavenCentral()
+    maven { url = 'https://maven.fabricmc.net/' }
+    // Xaero publishes an official developer Maven; the shipped jar is also usable directly.
+    maven { url = 'https://chocolateminecraft.com/maven' }
     flatDir { dirs 'libs' }
 }
 
 dependencies {
-    // Xaero's World Map is closed-source and not published to any Maven repo.
-    // We compile against the actual shipped jar (official Mojang mappings, no reobf needed).
-    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // Official Mojang mappings, not Yarn: the whole codebase (33k lines) is written against
+    // net.minecraft.* official names, and re-writing it to Yarn would be a rename pass with no
+    // functional gain. Loom remaps Fabric API and mod jars to these names for us.
+    mappings loom.officialMojangMappings()
+
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // ONLY Xaero's World Map is a compile-time dependency: six files import its element-render
+    // API directly. MTR (org.mtr.*), Create (com.simibubi.*) and Xaero's Minimap (xaero.common.*)
+    // are reached purely by reflection -- Class.forName + getMethod -- so those jars are runtime
+    // mods, not compile inputs, and are deliberately absent here.
+    modCompileOnly files('libs/xaeroworldmap-fabric-1.20.1-1.47.0.jar')
 }
 
-tasks.named('processResources', ProcessResources).configure {
-    var replaceProperties = [
-            minecraft_version: project.minecraft_version,
-            neoforge_version : project.neoforge_version,
-            mod_version      : project.mod_version,
-    ]
-    inputs.properties replaceProperties
-    // The licence goes into the jar as well as the repository. MIT requires the notice to travel
-    // with every copy, and the copy people actually receive is the jar, not the checkout.
-    from(rootProject.file('LICENSE')) {
-        into 'META-INF'
-    }
-    filesMatching(['META-INF/neoforge.mods.toml']) {
-        expand replaceProperties
+// Minecraft 1.20.1 declares RenderType.CompositeState protected, which 1.21.1 widened to public; the
+// HUD's render type needs it. Fabric's access widener is the equivalent of an access transformer.
+loom {
+    accessWidenerPath = file('src/main/resources/howtogo.accesswidener')
+}
+
+// Mirrors the original's split: src/common is loader-free, portable Java; src/main knows which
+// Minecraft and which loader it runs on. -PonlyCommon compiles just the portable half, which is
+// how the portability claim gets tested rather than asserted.
+def onlyCommon = project.hasProperty('onlyCommon')
+sourceSets {
+    main {
+        java.srcDirs = onlyCommon ? ['src/common/java'] : ['src/main/java', 'src/common/java']
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    // javac stops at 100 errors by default, which hides the shape of a port. Raise it so the
+    // inventory is complete.
+    options.compilerArgs += ['-Xmaxerrs', '100000']
+}
+
+// Diagnostic helper: prints the compile classpath and the resolved Minecraft jar so the real
+// 1.20.1 API can be inspected with javap instead of guessed at.
+tasks.register('dumpCompileClasspath') {
+    doLast {
+        new File(projectDir, 'compile-classpath.txt').text = sourceSets.main.compileClasspath.asPath
+        println "compile classpath written to compile-classpath.txt"
+    }
+}
+
+// fabric.mod.json carries ${version}, which has to be expanded as it is written into the jar --
+// the NeoForge original did the same for neoforge.mods.toml. The licence travels with the jar for
+// the same reason it did there: MIT requires the notice to accompany every copy, and the copy
+// people receive is the jar.
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+    from(rootProject.file('LICENSE')) {
+        into 'META-INF'
+    }
 }

@@ -206,7 +206,19 @@ public final class HudDraw {
 
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
+        // THREE porting facts meet on this one line.
+        // 1. 1.20.1 names the call vertex(Matrix4f, float, float, float) and the colour color(...);
+        //    addVertex/setColor are the 1.21 names, and 1.20.1 has no overload taking a PoseStack.Pose.
+        // 2. endVertex() is REQUIRED here and is the reason the whole HUD was blank on the first
+        //    attempt: BufferBuilder counts a vertex only when endVertex() is called
+        //    (endVertex() does vertices++), and 1.21 removed the method so that a vertex ends
+        //    implicitly at the next one. Code ported from 1.21 therefore compiles, runs, and draws
+        //    nothing at all -- no error, no warning. Everything drawn through this helper (the
+        //    mini-map's roads, route, markers and player arrow, and the whole world map layer) was
+        //    invisible until this call was added, while every vanilla graphics.fill/drawString next
+        //    to it kept working, because the vanilla paths call endVertex() themselves.
+        // 3. The tint is per vertex rather than per draw, so no RenderSystem colour state is involved.
+        vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
     }
 
     // ------------------------------------------------------------ rounded cards

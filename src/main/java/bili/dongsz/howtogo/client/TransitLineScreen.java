@@ -375,8 +375,9 @@ public final class TransitLineScreen extends Screen {
 
     // ---------------------------------------------------------------- render
 
+    /** 1.20.1 passes the graphics object alone; the other two arguments came later. */
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
     }
 
     /**
@@ -903,11 +904,13 @@ public final class TransitLineScreen extends Screen {
      * <p>Per column, and only for the column under the cursor: a wheel that moved all three at once would
      * take the line the player is reading out from under them while they looked for a stop to add.
      */
+    // 1.20.1's mouseScrolled carries the vertical wheel only; the horizontal component scrollX was
+    // split out of it in a later version, so this override and its two super calls lost an argument.
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
         int step = (int) Math.signum(scrollY);
         if (step == 0) {
-            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+            return super.mouseScrolled(mouseX, mouseY, scrollY);
         }
         if (inColumn(mouseX, mouseY, linesX)) {
             lineScroll = clampScroll(lineScroll - step, listed().size());
@@ -922,7 +925,7 @@ public final class TransitLineScreen extends Screen {
             candidatesScroll = clampScroll(candidatesScroll - step, offered().size());
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     /** Whether the pointer is anywhere in one column, list area and header alike. */

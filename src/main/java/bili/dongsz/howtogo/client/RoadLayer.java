@@ -1,8 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
-import net.neoforged.fml.ModList;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.fabricmc.loader.api.FabricLoader;
 import xaero.map.WorldMap;
 import xaero.map.element.MapElementRenderHandler;
 
@@ -21,11 +20,11 @@ public final class RoadLayer {
     private RoadLayer() {
     }
 
-    public static void onClientTick(ClientTickEvent.Post event) {
+    public static void onClientTick() {
         if (attempted) {
             return;
         }
-        if (!ModList.get().isLoaded("xaeroworldmap")) {
+        if (!FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
             // Should not happen (declared as a required dependency), but fail soft rather than
             // spamming the log every tick.
             attempted = true;

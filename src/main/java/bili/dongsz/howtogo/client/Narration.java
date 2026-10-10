@@ -399,7 +399,8 @@ public final class Narration {
         }
         long millis = (long) SPOKEN_BASE_MS + (long) syllables * SPOKEN_SYLLABLE_MS
                 + (long) letters * SPOKEN_LETTER_MS;
-        return ticksFor(Math.clamp(millis, SPOKEN_MIN_MS, SPOKEN_MAX_MS));
+        // Math.clamp is Java 21; 1.20.1 targets Java 17, where the same thing is written this way.
+        return ticksFor(Math.max(SPOKEN_MIN_MS, Math.min(SPOKEN_MAX_MS, millis)));
     }
 
     /** A length of time as client ticks, never less than one. */

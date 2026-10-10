@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
-import net.neoforged.fml.ModList;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -1005,7 +1005,9 @@ public final class MtrClientData {
      */
     private static boolean mtrLoaded() {
         try {
-            return ModList.get() != null && ModList.get().isLoaded(MOD_ID);
+            // On Fabric the loader is always there, so the "no loader to ask" case the NeoForge build
+            // guarded against cannot arise; the catch stays for the standalone harness.
+            return FabricLoader.getInstance().isModLoaded(MOD_ID);
         } catch (RuntimeException | LinkageError notBootstrapped) {
             return false;
         }

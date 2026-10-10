@@ -804,9 +804,13 @@ public final class DestinationScreen extends Screen {
 
     // ------------------------------------------------------------------ render
 
+    /**
+     * 1.20.1 passes the graphics object alone; the mouse position and partial tick the 1.21 signature
+     * carried were added in a later version. Nothing is drawn here either way: dimming is handled in
+     * render so the panel sits between it and the widgets.
+     */
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Dimming is handled in render so the panel sits between it and the widgets.
+    public void renderBackground(GuiGraphics graphics) {
     }
 
     @Override
@@ -1765,8 +1769,10 @@ public final class DestinationScreen extends Screen {
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
+    // 1.20.1's mouseScrolled carries the vertical wheel only; the horizontal component scrollX was
+    // split out of it in a later version, so this override lost an argument.
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
         if (insideMap(mouseX, mouseY)) {
             // Zoom about the centre. Anchoring on the centre rather than the cursor is simpler and
             // predictable enough at this size.

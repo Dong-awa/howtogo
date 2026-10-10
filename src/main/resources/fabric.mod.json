@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "howtogo",
+  "version": "${version}",
+  "name": "HowToGo | 问道",
+  "description": "My-world road marking and real-time navigation. Road marking and real-time navigation for Minecraft.",
+  "authors": [
+    "DongSZ"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/howtogo/textures/item/navigator.png",
+  "environment": "*",
+  "accessWidener": "howtogo.accesswidener",
+  "mixins": [
+    "howtogo.mixins.json"
+  ],
+  "entrypoints": {
+    "main": [
+      "bili.dongsz.howtogo.HowToGoServer"
+    ],
+    "client": [
+      "bili.dongsz.howtogo.HowToGo"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "fabric-api": "*",
+    "minecraft": "~1.20.1",
+    "java": ">=17"
+  },
+  "suggests": {
+    "xaeroworldmap": ">=1.40.0",
+    "xaerominimap": "*",
+    "mtr": "*",
+    "create": "*"
+  }
+}

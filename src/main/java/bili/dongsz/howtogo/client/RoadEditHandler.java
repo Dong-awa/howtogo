@@ -3,37 +3,44 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.RoadSegment;
 import com.mojang.blaze3d.platform.InputConstants;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.neoforged.neoforge.client.event.InputEvent;
-import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
-import net.neoforged.neoforge.client.event.ScreenEvent;
 import org.lwjgl.glfw.GLFW;
 
 /**
  * Mouse and keyboard control for the road editor.
  *
  * <h2>Why the keys come through the screen event and the mouse does not</h2>
- * The two input paths are not symmetric in this NeoForge build, and the asymmetry is the whole
+ * The two input paths are not symmetric in this Fabric build either, and the asymmetry is the whole
  * reason the editor's keys stopped working while its mouse kept going. Read out of the patched
  * sources:
  * <ul>
- *   <li>{@code KeyboardHandler.keyPress} offers the key to the open screen <b>first</b>
- *       ({@code onScreenKeyPressedPre}, then {@code screen.keyPressed}) and returns right there if the
- *       screen took it, posting {@code InputEvent.Key} only afterwards. Xaero's map consumes the keys
- *       it uses, so an {@code InputEvent.Key} listener never sees them: the R press was being eaten by
- *       the map screen before NeoForge's key event existed at all, which no gate could fix.</li>
- *   <li>{@code MouseHandler.onPress} posts {@code InputEvent.MouseButton} <b>before</b> any screen
- *       dispatch, so clicks arrive whether the screen wants them or not. That is why editing by mouse
- *       always worked.</li>
+ *   <li>{@link ScreenKeyboardEvents} are fired from {@code KeyboardHandler.keyPress}, at the very call
+ *       that offers the key to the open screen <b>first</b>, before {@code screen.keyPressed} runs, and
+ *       returning {@code false} from {@code allowKeyPress} cancels that call so the screen never sees
+ *       the key at all. Xaero's map consumes the keys it uses, so a handler that only ran after the
+ *       screen -- a client tick handler reading {@code KeyMapping.consumeClick()}, say -- never sees
+ *       them: the R press was being eaten by the map screen before such a handler existed at all,
+ *       which no gate could fix.</li>
+ *   <li>Fabric has no global mouse event to subscribe to: its own mouse callbacks
+ *       ({@code ScreenMouseEvents}) are per screen, live inside {@code MouseHandler}'s own screen
+ *       dispatch, and only ever exist while a screen is open and for the click that dispatch is about
+ *       to hand to that screen. The editor takes the click a step earlier instead, from a Mixin on
+ *       {@code MouseHandler.onPress}, which calls {@link #onMouseButtonPre(int, int)} <b>before</b>
+ *       vanilla dispatches the click and {@link #onMouseButtonPost(int, int)} after it, so clicks
+ *       arrive whether the screen wants them or not. That is why editing by mouse always worked.</li>
  * </ul>
- * So keys are handled from {@link ScreenEvent.KeyPressed.Pre} and {@link ScreenEvent.KeyReleased.Pre},
- * which fire before the screen sees the key and are indifferent to whether it would consume it, and
- * the key is cancelled only when the editor actually uses it -- otherwise Xaero would lose its own
- * shortcuts. There is deliberately no {@code InputEvent.Key} listener beside these: a key the map
- * happens not to consume would then be handled twice, and R would toggle on and off again.
+ * So keys are handled from the per-screen {@code allowKeyPress} / {@code allowKeyRelease} callbacks
+ * registered in {@link #registerScreenHandlers()}, which fire before the screen sees the key and are
+ * indifferent to whether it would consume it, and the key is consumed only when the editor actually
+ * uses it -- otherwise Xaero would lose its own shortcuts. There is deliberately no client tick key
+ * handler beside these: a key the map happens not to consume would then be handled twice, and R would
+ * toggle on and off again.
  *
  * <h2>Controls</h2>
  * <ul>
@@ -80,17 +87,27 @@ public final class RoadEditHandler {
     private RoadEditHandler() {
     }
 
-    public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
-        event.register(TOGGLE_EDIT);
-        event.register(LINES);
+    /** Registers the editor's two mappings, called once from the client initialiser. */
+    public static void registerKeys() {
+        KeyBindingHelper.registerKeyBinding(TOGGLE_EDIT);
+        KeyBindingHelper.registerKeyBinding(LINES);
     }
 
     // ------------------------------------------------------------------ mouse
 
-    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+    /**
+     * A mouse button changed state, before vanilla handles it.
+     *
+     * <p>Called from the Mixin on {@code MouseHandler.onPress}: Fabric offers no global mouse event, so
+     * that Mixin is what feeds the editor its clicks, from ahead of the screen's own mouse handling.
+     *
+     * @return whether the editor used the click, which is what cancels vanilla's handling of it --
+     *         {@code true} here is what {@code event.setCanceled(true)} used to be
+     */
+    public static boolean onMouseButtonPre(int button, int action) {
         Screen screen = Minecraft.getInstance().screen;
-        if (event.getAction() != GLFW.GLFW_PRESS) {
-            return;
+        if (action != GLFW.GLFW_PRESS) {
+            return false;
         }
 
         // Picking a destination comes before the typing gate: a click is not a typed character, so a
@@ -99,53 +116,58 @@ public final class RoadEditHandler {
         //
         // The map's own switches are not handled here at all: they belong to the screen rather than to
         // the map, and are handled and drawn by MapFilterOverlay.
-        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT && isMapScreen(screen)
+        if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT && isMapScreen(screen)
                 && !RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
-            event.setCanceled(true);
-            return;
+            return true;
         }
 
         // And while editing, the same click is a destination too: the editor places points on a bare
         // click and picks a destination on a Ctrl one.
-        if (isMapOpen(screen) && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
+        if (isMapOpen(screen) && button == GLFW.GLFW_MOUSE_BUTTON_LEFT
                 && RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
-            event.setCanceled(true);
-            return;
+            return true;
         }
 
         if (!isMapOpen(screen)) {
-            return;
+            return false;
         }
         if (!RoadEditSession.isActive()) {
-            return;
+            return false;
         }
 
-        switch (event.getButton()) {
+        switch (button) {
             case GLFW.GLFW_MOUSE_BUTTON_LEFT -> {
                 if (Screen.hasShiftDown()) {
                     safely("begin drag", RoadEditSession::beginDragAtCursor);
                 } else {
                     safely("place point", RoadEditSession::clickPlace);
                 }
-                event.setCanceled(true);
+                return true;
             }
             case GLFW.GLFW_MOUSE_BUTTON_RIGHT -> {
                 safely("finish road", RoadEditSession::clickFinishOrClear);
-                event.setCanceled(true);
+                return true;
             }
             default -> {
                 // Middle click and friends stay with Xaero.
             }
         }
+        return false;
     }
 
-    public static void onMouseButtonReleased(InputEvent.MouseButton.Post event) {
-        if (event.getAction() != GLFW.GLFW_RELEASE) {
+    /**
+     * A mouse button changed state, after vanilla handled it.
+     *
+     * <p>The other half of the Mixin on {@code MouseHandler.onPress}. Nothing here cancels anything: a
+     * release only has to end a drag that is still in progress.
+     */
+    public static void onMouseButtonPost(int button, int action) {
+        if (action != GLFW.GLFW_RELEASE) {
             return;
         }
-        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
+        if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT
                 && RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
             RoadEditSession.endDrag();
         }
@@ -154,30 +176,50 @@ public final class RoadEditHandler {
     // --------------------------------------------------------------- keyboard
 
     /**
-     * A key was pressed while some screen is open: the editor's only way in.
+     * Wires the keyboard into the screens the editor works on.
      *
-     * <p>Cancels the event only when the editor uses the key, so the map screen keeps every shortcut
-     * the editor does not claim.
+     * <p>Fabric's keyboard callbacks are per screen and can only be registered once the screen exists,
+     * so they are attached from {@link ScreenEvents#AFTER_INIT}.
+     *
+     * <p>Registration is deliberately not gated on {@link #isMapScreen(Screen)}: that test ends in
+     * {@code MapViewState.isFresh()}, and at {@code AFTER_INIT} the map screen has not drawn its first
+     * frame yet, so the reading is stale and the callbacks would never be registered at all -- the map
+     * would open with no editor keys. The Xaero-package half of that test is the part that is fixed for
+     * the life of the screen, and it is the one used here; its freshness half is dynamic and is asked
+     * again inside each callback, through {@link #isMapOpen(Screen)}, which is where the original asked
+     * it too. A screen that passes the package test but not the freshness one is therefore wired and
+     * then consumes nothing, which is exactly what the old global listeners did.
+     *
+     * <p>Re-registration on a resize is harmless: {@code AFTER_INIT} fires again for the same screen,
+     * but the {@code allowKeyPress} / {@code allowKeyRelease} invokers stop at the first callback that
+     * returns {@code false}, and a callback that does not consume is one that did nothing.
      */
-    public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
-        Screen screen = event.getScreen();
-        boolean gate = isMapOpen(screen);
-        boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_PRESS);
-        if (consumed) {
-            event.setCanceled(true);
-        }
-    }
+    public static void registerScreenHandlers() {
+        ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (!isInPackage(screen, "xaero.")) {
+                return;
+            }
 
-    /** A key was released: only a shift release matters, and it ends a drag. */
-    public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
-        Screen screen = event.getScreen();
-        boolean gate = isMapOpen(screen);
-        boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_RELEASE);
-        if (consumed) {
-            event.setCanceled(true);
-        }
+            ScreenKeyboardEvents.allowKeyPress(screen).register((open, keyCode, scanCode, modifiers) -> {
+                // A key was pressed while a screen is open: the editor's only way in. The gate is asked
+                // per key rather than once at registration, because the screen can change state while
+                // it is open -- a text field taking focus, or the map's view state going stale -- and
+                // that has to stop the editor claiming keys without the screen being reopened. Only a
+                // key the editor uses is consumed (false), so the map keeps every shortcut it owns.
+                boolean gate = isMapOpen(open);
+                boolean consumed = gate
+                        && handleKey(open, keyCode, scanCode, GLFW.GLFW_PRESS);
+                return !consumed;
+            });
+
+            ScreenKeyboardEvents.allowKeyRelease(screen).register((open, keyCode, scanCode, modifiers) -> {
+                // A key was released: only a shift release matters, and it ends a drag. Same live gate.
+                boolean gate = isMapOpen(open);
+                boolean consumed = gate
+                        && handleKey(open, keyCode, scanCode, GLFW.GLFW_RELEASE);
+                return !consumed;
+            });
+        });
     }
 
     /**

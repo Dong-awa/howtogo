@@ -1,25 +1,34 @@
 package bili.dongsz.howtogo.api;
 
 import bili.dongsz.howtogo.route.DestinationSource;
-import net.neoforged.bus.api.Event;
+import net.fabricmc.fabric.api.event.Event;
+import net.fabricmc.fabric.api.event.EventFactory;
 
 /**
  * "This mod is loaded and its API is ready" -- the moment an addon may register.
  *
  * <h2>When it is posted</h2>
  * Once, on the first client tick, on the client thread, after every mod has been constructed and
- * after client config has been read. Posted on the game event bus ({@code NeoForge.EVENT_BUS}), so an
- * addon reaches it the ordinary way:
+ * after client config has been read.
+ *
+ * <h2>What the Fabric port had to change</h2>
+ * On NeoForge this class extended {@code net.neoforged.bus.api.Event} and was posted on the game event
+ * bus, so an addon reached it with {@code @EventBusSubscriber} and {@code @SubscribeEvent}. Fabric's
+ * event API is built from {@link EventFactory} instead: there is no event base class and no annotation
+ * to subscribe with, so the event publishes its own {@link #EVENT} and an addon registers a callback on
+ * it:
  *
  * <pre>{@code
- * @EventBusSubscriber(modid = "myaddon", value = Dist.CLIENT)
- * public final class MyAddon {
- *     @SubscribeEvent
- *     public static void onRegister(HowToGoRegistrationEvent event) {
- *         event.registerDestinationSource(new MySource());
+ * public final class MyAddon implements ClientModInitializer {
+ *     @Override
+ *     public void onInitializeClient() {
+ *         HowToGoRegistrationEvent.EVENT.register(event -> event.registerDestinationSource(new MySource()));
  *     }
  * }
  * }</pre>
+ *
+ * <p>An addon may still subscribe from its own {@code onInitializeClient} rather than from the event,
+ * because the registries behind it are open from the start; the timing advice below is unchanged.
  *
  * <h2>Why not "as soon as I construct"</h2>
  * Because mod construction order is not a contract. An addon that posts into this mod's registries
@@ -39,7 +48,21 @@ import net.neoforged.bus.api.Event;
  * this event. Both routes end in the same list, and an id may only be taken once, so registering twice
  * is refused rather than doubled.
  */
-public final class HowToGoRegistrationEvent extends Event {
+public final class HowToGoRegistrationEvent {
+
+    /** What an addon registers on {@link #EVENT}; Fabric's substitute for {@code @SubscribeEvent}. */
+    @FunctionalInterface
+    public interface Handler {
+        void onRegistration(HowToGoRegistrationEvent event);
+    }
+
+    /** The event itself. Handlers run in registration order; a throwing handler is the loader's problem. */
+    public static final Event<Handler> EVENT = EventFactory.createArrayBacked(Handler.class,
+            handlers -> event -> {
+                for (Handler handler : handlers) {
+                    handler.onRegistration(event);
+                }
+            });
 
     /**
      * Constructed by this mod when it posts the event; addons only ever receive one.

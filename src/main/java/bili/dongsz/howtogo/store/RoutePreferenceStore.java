@@ -8,7 +8,7 @@ import bili.dongsz.howtogo.route.RoutePreferences;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
-import net.neoforged.fml.loading.FMLPaths;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -250,7 +250,7 @@ public final class RoutePreferenceStore {
 
     /** Client-wide rather than per world: routing taste is a property of the player, not the map. */
     private static Path file() {
-        return FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID).resolve("route_preferences.json");
+        return FabricLoader.getInstance().getConfigDir().resolve(HowToGo.MODID).resolve("route_preferences.json");
     }
 
     // --------------------------------------------------------------------- dto

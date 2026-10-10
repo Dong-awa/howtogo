@@ -6,7 +6,7 @@ import bili.dongsz.howtogo.road.RoadClass;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
-import net.neoforged.fml.loading.FMLPaths;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -317,7 +317,7 @@ public final class MapFilter {
 
     /** Client-wide rather than per world: what a player wants to see is their taste, not the world's. */
     private static Path file() {
-        Path config = FMLPaths.CONFIGDIR.get();
+        Path config = FabricLoader.getInstance().getConfigDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 

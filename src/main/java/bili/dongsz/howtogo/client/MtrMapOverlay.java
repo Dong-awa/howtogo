@@ -795,8 +795,7 @@ final class MtrMapOverlay {
      */
     private static boolean overlayLoaded() {
         try {
-            return net.neoforged.fml.ModList.get() != null
-                    && net.neoforged.fml.ModList.get().isLoaded(MOD_ID);
+            return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded(MOD_ID);
         } catch (RuntimeException | LinkageError notBootstrapped) {
             return false;
         }

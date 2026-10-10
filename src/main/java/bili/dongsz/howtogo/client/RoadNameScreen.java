@@ -377,9 +377,14 @@ public final class RoadNameScreen extends Screen {
         Minecraft.getInstance().setScreen(parent);
     }
 
-    /** No dim, no blur: the map underneath is the context for the name being typed. */
+    /**
+     * No dim, no blur: the map underneath is the context for the name being typed.
+     *
+     * <p>1.20.1 calls this with the graphics object alone; the mouse position and partial tick are a
+     * later addition to the signature.
+     */
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
     }
 
     @Override
