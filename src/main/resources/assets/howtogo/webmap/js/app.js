@@ -424,10 +424,15 @@
       return;
     }
     const seg = road.segment;
+    // Class, then which way it runs, then where it is, then how long this piece is -- the same list the
+    // in-game readout gives for a selected road, in the same order. Length is the piece's own: the page
+    // has no idea which of a name's pieces are one road and which are two that were named alike, and a
+    // segment's own length is a fact about the segment.
     const parts = [
       model.classLabel(seg.roadClass),
       model.directionLabel(seg.direction),
       model.layerLabel(seg.layer),
+      '本段 ' + model.formatLength(seg.lengthBlocks),
     ];
     refs.hover.textContent = '道路：' + (seg.hasName ? seg.name : '未命名道路') + '（' + parts.join(' · ') + '）';
   }

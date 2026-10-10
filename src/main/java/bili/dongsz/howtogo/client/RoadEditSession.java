@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import org.lwjgl.glfw.GLFW;
 
 /**
  * Client-side state for the road editing mode: whether it is on, where the cursor is, and what the
@@ -51,6 +52,41 @@ public final class RoadEditSession {
         return editor().activeLayer();
     }
 
+    /**
+     * Steps the storey new roads are drawn on, by {@code -/+} on the map.
+     *
+     * <h2>Why the drawing storey and not the selection</h2>
+     * The class keys act on a selected road because re-classing a road is a thing a player does to a road
+     * they are looking at. A storey is not: the whole point of it is that a tunnel is a <em>run</em> of
+     * roads, so the gesture is "go down a level, then keep drawing". Tying it to the selection would mean
+     * the key did one thing while something was selected and another while nothing was -- and the one it
+     * did while something was selected is already what {@code N} does, in a panel that also lets the
+     * player see the number they are about to write.
+     *
+     * <p>No undo entry, and no log line: the drawing storey is a mode rather than a property of anything
+     * saved, it is not written into the file, and the readout beside the statistics already says which
+     * storey the next click will use. Moving a road onto a storey is an edit, and that is the panel's job.
+     *
+     * @return the storey being drawn on after the step
+     */
+    public static int stepActiveLayer(int delta) {
+        RoadEditor ed = editor();
+        ed.setActiveLayer(ed.activeLayer() + delta);
+        return ed.activeLayer();
+    }
+
+    /** The storey of the selected road, or the surface when nothing is selected. */
+    public static int selectedLayer() {
+        RoadEditor ed = editor();
+        RoadSegment segment = RoadStore.get().segment(ed.selectedSegmentId());
+        return segment != null ? segment.layer() : 0;
+    }
+
+    /** Length in blocks of the whole selected road, or 0 when nothing is selected. */
+    public static double selectedLength() {
+        return editor().chainLength(editor().selectedSegmentId());
+    }
+
     /** The editor for the current level, creating it on first use. */
     public static RoadEditor editor() {
         RoadNetwork network = RoadStore.get();
@@ -78,6 +114,10 @@ public final class RoadEditSession {
     }
 
     private static void reset() {
+        // Before the editor is touched: turning editing off while the right button is held has to let the
+        // map's own button go, or the map would keep panning after the mouse was moved with nothing
+        // pressed -- the screen believes a button is down until it is told otherwise.
+        endMapPan();
         lastSnap = RoadSnapper.Result.free(0, 0);
         mouseValid = false;
         draggingNodeId = RoadSegment.NO_NODE;
@@ -733,6 +773,124 @@ public final class RoadEditSession {
             total += segment.length();
         }
         return total;
+    }
+
+    // ------------------------------------------------------- panning with the right button
+
+    /**
+     * How far the cursor may travel between a right press and its release and still count as a click
+     * rather than a drag, in the screen's own pixels.
+     *
+     * <p>Small, because it only has to separate "I let go without moving" from "I moved the map", and it
+     * is not the map's own threshold: Xaero decides what pans and what is a click of its own accord. This
+     * one only decides whether the release also drops the selection, which is the gesture a right click
+     * without a drag has always been.
+     */
+    private static final double PAN_CLICK_SLOP = 4.0;
+
+    /** The map screen whose pan this session handed a synthetic left press to, or null. */
+    private static Screen panScreen;
+    private static double panStartScreenX;
+    private static double panStartScreenY;
+    private static boolean panMoved;
+
+    /** Whether a right-button drag of the map is in progress. */
+    public static boolean isPanningMap() {
+        return panScreen != null;
+    }
+
+    /**
+     * Whether a polyline is being drawn right now -- the "purple line" the right button belongs to.
+     */
+    public static boolean isDrawing() {
+        return editor().chainNodeId() != RoadSegment.NO_NODE;
+    }
+
+    /**
+     * Starts a drag of the map with the right button, by handing the map screen the left-button press its
+     * own panning is driven by.
+     *
+     * <h2>Why it is done this way, and not by writing the camera</h2>
+     * Xaero's world map pans while its left button is down: the camera is worked out in its own render
+     * pass from the position the drag started at and where the cursor is now (its "click and drag to
+     * scroll the map"). The left button is the one this editor has already spent -- a press places a
+     * point -- so a right drag has nothing to hand it unless the press is delivered to the screen
+     * directly. {@code Screen.mouseClicked} is the vanilla method Xaero overrides for exactly this, so
+     * the pan that results is Xaero's own, with its own feel and its own animation, and no private field
+     * of a closed-source mod is named anywhere.
+     *
+     * <p>The real right press is cancelled by the caller, so the map never sees a right click: its
+     * right-click menu and its right-drag area selection are what this replaces.
+     *
+     * <p>If the press lands on one of the map's own widgets, the screen handles it and does not start a
+     * pan -- which is the correct outcome, since the player aimed at the widget.
+     */
+    public static void beginMapPan() {
+        if (panScreen != null) {
+            // A pan whose release never arrived -- the button came up while another window had the focus,
+            // so the map screen is still holding a press nobody let go of. It is let go here rather than
+            // refused: refusing would leave the right button dead until editing was toggled off and on.
+            endMapPan();
+        }
+        Screen screen = Minecraft.getInstance().screen;
+        if (screen == null) {
+            return;
+        }
+        double[] cursor = scaledCursor();
+        panScreen = screen;
+        panStartScreenX = cursor[0];
+        panStartScreenY = cursor[1];
+        panMoved = false;
+        screen.mouseClicked(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+    }
+
+    /**
+     * Ends it: the synthetic left press is released on the same screen that was pressed.
+     *
+     * <p>A release on a different screen is skipped rather than sent: the screen that was pressed has
+     * been closed, and a button held down on a screen nobody can see is not something to hand to whatever
+     * replaced it.
+     *
+     * <p>A right press and release that never moved is the old gesture -- drop the selection -- so it
+     * still does that. A drag is a pan and leaves the selection alone: a player moving the map to look at
+     * something else has not asked to forget what they had selected.
+     */
+    public static void endMapPan() {
+        Screen screen = panScreen;
+        if (screen == null) {
+            return;
+        }
+        panScreen = null;
+        double[] cursor = scaledCursor();
+        if (Math.abs(cursor[0] - panStartScreenX) > PAN_CLICK_SLOP
+                || Math.abs(cursor[1] - panStartScreenY) > PAN_CLICK_SLOP) {
+            panMoved = true;
+        }
+        if (Minecraft.getInstance().screen == screen) {
+            screen.mouseReleased(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        }
+        if (!panMoved) {
+            editor().clearSelection();
+            RailNameStore.clearSelection();
+        }
+    }
+
+    /**
+     * The cursor in the screen's own coordinates, which is what a screen's mouse methods take.
+     *
+     * <p>Worked out the way vanilla's own mouse handler works it out, from the raw position and the GUI
+     * scale, rather than taken from the projection this mod keeps for the map: that one is the cursor's
+     * <em>world</em> position turned back into pixels, which is a different number while the map moves
+     * and is not what a screen's hit testing wants.
+     */
+    private static double[] scaledCursor() {
+        Minecraft minecraft = Minecraft.getInstance();
+        com.mojang.blaze3d.platform.Window window = minecraft.getWindow();
+        int rawWidth = Math.max(1, window.getScreenWidth());
+        int rawHeight = Math.max(1, window.getScreenHeight());
+        double x = minecraft.mouseHandler.xpos() * window.getGuiScaledWidth() / (double) rawWidth;
+        double y = minecraft.mouseHandler.ypos() * window.getGuiScaledHeight() / (double) rawHeight;
+        return new double[]{x, y};
     }
 
     public static void updateDrag() {

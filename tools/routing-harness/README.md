@@ -58,6 +58,23 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | A turn at a fork, and the countdown read off the route at three points along it | Guards the arithmetic behind "in 200 metres" and "now": a turn's distance is measured from the route's own start and the countdown is that less what has been travelled, so a mistake shows as the wrong number rather than as a missing route |
 | A trip with three turns and a bend after the second, driven to the destination | The turn already made shown again as the next instruction, at zero distance, and the turn actually being approached skipped in the same step -- the junction was remembered in one slot the walk over the route overwrote, because that walk restarts at the route's first junction every tick. 3932 of the 6856 guided trips over a saved network did it |
 
+| A bridge drawn across a road a storey below it, and a tunnel under one | Painted in whatever order the network's id-keyed hash map happened to iterate, so whether the bridge covered the road beneath it or disappeared under it was an accident of the two segment ids. Roads are painted from the lowest storey up now, with same-storey order untouched |
+
+`DrawOrderCheck.java` covers the one rule behind that: **which road the map paints on top of which**. The
+in-game map cannot be photographed from here, but Xaero draws the frame's elements strictly in the order
+the provider hands them over, in one pass -- so the question reduces to the order of a list, and
+`RoadElement.sortForDraw` is that decision, in pure Java with no Minecraft in it. The checks pin the three
+things the rule is made of: storeys come out ascending over the whole `-32..32` range, roads on one storey
+keep the order they were added in (a stable sort, so the frame does not churn and the same-storey picture
+does not change), and the four overlay singletons -- the MTR marks, the editing handles, the route and the
+names -- still sort after every road and keep their own order, which is what keeps a bridge from covering a
+road name. It also pins the small cases a provider meets on a fresh world: one road, and an empty frame.
+
+The readout that goes with a selected road is checked as a scenario rather than as a screen:
+`scenarioChainLengthIsTheWholeRoad` is the number the HUD prints (the chain's summed length, through any of
+its pieces, with a separate road not swept into the sum and an id that names no segment answering zero), and
+the caption it is appended to is built from the same `chainDirection` the one-way arrows are.
+
 `RouteDirectionCheck.java` covers the reading the wrong-way call is built on: that a planned route never
 reads as running **backwards** where it is drawn forwards. `Route.bearingAt` answers with the nearest
 segment of the drawn line, and a line that passes over the same ground twice -- a road that loops back,

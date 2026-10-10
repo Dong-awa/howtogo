@@ -45,8 +45,14 @@ import org.lwjgl.glfw.GLFW;
  *       (works whether or not editing is on). This is the only way to start navigating from the map;
  *       there used to be a bare {@code G} as well, and it was dropped because a single unmodified
  *       letter on the map is too easy to press by accident and the map already owns most of them.</li>
- *   <li><b>Right click</b> - finish the current road, or clear the selection</li>
+ *   <li><b>Right click</b> - with a road in hand, finish it; with nothing in hand, clear the selection</li>
+ *   <li><b>Right drag</b> - drag the map. The right button is the road's while a road is being drawn,
+ *       and the map's otherwise: with nothing in hand there is no line to finish, and a map that cannot
+ *       be moved is a map you cannot draw on. See {@link RoadEditSession#beginMapPan}</li>
  *   <li><b>&lt; / &gt;</b> (comma / period) - change the road class being drawn, or of the selection</li>
+ *   <li><b>- / +</b> (minus / equals, and the keypad) - the storey new roads are drawn on: down one,
+ *       up one. Shown in the readout beside the statistics, which is where the class being drawn is
+ *       shown, since both are "what the next click will be"</li>
  *   <li><b>N</b> - name the selected road, or the road under the cursor</li>
  *   <li><b>O</b> - make the selected road, or the road under the cursor, one-way; each press moves it
  *       on to the next state, and the fourth brings it back to two-way</li>
@@ -132,7 +138,17 @@ public final class RoadEditHandler {
                 event.setCanceled(true);
             }
             case GLFW.GLFW_MOUSE_BUTTON_RIGHT -> {
-                safely("finish road", RoadEditSession::clickFinishOrClear);
+                if (RoadEditSession.isDrawing()) {
+                    // A line is on the map -- the purple rubber band -- so this is the gesture that ends
+                    // it, exactly as it always was.
+                    safely("finish road", RoadEditSession::clickFinishOrClear);
+                } else {
+                    // Nothing is being drawn, so the button is free and it drags the map instead. The
+                    // press is still taken from Xaero: the pan is Xaero's own, driven by a left press this
+                    // session hands it in beginMapPan, and letting the real right click through as well
+                    // would open the map's right-click menu on the release. See RoadEditSession.
+                    safely("pan map", RoadEditSession::beginMapPan);
+                }
                 event.setCanceled(true);
             }
             default -> {
@@ -148,6 +164,9 @@ public final class RoadEditHandler {
         if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
                 && RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
             RoadEditSession.endDrag();
+        }
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_RIGHT && RoadEditSession.isPanningMap()) {
+            safely("end map pan", RoadEditSession::endMapPan);
         }
     }
 
@@ -221,6 +240,15 @@ public final class RoadEditHandler {
         } else if (key == GLFW.GLFW_KEY_PERIOD) {
             // '>'
             safely("change class", () -> RoadEditSession.cycleActiveClass(1));
+        } else if (key == GLFW.GLFW_KEY_MINUS || key == GLFW.GLFW_KEY_KP_SUBTRACT) {
+            // '-' and its numpad twin: one storey down. The keypad is included because the two keys are
+            // the same idea and a player on a full keyboard reaches for whichever is nearer.
+            safely("lower storey", () -> RoadEditSession.stepActiveLayer(-1));
+        } else if (key == GLFW.GLFW_KEY_EQUAL || key == GLFW.GLFW_KEY_KP_ADD) {
+            // '=' -- which is also the '+' most layouts write on the shifted key -- and the numpad plus.
+            // Both act on the press of the unshifted key, so '+' and '=' are one binding rather than two
+            // that a player has to guess between.
+            safely("raise storey", () -> RoadEditSession.stepActiveLayer(1));
         } else if (key == GLFW.GLFW_KEY_N) {
             safely("name road", RoadEditSession::nameSelectedRoad);
         } else if (key == GLFW.GLFW_KEY_P) {

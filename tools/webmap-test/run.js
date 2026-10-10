@@ -1671,6 +1671,38 @@ function sectionAsync(title, body) {
       /^howtogo-.+\.png$/.test(anchors[anchors.length - 1].download),
       anchors.length ? anchors[anchors.length - 1].download : 'nothing downloaded');
 
+    // --- the hover readout ---------------------------------------------------------
+    // A model of its own with one road in it, so which road the cursor is over is not a question: what
+    // is being checked is what the readout says about a road, not how it picks one. It goes last
+    // because it replaces the model the app is holding, and the checks above read that one; the filters
+    // are cleared first because the class-filter check above turned one off and the hidden set outlives
+    // the model it was made for.
+    app.state.hiddenClasses.clear();
+    app.state.hiddenLayers.clear();
+    app.state.model = model.normalize({
+      version: 1, generatedAt: 1, world: 'sp_HOVER', dimension: 'minecraft:overworld', empty: false,
+      bounds: {minX: 0, minZ: 0, maxX: 100, maxZ: 0},
+      classes: [{id: 'HIGHWAY', color: '#3FA9F5', width: 7}],
+      nodes: [{id: 1, x: 0, y: 64, z: 0, type: 'ENDPOINT'}, {id: 2, x: 100, y: 64, z: 0, type: 'ENDPOINT'}],
+      segments: [{id: 1, roadClass: 'HIGHWAY', y: 64, layer: 1, from: 1, to: 2, direction: 'BACKWARD',
+        name: '高架路', points: [[0, 0], [100, 0]]}],
+      stats: {nodes: 2, segments: 1, lengthBlocks: 100, layers: [1]},
+    });
+    app.state.view = geom.makeView({centerX: 50, centerZ: 0, scale: 4, width: 900, height: 600});
+    byId['map'].dispatch('pointermove', {clientX: 450, clientY: 300, pointerId: 1});
+    const hoverText = byId['status-hover'].textContent;
+    ok('the hover readout names the road and gives its class, direction, storey and length',
+      hoverText.indexOf('道路：高架路') === 0 &&
+      hoverText.indexOf(model.classLabel('HIGHWAY')) >= 0 &&
+      hoverText.indexOf(model.directionLabel('BACKWARD')) >= 0 &&
+      hoverText.indexOf(model.layerLabel(1)) >= 0 &&
+      hoverText.indexOf('本段 ' + model.formatLength(100)) >= 0,
+      hoverText);
+    ok('and the storey comes after the direction, with the length after the storey',
+      hoverText.indexOf(model.directionLabel('BACKWARD')) < hoverText.indexOf(model.layerLabel(1)) &&
+      hoverText.indexOf(model.layerLabel(1)) < hoverText.indexOf('本段'),
+      hoverText);
+
     // --- tidy up ------------------------------------------------------------------
     for (const key of ['document', 'window', 'fetch', 'URL']) delete global[key];
   });

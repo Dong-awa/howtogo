@@ -110,6 +110,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             "hud.howtogo.edit.finish",
             "hud.howtogo.edit.select",
             "hud.howtogo.edit.class",
+            "hud.howtogo.edit.layer",
             "hud.howtogo.edit.name",
             "hud.howtogo.edit.oneway",
             "hud.howtogo.edit.poi",
@@ -1819,6 +1820,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         .chainDirection(RoadEditSession.editor().selectedSegmentId());
                 headline = headline + " · " + Component.translatable(
                         "hud.howtogo.direction." + direction.id()).getString();
+                // Then where it is and how long it is, in that order: a storey is the thing a flat map
+                // cannot show, so it is the first question a selected road raises, and the length is the
+                // number a player reads once the road is the right one. Both are about the whole road
+                // rather than the piece under the cursor -- see RoadEditor.chainLength -- because that is
+                // what selecting a road selects.
+                headline = headline + " · " + Component.translatable("hud.howtogo.layer",
+                        Navigation.roadLayerLabel(RoadEditSession.selectedLayer())).getString();
+                headline = headline + " · " + Component.translatable("hud.howtogo.selected_length",
+                        (int) Math.round(RoadEditSession.selectedLength())).getString();
             }
             leftLines.add(headline);
             leftLines.add(editStats());
@@ -1945,8 +1955,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * Top of a block of the given line count sitting on the given bottom.
      *
      * <p>Nothing is clamped here because nothing needs to be: the worst case is a six-line left block
-     * -- four navigation lines, the caption and the totals -- with the ten-line control list stepped
-     * above it, whose panel top still lands at 40 px of a scaled space Minecraft never makes shorter
+     * -- four navigation lines, the caption and the totals -- with the thirteen-line control list stepped
+     * above it, whose panel top still lands around 10 px of a scaled space Minecraft never makes shorter
      * than 240. A longer list would run off the top and be clipped by the renderer, which is the
      * point at which this would need a scroll or a second column rather than more lines.
      */

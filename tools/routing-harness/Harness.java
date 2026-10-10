@@ -54,6 +54,7 @@ public final class Harness {
         scenarioTurnIsCountedFromThePlayer();
         scenarioOneWayRoad();
         scenarioDeleteRemovesTheWholeRoad();
+        scenarioChainLengthIsTheWholeRoad();
         scenarioDriveTimingWalksOnlyTheWalkedPart();
         scenarioMtrTypeMapping();
         int[] direction = RouteDirectionCheck.run();
@@ -110,6 +111,9 @@ public final class Harness {
         int[] webMap = bili.dongsz.howtogo.webmap.WebMapCheck.run();
         checks += webMap[0];
         failures += webMap[1];
+        int[] drawOrder = DrawOrderCheck.run();
+        checks += drawOrder[0];
+        failures += drawOrder[1];
         int[] webMapHttp = bili.dongsz.howtogo.webmap.WebMapHttpCheck.run();
         checks += webMapHttp[0];
         failures += webMapHttp[1];
@@ -933,6 +937,32 @@ public final class Harness {
 
         editor.undo();
         expect("undo puts the whole street back", net.segmentCount() == 4 && net.nodeCount() == 6);
+    }
+
+    /**
+     * The length the readout gives for a selected road is the whole road's.
+     *
+     * <p>What the map highlights when a piece of a road is selected is the chain, so a readout that
+     * measured the piece under the cursor would disagree with the thing it is describing. The check also
+     * pins the two edges of that rule: a road the id does not name is zero rather than an exception, and
+     * a second, separate road is not swept into the sum by sharing a class or a name.
+     */
+    private static void scenarioChainLengthIsTheWholeRoad() {
+        System.out.println("== the length of the selected road ==");
+        RoadNetwork net = new RoadNetwork();
+        road(net, RoadClass.ROAD, 0, 0, 100, 0);
+        RoadSegment middle = road(net, RoadClass.ROAD, 100, 0, 100, 100);
+        road(net, RoadClass.ROAD, 100, 100, 200, 100);
+        road(net, RoadClass.ROAD, 500, 500, 600, 500);
+
+        RoadEditor editor = new RoadEditor(net);
+        expect("a bent street of three 100-block pieces measures 300 blocks through any of them",
+                editor.chainLength(middle.id()) == 300.0
+                        && editor.chainLength(net.segmentsSnapshot().get(0).id()) == 300.0);
+        expect("a road that is not part of it is not counted",
+                editor.chainLength(net.segmentsSnapshot().get(3).id()) == 100.0);
+        expect("and an id that names no segment is zero rather than an exception",
+                editor.chainLength(9999) == 0.0 && editor.chainLength(RoadSegment.NO_SEGMENT) == 0.0);
     }
 
     /**
