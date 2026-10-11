@@ -13,7 +13,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.StringRepresentable;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
@@ -217,8 +217,8 @@ public final class RailTrackStore {
     private static int graphVersion;
     private static boolean reportedGraphBuild;
 
-    private static Set<ResourceLocation> trackBlocks = Set.of();
-    private static Set<ResourceLocation> stationBlocks = Set.of();
+    private static Set<Identifier> trackBlocks = Set.of();
+    private static Set<Identifier> stationBlocks = Set.of();
     private static List<? extends String> configuredTrackIds = List.of();
     private static List<? extends String> configuredStationIds = List.of();
 
@@ -796,10 +796,10 @@ public final class RailTrackStore {
                 trackBlocks.size(), stationBlocks.size());
     }
 
-    private static Set<ResourceLocation> parseIds(List<? extends String> ids) {
-        Set<ResourceLocation> parsed = new HashSet<>();
+    private static Set<Identifier> parseIds(List<? extends String> ids) {
+        Set<Identifier> parsed = new HashSet<>();
         for (String id : ids) {
-            ResourceLocation location = id == null ? null : ResourceLocation.tryParse(id.trim());
+            Identifier location = id == null ? null : Identifier.tryParse(id.trim());
             if (location == null) {
                 if (!warnedBadId) {
                     warnedBadId = true;
@@ -923,7 +923,7 @@ public final class RailTrackStore {
     private static void collect(LevelChunk chunk, List<Long> tracks, List<Byte> shapes,
                                 List<Long> stations) {
         LevelChunkSection[] sections = chunk.getSections();
-        int minY = chunk.getMinBuildHeight();
+        int minY = chunk.getMinY();
         for (int index = 0; index < sections.length; index++) {
             LevelChunkSection section = sections[index];
             if (section == null || section.hasOnlyAir()) {
@@ -1008,12 +1008,12 @@ public final class RailTrackStore {
     }
 
     private static boolean isTrack(BlockState state) {
-        ResourceLocation key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+        Identifier key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return key != null && trackBlocks.contains(key);
     }
 
     private static boolean isStation(BlockState state) {
-        ResourceLocation key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+        Identifier key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return key != null && stationBlocks.contains(key);
     }
 

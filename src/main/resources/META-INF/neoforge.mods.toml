@@ -12,33 +12,35 @@ Road marking and real-time navigation for Minecraft
 '''
 authors = "DongSZ"
 
-# The 21.1.x series only. The range used to be open-ended ([21.1.0,)), which claimed compatibility
-# with every later NeoForge -- 21.2 and beyond -- none of which this has ever been run against.
-# A wrong upper bound is worse than a missing feature: it lets a player load the mod on a version it
-# was never tested on and then report the breakage as a bug.
+# The 26.1.x series only (the "cube" rendering overhaul). Same policy as ever: a wrong upper bound
+# is worse than a missing feature -- it lets a player load the mod on a version it was never tested
+# on and then report the breakage as a bug.
 [[dependencies.howtogo]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1.0,21.2)"
+versionRange = "[26.1.0,26.2)"
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.howtogo]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.21.2)"
+versionRange = "[26.1.0,26.2)"
 ordering = "NONE"
 side = "BOTH"
 
-# Both halves of Xaero are client-side, and so is this mod: every feature of it renders through the
-# world map, and the entry point is annotated @Mod(dist = Dist.CLIENT). XaeroLib was declared BOTH,
-# which made a dedicated server refuse to start -- "Mod howtogo requires xaerolib 1.1.0 or above.
-# Currently, xaerolib is not installed" -- even though nothing of this mod would ever run there. A
-# client-side dependency has to say CLIENT, or it is a demand that no server can satisfy.
+# Everything here renders through the world map, and it compiles against Xaero's 26.x-era third-tier
+# rendering API (XaeroBufferProvider et al.), which only exists from 1.47.0 -- an older 1.40.x would
+# crash the map the moment it drew this mod's elements, so the floor is the API tier, not 1.40.
+# Both halves of Xaero are client-side, and so is this mod: the entry point is annotated
+# @Mod(dist = Dist.CLIENT). XaeroLib was declared BOTH, which made a dedicated server refuse to
+# start -- "Mod howtogo requires xaerolib 1.1.0 or above. Currently, xaerolib is not installed" --
+# even though nothing of this mod would ever run there. A client-side dependency has to say CLIENT,
+# or it is a demand that no server can satisfy.
 [[dependencies.howtogo]]
 modId = "xaeroworldmap"
 type = "required"
-versionRange = "[1.40.0,)"
+versionRange = "[1.47.0,)"
 ordering = "AFTER"
 side = "CLIENT"
 

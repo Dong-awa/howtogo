@@ -10,14 +10,13 @@ import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import org.joml.Matrix3x2fStack;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +30,14 @@ import java.util.Locale;
  * click on the action button commits -- so a stray click does not silently start a trip.
  */
 public final class DestinationScreen extends Screen {
+
+    /**
+     * The one quad batch the picker's map draws through, reused across frames.
+     *
+     * <p>The extraction pass runs on the render thread only, so one instance is never in two places
+     * at once; {@code begin} clears it, and it is handed to the game on submit.
+     */
+    private static final HudDraw.Batch BATCH = new HudDraw.Batch();
 
     /** Width of the panel when the map and the list have to be stacked, one above the other. */
     private static final int PANEL_WIDTH = 268;
@@ -597,7 +604,7 @@ public final class DestinationScreen extends Screen {
      * whether or not the row is picked out; what marks a picked row is its background, drawn by
      * {@code drawRows}.
      */
-    private void drawNameLine(GuiGraphics graphics, Destination destination, int x, int y, int width) {
+    private void drawNameLine(GuiGraphicsExtractor graphics, Destination destination, int x, int y, int width) {
         String name = destination.name();
         String note = sourceNote(destination.source());
         int noteWidth = note.isEmpty() ? 0 : font.width(note);
@@ -605,10 +612,10 @@ public final class DestinationScreen extends Screen {
 
         int nameRoom = noteFits ? width - noteWidth : width;
         String shownName = font.plainSubstrByWidth(name, nameRoom);
-        graphics.drawString(font, shownName, x, y, readableColor(destination), false);
+        graphics.text(font, shownName, x, y, readableColor(destination), false);
 
         if (noteFits) {
-            graphics.drawString(font, note, x + font.width(shownName), y, COLOR_SOURCE_NOTE, false);
+            graphics.text(font, note, x + font.width(shownName), y, COLOR_SOURCE_NOTE, false);
         }
     }
 
@@ -703,7 +710,7 @@ public final class DestinationScreen extends Screen {
         return listBottom() - listTop;
     }
 
-    private void drawRows(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawRows(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         Destination active = Navigation.target();
         int last = Math.min(shown.size(), scroll + visibleRows);
 
@@ -740,10 +747,10 @@ public final class DestinationScreen extends Screen {
             // picked out, and the row's background is what marks it.
             drawNameLine(graphics, destination, textX, nameY, nameWidth);
 
-            graphics.drawString(font, destination.coordinates(), textX, nameY + 10,
+            graphics.text(font, destination.coordinates(), textX, nameY + 10,
                     COLOR_SECONDARY, false);
 
-            graphics.drawString(font, distance,
+            graphics.text(font, distance,
                     listPaneX + listPaneW - 6 - distanceWidth, nameY, COLOR_SECONDARY, false);
         }
 
@@ -805,12 +812,12 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------ render
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Dimming is handled in render so the panel sits between it and the widgets.
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+        // Dimming is handled in extractRenderState so the panel sits between it and the widgets.
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, COLOR_DIM);
 
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
@@ -818,7 +825,7 @@ public final class DestinationScreen extends Screen {
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
                 CORNER_RADIUS, COLOR_PANEL_EDGE);
 
-        graphics.drawString(font, title, panelX + PADDING, panelY + PADDING, COLOR_HEADER, false);
+        graphics.text(font, title, panelX + PADDING, panelY + PADDING, COLOR_HEADER, false);
 
         drawPickerMap(graphics, mouseX, mouseY);
         drawList(graphics, mouseX, mouseY);
@@ -829,7 +836,7 @@ public final class DestinationScreen extends Screen {
         drawTransitControls(graphics, mouseX, mouseY);
         drawFooter(graphics, mouseX, mouseY);
 
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
 
     /**
@@ -838,10 +845,10 @@ public final class DestinationScreen extends Screen {
      * <p>The hovered row is worked out here and read by {@code mouseClicked}, so the list column's
      * own bounds are the only thing that decides what is under the cursor.
      */
-    private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawList(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         hoveredRow = -1;
         if (shown.isEmpty()) {
-            graphics.drawString(font,
+            graphics.text(font,
                     Component.translatable(all.isEmpty()
                             ? "screen.howtogo.no_destinations"
                             : "screen.howtogo.no_matches").getString(),
@@ -870,7 +877,7 @@ public final class DestinationScreen extends Screen {
      * comes from the grouping, which is rebuilt only when the roads change -- and the roads are culled
      * against the map before they are asked about at all.
      */
-    private void drawMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network, double scale,
+    private void drawMapLabels(GuiGraphicsExtractor graphics, Minecraft mc, RoadNetwork network, double scale,
                                double centerX, double centerY,
                                double minX, double minY, double maxX, double maxY) {
         List<double[]> placed = new ArrayList<>();
@@ -925,16 +932,16 @@ public final class DestinationScreen extends Screen {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            PoseStack pose = graphics.pose();
-            pose.pushPose();
-            pose.translate(x, centreY, 0.0);
-            pose.mulPose(Axis.ZP.rotation(angle));
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
-            pose.popPose();
+            Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
+            graphics.text(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            pose.popMatrix();
         }
     }
 
-    private void drawPickerMap(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawPickerMap(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1, COLOR_PANEL_EDGE);
         graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, COLOR_MAP_BACKDROP);
 
@@ -950,10 +957,12 @@ public final class DestinationScreen extends Screen {
 
         // North-up, unlike the travelling HUD: when choosing a place, a consistent orientation
         // matters more than knowing which way the player happens to be facing.
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        VertexConsumer vc = HudDraw.consumer(graphics);
-        PoseStack.Pose last = pose.last();
+        //
+        // MC 26.x: the GUI is an extraction pass, so the map's quads are collected in a batch and
+        // handed to the game once the shapes are done -- there is no live consumer to draw through
+        // any more.
+        HudDraw.Batch batch = BATCH;
+        batch.begin(graphics);
 
         double minX = mapX;
         double minY = mapY;
@@ -979,7 +988,7 @@ public final class DestinationScreen extends Screen {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(batch,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
                         0.7, color, 0x9A, minX, minY, maxX, maxY);
@@ -1002,7 +1011,7 @@ public final class DestinationScreen extends Screen {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(batch,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
                         0.7, color, 0x9A, minX, minY, maxX, maxY);
@@ -1015,7 +1024,7 @@ public final class DestinationScreen extends Screen {
             for (int i = 1; i < points.size(); i++) {
                 double[] a = points.get(i - 1);
                 double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(batch,
                         centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
                         centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
                         1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
@@ -1032,7 +1041,7 @@ public final class DestinationScreen extends Screen {
             for (int i = 1; i < points.size(); i++) {
                 double[] a = points.get(i - 1);
                 double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(batch,
                         centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
                         centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
                         1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
@@ -1042,43 +1051,41 @@ public final class DestinationScreen extends Screen {
         double originX = Navigation.tripOriginX();
         double originZ = Navigation.tripOriginZ();
         if (!Double.isNaN(originX)) {
-            marker(last, vc, centerX + (originX - mapCenterX) * scale,
+            marker(batch, centerX + (originX - mapCenterX) * scale,
                     centerY + (originZ - mapCenterZ) * scale, COLOR_ORIGIN, minX, minY, maxX, maxY);
         }
         // A preview starts at the player rather than at a pinned trip origin, so without a live
         // trip its start has to be marked from the preview itself or the cyan line begins nowhere.
         if (Double.isNaN(originX) && planned != null) {
-            marker(last, vc, centerX + (planned.originX() - mapCenterX) * scale,
+            marker(batch, centerX + (planned.originX() - mapCenterX) * scale,
                     centerY + (planned.originZ() - mapCenterZ) * scale, COLOR_ORIGIN,
                     minX, minY, maxX, maxY);
         }
         Destination target = Navigation.target();
         if (target != null) {
-            marker(last, vc, centerX + (target.x() - mapCenterX) * scale,
+            marker(batch, centerX + (target.x() - mapCenterX) * scale,
                     centerY + (target.z() - mapCenterZ) * scale, COLOR_PIN, minX, minY, maxX, maxY);
         }
         if (pendingPick != null) {
-            marker(last, vc, centerX + (pendingPick[0] - mapCenterX) * scale,
+            marker(batch, centerX + (pendingPick[0] - mapCenterX) * scale,
                     centerY + (pendingPick[1] - mapCenterZ) * scale, COLOR_ACCENT, minX, minY, maxX, maxY);
         }
 
         // The player is drawn only when the whole dot falls inside the map: panning leaves them far
         // off the visible area, and a dot painted regardless ended up on the panel around the map.
         // Every other mark in this method clips for the same reason; this one was the exception.
-        emitDiscIfInside(last, vc, centerX + (playerX - mapCenterX) * scale,
+        emitDiscIfInside(batch, centerX + (playerX - mapCenterX) * scale,
                 centerY + (playerZ - mapCenterZ) * scale, 3.0, 0xFFFFFFFF, minX, minY, maxX, maxY);
 
         // Every place gets its marker on the preview as well, so the list and the map agree about
         // where the places are: drawn through the same hit list the hover and double click use.
-        drawPlaceMarkers(places, last, vc, minX, minY, maxX, maxY);
+        drawPlaceMarkers(places, batch, minX, minY, maxX, maxY);
 
-        // Names go last, after every quad: GuiGraphics.drawString flushes the batch it writes to,
-        // which ends the QUADS BufferBuilder behind vc. Emitting even one more quad after this
-        // throws "Not building!", so the label pass must stay at the tail of the quad sequence.
+        // The collected quads go to the game before the labels are queued: the names then sit in a
+        // later layer wherever their bounds meet the shapes, so a name stays on top of its road.
+        batch.submit(graphics);
+
         drawMapLabels(graphics, mc, network, scale, centerX, centerY, minX, minY, maxX, maxY);
-
-        pose.popPose();
-        graphics.flush();
 
         // Hover crosshair and the coordinates under it, so a point can be chosen precisely. The
         // crosshair is drawn on the exact cursor pixel, so at the map's edge half of it would reach
@@ -1114,7 +1121,7 @@ public final class DestinationScreen extends Screen {
                     labelX = (int) mouseX - 5 - width;
                 }
                 if (labelX >= minX + 1 && labelX + width <= maxX - 1) {
-                    graphics.drawString(font, label, labelX, labelY, COLOR_PRIMARY, true);
+                    graphics.text(font, label, labelX, labelY, COLOR_PRIMARY, true);
                 }
             }
         }
@@ -1136,18 +1143,18 @@ public final class DestinationScreen extends Screen {
      * <p>Fully inside rather than merely centred inside: a disc is a couple of units across, and
      * testing only its centre let its rim paint over the map's border and the panel beyond it.
      */
-    private static void emitDiscIfInside(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void emitDiscIfInside(HudDraw.Batch batch, double x, double y,
                                          double radius, int argb,
                                          double minX, double minY, double maxX, double maxY) {
         if (x - radius < minX || x + radius > maxX || y - radius < minY || y + radius > maxY) {
             return;
         }
-        HudDraw.emitDisc(pose, vc, x, y, radius, argb, 0xFF);
+        HudDraw.emitDisc(batch, x, y, radius, argb, 0xFF);
     }
 
-    private static void marker(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void marker(HudDraw.Batch batch, double x, double y,
                                int color, double minX, double minY, double maxX, double maxY) {
-        emitDiscIfInside(pose, vc, x, y, 2.6, color, minX, minY, maxX, maxY);
+        emitDiscIfInside(batch, x, y, 2.6, color, minX, minY, maxX, maxY);
     }
 
     /** Every place's marker on the preview as it was last drawn, and the destination it stands for. */
@@ -1213,20 +1220,20 @@ public final class DestinationScreen extends Screen {
      * measured against, and working them out again here would be the second answer the class's own
      * rule about one set of numbers exists to prevent.
      */
-    private void drawPlaceMarkers(List<PlaceHit> places, PoseStack.Pose pose, VertexConsumer vc,
+    private void drawPlaceMarkers(List<PlaceHit> places, HudDraw.Batch batch,
                                   double minX, double minY, double maxX, double maxY) {
         for (PlaceHit hit : places) {
-            emitPlaceMarker(pose, vc, hit.x(), hit.y(), minX, minY, maxX, maxY);
+            emitPlaceMarker(batch, hit.x(), hit.y(), minX, minY, maxX, maxY);
         }
     }
 
     /** A place's marker, skipped entirely when it falls outside the map. */
-    private static void emitPlaceMarker(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void emitPlaceMarker(HudDraw.Batch batch, double x, double y,
                                         double minX, double minY, double maxX, double maxY) {
         if (x < minX || x > maxX || y < minY || y > maxY) {
             return;
         }
-        HudDraw.emitPlaceMarker(pose, vc, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
+        HudDraw.emitPlaceMarker(batch, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
                 HudDraw.COLOR_PLACE);
     }
 
@@ -1274,8 +1281,8 @@ public final class DestinationScreen extends Screen {
      * <p>All three are shown at once rather than cycled through, because the choice changes the
      * route as well as the estimate, and seeing which one is on is the point of the row.
      */
-    private void drawModeSelector(GuiGraphics graphics, int mouseX, int mouseY) {
-        graphics.drawString(font, modeCaption(), rowX,
+    private void drawModeSelector(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        graphics.text(font, modeCaption(), rowX,
                 modeY + (MODE_ROW_HEIGHT - 8) / 2, COLOR_SECONDARY, false);
 
         TravelMode active = Navigation.mode();
@@ -1311,11 +1318,11 @@ public final class DestinationScreen extends Screen {
      * for a distance and a time that do not exist. Showing nothing at all would look like the
      * picker had simply stopped working.
      */
-    private void drawPreviewSummary(GuiGraphics graphics) {
+    private void drawPreviewSummary(GuiGraphicsExtractor graphics) {
         if (previewTarget == null) {
             // The band is reserved either way, so it says what to do with it rather than sitting
             // empty -- the preview is the whole reason the picker no longer commits on one click.
-            graphics.drawString(font, Component.translatable("screen.howtogo.preview_hint")
+            graphics.text(font, Component.translatable("screen.howtogo.preview_hint")
                             .getString(),
                     rowX, previewY, COLOR_SECONDARY, false);
             return;
@@ -1323,7 +1330,7 @@ public final class DestinationScreen extends Screen {
         TravelMode active = Navigation.mode();
         // The state line reads the same whether or not the plan worked, so a failed combination
         // still says which one failed -- the reason below it is the router's own sentence.
-        graphics.drawString(font, Component.translatable("screen.howtogo.preview_state",
+        graphics.text(font, Component.translatable("screen.howtogo.preview_state",
                         active.label()).getString(),
                 rowX, previewY, COLOR_SECONDARY, false);
 
@@ -1338,7 +1345,7 @@ public final class DestinationScreen extends Screen {
                     ? Component.translatable("screen.howtogo.preview_none").getString()
                     : preview.note();
         }
-        graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
+        graphics.text(font, font.plainSubstrByWidth(text, rowW),
                 rowX, previewY + PREVIEW_STATE_HEIGHT,
                 present ? COLOR_ACCENT : COLOR_WARN, false);
     }
@@ -1353,10 +1360,10 @@ public final class DestinationScreen extends Screen {
      * preview to re-plan -- it is here rather than on a settings page because a toggle the player
      * cannot find is a toggle that does not exist.
      */
-    private void drawPreferenceControls(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawPreferenceControls(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
 
-        graphics.drawString(font, metricCaption(), rowX,
+        graphics.text(font, metricCaption(), rowX,
                 preferenceY + (preferenceRowHeight - 8) / 2, COLOR_SECONDARY, false);
 
         control(graphics, mouseX, mouseY, preferenceButtonX(0), preferenceY, preferenceButtonWidth,
@@ -1374,10 +1381,10 @@ public final class DestinationScreen extends Screen {
      * player is choosing from: a row that grows as classes are added answers "what can I avoid"
      * with "what have I avoided", which is not the same question.
      */
-    private void drawClassControls(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawClassControls(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
 
-        graphics.drawString(font, avoidCaption(), rowX,
+        graphics.text(font, avoidCaption(), rowX,
                 classY + (classRowHeight - 8) / 2, COLOR_SECONDARY, false);
 
         RoadClass[] classes = RoadClass.values();
@@ -1402,8 +1409,8 @@ public final class DestinationScreen extends Screen {
      * and the caption beside it is what says which mode that is. Like the voice switch it changes
      * nothing about the route, so nothing is re-planned when it is pressed.
      */
-    private void drawTransitControls(GuiGraphics graphics, int mouseX, int mouseY) {
-        graphics.drawString(font, transitCaption(), rowX,
+    private void drawTransitControls(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        graphics.text(font, transitCaption(), rowX,
                 transitY + (transitRowHeight - 8) / 2, COLOR_SECONDARY, false);
         int[] rect = transitRect();
         control(graphics, mouseX, mouseY, rect[0], rect[1], rect[2], transitRowHeight,
@@ -1417,7 +1424,7 @@ public final class DestinationScreen extends Screen {
      * other control in the panel, and no widget to keep in step with a value that lives outside it.
      * Where it was clicked is decided in {@code mouseClicked}, which uses the same coordinates.
      */
-    private void control(GuiGraphics graphics, int mouseX, int mouseY, int x, int y, int w, int h,
+    private void control(GuiGraphicsExtractor graphics, int mouseX, int mouseY, int x, int y, int w, int h,
                          String label, boolean on) {
         drawButton(graphics, x, y, w, h, font.plainSubstrByWidth(label, w - 4),
                 on ? COLOR_ROW_ACTIVE : COLOR_BUTTON, COLOR_BUTTON_HOVER,
@@ -1525,7 +1532,7 @@ public final class DestinationScreen extends Screen {
         return null;
     }
 
-    private void drawFooter(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawFooter(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         Destination action = actionDestination();
         boolean navigating = Navigation.target() != null;
         boolean twoButtons = action != null || navigating;
@@ -1564,15 +1571,15 @@ public final class DestinationScreen extends Screen {
         return previewTarget;
     }
 
-    private void drawButton(GuiGraphics graphics, int x, int y, int w,
+    private void drawButton(GuiGraphicsExtractor graphics, int x, int y, int w,
                             String label, int base, int hover, boolean hovered) {
         drawButton(graphics, x, y, w, FOOTER_HEIGHT, label, base, hover, COLOR_PRIMARY, hovered);
     }
 
-    private void drawButton(GuiGraphics graphics, int x, int y, int w, int h,
+    private void drawButton(GuiGraphicsExtractor graphics, int x, int y, int w, int h,
                             String label, int base, int hover, int textColor, boolean hovered) {
         HudDraw.fillRounded(graphics, x, y, x + w, y + h, 3, hovered ? hover : base);
-        graphics.drawString(font, label, x + (w - font.width(label)) / 2,
+        graphics.text(font, label, x + (w - font.width(label)) / 2,
                 y + (h - 8) / 2, textColor, false);
     }
 
@@ -1587,9 +1594,12 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------- input
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
         if (button != 0) {
-            return super.mouseClicked(mouseX, mouseY, button);
+            return super.mouseClicked(event, doubled);
         }
         if (insideMap(mouseX, mouseY)) {
             if (insideRecenter(mouseX, mouseY)) {
@@ -1685,7 +1695,7 @@ public final class DestinationScreen extends Screen {
             onClose();
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubled);
     }
 
     /** Chooses a destination to preview, planning the route it implies. */
@@ -1731,20 +1741,22 @@ public final class DestinationScreen extends Screen {
     }
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        if (button == 0 && mapPressed) {
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        if (event.button() == 0 && mapPressed) {
             // Move the centre opposite to the drag, so the map follows the cursor.
             double scale = mapW / (viewRadius * 2.0);
             mapCenterX -= dragX / scale;
             mapCenterZ -= dragY / scale;
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        return super.mouseDragged(event, dragX, dragY);
     }
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0 && mapPressed) {
+    public boolean mouseReleased(MouseButtonEvent event) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        if (event.button() == 0 && mapPressed) {
             mapPressed = false;
             double moved = Math.hypot(mouseX - mapPressX, mouseY - mapPressY);
             if (moved < 3 && insideMap(mouseX, mouseY)) {
@@ -1762,7 +1774,7 @@ public final class DestinationScreen extends Screen {
             }
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        return super.mouseReleased(event);
     }
 
     @Override

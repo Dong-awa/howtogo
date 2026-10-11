@@ -14,7 +14,8 @@ import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -335,23 +336,23 @@ public final class TransitLineScreen extends Screen {
         return row >= 0 && row < visibleRows() && index >= 0 && index < rows ? index : -1;
     }
 
-    private void drawRow(GuiGraphics graphics, int columnX, int index, boolean highlighted) {
+    private void drawRow(GuiGraphicsExtractor graphics, int columnX, int index, boolean highlighted) {
         int y = listY + index * ROW_HEIGHT;
         if (highlighted) {
             graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, 0xFF1F6FEB);
         }
     }
 
-    private void drawLabel(GuiGraphics graphics, int columnX, int index, String text, int colour) {
+    private void drawLabel(GuiGraphicsExtractor graphics, int columnX, int index, String text, int colour) {
         drawLabel(graphics, columnX, index, text, colour, columnW - 4);
     }
 
     /** The same, cut to a given room, for a row that has to leave space for a control of its own. */
-    private void drawLabel(GuiGraphics graphics, int columnX, int index, String text, int colour,
+    private void drawLabel(GuiGraphicsExtractor graphics, int columnX, int index, String text, int colour,
                            int room) {
         int y = listY + index * ROW_HEIGHT;
         String shown = this.font.plainSubstrByWidth(text, Math.max(8, room));
-        graphics.drawString(this.font, shown, columnX + 2, y + 2, colour, false);
+        graphics.text(this.font, shown, columnX + 2, y + 2, colour, false);
     }
 
     /**
@@ -361,22 +362,22 @@ public final class TransitLineScreen extends Screen {
      * scrolled to the top of a long list looks like the whole list, and the lines below the fold are
      * lines the player has no reason to think exist.
      */
-    private void drawColumnHeader(GuiGraphics graphics, int columnX, String key, int count,
+    private void drawColumnHeader(GuiGraphicsExtractor graphics, int columnX, String key, int count,
                                   int scroll) {
-        graphics.drawString(this.font, Component.translatable(key).getString(), columnX,
+        graphics.text(this.font, Component.translatable(key).getString(), columnX,
                 listY - HEADER_HEIGHT, 0xFFA8B4C0, false);
         if (count <= visibleRows()) {
             return;
         }
         String shown = Math.min(count, scroll + visibleRows()) + "/" + count;
-        graphics.drawString(this.font, shown, columnX + columnW - 2 - this.font.width(shown),
+        graphics.text(this.font, shown, columnX + columnW - 2 - this.font.width(shown),
                 listY - HEADER_HEIGHT, 0xFF808A96, false);
     }
 
     // ---------------------------------------------------------------- render
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
     }
 
     /**
@@ -393,10 +394,10 @@ public final class TransitLineScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         if (parent != null) {
             try {
-                parent.render(graphics, mouseX, mouseY, partialTick);
+                parent.extractRenderState(graphics, mouseX, mouseY, partialTick);
             } catch (Throwable t) {
                 // The map is only backdrop here; if it cannot be re-rendered we still want the editor
                 // to be usable.
@@ -405,7 +406,7 @@ public final class TransitLineScreen extends Screen {
 
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xFF181818);
-        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD, 0xFFFFE070, false);
+        graphics.text(this.font, this.title, panelX + PAD, panelY + PAD, 0xFFFFE070, false);
 
         TransitLine line = selected();
         refreshRideable();
@@ -425,29 +426,29 @@ public final class TransitLineScreen extends Screen {
         if (readOnly(line)) {
             String note = Component.translatable("screen.howtogo.line_from_mtr_note").getString();
             String shown = this.font.plainSubstrByWidth(note, noteRoom);
-            graphics.drawString(this.font, shown, noteX, panelY + PAD, 0xFF7FB0FF, false);
+            graphics.text(this.font, shown, noteX, panelY + PAD, 0xFF7FB0FF, false);
             noteX += this.font.width(shown) + 6;
             noteRoom = Math.max(12, noteRoom - this.font.width(shown) - 6);
         }
         if (hasBrokenPair()) {
             // Beside the title rather than in a status bar: it is about the line on screen as a whole,
             // and a red stop that says nothing about why would only move the mystery.
-            graphics.drawString(this.font, this.font.plainSubstrByWidth(
+            graphics.text(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_broken").getString(), noteRoom),
                     noteX, panelY + PAD, 0xFFFF8060, false);
         } else if (hasUnjudgedPair()) {
             // Not silence, because "the mod cannot tell" is itself worth saying -- a line of a kind the
             // world has no roads of is the case this catches -- and not the red note either, which would
             // be an accusation the network does not support.
-            graphics.drawString(this.font, this.font.plainSubstrByWidth(
+            graphics.text(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_unjudged").getString(), noteRoom),
                     noteX, panelY + PAD, 0xFFFFC060, false);
         }
 
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
 
-    private void drawKinds(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
+    private void drawKinds(GuiGraphicsExtractor graphics, int mouseX, int mouseY, TransitLine line) {
         List<RoadClass> kinds = TransitLine.kinds();
         for (int i = 0; i < kinds.size(); i++) {
             int x = kindX + i * (kindW + 3);
@@ -463,13 +464,13 @@ public final class TransitLineScreen extends Screen {
                             "screen.howtogo.road_class." + kinds.get(i).name().toLowerCase(Locale.ROOT))
                     .getString();
             String shown = this.font.plainSubstrByWidth(label, kindW - 2);
-            graphics.drawString(this.font, shown,
+            graphics.text(this.font, shown,
                     x + Math.max(0, (kindW - this.font.width(shown)) / 2), kindY + 3,
                     selected ? 0xFFFFFFFF : 0xFFA8B4C0, false);
         }
     }
 
-    private void drawLines(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawLines(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         List<TransitLine> lines = listed();
         drawColumnHeader(graphics, linesX, "screen.howtogo.line_list", lines.size(), lineScroll);
         if (lines.isEmpty()) {
@@ -516,7 +517,7 @@ public final class TransitLineScreen extends Screen {
      * about the right line: a switch in the footer acts on whatever is selected, and a player who has
      * not selected an MTR line finds it doing nothing at all.
      */
-    private void drawMarksToggle(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line,
+    private void drawMarksToggle(GuiGraphicsExtractor graphics, int mouseX, int mouseY, TransitLine line,
                                  int x, int y) {
         boolean on = MtrTransit.marksEnabled(line);
         boolean hovered = mouseX >= x && mouseX < x + TOGGLE_WIDTH
@@ -532,11 +533,11 @@ public final class TransitLineScreen extends Screen {
         // The class the line marks in, in one character: 铁 for rail and 水 for water, so the box says
         // what turning it on actually adds. Both are one glyph wide, so the row's text does not shift.
         String glyph = line.kind() == RoadClass.WATER ? "\u6C34" : "\u8F68";
-        graphics.drawString(this.font, glyph, x + 1, y + 2,
+        graphics.text(this.font, glyph, x + 1, y + 2,
                 0xFF000000 | (line.kind().color() & 0xFFFFFF), false);
     }
 
-    private void drawStops(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
+    private void drawStops(GuiGraphicsExtractor graphics, int mouseX, int mouseY, TransitLine line) {
         drawColumnHeader(graphics, stopsX, "screen.howtogo.line_stops", line == null ? 0 : line.stopCount(),
                 stopsScroll);
         if (line == null || line.stopCount() == 0) {
@@ -569,12 +570,12 @@ public final class TransitLineScreen extends Screen {
                         hovered ? 0xFF3A4450 : 0xFF242A33);
                 String glyph = c == 0 ? "N" : c == 1 ? "^" : c == 2 ? "v" : "x";
                 int colour = c == 3 ? 0xFFFF8080 : 0xFFA8B4C0;
-                graphics.drawString(this.font, glyph, x + 3, y + 2, colour, false);
+                graphics.text(this.font, glyph, x + 3, y + 2, colour, false);
             }
         }
     }
 
-    private void drawCandidates(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
+    private void drawCandidates(GuiGraphicsExtractor graphics, int mouseX, int mouseY, TransitLine line) {
         List<LineStop> offered = offered();
         drawColumnHeader(graphics, candidatesX, "screen.howtogo.line_candidates", offered.size(),
                 candidatesScroll);
@@ -934,9 +935,11 @@ public final class TransitLineScreen extends Screen {
     // ----------------------------------------------------------------- input
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) {
-            return super.mouseClicked(mouseX, mouseY, button);
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        if (event.button() != 0) {
+            return super.mouseClicked(event, doubled);
         }
         List<TransitLine> lines = listed();
 
@@ -995,7 +998,7 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubled);
     }
 
     private int kindAt(double mouseX, double mouseY) {

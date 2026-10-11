@@ -11,6 +11,8 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -841,7 +843,10 @@ public final class RoadEditSession {
         panStartScreenX = cursor[0];
         panStartScreenY = cursor[1];
         panMoved = false;
-        screen.mouseClicked(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        // 26.x: the screen takes the press as a MouseButtonEvent record; the synthetic press carries no
+        // keyboard modifiers, which is what the pan gesture means anyway.
+        screen.mouseClicked(new MouseButtonEvent(cursor[0], cursor[1],
+                new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0)), false);
     }
 
     /**
@@ -867,7 +872,8 @@ public final class RoadEditSession {
             panMoved = true;
         }
         if (Minecraft.getInstance().screen == screen) {
-            screen.mouseReleased(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            screen.mouseReleased(new MouseButtonEvent(cursor[0], cursor[1],
+                    new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0)));
         }
         if (!panMoved) {
             editor().clearSelection();

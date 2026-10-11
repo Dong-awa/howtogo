@@ -5,19 +5,13 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.Route;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
+import org.joml.Matrix3x2fStack;
 
 import static bili.dongsz.howtogo.client.HudDraw.*;
 
@@ -94,6 +88,14 @@ public final class NavHudRenderer {
     private static final double ROAD_THICKNESS = 1.0;
     private static final double ROUTE_THICKNESS = 2.6;
 
+    /**
+     * The one quad batch the panel draws through, reused across frames.
+     *
+     * <p>The extraction pass runs on the render thread only, so one instance is never in two places
+     * at once; {@code begin} clears it, and it is handed to the game on submit.
+     */
+    private static final HudDraw.Batch BATCH = new HudDraw.Batch();
+
     private NavHudRenderer() {
     }
 
@@ -110,7 +112,7 @@ public final class NavHudRenderer {
 
     // -------------------------------------------------------------------- panel
 
-    private static void draw(GuiGraphics graphics, Minecraft mc) {
+    private static void draw(GuiGraphicsExtractor graphics, Minecraft mc) {
         int screenWidth = mc.getWindow().getGuiScaledWidth();
         int panelHeight = panelHeight();
         // Floored at MARGIN so a very narrow window cannot push the panel off the left edge.
@@ -151,7 +153,7 @@ public final class NavHudRenderer {
         return PADDING * 2 + HEADER_HEIGHT + MAP_SIZE + readout;
     }
 
-    private static void drawHeader(GuiGraphics graphics, Minecraft mc, int x, int y) {
+    private static void drawHeader(GuiGraphicsExtractor graphics, Minecraft mc, int x, int y) {
         Destination destination = Navigation.target();
         if (destination == null) {
             return;
@@ -166,14 +168,14 @@ public final class NavHudRenderer {
         // of a sentence that may not fit.
         String mode = Navigation.modeLabel();
         int modeWidth = mc.font.width(mode);
-        graphics.drawString(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
+        graphics.text(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
                 x, y, COLOR_HEADER_TEXT, false);
-        graphics.drawString(mc.font, mode, x + MAP_SIZE - modeWidth, y, COLOR_ACCENT, false);
+        graphics.text(mc.font, mode, x + MAP_SIZE - modeWidth, y, COLOR_ACCENT, false);
     }
 
     // ------------------------------------------------------------------ mini-map
 
-    private static void drawMiniMap(GuiGraphics graphics, Minecraft mc, int mapX, int mapY) {
+    private static void drawMiniMap(GuiGraphicsExtractor graphics, Minecraft mc, int mapX, int mapY) {
         double playerX = mc.player.getX();
         double playerZ = mc.player.getZ();
         double scale = MAP_SIZE / (VIEW_RADIUS * 2.0);
@@ -192,10 +194,11 @@ public final class NavHudRenderer {
         double maxX = mapX + MAP_SIZE;
         double maxY = mapY + MAP_SIZE;
 
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        VertexConsumer vc = HudDraw.consumer(graphics);
-        PoseStack.Pose last = pose.last();
+        // MC 26.x: the GUI is an extraction pass, so the quads are collected in a batch and handed
+        // over once the shapes are done. One shared batch per frame, reused -- a mini-map pass emits
+        // thousands of quads.
+        HudDraw.Batch batch = BATCH;
+        batch.begin(graphics);
 
         // The map is rotated to the player's heading, so a corner of it is sqrt(2) times its
         // half-width away in world blocks. The guard has to cover the corners: at the old bound of
@@ -213,7 +216,7 @@ public final class NavHudRenderer {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                emitClipped(last, vc,
+                emitClipped(batch,
                         screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
                         screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
                         screenX(bx - playerX, bz - playerZ, cos, sin, scale, centerX),
@@ -236,7 +239,7 @@ public final class NavHudRenderer {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                emitClipped(last, vc,
+                emitClipped(batch,
                         screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
                         screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
                         screenX(bx - playerX, bz - playerZ, cos, sin, scale, centerX),
@@ -264,10 +267,10 @@ public final class NavHudRenderer {
                 double half = ROUTE_THICKNESS * 0.5;
 
                 if (cumulative + segmentLength <= travelled) {
-                    emitClipped(last, vc, ax, ay, bx, by, half, COLOR_ROUTE_DONE, 0xFF,
+                    emitClipped(batch, ax, ay, bx, by, half, COLOR_ROUTE_DONE, 0xFF,
                             minX, minY, maxX, maxY);
                 } else if (cumulative >= travelled) {
-                    emitClipped(last, vc, ax, ay, bx, by, half, COLOR_ROUTE, 0xFF,
+                    emitClipped(batch, ax, ay, bx, by, half, COLOR_ROUTE, 0xFF,
                             minX, minY, maxX, maxY);
                 } else {
                     // Split exactly where the player is, so the grey edge creeps along with them
@@ -275,9 +278,9 @@ public final class NavHudRenderer {
                     double t = (travelled - cumulative) / segmentLength;
                     double mx = ax + (bx - ax) * t;
                     double my = ay + (by - ay) * t;
-                    emitClipped(last, vc, ax, ay, mx, my, half, COLOR_ROUTE_DONE, 0xFF,
+                    emitClipped(batch, ax, ay, mx, my, half, COLOR_ROUTE_DONE, 0xFF,
                             minX, minY, maxX, maxY);
-                    emitClipped(last, vc, mx, my, bx, by, half, COLOR_ROUTE, 0xFF,
+                    emitClipped(batch, mx, my, bx, by, half, COLOR_ROUTE, 0xFF,
                             minX, minY, maxX, maxY);
                 }
                 cumulative += segmentLength;
@@ -287,30 +290,34 @@ public final class NavHudRenderer {
         double originX = Navigation.tripOriginX();
         double originZ = Navigation.tripOriginZ();
         if (!Double.isNaN(originX)) {
-            emitMarker(last, vc, screenX(originX - playerX, originZ - playerZ, cos, sin, scale, centerX),
+            emitMarker(batch, screenX(originX - playerX, originZ - playerZ, cos, sin, scale, centerX),
                     screenY(originX - playerX, originZ - playerZ, cos, sin, scale, centerY),
                     COLOR_ORIGIN, minX, minY, maxX, maxY);
         }
         Destination destination = Navigation.target();
         if (destination != null) {
-            emitMarker(last, vc,
+            emitMarker(batch,
                     screenX(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerX),
                     screenY(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerY),
                     COLOR_DESTINATION, minX, minY, maxX, maxY);
         }
 
-        drawPlayerArrow(last, vc, centerX, centerY);
+        drawPlayerArrow(batch, centerX, centerY);
 
         // Every place gets its marker on the mini-map too, so places can be seen while travelling
         // without opening anything. The same list, colour and shape as the world map, from
         // Destinations and HudDraw, so the views cannot drift apart -- at this map's smaller size,
         // because a world-map marker covers a visible share of a panel this size.
         for (Destination place : Destinations.places()) {
-            emitPlaceMarkerClipped(last, vc,
+            emitPlaceMarkerClipped(batch,
                     screenX(place.x() - playerX, place.z() - playerZ, cos, sin, scale, centerX),
                     screenY(place.x() - playerX, place.z() - playerZ, cos, sin, scale, centerY),
                     minX, minY, maxX, maxY);
         }
+
+        // The collected quads go to the game before the labels are queued, so the labels' bounds
+        // land in a later layer and the names stay on top of the shapes they belong to.
+        batch.submit(graphics);
 
         drawMiniMapLabels(graphics, mc, network, playerX, playerZ, cos, sin, scale, centerX, centerY,
                 minX, minY, maxX, maxY);
@@ -324,9 +331,6 @@ public final class NavHudRenderer {
         if (markerX >= minX && markerX <= maxX && markerY >= minY && markerY <= maxY) {
             drawNorthMarker(graphics, mc, markerX, markerY);
         }
-
-        pose.popPose();
-        graphics.flush();
     }
 
     /**
@@ -342,7 +346,7 @@ public final class NavHudRenderer {
      * asking {@link RoadChains#chainContaining} per named road -- which builds an adjacency index of
      * the whole network to answer -- was the panel's dominant cost and its largest source of garbage.
      */
-    private static void drawMiniMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network,
+    private static void drawMiniMapLabels(GuiGraphicsExtractor graphics, Minecraft mc, RoadNetwork network,
                                           double playerX, double playerZ, double cos, double sin,
                                           double scale, double centerX, double centerY,
                                           double minX, double minY, double maxX, double maxY) {
@@ -396,12 +400,12 @@ public final class NavHudRenderer {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            PoseStack pose = graphics.pose();
-            pose.pushPose();
-            pose.translate(x, centreY, 0.0);
-            pose.mulPose(Axis.ZP.rotation(angle));
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
-            pose.popPose();
+            Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
+            graphics.text(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            pose.popMatrix();
         }
     }
 
@@ -423,10 +427,9 @@ public final class NavHudRenderer {
     }
 
     /** A filled dart showing which way the player is facing: always up, given the rotation. */
-    private static void drawPlayerArrow(PoseStack.Pose pose, VertexConsumer vc,
-                                        double cx, double cy) {
+    private static void drawPlayerArrow(HudDraw.Batch batch, double cx, double cy) {
         double size = 4.5;
-        emitQuad(pose, vc,
+        emitQuad(batch,
                 cx, cy - size,
                 cx + size * 0.75, cy + size * 0.75,
                 cx, cy + size * 0.3,
@@ -434,14 +437,14 @@ public final class NavHudRenderer {
                 0xFFFFFFFF);
     }
 
-    private static void drawNorthMarker(GuiGraphics graphics, Minecraft mc, double x, double y) {
-        graphics.drawString(mc.font, "N", (int) Math.round(x) - 2, (int) Math.round(y) - 4,
+    private static void drawNorthMarker(GuiGraphicsExtractor graphics, Minecraft mc, double x, double y) {
+        graphics.text(mc.font, "N", (int) Math.round(x) - 2, (int) Math.round(y) - 4,
                 0xFFD0D8E0, false);
     }
 
     // ------------------------------------------------------------------- info
 
-    private static void drawInfo(GuiGraphics graphics, Minecraft mc, int x, int y) {
+    private static void drawInfo(GuiGraphicsExtractor graphics, Minecraft mc, int x, int y) {
         Font font = mc.font;
         Destination destination = Navigation.target();
         if (destination == null) {
@@ -450,13 +453,13 @@ public final class NavHudRenderer {
 
         if (Navigation.showArrival()) {
             drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, COLOR_OK);
-            graphics.drawString(font, Component.translatable("hud.howtogo.hud_arrived").getString(),
+            graphics.text(font, Component.translatable("hud.howtogo.hud_arrived").getString(),
                     x + READOUT_TEXT_X, y + 6, COLOR_OK, false);
-            graphics.drawString(font, destination.name(), x + READOUT_TEXT_X, y + 18,
+            graphics.text(font, destination.name(), x + READOUT_TEXT_X, y + 18,
                     COLOR_SECONDARY_TEXT, false);
         } else if (!Navigation.route().isPresent()) {
             drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, COLOR_WARN);
-            graphics.drawString(font, Component.translatable("hud.howtogo.hud_noroute").getString(),
+            graphics.text(font, Component.translatable("hud.howtogo.hud_noroute").getString(),
                     x + READOUT_TEXT_X, y + 6, COLOR_WARN, false);
         } else {
             drawRouteReadout(graphics, mc, x, y);
@@ -467,7 +470,7 @@ public final class NavHudRenderer {
     }
 
     /** The turn, the distance, the progress bar and the remaining line: the live trip readout. */
-    private static void drawRouteReadout(GuiGraphics graphics, Minecraft mc, int x, int y) {
+    private static void drawRouteReadout(GuiGraphicsExtractor graphics, Minecraft mc, int x, int y) {
         Font font = mc.font;
         // While there is a line to be on -- walking up to the stop of a boarding, or riding one -- the
         // readout is the transit one: which line and which way, or which stop is coming and how many
@@ -517,7 +520,7 @@ public final class NavHudRenderer {
                 : (distanceAhead <= Navigation.turnNowDistance()
                         ? Component.translatable("hud.howtogo.hud_now").getString()
                         : Route.formatDistance(distanceAhead));
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
+        graphics.text(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
 
         String instruction;
         if (uturnCall || plainUturn) {
@@ -536,7 +539,7 @@ public final class NavHudRenderer {
             instruction = Component.translatable("hud.howtogo.turn_onto",
                     Navigation.turnPhrase(maneuverDegrees), road).getString();
         }
-        graphics.drawString(font,
+        graphics.text(font,
                 font.plainSubstrByWidth(instruction, MAP_SIZE - READOUT_TEXT_X - 2),
                 x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
 
@@ -552,7 +555,7 @@ public final class NavHudRenderer {
      * come from the same {@code TransitStep} the voice reads, so what is heard and what is seen cannot
      * be about different lines or different stops.
      */
-    private static void drawTransitReadout(GuiGraphics graphics, Font font, int x, int y) {
+    private static void drawTransitReadout(GuiGraphicsExtractor graphics, Font font, int x, int y) {
         Navigation.TransitStep step = Navigation.transitStep();
         if (step == null) {
             return;
@@ -565,9 +568,9 @@ public final class NavHudRenderer {
         String distance = step.distanceAhead() <= Navigation.turnNowDistance()
                 ? Component.translatable("hud.howtogo.hud_now").getString()
                 : Route.formatDistance(step.distanceAhead());
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
+        graphics.text(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
 
-        graphics.drawString(font,
+        graphics.text(font,
                 font.plainSubstrByWidth(Navigation.transitSentence(step),
                         MAP_SIZE - READOUT_TEXT_X - 2),
                 x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
@@ -579,19 +582,19 @@ public final class NavHudRenderer {
      * The progress bar, the remaining line and the walking-fallback note: everything under the
      * instruction, shared by the two readouts so the two cannot report the trip differently.
      */
-    private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY) {
+    private static void drawTripProgress(GuiGraphicsExtractor graphics, Font font, int x, int y, int barY) {
         drawProgressBar(graphics, x, barY, MAP_SIZE, 5);
 
         String remaining = Component.translatable("hud.howtogo.hud_remaining_short",
                 Route.formatDistance(Navigation.remainingLength()),
                 Route.formatDuration(Navigation.remainingSeconds())).getString();
         int color = Navigation.isOffRoute() ? COLOR_WARN : COLOR_SECONDARY_TEXT;
-        graphics.drawString(font, remaining, x, barY + 9, color, false);
+        graphics.text(font, remaining, x, barY + 9, color, false);
 
         // Why this is a walking route when another mode is selected.
         String fallback = Navigation.fallbackHint();
         if (fallback != null) {
-            graphics.drawString(font, font.plainSubstrByWidth(fallback, MAP_SIZE),
+            graphics.text(font, font.plainSubstrByWidth(fallback, MAP_SIZE),
                     x, barY + 20, COLOR_WARN, false);
         }
     }
@@ -604,7 +607,7 @@ public final class NavHudRenderer {
      * looks. Wrapped rather than clipped: it is worded to fit one line at the panel's width, and the
      * second line is there so a translation that runs longer cannot be cut in half.
      */
-    private static void drawNarratorHint(GuiGraphics graphics, Font font, int x, int y) {
+    private static void drawNarratorHint(GuiGraphicsExtractor graphics, Font font, int x, int y) {
         if (!Narration.unavailable()) {
             return;
         }
@@ -612,13 +615,13 @@ public final class NavHudRenderer {
                 Component.translatable("hud.howtogo.narrator_unavailable"), MAP_SIZE);
         int count = Math.min(NARRATOR_HINT_LINES, lines.size());
         for (int i = 0; i < count; i++) {
-            graphics.drawString(font, lines.get(i), x, y + i * NARRATOR_HINT_LINE_HEIGHT,
+            graphics.text(font, lines.get(i), x, y + i * NARRATOR_HINT_LINE_HEIGHT,
                     COLOR_WARN, false);
         }
     }
 
     /** Thin trip progress bar: filled by the fraction of the route already walked. */
-    private static void drawProgressBar(GuiGraphics graphics, int x, int y, int width, int height) {
+    private static void drawProgressBar(GuiGraphicsExtractor graphics, int x, int y, int width, int height) {
         double total = Navigation.route().totalLength();
         double fraction = total > 1.0E-6
                 ? Math.max(0, Math.min(1, Navigation.travelled() / total))
@@ -647,16 +650,15 @@ public final class NavHudRenderer {
      *
      * @param degrees signed turn angle, or NaN for "no turn ahead" (drawn as straight on)
      */
-    private static void drawTurnArrow(GuiGraphics graphics, double cx, double cy,
+    private static void drawTurnArrow(GuiGraphicsExtractor graphics, double cx, double cy,
                                       double degrees, int color) {
-        PoseStack pose = graphics.pose();
-        VertexConsumer vc = HudDraw.consumer(graphics);
-        PoseStack.Pose last = pose.last();
+        HudDraw.Batch batch = BATCH;
+        batch.begin(graphics);
         double thickness = 1.7;
 
         if (!Double.isNaN(degrees) && Math.abs(degrees) > 135) {
-            drawUturnArrow(last, vc, cx, cy, thickness, color);
-            graphics.flush();
+            drawUturnArrow(batch, cx, cy, thickness, color);
+            batch.submit(graphics);
             return;
         }
 
@@ -679,18 +681,18 @@ public final class NavHudRenderer {
         double baseX = tipX - dirX * headLength;
         double baseY = tipY - dirY * headLength;
 
-        emitLine(last, vc, cornerX, shaftBottomY, cornerX, cornerY, thickness, color, 0xFF);
-        emitDisc(last, vc, cornerX, cornerY, thickness, color, 0xFF);
-        emitLine(last, vc, cornerX, cornerY, baseX, baseY, thickness, color, 0xFF);
+        emitLine(batch, cornerX, shaftBottomY, cornerX, cornerY, thickness, color, 0xFF);
+        emitDisc(batch, cornerX, cornerY, thickness, color, 0xFF);
+        emitLine(batch, cornerX, cornerY, baseX, baseY, thickness, color, 0xFF);
 
         double perpX = -dirY;
         double perpY = dirX;
-        emitTriangle(last, vc,
+        emitTriangle(batch,
                 tipX, tipY,
                 baseX + perpX * headHalf, baseY + perpY * headHalf,
                 baseX - perpX * headHalf, baseY - perpY * headHalf, color);
 
-        graphics.flush();
+        batch.submit(graphics);
     }
 
     /**
@@ -706,7 +708,7 @@ public final class NavHudRenderer {
      * swapping between the two does not shift the readout beside them. The two shoulders stand in for
      * the curve, because every primitive here is a straight line.
      */
-    private static void drawUturnArrow(PoseStack.Pose pose, VertexConsumer vc,
+    private static void drawUturnArrow(HudDraw.Batch batch,
                                        double cx, double cy, double thickness, int color) {
         double half = 3.5;
         double topY = cy - 6.0;
@@ -715,20 +717,20 @@ public final class NavHudRenderer {
         double headBaseY = cy + 1.0;
         double tipY = cy + 7.0;
 
-        emitLine(pose, vc, cx + half, rightBottomY, cx + half, shoulderY, thickness, color, 0xFF);
-        emitLine(pose, vc, cx + half, shoulderY, cx, topY, thickness, color, 0xFF);
-        emitLine(pose, vc, cx, topY, cx - half, shoulderY, thickness, color, 0xFF);
-        emitLine(pose, vc, cx - half, shoulderY, cx - half, headBaseY, thickness, color, 0xFF);
-        emitDisc(pose, vc, cx + half, rightBottomY, thickness, color, 0xFF);
+        emitLine(batch, cx + half, rightBottomY, cx + half, shoulderY, thickness, color, 0xFF);
+        emitLine(batch, cx + half, shoulderY, cx, topY, thickness, color, 0xFF);
+        emitLine(batch, cx, topY, cx - half, shoulderY, thickness, color, 0xFF);
+        emitLine(batch, cx - half, shoulderY, cx - half, headBaseY, thickness, color, 0xFF);
+        emitDisc(batch, cx + half, rightBottomY, thickness, color, 0xFF);
         // Round joins at every corner. Without them the three shoulders meet at sharp wedges with a
         // notch on the outside, which is the same artefact roads would have without joints -- see the
         // round caps in the road renderer's stroke.
-        emitDisc(pose, vc, cx + half, shoulderY, thickness, color, 0xFF);
-        emitDisc(pose, vc, cx, topY, thickness, color, 0xFF);
-        emitDisc(pose, vc, cx - half, shoulderY, thickness, color, 0xFF);
-        emitDisc(pose, vc, cx - half, headBaseY, thickness, color, 0xFF);
+        emitDisc(batch, cx + half, shoulderY, thickness, color, 0xFF);
+        emitDisc(batch, cx, topY, thickness, color, 0xFF);
+        emitDisc(batch, cx - half, shoulderY, thickness, color, 0xFF);
+        emitDisc(batch, cx - half, headBaseY, thickness, color, 0xFF);
 
-        emitTriangle(pose, vc,
+        emitTriangle(batch,
                 cx - half, tipY,
                 cx - half * 2.0, headBaseY,
                 cx, headBaseY, color);
@@ -770,22 +772,22 @@ public final class NavHudRenderer {
     }
 
     /** Draws a marker, skipping it entirely when it falls outside the map. */
-    private static void emitMarker(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void emitMarker(HudDraw.Batch batch, double x, double y,
                                    int argb, double minX, double minY, double maxX, double maxY) {
         if (x < minX || x > maxX || y < minY || y > maxY) {
             return;
         }
-        emitDisc(pose, vc, x, y, 2.6, argb, 0xFF);
+        emitDisc(batch, x, y, 2.6, argb, 0xFF);
     }
 
     /** A place's marker, skipped entirely when it falls outside the map. */
-    private static void emitPlaceMarkerClipped(PoseStack.Pose pose, VertexConsumer vc, double x,
+    private static void emitPlaceMarkerClipped(HudDraw.Batch batch, double x,
                                               double y, double minX, double minY, double maxX,
                                               double maxY) {
         if (x < minX || x > maxX || y < minY || y > maxY) {
             return;
         }
-        HudDraw.emitPlaceMarker(pose, vc, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
+        HudDraw.emitPlaceMarker(batch, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
                 HudDraw.COLOR_PLACE);
     }
 }
