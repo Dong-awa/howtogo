@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.item;
 import bili.dongsz.howtogo.client.NavigatorClient;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -33,14 +33,17 @@ public final class NavigatorItem extends Item {
     }
 
     @Override
-    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        ItemStack stack = player.getItemInHand(hand);
+    public InteractionResult use(Level level, Player player, InteractionHand hand) {
         // Asked of the level rather than of anything global, because use() runs on both sides: the server
         // calls it to decide what happened, the client calls it to open the screen.
         if (level.isClientSide()) {
             NavigatorClient.openPicker();
         }
-        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+        // InteractionResultHolder was folded into InteractionResult in 1.21.2, and sidedSuccess(stack,
+        // isClientSide) -- success with a hand swing on the client, a bare consume on the server -- is
+        // now spelled with the two constants below. Neither side needs the stack any more: the record's
+        // ItemContext carries it only for items that transform what is held, which this never does.
+        return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.CONSUME;
     }
 
     @Override

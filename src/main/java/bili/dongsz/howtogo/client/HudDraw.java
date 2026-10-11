@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
@@ -122,9 +123,17 @@ public final class HudDraw {
     private HudDraw() {
     }
 
-    /** A fresh vertex consumer for the shared layer. */
+    /**
+     * A fresh vertex consumer for the shared layer.
+     *
+     * <p>GuiGraphics no longer exposes the buffer source it wraps, so the game's own shared instance
+     * is asked for directly -- vanilla builds every GuiGraphics around
+     * {@code Minecraft.renderBuffers().bufferSource()}, which is what this reads, so batching and the
+     * flush behaviour described in the class javadoc are unchanged. The graphics argument is kept so
+     * call sites read exactly as before.
+     */
     public static VertexConsumer consumer(GuiGraphics graphics) {
-        return graphics.bufferSource().getBuffer(QUADS);
+        return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(QUADS);
     }
 
     // ------------------------------------------------------------------ shapes
