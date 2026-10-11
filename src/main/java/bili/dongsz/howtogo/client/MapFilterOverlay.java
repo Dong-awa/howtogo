@@ -44,11 +44,14 @@ public final class MapFilterOverlay {
             return;
         }
         GuiGraphics graphics = event.getGuiGraphics();
-        graphics.pose().pushPose();
-        graphics.pose().last().pose().identity();
-        graphics.pose().last().normal().identity();
+        // The screen may leave a transform on the 2D pose stack (Xaero's does), and the panel draws in
+        // absolute screen coordinates. 1.21.6 made the GUI pose a Matrix3x2fStack: pushing copies the
+        // top, so the copy is reset to identity instead of resetting the pose of the top pose and normal
+        // the way the 3D PoseStack allowed.
+        graphics.pose().pushMatrix();
+        graphics.pose().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     /**

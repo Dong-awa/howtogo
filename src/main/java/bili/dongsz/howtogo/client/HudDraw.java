@@ -1,26 +1,30 @@
 package bili.dongsz.howtogo.client;
 
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
+import net.minecraft.client.gui.render.state.GuiElementRenderState;
+import net.minecraft.client.renderer.RenderPipelines;
+import org.joml.Matrix3x2f;
+import org.joml.Matrix3x2fStack;
+import org.joml.Vector2f;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
  * <p>Vanilla {@code GuiGraphics} only offers axis-aligned rectangles, which is not enough for
- * road lines, circular markers, turn arrows or rounded cards. Everything here builds on a single
+ * road lines, circular markers, turn arrows or rounded cards. Everything here builds on one
  * position-colour layer with depth testing off, so the results can be drawn over the world as well
  * as over a screen.
  *
- * <p><b>Draw all text after all shapes.</b> {@code GuiGraphics.drawString} flushes the buffer
- * source, which ends the QUADS {@code BufferBuilder} behind a consumer obtained from
- * {@link #consumer}. Emitting one more quad through that stale consumer throws
- * {@code IllegalStateException: Not building!} and takes the whole frame -- and with it the game --
- * down. Mixing the two inside one quad sequence is the trap; a label pass belongs at the tail.
+ * <p><b>Draw all text after all shapes.</b> On the world map ({@code MapElementGraphics}) text is
+ * written through the same vertex buffers as the shapes and its writer ends the last batch, so a
+ * label pass belongs at the tail of the shapes' sequence. On screens and the HUD the two go through
+ * the deferred GUI system instead, and the layering is decided for us -- but the same tail order
+ * keeps the two backends reading the same, so the rule stands in both.
  */
 public final class HudDraw {
 
@@ -101,30 +105,253 @@ public final class HudDraw {
     }
 
     /**
-     * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
-     * obvious choice, but its default depth test can bury an overlay behind the world.
+     * The pipeline behind the shared layer.
+     *
+     * <p>1.21.5 moved what a render type used to configure into pipelines: the shader, the blend, the
+     * depth test, the cull and the write mask are all pipeline properties now, and a render type is
+     * little more than a pipeline with a buffer size. This is the old {@code howtogo_hud} render type
+     * expressed the new way -- built on vanilla's GUI pipeline for its matrices and shaders, with the
+     * one thing the mod's geometry needs that vanilla's does not: culling off. A stroke's quad winding
+     * follows the direction of the line it belongs to, so half of every road would be inside-out and
+     * invisible under vanilla's back-face cull.
+     *
+     * <p>Depth testing and the write mask need no saying here: the GUI pipeline runs in the GUI pass,
+     * which has no depth fight to lose.
      */
-    public static final RenderType QUADS = RenderType.create(
-            "howtogo_hud",
-            DefaultVertexFormat.POSITION_COLOR,
-            VertexFormat.Mode.QUADS,
-            1536,
-            false,
-            true,
-            RenderType.CompositeState.builder()
-                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
-                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
-                    .setCullState(RenderStateShard.NO_CULL)
-                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
-                    .createCompositeState(false));
+    public static final RenderPipeline HUD_PIPELINE = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
+            .withLocation("howtogo:pipeline/hud_quads")
+            .withCull(false)
+            .build();
 
     private HudDraw() {
     }
 
-    /** A fresh vertex consumer for the shared layer. */
-    public static VertexConsumer consumer(GuiGraphics graphics) {
-        return graphics.bufferSource().getBuffer(QUADS);
+    /**
+     * Opens a quad batch for the shared layer, on a screen or the HUD.
+     *
+     * <p>1.21.6 deferred all GUI drawing: {@code GuiGraphics} stopped handing out a buffer source, and
+     * custom geometry now reaches the screen as a {@link GuiElementRenderState} that the GUI renderer
+     * plays back at the end of the frame, with the GUI's own projection. The batch collects transformed
+     * position-colour vertices as they are emitted and is handed over by {@link #end}. Batches are
+     * pooled and reused round-robin: a slot comes back only several frames after its last use, by which
+     * point the renderer has long consumed what it held.
+     */
+    public static QuadBatch beginBatch(GuiGraphics graphics) {
+        QuadBatch batch = POOL[POOL_CURSOR];
+        POOL_CURSOR = (POOL_CURSOR + 1) % POOL.length;
+        batch.reset(graphics.pose());
+        return batch;
+    }
+
+    private static final QuadBatch[] POOL = new QuadBatch[8];
+    private static int POOL_CURSOR;
+
+    static {
+        for (int i = 0; i < POOL.length; i++) {
+            POOL[i] = new QuadBatch();
+        }
+    }
+
+    /**
+     * One deferred GUI element: the position-colour quads of one drawing block.
+     *
+     * <p>Vertices are transformed through the pose as they are emitted, so what is stored are the final
+     * screen coordinates; at playback the renderer asks for them plain. Coordinates live in a growable
+     * float array -- six floats a vertex -- that survives between frames in the pool, so a steady frame
+     * allocates nothing here.
+     */
+    public static final class QuadBatch implements GuiElementRenderState, VertexSink {
+
+        /** The pose transforms are read from at emit time; cleared on reset to avoid stale reads. */
+        private Matrix3x2fStack pose;
+        private float[] data = new float[6 * 256];
+        private int vertices;
+        private float minX = Float.MAX_VALUE;
+        private float minY = Float.MAX_VALUE;
+        private float maxX = -Float.MAX_VALUE;
+        private float maxY = -Float.MAX_VALUE;
+        /** Scratch for the pose transform; render thread confined, so one per batch is plenty. */
+        private final Vector2f transformed = new Vector2f();
+
+        private void reset(Matrix3x2fStack pose) {
+            this.pose = pose;
+            this.vertices = 0;
+            this.minX = this.minY = Float.MAX_VALUE;
+            this.maxX = this.maxY = -Float.MAX_VALUE;
+        }
+
+        /** Hands the collected quads to the GUI renderer. An empty batch submits nothing. */
+        public void end(GuiGraphics graphics) {
+            if (vertices > 0) {
+                graphics.submitGuiElementRenderState(this);
+            }
+            this.pose = null;
+        }
+
+        @Override
+        public void vertex(double x, double y, int r, int g, int b, int a) {
+            float px;
+            float py;
+            if (pose != null) {
+                pose.transformPosition((float) x, (float) y, transformed);
+                px = transformed.x;
+                py = transformed.y;
+            } else {
+                px = (float) x;
+                py = (float) y;
+            }
+            if (vertices * 6 + 6 > data.length) {
+                data = java.util.Arrays.copyOf(data, data.length * 2);
+            }
+            data[vertices * 6] = px;
+            data[vertices * 6 + 1] = py;
+            data[vertices * 6 + 2] = r;
+            data[vertices * 6 + 3] = g;
+            data[vertices * 6 + 4] = b;
+            data[vertices * 6 + 5] = a;
+            if (px < minX) {
+                minX = px;
+            }
+            if (px > maxX) {
+                maxX = px;
+            }
+            if (py < minY) {
+                minY = py;
+            }
+            if (py > maxY) {
+                maxY = py;
+            }
+            vertices++;
+        }
+
+        @Override
+        public void buildVertices(VertexConsumer vc, float z) {
+            for (int i = 0; i < vertices; i++) {
+                vc.addVertex(data[i * 6], data[i * 6 + 1], z)
+                        .setColor((int) data[i * 6 + 2], (int) data[i * 6 + 3],
+                                (int) data[i * 6 + 4], (int) data[i * 6 + 5]);
+            }
+        }
+
+        @Override
+        public RenderPipeline pipeline() {
+            return HUD_PIPELINE;
+        }
+
+        @Override
+        public TextureSetup textureSetup() {
+            return TextureSetup.noTexture();
+        }
+
+        @Override
+        public ScreenRectangle scissorArea() {
+            return null;
+        }
+
+        @Override
+        public ScreenRectangle bounds() {
+            if (vertices == 0) {
+                return null;
+            }
+            int x = (int) Math.floor(minX);
+            int y = (int) Math.floor(minY);
+            return new ScreenRectangle(x, y,
+                    (int) Math.ceil(maxX) - x, (int) Math.ceil(maxY) - y);
+        }
+    }
+
+    /** Receives transformed position-colour vertices, in quad order. */
+    public interface VertexSink {
+        void vertex(double x, double y, int r, int g, int b, int a);
+    }
+
+    // ---------------------------------------------------- screen-space shapes
+
+    /** Emits a thick line as one quad, onto a deferred batch. */
+    public static void emitLine(QuadBatch batch,
+                                double x1, double y1, double x2, double y2,
+                                double halfWidth, int argb, int alpha) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double length = Math.hypot(dx, dy);
+        if (length < 1.0E-6) {
+            return;
+        }
+        double nx = -dy / length * halfWidth;
+        double ny = dx / length * halfWidth;
+
+        batch.vertex(x1 + nx, y1 + ny, r, g, b, a);
+        batch.vertex(x2 + nx, y2 + ny, r, g, b, a);
+        batch.vertex(x2 - nx, y2 - ny, r, g, b, a);
+        batch.vertex(x1 - nx, y1 - ny, r, g, b, a);
+    }
+
+    /** Emits a filled triangle, onto a deferred batch. */
+    public static void emitTriangle(QuadBatch batch,
+                                    double x1, double y1, double x2, double y2,
+                                    double x3, double y3, int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        // QUADS mode, so a triangle is written as a quad with its last corner repeated.
+        batch.vertex(x1, y1, r, g, b, a);
+        batch.vertex(x2, y2, r, g, b, a);
+        batch.vertex(x3, y3, r, g, b, a);
+        batch.vertex(x3, y3, r, g, b, a);
+    }
+
+    /** Emits a filled circle as a fan of degenerate quads, onto a deferred batch. */
+    public static void emitDisc(QuadBatch batch, double cx, double cy,
+                                double radius, int argb, int alpha) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+        final int segments = 12;
+        for (int i = 0; i < segments; i++) {
+            double a0 = i * Math.PI * 2 / segments;
+            double a1 = (i + 1) * Math.PI * 2 / segments;
+            double x0 = cx + Math.cos(a0) * radius;
+            double y0 = cy + Math.sin(a0) * radius;
+            double x1 = cx + Math.cos(a1) * radius;
+            double y1 = cy + Math.sin(a1) * radius;
+            batch.vertex(cx, cy, r, g, b, a);
+            batch.vertex(x0, y0, r, g, b, a);
+            batch.vertex(x1, y1, r, g, b, a);
+            batch.vertex(x0, y0, r, g, b, a);
+        }
+    }
+
+    /**
+     * A place's marker on a small map: the yellow square, onto a deferred batch.
+     *
+     * <p>The world map's own place markers are drawn by the map path below; this is the small-map
+     * twin, for the panel's mini-map and the picker's preview.
+     */
+    public static void emitPlaceMarker(QuadBatch batch, double cx, double cy,
+                                       double half, int argb) {
+        emitQuad(batch, cx - half, cy - half, cx + half, cy - half,
+                cx + half, cy + half, cx - half, cy + half, argb);
+    }
+
+    /** Emits a filled convex quad, corners given in winding order, onto a deferred batch. */
+    public static void emitQuad(QuadBatch batch,
+                                double x1, double y1, double x2, double y2,
+                                double x3, double y3, double x4, double y4, int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        batch.vertex(x1, y1, r, g, b, a);
+        batch.vertex(x2, y2, r, g, b, a);
+        batch.vertex(x3, y3, r, g, b, a);
+        batch.vertex(x4, y4, r, g, b, a);
     }
 
     // ------------------------------------------------------------------ shapes
@@ -355,6 +582,20 @@ public final class HudDraw {
         double dx = x2 - x1;
         double dy = y2 - y1;
         emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
+                x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
+    }
+
+    /** The same clip-and-emit, onto a deferred batch. */
+    public static void emitClipped(QuadBatch batch,
+                                   double x1, double y1, double x2, double y2,
+                                   double halfWidth, int argb, int alpha,
+                                   double minX, double minY, double maxX, double maxY) {
+        if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
+            return;
+        }
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        emitLine(batch, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
                 x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
     }
 }

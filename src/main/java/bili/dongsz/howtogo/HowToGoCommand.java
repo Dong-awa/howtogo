@@ -25,6 +25,7 @@ import net.minecraft.network.chat.Style;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -273,10 +274,12 @@ public final class HowToGoCommand {
 
     /** A URL a player can click, styled as the link it is. */
     private static Component urlLink(String url) {
+        // 1.21.6 made ClickEvent an interface with one record per action, and OpenUrl takes the URI
+        // itself; the old (Action, String) constructor is gone with it.
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
+                .withClickEvent(new ClickEvent.OpenUrl(URI.create(url))));
     }
 
     /** Ends the trip, if there is one. */

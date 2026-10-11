@@ -94,6 +94,12 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> AutoSelfTest.tick());
         NeoForge.EVENT_BUS.addListener(NavHudRenderer::onRenderGui);
 
+        // 1.21.5 moved render-type state into pipelines, and the GUI renderer only accepts elements
+        // whose pipeline is known. The shared HUD layer's no-cull variant of the GUI pipeline is
+        // registered here so its shader is preloaded with the rest and its sort key is stable.
+        modEventBus.addListener((net.neoforged.neoforge.client.event.RegisterRenderPipelinesEvent event) ->
+                event.registerPipeline(bili.dongsz.howtogo.client.HudDraw.HUD_PIPELINE));
+
         // Editing keys arrive as screen events and editing clicks as low-level input events, and the two
         // paths are not interchangeable in this build: the keyboard handler offers a key to the open
         // screen first and returns before posting InputEvent.Key if the screen took it, while the mouse
