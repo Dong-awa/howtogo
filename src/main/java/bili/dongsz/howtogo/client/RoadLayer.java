@@ -1,7 +1,8 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
-import net.minecraftforge.fml.ModList;
+import net.neoforged.fml.ModList;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
 import xaero.map.WorldMap;
 import xaero.map.element.MapElementRenderHandler;
 
@@ -12,10 +13,6 @@ import xaero.map.element.MapElementRenderHandler;
  * {@code MapElementRenderHandler.add} is public, so no mixin or access transformer is needed.
  * The only trick is timing: the handler does not exist until Xaero has initialised, so we poll
  * from the client tick until it shows up.
- *
- * <p>Called from {@code HowToGo}'s single tick listener rather than being a listener of its own: on
- * Forge there is one {@code TickEvent.ClientTickEvent} per phase and the phase has to be filtered, so
- * that filter is applied once, where the tick body is assembled, instead of in every tick job.
  */
 public final class RoadLayer {
 
@@ -24,7 +21,7 @@ public final class RoadLayer {
     private RoadLayer() {
     }
 
-    public static void onClientTick() {
+    public static void onClientTick(ClientTickEvent.Post event) {
         if (attempted) {
             return;
         }

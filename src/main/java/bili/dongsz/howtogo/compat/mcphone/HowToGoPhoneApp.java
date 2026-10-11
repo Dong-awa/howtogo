@@ -5,7 +5,7 @@ import com.november.mcphone.api.client.app.IPhoneApp;
 import com.november.mcphone.api.client.ui.IPhonePage;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraftforge.fml.ModList;
+import net.neoforged.fml.ModList;
 
 import java.util.List;
 

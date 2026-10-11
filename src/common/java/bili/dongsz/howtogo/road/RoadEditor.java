@@ -121,8 +121,28 @@ public final class RoadEditor {
         return true;
     }
 
-    /** Moves a stored place onto a storey, for the road a picked destination stands beside. */
-
+    /**
+     * How long the whole road the given segment belongs to is, in blocks.
+     *
+     * <p>The chain, not the piece: a road drawn with bends is several segments, and "how long is this
+     * road" is a question about the road. It is also the same thing the map highlights when the segment
+     * is selected, so what the readout says and what the player sees lit up cannot disagree.
+     *
+     * @return the summed length, or 0 when the id names no segment
+     */
+    public double chainLength(int segmentId) {
+        if (network.segment(segmentId) == null) {
+            return 0.0;
+        }
+        double total = 0.0;
+        for (int id : RoadChains.chainContaining(network, segmentId)) {
+            RoadSegment segment = network.segment(id);
+            if (segment != null) {
+                total += segment.length();
+            }
+        }
+        return total;
+    }
 
     /** Re-classes the whole road the given segment belongs to, leaving the drawing class alone. */
     public boolean setSegmentClass(int segmentId, RoadClass roadClass) {

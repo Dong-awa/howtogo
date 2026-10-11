@@ -15,7 +15,9 @@ import java.util.List;
  * pass, so this trades a negligible cost for never handing Xaero a stale view of the network while
  * the player is editing. Spatial indexing is a P3 concern.
  *
- * <p>Overlays are appended last so they draw on top of the roads.
+ * <p>Overlays are appended last so they draw on top of the roads, and the roads themselves are sorted
+ * by storey before anything is handed over, so a bridge is painted over the road it crosses. See
+ * {@link RoadElement#sortForDraw}.
  */
 public final class RoadElementProvider extends ElementRenderProvider<RoadElement, RoadRenderContext> {
 
@@ -160,6 +162,12 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             RoadElement.LABELS.setOverlayAnchor(MapViewState.cameraX(), MapViewState.cameraZ());
         }
         buffer.add(RoadElement.LABELS);
+
+        // The order the roads were gathered in says nothing about height -- hand-drawn segments come out
+        // of a hash map, and the rails are appended after all of them -- so the storeys are sorted last,
+        // once, over the whole frame. The overlays all sort after every road and keep their order, which
+        // is what leaves the tail of this list exactly as it was. See RoadElement.sortForDraw.
+        RoadElement.sortForDraw(buffer);
 
         index = 0;
     }

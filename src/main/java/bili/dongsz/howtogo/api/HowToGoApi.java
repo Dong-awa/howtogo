@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.api;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.WorldFiles;
 import bili.dongsz.howtogo.route.DestinationSource;
-import net.minecraftforge.fml.ModList;
+import net.neoforged.fml.ModList;
 
 import java.nio.file.Path;
 import java.util.Objects;
