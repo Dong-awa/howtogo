@@ -110,6 +110,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             "hud.howtogo.edit.finish",
             "hud.howtogo.edit.select",
             "hud.howtogo.edit.class",
+            "hud.howtogo.edit.layer",
             "hud.howtogo.edit.name",
             "hud.howtogo.edit.oneway",
             "hud.howtogo.edit.poi",
@@ -124,36 +125,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_ROUTE_DONE = 0xFF6E6E6E;
     private static final int COLOR_ROUTE_START = 0xFF44FF88;
     private static final int COLOR_ROUTE_END = 0xFFFF4444;
-    /**
-     * The route's stroke width in pixels, at or above {@link #ROUTE_FULL_WIDTH_SCALE}.
-     *
-     * <p>Three of these four numbers only make sense together, because the route used to be one number
-     * that reads wrong at some zoom: this one is the width when the map is close, the scale below is how
-     * close that has to be, and the floor is how thin it is allowed to get at the far end.
-     */
     private static final double ROUTE_STROKE_PX = 4.0;
-    /**
-     * The zoom at which the route reaches its full width.
-     *
-     * <p>Above {@code 1.0} on purpose: the map's scale is pixels per block, and a route that only
-     * starts thinning below one pixel per block still looks like a band across the whole of the
-     * zoomed-out range, which is the range most of a journey is read at. At 1.5 the stroke is already
-     * down to two thirds of its width by the time the map is at one pixel per block.
-     *
-     * <p>Without this the route was a fixed four pixels at every zoom, so it did not get thinner as
-     * the map was pulled back and became the thickest thing on a far-out map -- wider than any road
-     * it was drawn over. Roads thin with {@link #strokeHalfWidthPx}; the route now thins with them.
-     */
-    private static final double ROUTE_FULL_WIDTH_SCALE = 1.5;
-    /** Floor on the route's stroke, in pixels -- the same floor the roads are held to. */
-    private static final double ROUTE_MIN_STROKE_PX = 1.0;
-    /**
-     * Floor on the route's endpoints, as a share of their full size.
-     *
-     * <p>Held higher than the stroke's floor: the two dots are how a player finds the ends of a trip
-     * at a glance, and a dot scaled down as far as the line would be a dot nobody can see.
-     */
-    private static final double ROUTE_MARKER_MIN_FACTOR = 0.5;
     private static final double ROUTE_MARKER_PX = 5.0;
 
     /**
@@ -874,15 +846,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      *
      * <p>Shapes before text: see the warning on HudDraw.
      */
-    private static final double LINE_STROKE_PX = 1.3;
-    /**
-     * Narrowest a line is drawn at, so a line never disappears however far the map is zoomed out.
-     *
-     * <p>Both this and the width above came down with the roads' cap: a line is its own stroke
-     * (see {@link #lineStrokePx}) and does not go through {@link #strokeHalfWidthPx}, so leaving it
-     * at 2.5 made it read as thicker than the roads it runs beside once those were thinned.
-     */
-    private static final double MIN_LINE_STROKE_PX = 0.5;
+    private static final double LINE_STROKE_PX = 2.5;
+    /** Narrowest a line is drawn at, so a line never disappears however far the map is zoomed out. */
+    private static final double MIN_LINE_STROKE_PX = 0.9;
     /** Map scale at which a line is drawn at its full width: below it, the stroke thins with the map. */
     private static final double FULL_LINE_STROKE_SCALE = 0.5;
     /**
@@ -1692,12 +1658,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         Route route = Navigation.route();
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
-        // The route's share of the map's zoom: 1 at or above ROUTE_FULL_WIDTH_SCALE, falling with the
-        // map below it, and never below the stroke's floor. p10 is info.scale, the map's pixels per
-        // block, and is already a parameter of this method.
-        double routeZoom = Math.max(ROUTE_MIN_STROKE_PX / ROUTE_STROKE_PX,
-                Math.min(1.0, Math.abs(p10) / ROUTE_FULL_WIDTH_SCALE));
-        double marker = ROUTE_MARKER_PX * Math.max(ROUTE_MARKER_MIN_FACTOR, routeZoom) * posePerPixel;
+        double marker = ROUTE_MARKER_PX * posePerPixel;
 
         if (!route.isPresent()) {
             // Still show where the trip started and where it is trying to get to, so a failed
@@ -1713,7 +1674,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         List<double[]> points = route.points();
-        double halfWidth = ROUTE_STROKE_PX * 0.5 * routeZoom * posePerPixel;
+        double halfWidth = ROUTE_STROKE_PX * 0.5 * posePerPixel;
         double travelled = Navigation.travelled();
 
         int aheadR = (COLOR_ROUTE >> 16) & 0xFF;
@@ -1859,6 +1820,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         .chainDirection(RoadEditSession.editor().selectedSegmentId());
                 headline = headline + " · " + Component.translatable(
                         "hud.howtogo.direction." + direction.id()).getString();
+                // Then where it is and how long it is, in that order: a storey is the thing a flat map
+                // cannot show, so it is the first question a selected road raises, and the length is the
+                // number a player reads once the road is the right one. Both are about the whole road
+                // rather than the piece under the cursor -- see RoadEditor.chainLength -- because that is
+                // what selecting a road selects.
+                headline = headline + " · " + Component.translatable("hud.howtogo.layer",
+                        Navigation.roadLayerLabel(RoadEditSession.selectedLayer())).getString();
+                headline = headline + " · " + Component.translatable("hud.howtogo.selected_length",
+                        (int) Math.round(RoadEditSession.selectedLength())).getString();
             }
             leftLines.add(headline);
             leftLines.add(editStats());
@@ -1985,8 +1955,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * Top of a block of the given line count sitting on the given bottom.
      *
      * <p>Nothing is clamped here because nothing needs to be: the worst case is a six-line left block
-     * -- four navigation lines, the caption and the totals -- with the ten-line control list stepped
-     * above it, whose panel top still lands at 40 px of a scaled space Minecraft never makes shorter
+     * -- four navigation lines, the caption and the totals -- with the thirteen-line control list stepped
+     * above it, whose panel top still lands around 10 px of a scaled space Minecraft never makes shorter
      * than 240. A longer list would run off the top and be clipped by the renderer, which is the
      * point at which this would need a scroll or a second column rather than more lines.
      */
@@ -2008,33 +1978,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * How wide a stroke may get, in pixels per block of the road's own width.
-     *
-     * <p>A road is true to scale until it reaches this and stops widening. Multiplying by the
-     * class's own width rather than adding a constant is what keeps the classes in proportion:
-     * an additive ceiling gave every class the same three-pixel head start, which is half of a
-     * highway's width and more than all of a path's -- the six classes came out nearly the same
-     * thickness as each other and uniformly fatter than the blocks they stand for.
-     *
-     * <p>0.6 was arrived at by trying the alternatives: 0.7 and 0.65 read as too thick, 0.55 as
-     * too thin once zoomed in. To go a notch thinner, change this number only.
-     */
-    private static final double STROKE_MAX_PX_PER_BLOCK = 0.6;
-
-    /**
      * Half the on-screen stroke width in pixels for a road of the given class.
      *
      * <p>Below the cap the width is the road's true block width at the current zoom, so the map
      * stays metrically honest when zoomed out. Above it the stroke stops widening, which keeps
      * high zoom levels readable instead of turning every road into a solid band.
-     *
-     * <p>These are GUI pixels, not screen pixels: the pose Xaero leaves carries no map zoom of its
-     * own (see the class comment), so a player on GUI scale 3 sees this value three times over.
-     * Judge thickness against this number, not against the screen.
      */
     private static double strokeHalfWidthPx(RoadClass roadClass, double scale) {
         double naturalHalf = roadClass.width() * 0.5 * Math.abs(scale);
-        double cappedHalf = roadClass.width() * 0.5 * STROKE_MAX_PX_PER_BLOCK;
+        double cappedHalf = (3.0 + roadClass.width() * 0.7) * 0.5;
         return Math.max(MIN_STROKE_PX * 0.5, Math.min(naturalHalf, cappedHalf));
     }
 
@@ -2222,23 +2174,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
     }
 
-    /**
-     * The one place a vertex is written for everything this mod draws on Xaero's world map: roads,
-     * routes, markers and labels all funnel through here.
-     *
-     * <h2>The {@code endVertex()} is not optional</h2>
-     * 1.20.1 requires a vertex to be ended explicitly -- only {@code BufferBuilder.endVertex()}
-     * increments the vertex count. 1.21 removed the method and made the vertex complete implicitly, so
-     * the author's original (NeoForge 1.21.1) has no such call, and copying it verbatim gives the
-     * silent failure this whole port has to watch for: it compiles, it runs, it logs nothing, and
-     * nothing is drawn. The map's cards, borders and text still appear because those go through
-     * vanilla {@code GuiGraphics}, which ends its own vertices.
-     *
-     * <p>{@code VertexConsumer.vertex(Matrix4f, float, float, float)} is 1.20.1's name for what 1.21
-     * calls {@code addVertex(Pose, ...)}.
-     */
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
+        vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
     }
 }

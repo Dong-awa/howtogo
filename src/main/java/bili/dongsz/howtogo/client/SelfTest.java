@@ -522,12 +522,8 @@ public final class SelfTest {
                     network);
 
             server = WebMapServer.start(() -> snapshot, freePort());
-
-            // Not a try-with-resources, and the reason is a Java version rather than a Minecraft one:
-            // HttpClient only became AutoCloseable in Java 21, and 1.20.1 is a Java 17 game.
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10)).build();
-            try {
+            try (HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10)).build()) {
                 Reply page = fetch(client, server.url());
                 Reply script = fetch(client, server.url() + "js/app.js");
                 Reply library = fetch(client, server.url() + "vendor/html2canvas.min.js");
@@ -558,11 +554,6 @@ public final class SelfTest {
                 }
                 return new Result("command.howtogo.selftest.check.webmap",
                         pageOk && scriptOk && libraryOk && apiOk, detail);
-            } finally {
-                // Nothing to close: HttpClient has no close() under Java 17. The try/finally is kept
-                // only so the scoping the original try-with-resources expressed still reads the same
-                // way; the client's own executor is a daemon pool, so leaving it to the GC here does
-                // not hold the process open.
             }
         } catch (IOException | RuntimeException failed) {
             // Most likely here: no port could be bound, or the JDK's HTTP module is not in this

@@ -17,7 +17,7 @@ import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
-import net.minecraftforge.client.event.RenderGuiEvent;
+import net.neoforged.neoforge.client.event.RenderGuiEvent;
 
 import static bili.dongsz.howtogo.client.HudDraw.*;
 

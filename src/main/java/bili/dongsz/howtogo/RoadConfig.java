@@ -4,7 +4,7 @@ import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.route.RoutePreference;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
-import net.minecraftforge.common.ForgeConfigSpec;
+import net.neoforged.neoforge.common.ModConfigSpec;
 
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -22,37 +22,37 @@ import java.util.Set;
  */
 public final class RoadConfig {
 
-    public static final ForgeConfigSpec SPEC;
+    public static final ModConfigSpec SPEC;
 
-    private static final Map<RoadClass, ForgeConfigSpec.DoubleValue> ON_ROAD_TOLERANCE =
+    private static final Map<RoadClass, ModConfigSpec.DoubleValue> ON_ROAD_TOLERANCE =
             new EnumMap<>(RoadClass.class);
 
-    private static final ForgeConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
-    private static final ForgeConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
-    private static final ForgeConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
-    private static final ForgeConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
-    private static final ForgeConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
-    private static final ForgeConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
-    private static final ForgeConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
-    private static final ForgeConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
-    private static final ForgeConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
-    private static final ForgeConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
-    private static final ForgeConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
-    private static final ForgeConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
-    private static final ForgeConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
-    private static final ForgeConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
-    private static final ForgeConfigSpec.BooleanValue MTR_TRANSIT;
-    private static final ForgeConfigSpec.BooleanValue MTR_FULL_MAP;
-    private static final ForgeConfigSpec.BooleanValue MTR_MAP_OVERLAY;
-    private static final ForgeConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
-    private static final ForgeConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
+    private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
+    private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
+    private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
+    private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
+    private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
+    private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
+    private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
+    private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
+    private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
+    private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
+    private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
+    private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
+    private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
+    private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
+    private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
+    private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
     /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
-    private static final ForgeConfigSpec.BooleanValue DEBUG_LOG;
-    private static final ForgeConfigSpec.BooleanValue WEBMAP_AUTO_START;
-    private static final ForgeConfigSpec.IntValue WEBMAP_PORT;
+    private static final ModConfigSpec.BooleanValue DEBUG_LOG;
+    private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
+    private static final ModConfigSpec.IntValue WEBMAP_PORT;
 
     static {
-        ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
+        ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
 
         builder.comment(
                         "How far from the drawn line still counts as being on the road, in blocks.",
@@ -94,16 +94,8 @@ public final class RoadConfig {
                         "Road classes to keep out of the route entirely, for player and vehicle alike.",
                         "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
                         "unknown entries are ignored. Empty by default.")
-                // Water is what the list exists for, so it is what the config screen suggests.
-                //
-                // Signature note, and the behaviour is preserved exactly: NeoForge adds an overload
-                // (path, defaultValue, Supplier<T> suggestedEntry) whose only job is to wrap that one
-                // value in a list and use it as the default supplier; Forge 1.20.1 has no such
-                // overload, so the same thing is expressed directly -- plus one line of the author's
-                // intent, which was an EMPTY list with water merely offered as the thing to add. Passing
-                // List.of("water") as the default would quietly change the shipped behaviour to
-                // "water is avoided out of the box", which is not what the comment above promises.
-                .<String>defineListAllowEmpty("avoid_road_classes", List.<String>of(),
+                // Water is what the list exists for, so it is what the config UI offers to add.
+                .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
                         element -> element instanceof String);
 
         PREFER_MAJOR_ROADS = builder.comment(
@@ -167,8 +159,8 @@ public final class RoadConfig {
                         "\"create:track\" is Create's Train Track. \"create:fake_track\" -- its invisible",
                         "Track Marker for Maps -- is deliberately not included: it is a marker rather",
                         "than a surface and could draw lines where no track runs.")
-                .<String>defineListAllowEmpty("create_track_block_ids", List.of("create:track"),
-                        element -> element instanceof String);
+                .defineListAllowEmpty("create_track_block_ids", List.of("create:track"),
+                        () -> "create:track", element -> element instanceof String);
 
         CREATE_STATION_BLOCK_IDS = builder.comment(
                         "Block ids whose positions become destinations, listed in the picker under their",
@@ -176,8 +168,8 @@ public final class RoadConfig {
                         "They are named from their position: Create keeps a station's name on its",
                         "server-side railway data, and the block entity that reaches the client carries",
                         "no name, so there is nothing here to read it from.")
-                .<String>defineListAllowEmpty("create_station_block_ids", List.of("create:track_station"),
-                        element -> element instanceof String);
+                .defineListAllowEmpty("create_station_block_ids", List.of("create:track_station"),
+                        () -> "create:track_station", element -> element instanceof String);
 
         CREATE_TRACK_SCAN_RADIUS = builder.comment(
                         "How far from the player, in blocks, chunks are read for tracks. A square rather",
@@ -343,7 +335,7 @@ public final class RoadConfig {
 
     /** Tolerance for the given class, falling back to a sane value before configs have loaded. */
     public static double onRoadTolerance(RoadClass roadClass) {
-        ForgeConfigSpec.DoubleValue value = ON_ROAD_TOLERANCE.get(roadClass);
+        ModConfigSpec.DoubleValue value = ON_ROAD_TOLERANCE.get(roadClass);
         if (value == null) {
             return defaultTolerance(roadClass);
         }
@@ -544,7 +536,7 @@ public final class RoadConfig {
     }
 
     private static List<? extends String> configuredList(
-            ForgeConfigSpec.ConfigValue<List<? extends String>> value, String fallback) {
+            ModConfigSpec.ConfigValue<List<? extends String>> value, String fallback) {
         try {
             List<? extends String> loaded = value.get();
             return loaded == null ? List.of() : loaded;

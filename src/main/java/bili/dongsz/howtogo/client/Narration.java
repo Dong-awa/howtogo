@@ -399,11 +399,7 @@ public final class Narration {
         }
         long millis = (long) SPOKEN_BASE_MS + (long) syllables * SPOKEN_SYLLABLE_MS
                 + (long) letters * SPOKEN_LETTER_MS;
-        // Math.clamp(long, int, int) is a Java 21 API; 1.20.1 is a Java 17 game, so the same
-        // clamp is spelled out. The bound types differ (long value, int limits), which is why the
-        // widening is explicit rather than relying on overload resolution.
-        return ticksFor(Math.max((long) SPOKEN_MIN_MS,
-                Math.min((long) SPOKEN_MAX_MS, millis)));
+        return ticksFor(Math.clamp(millis, SPOKEN_MIN_MS, SPOKEN_MAX_MS));
     }
 
     /** A length of time as client ticks, never less than one. */
