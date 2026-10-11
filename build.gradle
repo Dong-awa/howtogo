@@ -7,7 +7,7 @@ version = project.mod_version
 group = project.maven_group
 base.archivesName = project.archives_name
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+java.toolchain.languageVersion = JavaLanguageVersion.of((project.findProperty('javaToolchainVersion') ?: '21') as Integer)
 
 neoForge {
     version = project.neoforge_version
@@ -90,9 +90,10 @@ repositories {
     // Workspace-local mirror carrying the NeoForm toolchain (neoform-runtime, neoform, mergetool,
     // AutoRenamingTool, ...) and the minecraft-dependencies module metadata, which ship no POM-only
     // fallback here -- Gradle module metadata is the only thing it stores for some of them.
+    // Git worktrees pass -PhtgLocalMaven=<absolute path> to share the main checkout's mirror.
     maven {
         name = 'workspace-local-mirror'
-        url = uri("${rootDir}/.recon/maven-local")
+        url = uri(project.findProperty('htgLocalMaven') ?: "${rootDir}/.recon/maven-local")
         metadataSources { it.gradleMetadata() }
     }
     // bmclapi2 proxies Maven Central (plus parts of the neoforged repo), so it sits right after the
@@ -118,7 +119,9 @@ repositories {
 dependencies {
     // Xaero's World Map is closed-source and not published to any Maven repo.
     // We compile against the actual shipped jar (official Mojang mappings, no reobf needed).
-    compileOnly "maven.modrinth:NcUtCpym:SnQ4SoDe"
+    // The coordinate is version-specific -- see xaeroDependency in gradle.properties; the matching
+    // jar must also sit in libs/ for the flatDir fileTree below.
+    compileOnly project.property('xaeroDependency')
 
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
@@ -142,4 +145,21 @@ tasks.named('processResources', ProcessResources).configure {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+// Offline-mirror escape hatch: gradle.properties may declare dependencySubstitutions as a
+// comma-separated list of "group:artifact:version->group:artifact:version" pairs. Used when the
+// blocked official repo and bmclapi both lack an exact version but the workspace mirror holds a
+// compatible sibling (e.g. FML 11.0.16 -> 11.0.15, neoform 26.2-2 -> 26.2-1).
+def subProps = (project.findProperty('dependencySubstitutions') ?: '').toString().split(',').findAll { it.contains('->') }
+if (!subProps.isEmpty()) {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            subProps.each { String raw ->
+                def pair = raw.trim().split(/->/)*.trim()
+                substitute(module(pair[0])).using(module(pair[1]))
+                    .because('the exact version is unreachable offline; the mirror carries a compatible sibling')
+            }
+        }
+    }
 }

@@ -31,3 +31,6 @@ tools/routing-harness/build/
 .gradle-dist/
 .gradle-home/
 local-first.gradle
+
+# per-branch worktrees
+.worktrees/
