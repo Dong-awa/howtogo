@@ -5,7 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.fml.ModList;
+import net.minecraftforge.fml.ModList;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;

@@ -1,12 +1,16 @@
 package bili.dongsz.howtogo.client;
 
+import com.mojang.blaze3d.platform.GlStateManager;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
+import org.lwjgl.opengl.GL11;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
@@ -100,6 +104,89 @@ public final class HudDraw {
                 cx - half, cy + half, argb);
     }
 
+    /*
+     * ---------------------------------------------------------------------------------------------
+     * THE FIVE RENDER STATES, BUILT FROM PUBLIC API INSTEAD OF BORROWED FROM VANILLA
+     * ---------------------------------------------------------------------------------------------
+     *
+     * The author's original (NeoForge 1.21.1) wrote this as
+     *
+     *     RenderType.CompositeState.builder()
+     *             .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
+     *             .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
+     *             .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
+     *             .setCullState(RenderStateShard.NO_CULL)
+     *             .setWriteMaskState(RenderStateShard.COLOR_WRITE)
+     *             .createCompositeState(false)
+     *
+     * and it compiled because NeoForge widens those RenderStateShard constants with its own access
+     * transformer. On Forge 1.20.1 all five are `protected static final` and Forge widens none of them,
+     * and an access transformer of our own does not fix it reliably: ForgeGradle resolves an AT field
+     * entry against the SRG name, and for a field it cannot resolve the entry is dropped silently and
+     * the compile still fails. That was measured, not assumed -- with no AT all five fail; with an AT
+     * naming all five SRG ids the compile still failed on all five.
+     *
+     * So all five are constructed here instead, each copied call for call from vanilla's own static
+     * initialiser (read out of the class with `javap -c`, not from memory). The result is the same
+     * shader, the same blend state, the same depth test, the same cull and the same write mask, with no
+     * dependency on an obfuscation name a future Forge build is free to change.
+     */
+
+    /**
+     * {@code RenderStateShard.POSITION_COLOR_SHADER}: the flat position-colour shader.
+     *
+     * <p>Vanilla builds it as {@code new ShaderStateShard(GameRenderer::getPositionColorShader)}, and
+     * that accessor is public, so this is the constant itself rather than a copy of it.
+     */
+    private static final RenderStateShard.ShaderStateShard POSITION_COLOR_SHADER =
+            new RenderStateShard.ShaderStateShard(GameRenderer::getPositionColorShader);
+
+    /**
+     * {@code RenderStateShard.TRANSLUCENT_TRANSPARENCY}: ordinary alpha blending.
+     *
+     * <p>Setup is {@code enableBlend()} followed by
+     * {@code blendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA)} -- colour and
+     * alpha blended by separate factors, which is what keeps a translucent colour at the alpha it asked
+     * for instead of compounding it. Teardown is {@code disableBlend()} then {@code defaultBlendFunc()},
+     * exactly vanilla's clear.
+     */
+    private static final RenderStateShard.TransparencyStateShard TRANSLUCENT_TRANSPARENCY =
+            new RenderStateShard.TransparencyStateShard(
+                    "howtogo_translucent_transparency",
+                    () -> {
+                        RenderSystem.enableBlend();
+                        RenderSystem.blendFuncSeparate(
+                                GlStateManager.SourceFactor.SRC_ALPHA,
+                                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+                                GlStateManager.SourceFactor.ONE,
+                                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
+                    },
+                    () -> {
+                        RenderSystem.disableBlend();
+                        RenderSystem.defaultBlendFunc();
+                    });
+
+    /**
+     * {@code RenderStateShard.NO_DEPTH_TEST}: pass everything, whatever is already in the depth buffer.
+     *
+     * <p>Vanilla's is {@code new DepthTestStateShard("always", 519)}, where 519 is
+     * {@code GL11.GL_ALWAYS}; negative depth offsets are rejected by {@code DepthTestStateShard}'s own
+     * constructor, so the lambda disables the offset rather than setting it.
+     *
+     * <p>This is the state the author's comment above cares about: without it the HUD layer would be
+     * buried behind the world.
+     */
+    private static final RenderStateShard.DepthTestStateShard NO_DEPTH_TEST =
+            new RenderStateShard.DepthTestStateShard("always", GL11.GL_ALWAYS);
+
+    /** {@code RenderStateShard.NO_CULL}: draw both faces. Vanilla's is {@code new CullStateShard(false)}. */
+    private static final RenderStateShard.CullStateShard NO_CULL =
+            new RenderStateShard.CullStateShard(false);
+
+    /** {@code RenderStateShard.COLOR_WRITE}: write colour, leave the depth buffer alone. */
+    private static final RenderStateShard.WriteMaskStateShard COLOR_WRITE =
+            new RenderStateShard.WriteMaskStateShard(true, false);
+
     /**
      * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
      * obvious choice, but its default depth test can bury an overlay behind the world.
@@ -112,11 +199,11 @@ public final class HudDraw {
             false,
             true,
             RenderType.CompositeState.builder()
-                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
-                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
-                    .setCullState(RenderStateShard.NO_CULL)
-                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
+                    .setShaderState(POSITION_COLOR_SHADER)
+                    .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
+                    .setDepthTestState(NO_DEPTH_TEST)
+                    .setCullState(NO_CULL)
+                    .setWriteMaskState(COLOR_WRITE)
                     .createCompositeState(false));
 
     private HudDraw() {
@@ -204,9 +291,26 @@ public final class HudDraw {
         }
     }
 
+    /**
+     * The one place a vertex is written for the HUD layer.
+     *
+     * <h2>The {@code endVertex()} is not optional</h2>
+     * 1.20.1 requires a vertex to be ended explicitly: only {@code BufferBuilder.endVertex()} increments
+     * the vertex count and checks the buffer's capacity. 1.21 removed the method and made the vertex
+     * complete implicitly, so the author's original -- written against NeoForge 1.21.1 -- has no such
+     * call, and transplanting it verbatim produces the worst possible failure: it <em>compiles</em>,
+     * it <em>runs</em>, it logs nothing, and <b>not one pixel appears</b>. Everything vanilla draws in
+     * the same frame looks fine, because {@code GuiGraphics.fill}/{@code drawString} call
+     * {@code endVertex()} themselves, which is why the symptom reads as "the panel is there but the map
+     * is empty" rather than as a crash.
+     *
+     * <p>{@code VertexConsumer.vertex(Matrix4f, float, float, float)} is the 1.20.1 spelling of what
+     * 1.21 calls {@code addVertex(Pose, ...)}; the matrix is the pose's own, which carries no scale
+     * (see {@link MapProjection}'s note), so these coordinates are GUI pixels.
+     */
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
+        vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
     }
 
     // ------------------------------------------------------------ rounded cards

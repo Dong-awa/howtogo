@@ -375,8 +375,12 @@ public final class TransitLineScreen extends Screen {
 
     // ---------------------------------------------------------------- render
 
+    /**
+     * 1.20.1's override takes only the drawing context; the (mouseX, mouseY, partialTick) form arrived
+     * in 1.20.2 and none of the three was read here.
+     */
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
     }
 
     /**
@@ -902,12 +906,16 @@ public final class TransitLineScreen extends Screen {
      *
      * <p>Per column, and only for the column under the cursor: a wheel that moved all three at once would
      * take the line the player is reading out from under them while they looked for a stop to add.
+     *
+     * <p>1.20.1's override receives the two scroll amounts in one {@code scrollY}; the split
+     * {@code (scrollX, scrollY)} pair arrived later, and only the vertical half is used here -- the wheel
+     * is not asked to scroll a column sideways anywhere in this screen.
      */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
         int step = (int) Math.signum(scrollY);
         if (step == 0) {
-            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+            return super.mouseScrolled(mouseX, mouseY, scrollY);
         }
         if (inColumn(mouseX, mouseY, linesX)) {
             lineScroll = clampScroll(lineScroll - step, listed().size());
@@ -922,7 +930,7 @@ public final class TransitLineScreen extends Screen {
             candidatesScroll = clampScroll(candidatesScroll - step, offered().size());
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     /** Whether the pointer is anywhere in one column, list area and header alike. */

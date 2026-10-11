@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.client;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
-import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.minecraftforge.client.event.ScreenEvent;
 import org.lwjgl.glfw.GLFW;
 
 /**

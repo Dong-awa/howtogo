@@ -22,7 +22,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
-import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.minecraftforge.client.event.RegisterClientCommandsEvent;
 
 import java.io.IOException;
 import java.util.ArrayList;

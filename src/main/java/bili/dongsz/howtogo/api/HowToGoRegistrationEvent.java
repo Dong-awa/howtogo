@@ -1,14 +1,14 @@
 package bili.dongsz.howtogo.api;
 
 import bili.dongsz.howtogo.route.DestinationSource;
-import net.neoforged.bus.api.Event;
+import net.minecraftforge.eventbus.api.Event;
 
 /**
  * "This mod is loaded and its API is ready" -- the moment an addon may register.
  *
  * <h2>When it is posted</h2>
  * Once, on the first client tick, on the client thread, after every mod has been constructed and
- * after client config has been read. Posted on the game event bus ({@code NeoForge.EVENT_BUS}), so an
+ * after client config has been read. Posted on the game event bus ({@code MinecraftForge.EVENT_BUS}), so an
  * addon reaches it the ordinary way:
  *
  * <pre>{@code

@@ -7,7 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
-import net.neoforged.fml.ModList;
+import net.minecraftforge.fml.ModList;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;

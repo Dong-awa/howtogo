@@ -9,8 +9,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.fml.loading.FMLEnvironment;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.loading.FMLEnvironment;
 
 import java.util.List;
 
@@ -43,8 +43,15 @@ public final class NavigatorItem extends Item {
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
     }
 
+    /**
+     * The tooltip, built on the client.
+     *
+     * <p>Signature note: 1.20.5 replaced the {@code Level} parameter with a {@code TooltipContext}, so
+     * the author's original is the newer shape. On 1.20.1 the override takes the level -- and it was
+     * never read here, so this is a signature change and nothing else.
+     */
     @Override
-    public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
+    public void appendHoverText(ItemStack stack, Level level, List<Component> tooltip,
                                 TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.
