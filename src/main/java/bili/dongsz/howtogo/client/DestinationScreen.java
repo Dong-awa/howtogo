@@ -804,8 +804,12 @@ public final class DestinationScreen extends Screen {
 
     // ------------------------------------------------------------------ render
 
+    /**
+     * 1.20.1's override takes only the drawing context: the (mouseX, mouseY, partialTick) form arrived
+     * in 1.20.2. None of the three was read here, so nothing but the signature changes.
+     */
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
         // Dimming is handled in render so the panel sits between it and the widgets.
     }
 
@@ -1765,8 +1769,14 @@ public final class DestinationScreen extends Screen {
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
+    /**
+     * Scroll wheel over the map.
+     *
+     * <p>1.20.1's override receives the two scroll amounts in one {@code scrollY}; the split
+     * {@code (scrollX, scrollY)} pair arrived later, and the horizontal half was never read here.
+     */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
         if (insideMap(mouseX, mouseY)) {
             // Zoom about the centre. Anchoring on the centre rather than the cursor is simpler and
             // predictable enough at this size.

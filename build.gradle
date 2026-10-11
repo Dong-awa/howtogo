@@ -1,41 +1,66 @@
+// ForgeGradle 6 is the toolchain Forge 1.20.1 was built and supported with; it produces the
+// reobfuscated production jar that a vanilla 1.20.1 Forge client/server can load.
 plugins {
-    id 'java'
-    id 'net.neoforged.moddev' version '2.0.148'
+    id 'eclipse'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
 }
 
 version = project.mod_version
 group = project.maven_group
 base.archivesName = project.archives_name
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+// Minecraft 1.20.1 is a Java 17 game. (The NeoForge original targeted Java 21.)
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
-neoForge {
-    version = project.neoforge_version
+minecraft {
+    // Official Mojang mappings, not the MCP/SRG-named ones: the whole codebase already reads
+    // net.minecraft.* and re-naming it would be a pure rename pass with no functional gain.
+    // `official` is ForgeGradle's channel for exactly those names.
+    mappings channel: 'official', version: project.minecraft_version
+
+    // NO ACCESS TRANSFORMER, and that is a finding rather than an omission -- the Fabric branch of this
+    // same port needed one, and the requirements document expected this branch to need one too ("Forge:
+    // add `public net.minecraft.client.renderer.RenderType$CompositeState`").
+    //
+    //   * RenderType.CompositeState is ALREADY PUBLIC on Forge 1.20.1 (access_flags 0x0031 in
+    //     ForgeGradle's injected jar), so that AT entry is unnecessary. The Fabric branch's access
+    //     widener carried it because javac honours the InnerClasses attribute rather than the class
+    //     flags; Forge's own patch makes the class itself public, so nothing is left to widen.
+    //   * HudDraw composes its HUD render type from five RenderStateShard constants. Three -- NO_CULL,
+    //     NO_DEPTH_TEST, COLOR_WRITE -- are public in 1.20.1. The other two, POSITION_COLOR_SHADER and
+    //     TRANSLUCENT_TRANSPARENCY, are `protected`, and an AT for them is NOT reliable here:
+    //     ForgeGradle resolves AT field entries against SRG names (its own parent AT file is written
+    //     that way) and for these two the SRG id does not resolve, so the entry is skipped silently and
+    //     the compile still fails. That was measured, not assumed: with no AT all five constants fail;
+    //     with an AT naming all five SRG ids, exactly three are widened and those two still fail.
+    //   * So both were rebuilt in HudDraw from public API instead -- GameRenderer::getPositionColorShader
+    //     for the shader, and RenderSystem.enableBlend/blendFuncSeparate/disableBlend/defaultBlendFunc
+    //     for the translucency, copied call for call from vanilla's own constant. That removes the
+    //     dependency on an obfuscation name entirely, which is strictly better than an AT that happens
+    //     to work.
 
     runs {
         client {
-            client()
-            systemProperty 'forge.logging.markers', 'REGISTRIES'
-            // The in-game self-test, for tools/user-test/run-user-test.ps1: the rig runs the client with
-            // -PhtgSelftest=<seconds> (and optionally -PhtgSelftestQuit=1) so the checks run themselves
-            // once a world is loaded and the report lands in the log for the rig to grade. Empty -- the
-            // default -- means the client behaves exactly as a player's does.
-            systemProperty 'howtogo.selftest', project.findProperty('htgSelftest') ?: ''
-            systemProperty 'howtogo.selftest.quit', project.findProperty('htgSelftestQuit') ?: ''
-            // -PhtgQuickPlay=<world name> opens that world on start, which is what makes the rig a single
-            // command: without it the client sits on the title screen and the checks, which are all about
-            // a world, have nothing to read. Passing it through the run config because Gradle's own
-            // --args replaces the launcher's arguments rather than adding to them.
-            if (project.hasProperty('htgQuickPlay')) {
-                programArgument '--quickPlaySingleplayer'
-                programArgument project.property('htgQuickPlay')
-            }
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            // The in-game self-test rig: -PhtgSelftest=<seconds> (optionally with
+            // -PhtgSelftestQuit=1) so the checks run themselves once a world is loaded and the
+            // report lands in the log. Empty -- the default -- means the client behaves exactly
+            // as a player's does.
+            property 'howtogo.selftest', (project.findProperty('htgSelftest') ?: '')
+            property 'howtogo.selftest.quit', (project.findProperty('htgSelftestQuit') ?: '')
+            mods { howtogo { source sourceSets.main } }
         }
-    }
-
-    mods {
-        howtogo {
-            sourceSet sourceSets.main
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            // --nogui so the server does not try to open its Swing console window: a headless run with
+            // no console attached is the case that trips it up.
+            args '--nogui'
+            mods { howtogo { source sourceSets.main } }
         }
     }
 }
@@ -43,41 +68,45 @@ neoForge {
 // The mod is split across two source roots so that the parts which are genuinely portable stay
 // portable. Anything under src/common is pure Java -- the road network, the routing engine, the
 // transit model, the reflective bridges to other mods -- and contains no Minecraft, loader or
-// Xaero import at all, so the same files can be shared verbatim by every loader/version branch
-// instead of being forked and left to drift. src/main holds everything that has to know which
-// Minecraft and which loader it is running on.
-
+// Xaero import at all, so the same files can be shared by every loader/version branch instead of
+// being forked and left to drift. src/main holds everything that has to know which Minecraft and
+// which loader it is running on.
 sourceSets {
     main {
         java.srcDirs = ['src/main/java', 'src/common/java']
     }
 }
 
-//repositories.clear()
-
 repositories {
-    maven {
-        name = "Modrinth"
-        url = "https://api.modrinth.com/maven"
-        content {
-            includeGroup "maven.modrinth"
-        }
-    }
     flatDir { dirs 'libs' }
 }
 
 dependencies {
-    // Xaero's World Map is closed-source and not published to any Maven repo.
-    // We compile against the actual shipped jar (official Mojang mappings, no reobf needed).
-    compileOnly "maven.modrinth:NcUtCpym:SnQ4SoDe"
+    minecraft "net.minecraftforge:forge:${project.minecraft_version}-${project.forge_version}"
 
+    // libs/ holds the two jars the mod compiles against, and only those two:
+    //
+    //   xaeroworldmap-forge-1.20.1-1.47.0.jar  -- six files import its element-render API directly;
+    //       the whole map layer is built on it. Closed source and All Rights Reserved, so it is a
+    //       compile+runtime dependency the player installs and must NOT be bundled in the jar.
+    //   mcphone-1.20.1-forge.jar               -- two files import com.november.mcphone.api.*.
+    //       This one is a genuine Forge-side win over the Fabric branch: mcphone ships a 1.20.1
+    //       *Forge* build (1.11.0) but never a 1.20.1 Fabric one, so this integration had to be
+    //       stripped from the Fabric port and is kept here.
+    //
+    // MTR (org.mtr.*), Create (com.simibubi.*), Xaero's Minimap (xaero.common.*) and MTR Map Overlay
+    // (com.lx862.mtrmap.*) are reached purely by reflection -- Class.forName + getMethod -- so those
+    // jars are runtime mods, not compile inputs, and are deliberately absent.
+    //
+    // ForgeGradle's `official` channel means both jars' names are already the ones we compile
+    // against, so no remap step is involved.
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
 
 tasks.named('processResources', ProcessResources).configure {
     var replaceProperties = [
             minecraft_version: project.minecraft_version,
-            neoforge_version : project.neoforge_version,
+            forge_version    : project.forge_version,
             mod_version      : project.mod_version,
     ]
     inputs.properties replaceProperties
@@ -86,11 +115,71 @@ tasks.named('processResources', ProcessResources).configure {
     from(rootProject.file('LICENSE')) {
         into 'META-INF'
     }
-    filesMatching(['META-INF/neoforge.mods.toml']) {
+    filesMatching(['META-INF/mods.toml']) {
         expand replaceProperties
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    // javac stops at 100 errors by default, which hides the shape of a port. Raise it so the
+    // inventory is complete.
+    options.compilerArgs += ['-Xmaxerrs', '100000']
 }
+
+// Diagnostic helper: prints the compile classpath and the resolved Minecraft jar so the real
+// 1.20.1 API can be inspected with javap instead of guessed at.
+tasks.register('dumpCompileClasspath') {
+    doLast {
+        new File(projectDir, 'compile-classpath.txt').text = sourceSets.main.compileClasspath.asPath
+        println "compile classpath written to compile-classpath.txt"
+    }
+}
+
+// Writes the runtime classpath out, so a Forge dedicated server can be booted from a plain
+// `java -cp ...` command outside Gradle, or so the real compile/runtime API can be inspected with
+// javap instead of guessed at.
+tasks.register('dumpServerClasspath') {
+    doLast {
+        new File(projectDir, 'server-classpath.txt').text = sourceSets.main.runtimeClasspath.asPath
+        println "server classpath written to server-classpath.txt (${sourceSets.main.runtimeClasspath.files.size()} entries)"
+    }
+}
+
+// `FMLModType` decides which bucket ModValidator puts this jar in, and the buckets are not
+// interchangeable:
+//   MOD / GAMELIBRARY -> ModValidator.candidateMods -> ModFile.identifyMods() runs -> the jar becomes a
+//                        real mod and logs "Loading mod file ... with languages [...]".
+//   LIBRARY           -> ModValidator.candidatePlugins ONLY. identifyMods() is never called, so the jar
+//                        is not a mod: no IModInfo, no FMLModContainer, no mod list entry, no config
+//                        file -- and nothing is logged, because the "File ... has been ignored - it is
+//                        invalid" warning only fires for entries that were in candidateMods.
+//
+// So a jar that ships META-INF/mods.toml and is marked LIBRARY vanishes silently: Forge logs
+// "Considering mod file candidate ..." and "Found valid mod file ... with {howtogo} mods", and then the
+// mod simply does not exist, while every other jar in the folder loads normally. Nothing in the build,
+// the compile, the reobfuscation, the jar's integrity or its mods.toml catches it, and `gradlew
+// runServer` does not either -- that path loads from the compiled dev-source-set folders and never
+// reads this attribute.
+//
+// Omitting the attribute entirely is also correct: ModFile.parseType falls back to "MOD". It is set
+// explicitly so the value is visible rather than implied, but it must stay MOD.
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'   : project.archives_name,
+                'Specification-Vendor'  : project.maven_group,
+                'Specification-Version' : '1',
+                'Implementation-Title'  : project.name,
+                'Implementation-Version': project.version,
+                'Implementation-Vendor' : project.maven_group,
+                // MOD = "load this as a mod". See the block above before changing it.
+                'FMLModType'            : 'MOD',
+        ])
+    }
+}
+
+// Reobfuscation: on 1.20.1 ForgeGradle compiles against SRG names internally, so the shipped jar
+// has to be reobfuscated back. Declaring an explicit (empty) reobfuscation spec is how ForgeGradle 6
+// is told the mod targets the official/vanilla namespace rather than a mapped one.
+jar.finalizedBy('reobfJar')
