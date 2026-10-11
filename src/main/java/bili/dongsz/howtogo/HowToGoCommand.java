@@ -253,7 +253,7 @@ public final class HowToGoCommand {
         RoadNetwork network = RoadStore.get();
         Component where = Component.translatable("command.howtogo.webmap.where",
                 WorldFiles.currentWorldKey(),
-                minecraft.level.dimension().location().toString());
+                minecraft.level.dimension().identifier().toString());
         Component stats = Component.translatable("command.howtogo.webmap.stats",
                 network.nodeCount(), network.segmentCount(),
                 String.format(Locale.ROOT, "%.2f", networkLengthKilometres(network)));
@@ -276,7 +276,9 @@ public final class HowToGoCommand {
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
+                // ClickEvent became a sealed interface in 1.21.5: OPEN_URL is its own record now,
+                // carrying a URI rather than a string.
+                .withClickEvent(new ClickEvent.OpenUrl(java.net.URI.create(url))));
     }
 
     /** Ends the trip, if there is one. */

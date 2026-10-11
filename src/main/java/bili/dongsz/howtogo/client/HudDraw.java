@@ -1,26 +1,32 @@
 package bili.dongsz.howtogo.client;
 
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
+import net.minecraft.client.gui.render.state.GuiElementRenderState;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.util.ARGB;
+import org.joml.Matrix3x2f;
+import org.joml.Matrix4f;
+
+import java.util.Arrays;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
  * <p>Vanilla {@code GuiGraphics} only offers axis-aligned rectangles, which is not enough for
  * road lines, circular markers, turn arrows or rounded cards. Everything here builds on a single
- * position-colour layer with depth testing off, so the results can be drawn over the world as well
- * as over a screen.
+ * position-colour layer, so the results can be drawn over the world as well as over a screen.
  *
- * <p><b>Draw all text after all shapes.</b> {@code GuiGraphics.drawString} flushes the buffer
- * source, which ends the QUADS {@code BufferBuilder} behind a consumer obtained from
- * {@link #consumer}. Emitting one more quad through that stale consumer throws
- * {@code IllegalStateException: Not building!} and takes the whole frame -- and with it the game --
- * down. Mixing the two inside one quad sequence is the trap; a label pass belongs at the tail.
+ * <p><b>Draw all text after all shapes, and call {@link #flush} at the end of a quad pass.</b>
+ * Since the 1.21.6 GUI rework {@code GuiGraphics} collects deferred render states instead of
+ * writing into a buffer, so this class batches the quads itself ({@link #consumer}) and hands the
+ * whole batch to the GUI renderer as one element ({@link #flush}). A batch still has to be
+ * submitted before the labels that belong on top of it: text and quads are ordered by where their
+ * bounds overlap, and a batch that is still open when the text pass runs would land above it.
  */
 public final class HudDraw {
 
@@ -101,30 +107,199 @@ public final class HudDraw {
     }
 
     /**
-     * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
-     * obvious choice, but its default depth test can bury an overlay behind the world.
+     * The scratch pose for GUI-space vertex emission.
+     *
+     * <p>On 1.21.1 the GUI pose was a {@code PoseStack}; since the 1.21.6 rework
+     * {@code GuiGraphics.pose()} is a JOML 2D stack instead. The shape emitters still take a
+     * {@code PoseStack.Pose}, and every GUI caller here emits through an untransformed frame, so a
+     * shared scratch stack stands in for the old object: callers push and read
+     * {@code last()} from it exactly as before. Map-space rendering keeps its real
+     * {@code PoseStack} and never touches this.
      */
-    public static final RenderType QUADS = RenderType.create(
-            "howtogo_hud",
-            DefaultVertexFormat.POSITION_COLOR,
-            VertexFormat.Mode.QUADS,
-            1536,
-            false,
-            true,
-            RenderType.CompositeState.builder()
-                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
-                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
-                    .setCullState(RenderStateShard.NO_CULL)
-                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
-                    .createCompositeState(false));
+    private static final PoseStack GUI_POSE = new PoseStack();
+
+    /** The pose {@link Batch} replays recorded vertices through: they are already in screen space. */
+    private static final Matrix3x2f IDENTITY = new Matrix3x2f();
+
+    /**
+     * The recorded quad batch: x and y per vertex in screen space, then one ARGB colour per vertex.
+     *
+     * <p>Parallel plain arrays grown on demand. Two floats and an int per vertex, stored flat,
+     * because this runs once per segment of every map this mod draws -- three thousand of them in a
+     * frame is ordinary -- and a small object per vertex was the largest single source of garbage in
+     * a map pass. Confined to the render thread, which is the only thread that draws.
+     */
+    private static float[] batchXy = new float[1024];
+    private static int[] batchArgb = new int[512];
+    private static int batchVertices;
+
+    /** The one consumer the shape emitters write through. */
+    private static final VertexConsumer BATCH = new Batch();
 
     private HudDraw() {
     }
 
-    /** A fresh vertex consumer for the shared layer. */
+    /** The scratch pose for GUI-space emission; see {@link #GUI_POSE}. */
+    public static PoseStack guiPose() {
+        return GUI_POSE;
+    }
+
+    /**
+     * A vertex consumer for the shared layer.
+     *
+     * <p>The consumer records into the quad batch instead of a buffer: the 1.21.6+ GUI renderer
+     * accepts finished render states rather than live buffers, so {@link #flush} hands the batch
+     * over once the quad pass is done. Recording keeps every call site's shape of old code --
+     * obtain a consumer, emit quads through it -- while the actual submission moved behind flush.
+     */
     public static VertexConsumer consumer(GuiGraphics graphics) {
-        return graphics.bufferSource().getBuffer(QUADS);
+        return BATCH;
+    }
+
+    /**
+     * Submits the recorded quads to the GUI renderer as one element, then empties the batch.
+     *
+     * <p>Replaces the old {@code graphics.flush()}: the pipeline is the same one vanilla
+     * {@code fill} uses, so a batch lands among the rectangles around it by where its bounds
+     * overlap theirs, and text drawn after it still lands on top. A no-op when nothing was
+     * recorded, which is the common case for the readout passes that flush defensively.
+     */
+    public static void flush(GuiGraphics graphics) {
+        if (batchVertices == 0) {
+            return;
+        }
+        // Copied out rather than handed over: the batch keeps recording while the renderer is
+        // still walking last frame's states, so the state must own its own arrays.
+        final float[] xy = Arrays.copyOf(batchXy, batchVertices * 2);
+        final int[] argb = Arrays.copyOf(batchArgb, batchVertices);
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < batchVertices; i++) {
+            float x = xy[i * 2];
+            float y = xy[i * 2 + 1];
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+        batchVertices = 0;
+        // Rounded inward to whole pixels: the bounds only decide which other elements this batch
+        // must layer above, and a pixel of slack cannot change that.
+        final ScreenRectangle bounds = new ScreenRectangle((int) Math.floor(minX),
+                (int) Math.floor(minY),
+                Math.max(1, (int) Math.ceil(maxX) - (int) Math.floor(minX)),
+                Math.max(1, (int) Math.ceil(maxY) - (int) Math.floor(minY)));
+
+        graphics.submitGuiElementRenderState(new GuiElementRenderState() {
+            @Override
+            public void buildVertices(VertexConsumer vc) {
+                for (int i = 0; i < argb.length; i++) {
+                    vc.addVertexWith2DPose(IDENTITY, xy[i * 2], xy[i * 2 + 1]).setColor(argb[i]);
+                }
+            }
+
+            @Override
+            public RenderPipeline pipeline() {
+                return RenderPipelines.GUI;
+            }
+
+            @Override
+            public TextureSetup textureSetup() {
+                return TextureSetup.noTexture();
+            }
+
+            @Override
+            public ScreenRectangle scissorArea() {
+                return null;
+            }
+
+            @Override
+            public ScreenRectangle bounds() {
+                return bounds;
+            }
+        });
+    }
+
+    /** Records one transformed vertex into the batch, growing the arrays as needed. */
+    private static void record(float x, float y) {
+        if (batchVertices >= batchArgb.length) {
+            batchXy = Arrays.copyOf(batchXy, batchVertices * 4);
+            batchArgb = Arrays.copyOf(batchArgb, batchVertices * 2);
+        }
+        batchXy[batchVertices * 2] = x;
+        batchXy[batchVertices * 2 + 1] = y;
+        batchArgb[batchVertices] = 0xFFFFFFFF;
+        batchVertices++;
+    }
+
+    private static void recordColor(int argb) {
+        if (batchVertices > 0) {
+            batchArgb[batchVertices - 1] = argb;
+        }
+    }
+
+    /**
+     * The batching consumer.
+     *
+     * <p>Only position and colour are meaningful for this layer; the texture, overlay and normal
+     * setters are accepted and dropped so that any caller shape compiles. Vertices arrive through
+     * {@link #addVertex(PoseStack.Pose, float, float, float)} -- the exact call the shape emitters
+     * make -- and are transformed there, so the batch holds finished screen coordinates.
+     */
+    private static final class Batch implements VertexConsumer {
+        @Override
+        public VertexConsumer addVertex(PoseStack.Pose pose, float x, float y, float z) {
+            Matrix4f m = pose.pose();
+            record(m.m00() * x + m.m01() * y + m.m02() * z + m.m03(),
+                    m.m10() * x + m.m11() * y + m.m12() * z + m.m13());
+            return this;
+        }
+
+        @Override
+        public VertexConsumer addVertex(float x, float y, float z) {
+            record(x, y);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setColor(int r, int g, int b, int a) {
+            recordColor(ARGB.color(a, r, g, b));
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setColor(int argb) {
+            recordColor(argb);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv(float u, float v) {
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv1(int u, int v) {
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv2(int u, int v) {
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setNormal(float x, float y, float z) {
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setLineWidth(float width) {
+            return this;
+        }
     }
 
     // ------------------------------------------------------------------ shapes

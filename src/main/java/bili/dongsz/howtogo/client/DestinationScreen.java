@@ -12,7 +12,6 @@ import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
@@ -925,12 +924,12 @@ public final class DestinationScreen extends Screen {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            PoseStack pose = graphics.pose();
-            pose.pushPose();
-            pose.translate(x, centreY, 0.0);
-            pose.mulPose(Axis.ZP.rotation(angle));
+            org.joml.Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
             graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
-            pose.popPose();
+            pose.popMatrix();
         }
     }
 
@@ -950,7 +949,7 @@ public final class DestinationScreen extends Screen {
 
         // North-up, unlike the travelling HUD: when choosing a place, a consistent orientation
         // matters more than knowing which way the player happens to be facing.
-        PoseStack pose = graphics.pose();
+        PoseStack pose = HudDraw.guiPose();
         pose.pushPose();
         VertexConsumer vc = HudDraw.consumer(graphics);
         PoseStack.Pose last = pose.last();
@@ -1078,7 +1077,7 @@ public final class DestinationScreen extends Screen {
         drawMapLabels(graphics, mc, network, scale, centerX, centerY, minX, minY, maxX, maxY);
 
         pose.popPose();
-        graphics.flush();
+        HudDraw.flush(graphics);
 
         // Hover crosshair and the coordinates under it, so a point can be chosen precisely. The
         // crosshair is drawn on the exact cursor pixel, so at the map's edge half of it would reach
@@ -1587,9 +1586,12 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------- input
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
         if (button != 0) {
-            return super.mouseClicked(mouseX, mouseY, button);
+            return super.mouseClicked(event, doubled);
         }
         if (insideMap(mouseX, mouseY)) {
             if (insideRecenter(mouseX, mouseY)) {
@@ -1685,7 +1687,7 @@ public final class DestinationScreen extends Screen {
             onClose();
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubled);
     }
 
     /** Chooses a destination to preview, planning the route it implies. */
@@ -1731,20 +1733,22 @@ public final class DestinationScreen extends Screen {
     }
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        if (button == 0 && mapPressed) {
+    public boolean mouseDragged(net.minecraft.client.input.MouseButtonEvent event, double dragX, double dragY) {
+        if (event.button() == 0 && mapPressed) {
             // Move the centre opposite to the drag, so the map follows the cursor.
             double scale = mapW / (viewRadius * 2.0);
             mapCenterX -= dragX / scale;
             mapCenterZ -= dragY / scale;
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        return super.mouseDragged(event, dragX, dragY);
     }
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0 && mapPressed) {
+    public boolean mouseReleased(net.minecraft.client.input.MouseButtonEvent event) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        if (event.button() == 0 && mapPressed) {
             mapPressed = false;
             double moved = Math.hypot(mouseX - mapPressX, mouseY - mapPressY);
             if (moved < 3 && insideMap(mouseX, mouseY)) {
@@ -1762,7 +1766,7 @@ public final class DestinationScreen extends Screen {
             }
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        return super.mouseReleased(event);
     }
 
     @Override

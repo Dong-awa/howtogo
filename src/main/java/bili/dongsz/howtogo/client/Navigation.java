@@ -295,7 +295,7 @@ public final class Navigation {
     /** The dimension the player is in, or null when no world is loaded. */
     private static String currentDimension() {
         net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
-        return level == null ? null : level.dimension().location().toString();
+        return level == null ? null : level.dimension().identifier().toString();
     }
 
     /** Where the trip started; stays fixed even after the route is re-planned. */

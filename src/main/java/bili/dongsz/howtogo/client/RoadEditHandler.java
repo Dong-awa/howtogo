@@ -64,11 +64,23 @@ public final class RoadEditHandler {
 
     public static final String KEY_CATEGORY = "category.howtogo";
 
+    /**
+     * The mod's own key category.
+     *
+     * <p>Since 1.21.6 a category is an {@code Identifier} record rather than a bare translation key,
+     * and its label is read from {@code key.category.<namespace>.<path>}, so the lang files carry the
+     * same two strings under that new key. Built with the record constructor and registered through
+     * {@link RegisterKeyMappingsEvent#registerCategory}: NeoForge appends event-registered categories
+     * to the sort order itself, so registering it statically as well would list it twice.
+     */
+    public static final KeyMapping.Category KEY_CATEGORY_ID =
+            new KeyMapping.Category(net.minecraft.resources.Identifier.fromNamespaceAndPath("howtogo", "main"));
+
     public static final KeyMapping TOGGLE_EDIT = new KeyMapping(
             "key.howtogo.toggle_edit",
             InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_R,
-            KEY_CATEGORY);
+            KEY_CATEGORY_ID);
 
     /**
      * Opens the line editor.
@@ -81,12 +93,13 @@ public final class RoadEditHandler {
             "key.howtogo.lines",
             InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_L,
-            KEY_CATEGORY);
+            KEY_CATEGORY_ID);
 
     private RoadEditHandler() {
     }
 
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
+        event.registerCategory(KEY_CATEGORY_ID);
         event.register(TOGGLE_EDIT);
         event.register(LINES);
     }
@@ -106,7 +119,7 @@ public final class RoadEditHandler {
         // The map's own switches are not handled here at all: they belong to the screen rather than to
         // the map, and are handled and drawn by MapFilterOverlay.
         if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT && isMapScreen(screen)
-                && !RoadEditSession.isActive() && Screen.hasControlDown()) {
+                && !RoadEditSession.isActive() && Minecraft.getInstance().hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
             return;
@@ -115,7 +128,7 @@ public final class RoadEditHandler {
         // And while editing, the same click is a destination too: the editor places points on a bare
         // click and picks a destination on a Ctrl one.
         if (isMapOpen(screen) && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
-                && RoadEditSession.isActive() && Screen.hasControlDown()) {
+                && RoadEditSession.isActive() && Minecraft.getInstance().hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
             return;
@@ -130,7 +143,7 @@ public final class RoadEditHandler {
 
         switch (event.getButton()) {
             case GLFW.GLFW_MOUSE_BUTTON_LEFT -> {
-                if (Screen.hasShiftDown()) {
+                if (Minecraft.getInstance().hasShiftDown()) {
                     safely("begin drag", RoadEditSession::beginDragAtCursor);
                 } else {
                     safely("place point", RoadEditSession::clickPlace);
@@ -217,7 +230,7 @@ public final class RoadEditHandler {
             return false;
         }
 
-        if (TOGGLE_EDIT.matches(key, scanCode)) {
+        if (TOGGLE_EDIT.matches(new net.minecraft.client.input.KeyEvent(key, scanCode, 0))) {
             RoadEditSession.toggle();
             HowToGo.LOGGER.info("[HowToGo] road editing {}",
                     RoadEditSession.isActive() ? "enabled" : "disabled");
@@ -227,7 +240,7 @@ public final class RoadEditHandler {
             return false;
         }
 
-        boolean ctrl = Screen.hasControlDown();
+        boolean ctrl = Minecraft.getInstance().hasControlDown();
         if (ctrl && key == GLFW.GLFW_KEY_Z) {
             safely("undo", RoadEditSession::undo);
         } else if (ctrl && key == GLFW.GLFW_KEY_Y) {
@@ -257,7 +270,7 @@ public final class RoadEditHandler {
             // One-way. A bare letter like N and P, and not a registered mapping, for the same reason
             // those are not: it acts on a selection the editor owns and only exists while editing is on.
             safely("toggle one-way", RoadEditSession::toggleOneWay);
-        } else if (LINES.matches(key, scanCode)) {
+        } else if (LINES.matches(new net.minecraft.client.input.KeyEvent(key, scanCode, 0))) {
             // The lines are a property of the network rather than of whatever is selected, so this
             // opens on the map itself and needs no selection first. Deferred to the next tick, like
             // every other screen here: opening one from the input handler is what makes a key look

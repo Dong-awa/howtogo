@@ -3,7 +3,7 @@ package bili.dongsz.howtogo.item;
 import bili.dongsz.howtogo.client.NavigatorClient;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -33,23 +33,28 @@ public final class NavigatorItem extends Item {
     }
 
     @Override
-    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        ItemStack stack = player.getItemInHand(hand);
+    public InteractionResult use(Level level, Player player, InteractionHand hand) {
         // Asked of the level rather than of anything global, because use() runs on both sides: the server
         // calls it to decide what happened, the client calls it to open the screen.
         if (level.isClientSide()) {
             NavigatorClient.openPicker();
+            return InteractionResult.SUCCESS;
         }
-        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+        // What InteractionResultHolder.sidedSuccess did before 1.21.2 split the type: the server
+        // side reports success without asking the client to swing.
+        return InteractionResult.SUCCESS_SERVER;
     }
 
     @Override
-    public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
+    @SuppressWarnings("deprecation") // still called by vanilla for every item; the hook lives on
+    public void appendHoverText(ItemStack stack, Item.TooltipContext context,
+                                net.minecraft.world.item.component.TooltipDisplay display,
+                                java.util.function.Consumer<Component> lines,
                                 TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.
-        if (FMLEnvironment.dist == Dist.CLIENT) {
-            NavigatorClient.appendTooltip(tooltip);
+        if (FMLEnvironment.getDist() == Dist.CLIENT) {
+            NavigatorClient.appendTooltip(lines);
         }
     }
 }

@@ -934,9 +934,11 @@ public final class TransitLineScreen extends Screen {
     // ----------------------------------------------------------------- input
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) {
-            return super.mouseClicked(mouseX, mouseY, button);
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        if (event.button() != 0) {
+            return super.mouseClicked(event, doubled);
         }
         List<TransitLine> lines = listed();
 
@@ -995,7 +997,7 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubled);
     }
 
     private int kindAt(double mouseX, double mouseY) {

@@ -7,6 +7,7 @@ import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.text2speech.Narrator;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.sounds.SoundSource;
 
 /**
  * Spoken navigation announcements, through the text-to-speech engine Minecraft ships with.
@@ -111,6 +112,15 @@ public final class Narration {
      * the backlog can never grow.
      */
     private static String pending;
+    /**
+     * The voice volume the pending phrase should be spoken at, read by the client thread beside the
+     * enqueue above and consumed by the speaking thread with the phrase.
+     *
+     * <p>Volatile rather than lock-guarded because the loop reads it after it has already taken the
+     * phrase: a volume captured for a phrase that has since been replaced is close enough, since the
+     * value only sets how loud the sentence comes out.
+     */
+    private static volatile float pendingVolume = 1.0F;
     /** Whether the speaking thread has finished building the engine, set once by that thread. */
     private static volatile boolean engineKnown;
     /** Whether that engine came up, published by the speaking thread for the readout to read. */
@@ -662,6 +672,12 @@ public final class Narration {
         // from clear().
         lastSpoken = phrase;
         ensureSpeaker();
+        // The voice volume is read here, on the client thread, rather than beside the engine call:
+        // the speaking thread has no business touching Minecraft's option objects. The new
+        // text2speech API scales the phrase by it (vanilla passes the VOICE source's final volume),
+        // and the value the slot holds when the loop takes the phrase is the one used.
+        pendingVolume = Minecraft.getInstance().options
+                .getFinalSoundSourceVolume(SoundSource.VOICE);
         synchronized (LOCK) {
             // Newest wins: the slot is overwritten rather than queued behind, so a backlog cannot
             // form and an out-of-date instruction is never spoken after the newer one.
@@ -712,6 +728,7 @@ public final class Narration {
 
         while (true) {
             String phrase = take();
+            float volume = pendingVolume;
             if (phrase == null) {
                 // Interrupted while waiting: the thread has been asked to stop.
                 return;
@@ -726,9 +743,10 @@ public final class Narration {
                 HowToGo.diagnostic("[HowToGo] speaking: {}", phrase);
                 // The same sequence the vanilla wrapper uses: drop whatever is being said, then
                 // interrupt, which is what a turn prompt wants -- the previous instruction is out of
-                // date by then.
+                // date by then. The volume is the VOICE source's final volume, captured when the
+                // phrase was queued, which is what vanilla passes the engine.
                 narrator.clear();
-                narrator.say(phrase, true);
+                narrator.say(phrase, true, volume);
             } catch (Throwable t) {
                 // The loop must not die: a dead speaker is silence with no explanation, and the
                 // readout would still be claiming the engine is fine.

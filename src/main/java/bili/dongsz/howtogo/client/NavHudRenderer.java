@@ -5,16 +5,11 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.Route;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
@@ -192,7 +187,7 @@ public final class NavHudRenderer {
         double maxX = mapX + MAP_SIZE;
         double maxY = mapY + MAP_SIZE;
 
-        PoseStack pose = graphics.pose();
+        PoseStack pose = HudDraw.guiPose();
         pose.pushPose();
         VertexConsumer vc = HudDraw.consumer(graphics);
         PoseStack.Pose last = pose.last();
@@ -326,7 +321,7 @@ public final class NavHudRenderer {
         }
 
         pose.popPose();
-        graphics.flush();
+        HudDraw.flush(graphics);
     }
 
     /**
@@ -396,12 +391,12 @@ public final class NavHudRenderer {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            PoseStack pose = graphics.pose();
-            pose.pushPose();
-            pose.translate(x, centreY, 0.0);
-            pose.mulPose(Axis.ZP.rotation(angle));
+            org.joml.Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
             graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
-            pose.popPose();
+            pose.popMatrix();
         }
     }
 
@@ -649,14 +644,14 @@ public final class NavHudRenderer {
      */
     private static void drawTurnArrow(GuiGraphics graphics, double cx, double cy,
                                       double degrees, int color) {
-        PoseStack pose = graphics.pose();
+        PoseStack pose = HudDraw.guiPose();
         VertexConsumer vc = HudDraw.consumer(graphics);
         PoseStack.Pose last = pose.last();
         double thickness = 1.7;
 
         if (!Double.isNaN(degrees) && Math.abs(degrees) > 135) {
             drawUturnArrow(last, vc, cx, cy, thickness, color);
-            graphics.flush();
+            HudDraw.flush(graphics);
             return;
         }
 
@@ -690,7 +685,7 @@ public final class NavHudRenderer {
                 baseX + perpX * headHalf, baseY + perpY * headHalf,
                 baseX - perpX * headHalf, baseY - perpY * headHalf, color);
 
-        graphics.flush();
+        HudDraw.flush(graphics);
     }
 
     /**

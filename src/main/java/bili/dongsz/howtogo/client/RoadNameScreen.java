@@ -334,8 +334,10 @@ public final class RoadNameScreen extends Screen {
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (isPlaceEditor() && button == 0) {
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        if (isPlaceEditor() && event.button() == 0) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
                 int x = typeX(i);
@@ -349,13 +351,14 @@ public final class RoadNameScreen extends Screen {
                 }
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubled);
     }
 
     // ---------------------------------------------------------------- screen
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+        int keyCode = event.key();
         // Enter confirms, so a road can be named and given a storey without reaching for the mouse.
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
                 || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER) {
@@ -369,7 +372,7 @@ public final class RoadNameScreen extends Screen {
             setFocused(getFocused() == layerField ? field : layerField);
             return true;
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return super.keyPressed(event);
     }
 
     @Override

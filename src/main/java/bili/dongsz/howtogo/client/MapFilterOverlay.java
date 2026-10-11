@@ -44,11 +44,13 @@ public final class MapFilterOverlay {
             return;
         }
         GuiGraphics graphics = event.getGuiGraphics();
-        graphics.pose().pushPose();
-        graphics.pose().last().pose().identity();
-        graphics.pose().last().normal().identity();
+        // The 2D pose, reset defensively as before: the panel is drawn in raw screen units, and a
+        // screen that left a transform on the 2D stack must not displace it. There is no normal
+        // matrix in the 2D stack any more, so the old normal().identity() is simply gone.
+        graphics.pose().pushMatrix();
+        graphics.pose().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     /**
