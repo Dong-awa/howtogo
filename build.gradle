@@ -12,6 +12,13 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 neoForge {
     version = project.neoforge_version
 
+    // The NeoForm runtime tool downloads from maven.neoforged.net, which is unreachable on this
+    // network. Pin it to the version cached in the local Gradle cache and served by the workspace
+    // maven repo declared below, so builds work offline.
+    neoFormRuntime {
+        version = project.findProperty('nfrt_version') ?: '2.0.18'
+    }
+
     runs {
         client {
             client()
@@ -53,9 +60,51 @@ sourceSets {
     }
 }
 
-//repositories.clear()
+// The mcphone compat package compiles against the (private, not on Modrinth) mcphone mod's API
+// jar. When that jar is absent from libs/, exclude the compat sources and their ServiceLoader
+// registration from the build instead of failing: the classes are only ever loaded when mcphone
+// itself is installed, so an install without the jar loses nothing.
+def mcphoneApiJar = fileTree(dir: 'libs', include: ['*.jar']).find { f ->
+    try {
+        new java.util.zip.ZipFile(f).getEntry('com/november/mcphone/api/client/app/IPhoneApp.class') != null
+    } catch (Exception ignored) {
+        false
+    }
+}
+if (mcphoneApiJar == null) {
+    sourceSets.main.java.exclude '**/compat/mcphone/**'
+    sourceSets.main.resources.exclude 'META-INF/services/com.november.mcphone.api.client.app.IPhoneApp'
+}
 
 repositories {
+    // The moddev plugin injects two maven.neoforged.net repositories (releases + mojang-meta) at
+    // apply time and sorts them in front of everything else. That host is unreachable on this
+    // network and stalls every resolution until timeout, so drop them here -- everything they
+    // served is mirrored in the workspace-local repo below (seeded from the Gradle cache) or on
+    // the bmclapi2 mirror.
+    def deadRepos = repositories.findAll { r ->
+        try { r.url != null && r.url.toString().contains('maven.neoforged.net') } catch (Exception ignored) { false }
+    }
+    deadRepos.each { repositories.remove(it) }
+
+    // Workspace-local mirror carrying the NeoForm toolchain (neoform-runtime, neoform, mergetool,
+    // AutoRenamingTool, ...) and the minecraft-dependencies module metadata, which ship no POM-only
+    // fallback here -- Gradle module metadata is the only thing it stores for some of them.
+    maven {
+        name = 'workspace-local-mirror'
+        url = uri("${rootDir}/.recon/maven-local")
+        metadataSources { it.gradleMetadata() }
+    }
+    // bmclapi2 proxies Maven Central (plus parts of the neoforged repo), so it sits right after the
+    // local mirror to satisfy the parent POMs (commons-parent etc.) that the Mojang library POMs
+    // reference -- the Mojang host serves only the leaf artifacts.
+    maven { name = 'bmclapi-mirror'; url = 'https://bmclapi2.bangbang93.com/maven' }
+    // Mojang's own library host is reachable and serves the com.mojang / bundled Minecraft
+    // dependencies that minecraft-dependencies references with strict versions.
+    maven {
+        name = 'mojang-libraries'
+        url = 'https://libraries.minecraft.net/'
+    }
     maven {
         name = "Modrinth"
         url = "https://api.modrinth.com/maven"

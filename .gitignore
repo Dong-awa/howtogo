@@ -23,3 +23,11 @@ tools/routing-harness/build/
 # the Xaero classes are that author's closed-source work. Publishing either would be a licence
 # breach, so the whole directory stays out of the repository.
 .recon/
+
+# Offline build infrastructure: local maven mirror seeded from the Gradle cache,
+# the unpacked Gradle distribution and the redirected GRADLE_USER_HOME. Machine-local,
+# reproducible from the notes in .recon/NETWORK-NOTES.md — never commit the binaries.
+.recon/
+.gradle-dist/
+.gradle-home/
+local-first.gradle
