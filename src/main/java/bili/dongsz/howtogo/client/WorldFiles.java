@@ -53,7 +53,7 @@ public final class WorldFiles {
 
         String dimension = "unknown";
         if (level instanceof ClientLevel clientLevel) {
-            dimension = clientLevel.dimension().location().toString();
+            dimension = clientLevel.dimension().identifier().toString();
         }
         Path root = FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID);
         return root.resolve(worldDirectory(root, worldKey(mc)))

@@ -1,10 +1,10 @@
 package bili.dongsz.howtogo.client;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.neoforged.neoforge.client.event.ScreenEvent;
-import org.lwjgl.glfw.GLFW;
 
 /**
  * The map's switches, drawn as part of the map screen rather than inside the map.
@@ -43,12 +43,14 @@ public final class MapFilterOverlay {
         if (!offered(event.getScreen())) {
             return;
         }
-        GuiGraphics graphics = event.getGuiGraphics();
-        graphics.pose().pushPose();
-        graphics.pose().last().pose().identity();
-        graphics.pose().last().normal().identity();
+        GuiGraphicsExtractor graphics = event.getGuiGraphics();
+        // The extraction pass owns a 2D pose stack now; flattened the same way the old 3D one was,
+        // so the panel lands exactly where its click handlers look for it even if the screen left a
+        // transform behind.
+        graphics.pose().pushMatrix();
+        graphics.pose().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     /**
@@ -58,7 +60,7 @@ public final class MapFilterOverlay {
      * road or start a drag under the thing the player was aiming at.
      */
     public static void onMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
-        if (event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT || !offered(event.getScreen())) {
+        if (event.getButton() != InputConstants.MOUSE_BUTTON_LEFT || !offered(event.getScreen())) {
             return;
         }
         double mouseX = event.getMouseX();
@@ -106,7 +108,7 @@ public final class MapFilterOverlay {
 
     /** Letting the title go either finishes a move or rolls the panel up. */
     public static void onMouseReleased(ScreenEvent.MouseButtonReleased.Pre event) {
-        if (!held || event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+        if (!held || event.getButton() != InputConstants.MOUSE_BUTTON_LEFT) {
             return;
         }
         held = false;

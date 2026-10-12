@@ -6,7 +6,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
-import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * What the navigator item does when there is a client to do it on.
@@ -30,20 +30,25 @@ public final class NavigatorClient {
     /** Opens the destination picker over whatever screen is open -- the world map, usually. */
     public static void openPicker() {
         Minecraft minecraft = Minecraft.getInstance();
-        minecraft.setScreen(new DestinationScreen(minecraft.screen));
+        minecraft.gui.setScreen(new DestinationScreen(minecraft.gui.screen()));
     }
 
-    /** The item's tooltip: the trip being navigated, or an invitation to pick one. */
-    public static void appendTooltip(List<Component> tooltip) {
+    /**
+     * The item's tooltip: the trip being navigated, or an invitation to pick one.
+     *
+     * <p>Since 1.21.5 the hover text arrives as a component sink rather than a mutable list, so the
+     * lines are written through it.
+     */
+    public static void appendTooltip(Consumer<Component> tooltip) {
         Destination target = Navigation.target();
         if (target == null) {
-            tooltip.add(Component.translatable("tooltip.howtogo.navigator.idle")
+            tooltip.accept(Component.translatable("tooltip.howtogo.navigator.idle")
                     .withStyle(ChatFormatting.GRAY));
             return;
         }
-        tooltip.add(Component.translatable("tooltip.howtogo.navigator.target", target.name())
+        tooltip.accept(Component.translatable("tooltip.howtogo.navigator.target", target.name())
                 .withStyle(ChatFormatting.AQUA));
-        tooltip.add(Component.translatable("tooltip.howtogo.navigator.remaining",
+        tooltip.accept(Component.translatable("tooltip.howtogo.navigator.remaining",
                         Route.formatDistance(Navigation.remainingLength()),
                         Navigation.modeLabel(),
                         Route.formatDuration(Navigation.remainingSeconds()))

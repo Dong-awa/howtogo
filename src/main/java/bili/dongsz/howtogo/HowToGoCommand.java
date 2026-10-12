@@ -25,6 +25,7 @@ import net.minecraft.network.chat.Style;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -138,7 +139,7 @@ public final class HowToGoCommand {
     private static int terminal(CommandContext<CommandSourceStack> context) {
         pending = () -> {
             Minecraft minecraft = Minecraft.getInstance();
-            minecraft.setScreen(new DestinationScreen(minecraft.screen));
+            minecraft.gui.setScreen(new DestinationScreen(minecraft.gui.screen()));
         };
         say(context, Component.translatable("command.howtogo.terminal"));
         return 1;
@@ -253,7 +254,7 @@ public final class HowToGoCommand {
         RoadNetwork network = RoadStore.get();
         Component where = Component.translatable("command.howtogo.webmap.where",
                 WorldFiles.currentWorldKey(),
-                minecraft.level.dimension().location().toString());
+                minecraft.level.dimension().identifier().toString());
         Component stats = Component.translatable("command.howtogo.webmap.stats",
                 network.nodeCount(), network.segmentCount(),
                 String.format(Locale.ROOT, "%.2f", networkLengthKilometres(network)));
@@ -273,10 +274,12 @@ public final class HowToGoCommand {
 
     /** A URL a player can click, styled as the link it is. */
     private static Component urlLink(String url) {
+        // 26.x made ClickEvent an interface of records: the (Action, payload) constructor became a
+        // per-action record, and OpenUrl carries the URI itself rather than a string.
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
+                .withClickEvent(new ClickEvent.OpenUrl(URI.create(url))));
     }
 
     /** Ends the trip, if there is one. */

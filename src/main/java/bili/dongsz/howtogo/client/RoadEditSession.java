@@ -9,9 +9,11 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
-import org.lwjgl.glfw.GLFW;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 
 /**
  * Client-side state for the road editing mode: whether it is on, where the cursor is, and what the
@@ -394,8 +396,8 @@ public final class RoadEditSession {
             if (node == null) {
                 return;
             }
-            Screen parent = Minecraft.getInstance().screen;
-            Minecraft.getInstance().setScreen(new RoadNameScreen(parent,
+            Screen parent = Minecraft.getInstance().gui.screen();
+            Minecraft.getInstance().gui.setScreen(new RoadNameScreen(parent,
                     RoadNameScreen.TITLE_PLACE_EDIT, node.name(), node.placeKind(),
                     // The station rule is asked here, where the node is known, so the screen can keep
                     // itself open and say why rather than closing on a change that was refused.
@@ -504,8 +506,8 @@ public final class RoadEditSession {
     private static void promptName(String titleKey, String initial, double anchorX, double anchorY,
                                    java.util.function.Consumer<String> apply) {
         pendingAction = () -> {
-            Screen parent = Minecraft.getInstance().screen;
-            Minecraft.getInstance().setScreen(
+            Screen parent = Minecraft.getInstance().gui.screen();
+            Minecraft.getInstance().gui.setScreen(
                     new RoadNameScreen(parent, titleKey, initial, anchorX, anchorY, value -> {
                         apply.accept(value);
                         RoadStore.markDirty();
@@ -524,8 +526,8 @@ public final class RoadEditSession {
                                    double anchorY,
                                    java.util.function.BiConsumer<String, Integer> apply) {
         pendingAction = () -> {
-            Screen parent = Minecraft.getInstance().screen;
-            Minecraft.getInstance().setScreen(
+            Screen parent = Minecraft.getInstance().gui.screen();
+            Minecraft.getInstance().gui.setScreen(
                     new RoadNameScreen(parent, titleKey, initial, layer, anchorX, anchorY,
                             (name, storey) -> {
                                 apply.accept(name, storey);
@@ -619,8 +621,8 @@ public final class RoadEditSession {
      */
     public static void promptLineEditor() {
         pendingAction = () -> {
-            Screen parent = Minecraft.getInstance().screen;
-            Minecraft.getInstance().setScreen(new TransitLineScreen(parent));
+            Screen parent = Minecraft.getInstance().gui.screen();
+            Minecraft.getInstance().gui.setScreen(new TransitLineScreen(parent));
         };
     }
 
@@ -832,7 +834,7 @@ public final class RoadEditSession {
             // refused: refusing would leave the right button dead until editing was toggled off and on.
             endMapPan();
         }
-        Screen screen = Minecraft.getInstance().screen;
+        Screen screen = Minecraft.getInstance().gui.screen();
         if (screen == null) {
             return;
         }
@@ -841,7 +843,10 @@ public final class RoadEditSession {
         panStartScreenX = cursor[0];
         panStartScreenY = cursor[1];
         panMoved = false;
-        screen.mouseClicked(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        // 26.x: the screen takes the press as a MouseButtonEvent record; the synthetic press carries no
+        // keyboard modifiers, which is what the pan gesture means anyway.
+        screen.mouseClicked(new MouseButtonEvent(cursor[0], cursor[1],
+                new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), false);
     }
 
     /**
@@ -866,8 +871,9 @@ public final class RoadEditSession {
                 || Math.abs(cursor[1] - panStartScreenY) > PAN_CLICK_SLOP) {
             panMoved = true;
         }
-        if (Minecraft.getInstance().screen == screen) {
-            screen.mouseReleased(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        if (Minecraft.getInstance().gui.screen() == screen) {
+            screen.mouseReleased(new MouseButtonEvent(cursor[0], cursor[1],
+                    new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)));
         }
         if (!panMoved) {
             editor().clearSelection();

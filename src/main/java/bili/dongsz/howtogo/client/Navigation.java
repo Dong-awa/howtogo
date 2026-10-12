@@ -249,10 +249,9 @@ public final class Navigation {
         if (player == null) {
             return;
         }
-        player.displayClientMessage(
+        Minecraft.getInstance().gui.hud.setOverlayMessage(
                 net.minecraft.network.chat.Component.translatable(
-                        "hud.howtogo.mode_switched", mode.label()),
-                true);
+                        "hud.howtogo.mode_switched", mode.label()), true);
     }
 
     /** Starts navigating to the given destination, replacing any current route. */
@@ -295,7 +294,7 @@ public final class Navigation {
     /** The dimension the player is in, or null when no world is loaded. */
     private static String currentDimension() {
         net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
-        return level == null ? null : level.dimension().location().toString();
+        return level == null ? null : level.dimension().identifier().toString();
     }
 
     /** Where the trip started; stays fixed even after the route is re-planned. */
@@ -325,7 +324,7 @@ public final class Navigation {
         if (tripDimension != null && dimension != null && !tripDimension.equals(dimension)) {
             HowToGo.LOGGER.info("[HowToGo] the trip was planned in {} and the player is now in {}; "
                     + "ending it rather than guiding the wrong world's roads", tripDimension, dimension);
-            player.displayClientMessage(
+            Minecraft.getInstance().gui.hud.setOverlayMessage(
                     Component.translatable("hud.howtogo.dimension_changed"), true);
             clear();
             return;
