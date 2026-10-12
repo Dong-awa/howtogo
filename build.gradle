@@ -151,14 +151,26 @@ tasks.withType(JavaCompile).configureEach {
 // comma-separated list of "group:artifact:version->group:artifact:version" pairs. Used when the
 // blocked official repo and bmclapi both lack an exact version but the workspace mirror holds a
 // compatible sibling (e.g. FML 11.0.16 -> 11.0.15, neoform 26.2-2 -> 26.2-1).
+//
+// Implemented as an eachDependency callback rather than resolutionStrategy.dependencySubstitution:
+// the plugin's eagerly-resolved neoFormRuntimeDependencies* configurations do not honour static
+// substitution rules (observed on Gradle 9.7.1 + moddev 2.0.148 -- the rule compiled fine but
+// dependencyInsight still resolved neoform 26.2-2), while eachDependency fires for every
+// configuration including those.
 def subProps = (project.findProperty('dependencySubstitutions') ?: '').toString().split(',').findAll { it.contains('->') }
 if (!subProps.isEmpty()) {
     configurations.configureEach {
-        resolutionStrategy.dependencySubstitution {
+        resolutionStrategy.eachDependency { details ->
             subProps.each { String raw ->
                 def pair = raw.trim().split(/->/)*.trim()
-                substitute(module(pair[0])).using(module(pair[1]))
-                    .because('the exact version is unreachable offline; the mirror carries a compatible sibling')
+                def fromParts = pair[0].split(':')
+                def toParts = pair[1].split(':')
+                def fromVersion = fromParts.length > 2 ? fromParts[2] : null
+                if (details.requested.group == fromParts[0] && details.requested.name == fromParts[1]
+                        && (fromVersion == null || details.requested.version == fromVersion)) {
+                    def target = toParts.length > 2 ? pair[1] : "${toParts[0]}:${toParts[1]}:${details.requested.version}"
+                    details.useTarget(target)
+                }
             }
         }
     }

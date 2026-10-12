@@ -517,7 +517,7 @@ public final class SelfTest {
         try {
             String dimension = Minecraft.getInstance().level == null
                     ? "unknown"
-                    : Minecraft.getInstance().level.dimension().location().toString();
+                    : Minecraft.getInstance().level.dimension().identifier().toString();
             RoadMapSnapshot snapshot = RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension,
                     network);
 

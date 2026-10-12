@@ -1,7 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import org.lwjgl.glfw.GLFW;
@@ -43,12 +43,14 @@ public final class MapFilterOverlay {
         if (!offered(event.getScreen())) {
             return;
         }
-        GuiGraphics graphics = event.getGuiGraphics();
-        graphics.pose().pushPose();
-        graphics.pose().last().pose().identity();
-        graphics.pose().last().normal().identity();
+        GuiGraphicsExtractor graphics = event.getGuiGraphics();
+        // The extraction pass owns a 2D pose stack now; flattened the same way the old 3D one was,
+        // so the panel lands exactly where its click handlers look for it even if the screen left a
+        // transform behind.
+        graphics.pose().pushMatrix();
+        graphics.pose().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     /**
