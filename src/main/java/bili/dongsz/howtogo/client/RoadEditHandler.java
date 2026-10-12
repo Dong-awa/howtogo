@@ -67,11 +67,15 @@ public final class RoadEditHandler {
      * The controls-list section both editor keys sit under.
      *
      * <p>26.x made a category a {@code KeyMapping.Category} record over an {@link net.minecraft.resources.Identifier}
-     * instead of a bare translation string. The id is {@code howtogo:category}, whose
-     * {@code toLanguageKey()} is {@code howtogo.category} -- the key the lang files carry.
+     * instead of a bare translation string, so the label is not the id itself but a key derived from
+     * it: the screen reads the name through {@code id.toLanguageKey("key.category")}, which is
+     * {@code "key.category." + namespace + "." + path}. The id is {@code howtogo:main}, so the game
+     * looks up {@code key.category.howtogo.main} and the lang files have to carry exactly that key --
+     * the bare {@code toLanguageKey()} of a category id never matches, which is why the controls
+     * screen used to print a raw key instead of a name.
      */
     public static final KeyMapping.Category KEY_CATEGORY = new KeyMapping.Category(
-            net.minecraft.resources.Identifier.fromNamespaceAndPath("howtogo", "category"));
+            net.minecraft.resources.Identifier.fromNamespaceAndPath("howtogo", "main"));
 
     public static final KeyMapping TOGGLE_EDIT = new KeyMapping(
             "key.howtogo.toggle_edit",

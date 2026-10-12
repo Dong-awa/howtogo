@@ -1,5 +1,5 @@
 {
-  "howtogo.category": "HowToGo | 问道",
+  "key.category.howtogo.main": "HowToGo | 问道",
   "key.howtogo.toggle_edit": "切换道路编辑",
   "item.howtogo.navigator": "道路导航仪",
   "screen.howtogo.name_road": "道路：名称与层",

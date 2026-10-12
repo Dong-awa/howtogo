@@ -1,5 +1,5 @@
 {
-  "howtogo.category": "HowToGo",
+  "key.category.howtogo.main": "HowToGo",
   "key.howtogo.toggle_edit": "Toggle Road Editing",
   "item.howtogo.navigator": "Road Navigator",
   "screen.howtogo.name_road": "Road: name and storey",
