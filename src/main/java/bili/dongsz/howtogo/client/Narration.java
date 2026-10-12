@@ -728,7 +728,8 @@ public final class Narration {
                 // interrupt, which is what a turn prompt wants -- the previous instruction is out of
                 // date by then.
                 narrator.clear();
-                narrator.say(phrase, true);
+                // text2speech gained a volume parameter; the plain voice, at full volume.
+                narrator.say(phrase, true, 1.0f);
             } catch (Throwable t) {
                 // The loop must not die: a dead speaker is silence with no explanation, and the
                 // readout would still be claiming the engine is fine.

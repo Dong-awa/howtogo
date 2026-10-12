@@ -10,14 +10,14 @@ import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
-import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.joml.Matrix3x2f;
+import org.joml.Matrix3x2fStack;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -925,12 +925,12 @@ public final class DestinationScreen extends Screen {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            PoseStack pose = graphics.pose();
-            pose.pushPose();
-            pose.translate(x, centreY, 0.0);
-            pose.mulPose(Axis.ZP.rotation(angle));
+            Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
             graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
-            pose.popPose();
+            pose.popMatrix();
         }
     }
 
@@ -950,10 +950,9 @@ public final class DestinationScreen extends Screen {
 
         // North-up, unlike the travelling HUD: when choosing a place, a consistent orientation
         // matters more than knowing which way the player happens to be facing.
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        VertexConsumer vc = HudDraw.consumer(graphics);
-        PoseStack.Pose last = pose.last();
+        Matrix3x2fStack pose = graphics.pose();
+        pose.pushMatrix();
+        HudDraw.Batch vc = HudDraw.batch();
 
         double minX = mapX;
         double minY = mapY;
@@ -979,7 +978,7 @@ public final class DestinationScreen extends Screen {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(pose, vc,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
                         0.7, color, 0x9A, minX, minY, maxX, maxY);
@@ -1002,7 +1001,7 @@ public final class DestinationScreen extends Screen {
                     continue;
                 }
                 int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(pose, vc,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
                         0.7, color, 0x9A, minX, minY, maxX, maxY);
@@ -1015,7 +1014,7 @@ public final class DestinationScreen extends Screen {
             for (int i = 1; i < points.size(); i++) {
                 double[] a = points.get(i - 1);
                 double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(pose, vc,
                         centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
                         centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
                         1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
@@ -1032,7 +1031,7 @@ public final class DestinationScreen extends Screen {
             for (int i = 1; i < points.size(); i++) {
                 double[] a = points.get(i - 1);
                 double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
+                HudDraw.emitClipped(pose, vc,
                         centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
                         centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
                         1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
@@ -1042,43 +1041,42 @@ public final class DestinationScreen extends Screen {
         double originX = Navigation.tripOriginX();
         double originZ = Navigation.tripOriginZ();
         if (!Double.isNaN(originX)) {
-            marker(last, vc, centerX + (originX - mapCenterX) * scale,
+            marker(pose, vc, centerX + (originX - mapCenterX) * scale,
                     centerY + (originZ - mapCenterZ) * scale, COLOR_ORIGIN, minX, minY, maxX, maxY);
         }
         // A preview starts at the player rather than at a pinned trip origin, so without a live
         // trip its start has to be marked from the preview itself or the cyan line begins nowhere.
         if (Double.isNaN(originX) && planned != null) {
-            marker(last, vc, centerX + (planned.originX() - mapCenterX) * scale,
+            marker(pose, vc, centerX + (planned.originX() - mapCenterX) * scale,
                     centerY + (planned.originZ() - mapCenterZ) * scale, COLOR_ORIGIN,
                     minX, minY, maxX, maxY);
         }
         Destination target = Navigation.target();
         if (target != null) {
-            marker(last, vc, centerX + (target.x() - mapCenterX) * scale,
+            marker(pose, vc, centerX + (target.x() - mapCenterX) * scale,
                     centerY + (target.z() - mapCenterZ) * scale, COLOR_PIN, minX, minY, maxX, maxY);
         }
         if (pendingPick != null) {
-            marker(last, vc, centerX + (pendingPick[0] - mapCenterX) * scale,
+            marker(pose, vc, centerX + (pendingPick[0] - mapCenterX) * scale,
                     centerY + (pendingPick[1] - mapCenterZ) * scale, COLOR_ACCENT, minX, minY, maxX, maxY);
         }
 
         // The player is drawn only when the whole dot falls inside the map: panning leaves them far
         // off the visible area, and a dot painted regardless ended up on the panel around the map.
         // Every other mark in this method clips for the same reason; this one was the exception.
-        emitDiscIfInside(last, vc, centerX + (playerX - mapCenterX) * scale,
+        emitDiscIfInside(pose, vc, centerX + (playerX - mapCenterX) * scale,
                 centerY + (playerZ - mapCenterZ) * scale, 3.0, 0xFFFFFFFF, minX, minY, maxX, maxY);
 
         // Every place gets its marker on the preview as well, so the list and the map agree about
         // where the places are: drawn through the same hit list the hover and double click use.
-        drawPlaceMarkers(places, last, vc, minX, minY, maxX, maxY);
+        drawPlaceMarkers(places, pose, vc, minX, minY, maxX, maxY);
 
-        // Names go last, after every quad: GuiGraphics.drawString flushes the batch it writes to,
-        // which ends the QUADS BufferBuilder behind vc. Emitting even one more quad after this
-        // throws "Not building!", so the label pass must stay at the tail of the quad sequence.
+        // Names go last, after every quad: the label pass decides layering, because the geometry
+        // and the text are handed to the frame in submission order and the names must read on top.
         drawMapLabels(graphics, mc, network, scale, centerX, centerY, minX, minY, maxX, maxY);
 
-        pose.popPose();
-        graphics.flush();
+        pose.popMatrix();
+        HudDraw.flush(graphics, vc);
 
         // Hover crosshair and the coordinates under it, so a point can be chosen precisely. The
         // crosshair is drawn on the exact cursor pixel, so at the map's edge half of it would reach
@@ -1136,7 +1134,7 @@ public final class DestinationScreen extends Screen {
      * <p>Fully inside rather than merely centred inside: a disc is a couple of units across, and
      * testing only its centre let its rim paint over the map's border and the panel beyond it.
      */
-    private static void emitDiscIfInside(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void emitDiscIfInside(Matrix3x2f pose, VertexConsumer vc, double x, double y,
                                          double radius, int argb,
                                          double minX, double minY, double maxX, double maxY) {
         if (x - radius < minX || x + radius > maxX || y - radius < minY || y + radius > maxY) {
@@ -1145,7 +1143,7 @@ public final class DestinationScreen extends Screen {
         HudDraw.emitDisc(pose, vc, x, y, radius, argb, 0xFF);
     }
 
-    private static void marker(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void marker(Matrix3x2f pose, VertexConsumer vc, double x, double y,
                                int color, double minX, double minY, double maxX, double maxY) {
         emitDiscIfInside(pose, vc, x, y, 2.6, color, minX, minY, maxX, maxY);
     }
@@ -1213,7 +1211,7 @@ public final class DestinationScreen extends Screen {
      * measured against, and working them out again here would be the second answer the class's own
      * rule about one set of numbers exists to prevent.
      */
-    private void drawPlaceMarkers(List<PlaceHit> places, PoseStack.Pose pose, VertexConsumer vc,
+    private void drawPlaceMarkers(List<PlaceHit> places, Matrix3x2f pose, VertexConsumer vc,
                                   double minX, double minY, double maxX, double maxY) {
         for (PlaceHit hit : places) {
             emitPlaceMarker(pose, vc, hit.x(), hit.y(), minX, minY, maxX, maxY);
@@ -1221,7 +1219,7 @@ public final class DestinationScreen extends Screen {
     }
 
     /** A place's marker, skipped entirely when it falls outside the map. */
-    private static void emitPlaceMarker(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+    private static void emitPlaceMarker(Matrix3x2f pose, VertexConsumer vc, double x, double y,
                                         double minX, double minY, double maxX, double maxY) {
         if (x < minX || x > maxX || y < minY || y > maxY) {
             return;

@@ -1,26 +1,37 @@
 package bili.dongsz.howtogo.client;
 
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
+import net.minecraft.client.gui.render.state.GuiElementRenderState;
+import net.minecraft.client.renderer.RenderPipelines;
+import org.joml.Matrix3x2f;
+import org.joml.Vector2f;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
  * <p>Vanilla {@code GuiGraphics} only offers axis-aligned rectangles, which is not enough for
  * road lines, circular markers, turn arrows or rounded cards. Everything here builds on a single
- * position-colour layer with depth testing off, so the results can be drawn over the world as well
- * as over a screen.
+ * position-colour layer, so the results can be drawn over the world as well as over a screen.
  *
- * <p><b>Draw all text after all shapes.</b> {@code GuiGraphics.drawString} flushes the buffer
- * source, which ends the QUADS {@code BufferBuilder} behind a consumer obtained from
- * {@link #consumer}. Emitting one more quad through that stale consumer throws
- * {@code IllegalStateException: Not building!} and takes the whole frame -- and with it the game --
- * down. Mixing the two inside one quad sequence is the trap; a label pass belongs at the tail.
+ * <p><b>How the shapes reach the screen.</b> On this version a GUI is rendered in two steps: the
+ * draw phase records <em>render states</em>, and the GUI renderer later turns them into meshes.
+ * Immediate-mode drawing through a buffer source is gone from {@code GuiGraphics}, so a custom
+ * polygon layer is submitted as one {@link GuiElementRenderState}: {@link #batch()} hands out a
+ * {@link Batch} that collects vertices (transforming each one through the {@code Matrix3x2f} pose
+ * it is given, at the moment it is given, so a batch may span pose changes), and {@link #flush}
+ * hands the collected geometry to the frame's renderer. Emitter order therefore still decides
+ * layering -- <b>draw all text after all shapes</b> -- but nothing crashes if the order slips any
+ * more; the old trap of {@code drawString} ending the batched buffer mid-sequence is gone with the
+ * buffer source itself.
+ *
+ * <p>The same emitters also serve the Xaero world map, whose renderer still works in immediate
+ * mode with a real {@link PoseStack}: the three-dimensional overloads below feed that path, and the
+ * two-dimensional ones feed the GUI path.
  */
 public final class HudDraw {
 
@@ -85,52 +96,214 @@ public final class HudDraw {
         return new double[] {width * cos + height * sin, width * sin + height * cos};
     }
 
+    // ------------------------------------------------------------- GUI vertex collecting
+
     /**
-     * A place's marker: the yellow square the editor draws for a hand-placed place.
+     * Collects the frame's custom GUI geometry and hands it to the renderer as one position-colour
+     * element state.
      *
-     * <p>One routine for every view, because a place that is a square on the world map and a circle
-     * on the panel's mini-map reads as two different kinds of thing. It is a square rather than a
-     * disc for the same reason: that is what a place already looked like in edit mode.
+     * <p>It implements just enough of {@link VertexConsumer} for the emitters below: a position add
+     * followed by a colour set records one vertex. Positions are recorded already transformed --
+     * {@link #addVertexWith2DPose} pushes the point through the pose it is handed at call time --
+     * because a batch may legitimately span several pose states, and the pose the caller holds is a
+     * mutable stack that will have moved on by the time the renderer builds the mesh.
      *
-     * @param half half the marker's side, in the units of {@code pose}
+     * <p>One instance is reused for the whole game: drawing is render-thread only, and the
+     * geometry is copied out at {@link #flush} time, so nothing escapes the frame that cleared it.
      */
+    public static final class Batch implements VertexConsumer {
+
+        private float[] xy = new float[8192];
+        private int[] rgba = new int[16384];
+        private int vertices;
+
+        /** Empties the batch without releasing its arrays. */
+        void clear() {
+            vertices = 0;
+        }
+
+        @Override
+        public VertexConsumer addVertex(float x, float y, float z) {
+            if (vertices * 2 + 1 >= xy.length) {
+                xy = java.util.Arrays.copyOf(xy, xy.length * 2);
+                rgba = java.util.Arrays.copyOf(rgba, rgba.length * 2);
+            }
+            xy[vertices * 2] = x;
+            xy[vertices * 2 + 1] = y;
+            vertices++;
+            return this;
+        }
+
+        @Override
+        public VertexConsumer addVertexWith2DPose(Matrix3x2f pose, float x, float y, float z) {
+            SCREEN_POINT.set(x, y);
+            pose.transformPosition(SCREEN_POINT);
+            return addVertex(SCREEN_POINT.x, SCREEN_POINT.y, z);
+        }
+
+        @Override
+        public VertexConsumer setColor(int r, int g, int b, int a) {
+            int vertex = vertices - 1;
+            if (vertex < 0) {
+                return this;
+            }
+            int base = vertex * 4;
+            rgba[base] = r;
+            rgba[base + 1] = g;
+            rgba[base + 2] = b;
+            rgba[base + 3] = a;
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv(float u, float v) {
+            throw new UnsupportedOperationException("HowToGo's GUI layer carries no texture");
+        }
+
+        @Override
+        public VertexConsumer setUv1(int u, int v) {
+            throw new UnsupportedOperationException("HowToGo's GUI layer carries no overlay");
+        }
+
+        @Override
+        public VertexConsumer setUv2(int u, int v) {
+            throw new UnsupportedOperationException("HowToGo's GUI layer carries no lightmap");
+        }
+
+        @Override
+        public VertexConsumer setNormal(float x, float y, float z) {
+            throw new UnsupportedOperationException("HowToGo's GUI layer carries no normals");
+        }
+    }
+
+    /** Scratch for {@link Batch#addVertexWith2DPose}; render thread only, like everything here. */
+    private static final Vector2f SCREEN_POINT = new Vector2f();
+
+    /** The frame's collecting batch. One at a time, on the render thread. */
+    private static final Batch BATCH = new Batch();
+
+    /**
+     * A fresh collector for the shared position-colour layer.
+     *
+     * <p>Submit what it collects with {@link #flush}; until then nothing is on screen.
+     */
+    public static Batch batch() {
+        BATCH.clear();
+        return BATCH;
+    }
+
+    /**
+     * Hands the batch's geometry to this frame's GUI renderer as one deferred element state.
+     *
+     * <p>The vertices are copied out here: the submitted state outlives the call -- the renderer
+     * reads it after the whole draw phase -- while the batch itself is cleared and refilled by the
+     * next {@link #batch()}, of which one frame may make several (the HUD's turn arrow alone
+     * flushes once per arrow it draws).
+     */
+    public static void flush(GuiGraphics graphics, Batch batch) {
+        if (batch.vertices == 0) {
+            return;
+        }
+        // The bounding box is worked out here rather than at render time: the renderer culls whole
+        // elements with it, and the batch is about to be reused for the next shape pass.
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+        for (int vertex = 0; vertex < batch.vertices; vertex++) {
+            minX = Math.min(minX, batch.xy[vertex * 2]);
+            maxX = Math.max(maxX, batch.xy[vertex * 2]);
+            minY = Math.min(minY, batch.xy[vertex * 2 + 1]);
+            maxY = Math.max(maxY, batch.xy[vertex * 2 + 1]);
+        }
+        graphics.submitGuiElementRenderState(new Polygons(
+                java.util.Arrays.copyOf(batch.xy, batch.vertices * 2),
+                java.util.Arrays.copyOf(batch.rgba, batch.vertices * 4),
+                batch.vertices,
+                new ScreenRectangle((int) Math.floor(minX), (int) Math.floor(minY),
+                        (int) Math.ceil(maxX - minX) + 1, (int) Math.ceil(maxY - minY) + 1)));
+        batch.clear();
+    }
+
+    /**
+     * The mod's custom GUI geometry as the renderer wants it: flat screen-space points in the GUI
+     * pixel space, drawn with vanilla's untextured GUI pipeline, in submission order.
+     */
+    private record Polygons(float[] xy, int[] rgba, int vertexCount,
+                            ScreenRectangle bounds) implements GuiElementRenderState {
+
+        @Override
+        public void buildVertices(VertexConsumer consumer, float z) {
+            for (int vertex = 0; vertex < vertexCount; vertex++) {
+                consumer.addVertex(xy[vertex * 2], xy[vertex * 2 + 1], z)
+                        .setColor(rgba[vertex * 4], rgba[vertex * 4 + 1],
+                                rgba[vertex * 4 + 2], rgba[vertex * 4 + 3]);
+            }
+        }
+
+        @Override
+        public RenderPipeline pipeline() {
+            return RenderPipelines.GUI;
+        }
+
+        @Override
+        public TextureSetup textureSetup() {
+            return TextureSetup.noTexture();
+        }
+
+        @Override
+        public ScreenRectangle scissorArea() {
+            return null;
+        }
+
+        @Override
+        public ScreenRectangle bounds() {
+            return bounds;
+        }
+    }
+
+    // ------------------------------------------------------------------ shapes
+
+    /** A place's marker: the yellow square the editor draws for a hand-placed place. */
     public static void emitPlaceMarker(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
                                        double half, int argb) {
         emitQuad(pose, vc, cx - half, cy - half, cx + half, cy - half, cx + half, cy + half,
                 cx - half, cy + half, argb);
     }
 
-    /**
-     * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
-     * obvious choice, but its default depth test can bury an overlay behind the world.
-     */
-    public static final RenderType QUADS = RenderType.create(
-            "howtogo_hud",
-            DefaultVertexFormat.POSITION_COLOR,
-            VertexFormat.Mode.QUADS,
-            1536,
-            false,
-            true,
-            RenderType.CompositeState.builder()
-                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
-                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
-                    .setCullState(RenderStateShard.NO_CULL)
-                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
-                    .createCompositeState(false));
-
-    private HudDraw() {
+    /** The same marker through a GUI pose. */
+    public static void emitPlaceMarker(Matrix3x2f pose, VertexConsumer vc, double cx, double cy,
+                                       double half, int argb) {
+        emitQuad(pose, vc, cx - half, cy - half, cx + half, cy - half, cx + half, cy + half,
+                cx - half, cy + half, argb);
     }
-
-    /** A fresh vertex consumer for the shared layer. */
-    public static VertexConsumer consumer(GuiGraphics graphics) {
-        return graphics.bufferSource().getBuffer(QUADS);
-    }
-
-    // ------------------------------------------------------------------ shapes
 
     /** Emits a thick line as one quad. */
     public static void emitLine(PoseStack.Pose pose, VertexConsumer vc,
+                            double x1, double y1, double x2, double y2,
+                            double halfWidth, int argb, int alpha) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double length = Math.hypot(dx, dy);
+        if (length < 1.0E-6) {
+            return;
+        }
+        double nx = -dy / length * halfWidth;
+        double ny = dx / length * halfWidth;
+
+        vertex(pose, vc, x1 + nx, y1 + ny, r, g, b, a);
+        vertex(pose, vc, x2 + nx, y2 + ny, r, g, b, a);
+        vertex(pose, vc, x2 - nx, y2 - ny, r, g, b, a);
+        vertex(pose, vc, x1 - nx, y1 - ny, r, g, b, a);
+    }
+
+    /** The same line through a GUI pose. */
+    public static void emitLine(Matrix3x2f pose, VertexConsumer vc,
                             double x1, double y1, double x2, double y2,
                             double halfWidth, int argb, int alpha) {
         int r = (argb >> 16) & 0xFF;
@@ -168,8 +341,36 @@ public final class HudDraw {
         vertex(pose, vc, x3, y3, r, g, b, a);
     }
 
+    /** The same triangle through a GUI pose. */
+    public static void emitTriangle(Matrix3x2f pose, VertexConsumer vc,
+                                double x1, double y1, double x2, double y2,
+                                double x3, double y3, int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        vertex(pose, vc, x1, y1, r, g, b, a);
+        vertex(pose, vc, x2, y2, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
+    }
+
     /** Emits a filled convex quad, corners given in winding order. */
     public static void emitQuad(PoseStack.Pose pose, VertexConsumer vc,
+                                double x1, double y1, double x2, double y2,
+                                double x3, double y3, double x4, double y4, int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        vertex(pose, vc, x1, y1, r, g, b, a);
+        vertex(pose, vc, x2, y2, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
+        vertex(pose, vc, x4, y4, r, g, b, a);
+    }
+
+    /** The same quad through a GUI pose. */
+    public static void emitQuad(Matrix3x2f pose, VertexConsumer vc,
                                 double x1, double y1, double x2, double y2,
                                 double x3, double y3, double x4, double y4, int argb) {
         int r = (argb >> 16) & 0xFF;
@@ -204,9 +405,38 @@ public final class HudDraw {
         }
     }
 
+    /** The same disc through a GUI pose. */
+    public static void emitDisc(Matrix3x2f pose, VertexConsumer vc, double cx, double cy,
+                            double radius, int argb, int alpha) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+        final int segments = 12;
+        for (int i = 0; i < segments; i++) {
+            double a0 = i * Math.PI * 2 / segments;
+            double a1 = (i + 1) * Math.PI * 2 / segments;
+            double x0 = cx + Math.cos(a0) * radius;
+            double y0 = cy + Math.sin(a0) * radius;
+            double x1 = cx + Math.cos(a1) * radius;
+            double y1 = cy + Math.sin(a1) * radius;
+            vertex(pose, vc, cx, cy, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
+            vertex(pose, vc, x1, y1, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
+        }
+    }
+
+    /** One corner of a shape, transformed by the Xaero renderer's three-dimensional pose. */
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
+    }
+
+    /** One corner of a shape, transformed by the GUI's two-dimensional pose. */
+    private static void vertex(Matrix3x2f pose, VertexConsumer vc, double x, double y,
+                               int r, int g, int b, int a) {
+        vc.addVertexWith2DPose(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
     }
 
     // ------------------------------------------------------------ rounded cards
@@ -273,8 +503,8 @@ public final class HudDraw {
     /**
      * Liang-Barsky clip of a segment against a rectangle, as parameters along the segment.
      *
-     * <p>Useful because vertices go through a batched buffer, so whether a GPU scissor is still in
-     * effect when they are finally flushed is not something to rely on for correctness.
+     * <p>Useful because whether a shape is inside the map is decided when it is emitted, so a road
+     * that leaves the panel cannot paint over the panel around it.
      *
      * @return whether anything survived; the two parameters are then in {@link #CLIP_T}, as the
      *     fractions of the segment from its first point to its last
@@ -346,6 +576,20 @@ public final class HudDraw {
 
     /** Clips a segment to a rectangle and emits it if anything survives. */
     public static void emitClipped(PoseStack.Pose pose, VertexConsumer vc,
+                                   double x1, double y1, double x2, double y2,
+                                   double halfWidth, int argb, int alpha,
+                                   double minX, double minY, double maxX, double maxY) {
+        if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
+            return;
+        }
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
+                x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
+    }
+
+    /** The same clipped line through a GUI pose. */
+    public static void emitClipped(Matrix3x2f pose, VertexConsumer vc,
                                    double x1, double y1, double x2, double y2,
                                    double halfWidth, int argb, int alpha,
                                    double minX, double minY, double maxX, double maxY) {

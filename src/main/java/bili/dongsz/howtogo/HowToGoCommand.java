@@ -273,10 +273,12 @@ public final class HowToGoCommand {
 
     /** A URL a player can click, styled as the link it is. */
     private static Component urlLink(String url) {
+        // On this version ClickEvent is a sealed interface: the old action-plus-argument constructor
+        // is now one record per action, and OpenUrl carries a URI rather than a string.
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
+                .withClickEvent(new ClickEvent.OpenUrl(java.net.URI.create(url))));
     }
 
     /** Ends the trip, if there is one. */

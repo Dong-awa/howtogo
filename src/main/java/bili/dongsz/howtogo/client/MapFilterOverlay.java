@@ -44,11 +44,13 @@ public final class MapFilterOverlay {
             return;
         }
         GuiGraphics graphics = event.getGuiGraphics();
-        graphics.pose().pushPose();
-        graphics.pose().last().pose().identity();
-        graphics.pose().last().normal().identity();
+        graphics.pose().pushMatrix();
+        // The map screen leaves an arbitrary transform in the GUI pose; the panel is positioned in
+        // plain screen pixels, so it is drawn from a clean slate. (The old code also reset a normal
+        // matrix; a two-dimensional GUI pose has no such thing.)
+        graphics.pose().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
-        graphics.pose().popPose();
+        graphics.pose().popMatrix();
     }
 
     /**

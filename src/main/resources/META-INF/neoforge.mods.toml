@@ -12,21 +12,21 @@ Road marking and real-time navigation for Minecraft
 '''
 authors = "DongSZ"
 
-# The 21.1.x series only. The range used to be open-ended ([21.1.0,)), which claimed compatibility
-# with every later NeoForge -- 21.2 and beyond -- none of which this has ever been run against.
+# The 21.6.x series only. The range used to be open-ended ([21.1.0,)), which claimed compatibility
+# with every later NeoForge -- none of which this has ever been run against.
 # A wrong upper bound is worse than a missing feature: it lets a player load the mod on a version it
 # was never tested on and then report the breakage as a bug.
 [[dependencies.howtogo]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1.0,21.2)"
+versionRange = "[21.6.0,21.7)"
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.howtogo]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.21.2)"
+versionRange = "[1.21.6,1.21.7)"
 ordering = "NONE"
 side = "BOTH"
 
@@ -35,10 +35,13 @@ side = "BOTH"
 # which made a dedicated server refuse to start -- "Mod howtogo requires xaerolib 1.1.0 or above.
 # Currently, xaerolib is not installed" -- even though nothing of this mod would ever run there. A
 # client-side dependency has to say CLIENT, or it is a demand that no server can satisfy.
+# Xaero's World Map 1.39.11 is the 1.21.6 build this branch compiles against (it is the first
+# series exposing MapElementGraphics, which the renderer now requires), so the floor is the
+# actually-tested version rather than the 1.21.1 branch's [1.40.0,), which would exclude it.
 [[dependencies.howtogo]]
 modId = "xaeroworldmap"
 type = "required"
-versionRange = "[1.40.0,)"
+versionRange = "[1.39.11,)"
 ordering = "AFTER"
 side = "CLIENT"
 

@@ -923,7 +923,7 @@ public final class RailTrackStore {
     private static void collect(LevelChunk chunk, List<Long> tracks, List<Byte> shapes,
                                 List<Long> stations) {
         LevelChunkSection[] sections = chunk.getSections();
-        int minY = chunk.getMinBuildHeight();
+        int minY = chunk.getMinY();
         for (int index = 0; index < sections.length; index++) {
             LevelChunkSection section = sections[index];
             if (section == null || section.hasOnlyAir()) {
