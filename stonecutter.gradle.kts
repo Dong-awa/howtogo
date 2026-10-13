@@ -19,13 +19,22 @@ stonecutter parameters {
     // HowToGo.MOD_VERSION via a literal that this keeps in step with gradle.properties.
     swaps["mod_version"] = "\"${properties.get<String>("mod_version")}\";"
 
-    // Replacements rewrite the shared source per version, so a rename that Minecraft made
-    // once does not have to be written by hand in every branch of an `if`.
-    //
-    // Deliberately EMPTY for now. The source on disk is the 26.3 state, which is already
-    // written against the modern names; each one is added here as the older nodes are ported,
-    // so that a replacement is never declared before the version it applies to actually has
-    // the new name.
+    // Replacements rewrite the shared source per version, so a rename that a release made once
+    // does not have to be written by hand at every site. They are textual and global within the
+    // node they apply to, so each one is declared only where the new name really exists: the
+    // shared source is written against the NEWEST spelling, and an older node gets the older
+    // name substituted back in.
     replacements {
+        // Xaero's element renderer swapped its live-buffer parameter when the third-tier
+        // rendering API arrived. 26.1 hands the renderer a vanilla BufferSource; 26.2 moved the
+        // same role into XaeroLib's own provider. The call shape is identical --
+        // getBuffer(RenderType) returns a VertexConsumer either way -- so only the type name
+        // changes. The import is rewritten first and in full, because the two types live in
+        // different packages: a bare name replacement alone would leave a nonsense import.
+        string(current.parsed < "26.2") {
+            replace("import xaero.lib.client.graphics.XaeroBufferProvider;",
+                    "import net.minecraft.client.renderer.MultiBufferSource;")
+            replace("XaeroBufferProvider", "MultiBufferSource.BufferSource")
+        }
     }
 }

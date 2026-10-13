@@ -128,9 +128,22 @@ repositories {
 
 dependencies {
     // Xaero's World Map is closed-source and on no Maven repo: compile against the shipped jar.
-    // The coordinate is per-node; the matching jar must also sit in libs/ for the fileTree below.
     compileOnly(xaeroCoordinate)
-    compileOnly(fileTree(rootProject.file("libs")) { include("*.jar") })
+
+    // Every Xaero jar in libs/ belongs to exactly one Minecraft version, and their APIs are NOT
+    // interchangeable across the eras -- a 1.21.11 XaeroLib names net.minecraft.render.MultiBufferSource
+    // in its signatures, a class 26.x no longer has, so putting the whole directory on one node's
+    // classpath makes javac fail on a type the node's own code never mentions. Select this node's
+    // jars by name: "<version>" appears in both the world map and the XaeroLib file name.
+    val libs = rootProject.file("libs")
+    compileOnly(fileTree(libs) { include("xaero-$minecraftVersion-*.jar") })
+    val xaerolib = findProperty("deps.xaerolib")?.toString().orEmpty()
+    if (xaerolib.isNotEmpty()) {
+        compileOnly(fileTree(libs) { include(xaerolib) })
+    }
+    // The mcphone integration, when its jar has been supplied. Deliberately not version-gated:
+    // the exclusion above keys off the jar's presence, which is the only thing that matters.
+    compileOnly(fileTree(libs) { include("mcphone-*.jar") })
 }
 
 tasks.named<ProcessResources>("processResources") {
