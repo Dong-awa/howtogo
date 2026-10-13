@@ -1,6 +1,12 @@
 package bili.dongsz.howtogo.client;
 
+// 26.3 moved RenderPipeline out of blaze3d into the renderpearl API; 26.1/26.2 still have it
+// where it has always been. Everything else in this file is identical across the 26.x nodes.
+//? if >=26.3 {
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+//?} else {
+/*import com.mojang.blaze3d.pipeline.RenderPipeline;
+*///?}
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -13,6 +19,8 @@ import org.joml.Matrix3x2fc;
 import org.joml.Vector2f;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Arrays;
+
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
@@ -24,7 +32,7 @@ import org.jspecify.annotations.Nullable;
  * game builds the meshes later, in its own buffers. Free-form geometry is submitted through a
  * {@link GuiElementRenderState} -- see {@link Batch}, which collects the quads emitted while it is
  * open and hands them to the game as one element. The map, on the other hand, still draws through
- * Xaero's live buffer provider ({@code XaeroBufferProvider}), so the shape emitters come in both
+ * Xaero's live {@link MultiBufferSource}-backed buffers, so the shape emitters come in both
  * flavours: one writing into a {@link Batch} through a 2D pose, one writing straight into a
  * {@link VertexConsumer} through a 3D {@link PoseStack.Pose}.
  *
@@ -109,14 +117,17 @@ public final class HudDraw {
      * MC 26.x no longer offers one there -- the game builds its meshes itself, after the extraction
      * pass has ended. So the quads are collected here, transformed by the pose current when they
      * were emitted (the same captured-pose model vanilla's own {@code ColoredRectangleRenderState}
-     * uses), and handed over as one {@link GuiElementRenderState} on submit. The game then replays
-     * them through the vanilla GUI pipeline -- the same position-colour, blended, depth-free layer
-     * the old custom {@code RenderType} was.
+     * uses), and a <em>snapshot</em> of them is handed over as one {@link GuiElementRenderState} on
+     * submit. The game then replays them through the vanilla GUI pipeline -- the same position-colour,
+     * blended, depth-free layer the old custom {@code RenderType} was.
      *
      * <p>Reuse one batch per frame segment rather than allocating per shape: a mini-map pass emits
-     * thousands of quads, and this runs every frame.
+     * thousands of quads, and this runs every frame. Reuse is why {@link #submit} copies: the game
+     * reads the submitted state after the pass has ended, so a batch that is opened again -- the
+     * navigation panel does exactly that, mini-map then turn arrow -- must not still be the object
+     * the game is going to read.
      */
-    public static final class Batch implements GuiElementRenderState {
+    public static final class Batch {
 
         /** Scratch for the pose transform, confined to the render thread like the rest of drawing. */
         private static final Vector2f SCRATCH = new Vector2f();
@@ -170,11 +181,59 @@ public final class HudDraw {
             this.count++;
         }
 
-        /** Hands the collected quads to the game. An empty batch submits nothing. */
+        /**
+         * Hands the collected quads to the game as a snapshot. An empty batch submits nothing.
+         *
+         * <p><b>The quads must be copied out here, not handed over by reference.</b> The extraction
+         * pass only <em>describes</em> the frame: the game walks the submitted states after the pass
+         * has ended and calls {@code GuiElementRenderState.buildVertices} on each one then -- see
+         * {@code GuiRenderer.prepare()}, which runs {@code addElementsToMeshes} over the whole
+         * {@code GuiRenderState} once the screen or HUD handler has returned. A batch reused for a
+         * second figure in the same frame -- which the navigation panel does, for the mini-map and
+         * then for the turn arrow -- would otherwise be {@code begin()}--ed again before the game
+         * ever read it, and the earlier element would be built from the later figure's vertices.
+         * The same hazard exists across frames, since the game may still be walking last frame's
+         * states while this frame's are recorded. This is why the deferred-GUI version of this file
+         * copied its arrays in {@code flush}, and the copy is the load-bearing part of it.
+         */
         public void submit(GuiGraphicsExtractor graphics) {
-            if (this.count > 0) {
-                graphics.submitGuiElementRenderState(this);
+            if (this.count == 0) {
+                return;
             }
+            float[] xy = Arrays.copyOf(this.xy, this.count * 2);
+            int[] col = Arrays.copyOf(this.col, this.count);
+            ScreenRectangle bounds = this.bounds();
+            ScreenRectangle scissor = this.scissor;
+            graphics.submitGuiElementRenderState(new GuiElementRenderState() {
+                @Override
+                public void buildVertices(VertexConsumer vertexConsumer) {
+                    for (int i = 0; i < col.length; i++) {
+                        vertexConsumer.addVertex(xy[i * 2], xy[i * 2 + 1], 0.0F).setColor(col[i]);
+                    }
+                }
+
+                @Override
+                public RenderPipeline pipeline() {
+                    return RenderPipelines.GUI;
+                }
+
+                @Override
+                public TextureSetup textureSetup() {
+                    return TextureSetup.noTexture();
+                }
+
+                @Override
+                @Nullable
+                public ScreenRectangle scissorArea() {
+                    return scissor;
+                }
+
+                @Override
+                @Nullable
+                public ScreenRectangle bounds() {
+                    return bounds;
+                }
+            });
         }
 
         /** How many corners the batch holds; four per quad. */
@@ -182,35 +241,14 @@ public final class HudDraw {
             return this.count;
         }
 
-        @Override
-        public void buildVertices(VertexConsumer vertexConsumer) {
-            for (int i = 0; i < this.count; i++) {
-                vertexConsumer.addVertex(this.xy[i * 2], this.xy[i * 2 + 1], 0.0F)
-                        .setColor(this.col[i]);
-            }
-        }
-
-        @Override
-        public RenderPipeline pipeline() {
-            // The vanilla GUI layer: position-colour quads, translucent, no depth test -- the same
-            // contract the custom RenderType the HUD used to draw through had.
-            return RenderPipelines.GUI;
-        }
-
-        @Override
-        public TextureSetup textureSetup() {
-            return TextureSetup.noTexture();
-        }
-
-        @Override
+        /**
+         * The screen-space box the collected quads cover, or null when the batch is empty.
+         *
+         * <p>Only decides which elements this one must layer above -- the game walks the submitted
+         * states by these boxes -- so a pixel of slack cannot change what is drawn.
+         */
         @Nullable
-        public ScreenRectangle scissorArea() {
-            return this.scissor;
-        }
-
-        @Override
-        @Nullable
-        public ScreenRectangle bounds() {
+        private ScreenRectangle bounds() {
             if (this.count == 0) {
                 return null;
             }

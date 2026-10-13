@@ -386,8 +386,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // element sits in the map's own order. Not while one of this mod's panels is up, for the
             // reason the labels pass gives: this pass draws over the map, and a panel is not the map.
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
-            if (!(minecraft.gui.screen() instanceof TransitLineScreen)
-                    && !(minecraft.gui.screen() instanceof RoadNameScreen)) {
+            if (!(MinecraftCompat.currentScreen() instanceof TransitLineScreen)
+                    && !(MinecraftCompat.currentScreen() instanceof RoadNameScreen)) {
                 int markMargin = 64;
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
@@ -410,8 +410,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // sets the destination, and the map's own panel is clicked through it. The raw position only:
             // snapping costs a walk of the whole network and is the editor's business.
             RoadEditSession.setMouse(info.mouseX, info.mouseZ);
-            if (!(minecraft.gui.screen() instanceof TransitLineScreen)
-                    && !(minecraft.gui.screen() instanceof RoadNameScreen)) {
+            if (!(MinecraftCompat.currentScreen() instanceof TransitLineScreen)
+                    && !(MinecraftCompat.currentScreen() instanceof RoadNameScreen)) {
                 // Shapes before text, and the lines before the names: a line name drawn under a stop
                 // marker is a name nobody can read. The line names go last of all, after the place
                 // markers renderLabels emits, for the same reason.
@@ -821,7 +821,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         pose.pushPose();
         pose.translate(x, y, 0.0);
+        // 26.3 renamed PoseStack.mulPose(Quaternionf) to rotate(Quaternionfc) -- the same
+        // composition, minus the widened parameter type.
+        //? if >=26.3 {
         pose.rotate(Axis.ZP.rotation((float) screenAngle(segment, projection)));
+        //?} else {
+        /*pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));
+        *///?}
         pose.scale(factor, factor, 1.0F);
         graphics.drawString(font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
         pose.popPose();

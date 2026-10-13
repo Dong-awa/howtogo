@@ -1809,6 +1809,6 @@ public final class DestinationScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().gui.setScreen(parent);
+        MinecraftCompat.openScreen(parent);
     }
 }

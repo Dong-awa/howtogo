@@ -30,7 +30,7 @@ public final class NavigatorClient {
     /** Opens the destination picker over whatever screen is open -- the world map, usually. */
     public static void openPicker() {
         Minecraft minecraft = Minecraft.getInstance();
-        minecraft.gui.setScreen(new DestinationScreen(minecraft.gui.screen()));
+        MinecraftCompat.openScreen(new DestinationScreen(MinecraftCompat.currentScreen()));
     }
 
     /**

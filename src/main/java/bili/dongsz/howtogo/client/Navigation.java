@@ -249,7 +249,7 @@ public final class Navigation {
         if (player == null) {
             return;
         }
-        Minecraft.getInstance().gui.hud.setOverlayMessage(
+        MinecraftCompat.overlayMessage(
                 net.minecraft.network.chat.Component.translatable(
                         "hud.howtogo.mode_switched", mode.label()), true);
     }
@@ -324,7 +324,7 @@ public final class Navigation {
         if (tripDimension != null && dimension != null && !tripDimension.equals(dimension)) {
             HowToGo.LOGGER.info("[HowToGo] the trip was planned in {} and the player is now in {}; "
                     + "ending it rather than guiding the wrong world's roads", tripDimension, dimension);
-            Minecraft.getInstance().gui.hud.setOverlayMessage(
+            MinecraftCompat.overlayMessage(
                     Component.translatable("hud.howtogo.dimension_changed"), true);
             clear();
             return;

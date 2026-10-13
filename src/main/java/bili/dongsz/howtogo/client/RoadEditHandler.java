@@ -83,9 +83,20 @@ public final class RoadEditHandler {
     public static final KeyMapping.Category KEY_CATEGORY = new KeyMapping.Category(
             net.minecraft.resources.Identifier.fromNamespaceAndPath("howtogo", "main"));
 
+    /**
+     * The input type the editor keys are registered under. 26.3 renamed {@code KEYSYM} to
+     * {@code KEYBOARD} when input moved from GLFW to SDL; both name the same keyboard-key space,
+     * so the constants below resolve to the same kind on every 26.x node.
+     */
+    //? if >=26.3 {
+    private static final InputConstants.Type KEY_TYPE = InputConstants.Type.KEYBOARD;
+    //?} else {
+    /*private static final InputConstants.Type KEY_TYPE = InputConstants.Type.KEYSYM;
+    *///?}
+
     public static final KeyMapping TOGGLE_EDIT = new KeyMapping(
             "key.howtogo.toggle_edit",
-            InputConstants.Type.KEYBOARD,
+            KEY_TYPE,
             InputConstants.KEY_R,
             KEY_CATEGORY);
 
@@ -98,7 +109,7 @@ public final class RoadEditHandler {
      */
     public static final KeyMapping LINES = new KeyMapping(
             "key.howtogo.lines",
-            InputConstants.Type.KEYBOARD,
+            KEY_TYPE,
             InputConstants.KEY_L,
             KEY_CATEGORY);
 
@@ -116,7 +127,7 @@ public final class RoadEditHandler {
     // ------------------------------------------------------------------ mouse
 
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
-        Screen screen = Minecraft.getInstance().gui.screen();
+        Screen screen = MinecraftCompat.currentScreen();
         if (event.getAction() != InputConstants.PRESS) {
             return;
         }

@@ -101,7 +101,7 @@ public final class NavHudRenderer {
 
     public static void onRenderGui(RenderGuiEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.gui.screen() != null || mc.player == null || mc.level == null) {
+        if (MinecraftCompat.currentScreen() != null || mc.player == null || mc.level == null) {
             return;
         }
         if (Navigation.target() == null) {
