@@ -233,7 +233,7 @@ public final class RoadEditHandler {
         // and an else pair here emitted both of them on the newer node.
         //? if >=26.1 {
         /*boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getKeyEvent().keycode(), InputConstants.PRESS);
+                && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.PRESS);
         *///?}
         //? if <26.1 {
         boolean consumed = gate
@@ -250,7 +250,7 @@ public final class RoadEditHandler {
         boolean gate = isMapOpen(screen);
         //? if >=26.1 {
         /*boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getKeyEvent().keycode(), InputConstants.RELEASE);
+                && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.RELEASE);
         *///?}
         //? if <26.1 {
         boolean consumed = gate
