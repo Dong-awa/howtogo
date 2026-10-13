@@ -307,6 +307,30 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     //?}
 
     /**
+     * One string on the map.
+     *
+     * <p>Xaero's {@code MapElementGraphics} kept {@code drawString} through 26.3 even though vanilla's
+     * graphics object renamed its equivalent to {@code text}. Xaero's type is its own and did not
+     * follow the vanilla change, so the build's rename rule -- which rewrites every {@code .drawString(}
+     * it finds, because it cannot tell one receiver's method from another's -- must not see these
+     * calls. They live in {@link MapLabels}, one file per era, for that reason.
+     */
+    // Two independent branches rather than an if/else, matching the viewport helpers above: the else
+    // form and a whole-file fence elsewhere in this same file interfered with each other once.
+    //? if >=1.21.6 {
+    /*private static void mapLabel(MapElementGraphics graphics, Font font, String text, int x, int y,
+                                 int colour, boolean shadow) {
+        MapLabels.drawOnMap(graphics, font, text, x, y, colour, shadow);
+    }
+    *///?}
+    //? if <1.21.6 {
+    private static void mapLabel(GuiGraphics graphics, Font font, String text, int x, int y,
+                                 int colour, boolean shadow) {
+        MapLabels.drawOnMap(graphics, font, text, x, y, colour, shadow);
+    }
+    //?}
+
+    /**
      * One name on the map, centred on a point and drawn at the size the map is zoomed to.
      *
      * <p>Text is drawn after the pose has been flattened to screen space, so the scaling has to be put
@@ -327,7 +351,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.pushPose();
         pose.translate(x, y, 0.0);
         pose.scale(factor, factor, 1.0F);
-        graphics.drawString(font, name, -font.width(name) / 2, 0, colour, true);
+        mapLabel(graphics, font, name, -font.width(name) / 2, 0, colour, true);
         pose.popPose();
     }
 
@@ -884,7 +908,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.translate(x, y, 0.0);
         pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));
         pose.scale(factor, factor, 1.0F);
-        graphics.drawString(font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
+        mapLabel(graphics, font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
         pose.popPose();
     }
 
@@ -1683,7 +1707,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     || label.y() > viewBottom) {
                 continue;
             }
-            graphics.drawString(font, label.name(),
+            mapLabel(graphics, font, label.name(),
                     (int) Math.round(label.x()) - font.width(label.name()) / 2,
                     (int) Math.round(label.y()), label.colour(), true);
         }
@@ -1976,12 +2000,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         int y = leftTop;
         for (String line : leftLines) {
-            graphics.drawString(font, line, HUD_LEFT_INSET + leftIndent, y, HUD_FG, true);
+            mapLabel(graphics, font, line, HUD_LEFT_INSET + leftIndent, y, HUD_FG, true);
             y += HUD_LINE_HEIGHT;
         }
         y = hintTop;
         for (String line : hintLines) {
-            graphics.drawString(font, line, hintTextLeft, y, HUD_FG, true);
+            mapLabel(graphics, font, line, hintTextLeft, y, HUD_FG, true);
             y += HUD_LINE_HEIGHT;
         }
 

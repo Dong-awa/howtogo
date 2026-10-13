@@ -94,21 +94,70 @@ stonecutter parameters {
         // drawCenteredString is centeredText(). Sixty-odd call sites across six files, which is why
         // these are replacements and not conditions.
         //
-        // The matches are anchored on the call's receiver and its opening parenthesis so that the
-        // bare words are not rewritten where they appear as something else -- a local variable, a
-        // helper's own name, or a comment. Each is one-way for the reason the header gives.
+        // One receiver in this tree disagrees and is deliberately excluded: Xaero's own
+        // MapElementGraphics kept drawString in 26.3, because it is not the vanilla type and did not
+        // follow it. Its calls live in MapLabels.java, a whole-file condition on the era, so this rule
+        // never reaches them -- a rule cannot be told to skip one file, but it can be kept away from
+        // one by moving the dissenting call somewhere the rule does not look.
         regex(current.parsed >= "26.1") {
             replace("\\.drawString\\(", ".text(", "NO_REVERSE", "NO_REVERSE")
         }
         regex(current.parsed >= "26.1") {
             replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
         }
-        // The map's viewport question is NOT a rule here. Xaero's MapElementGraphics reports its own
-        // size from 26.1 and not before, and the five places that ask read `guiWidth()` unqualified --
-        // the same text as the helper's own declaration. A rule repointing them therefore rewrote the
-        // declaration too, twice over, once as `private static int graphics.guiWidth()`. RoadElement
-        // Renderer asks through mapViewRight/mapViewBottom instead, which take the graphics object and
-        // carry the condition in one place. That is the pattern to reach for when a rename's target
-        // text also appears in its own definition.
+        // The type itself moved too, and with the same one-way treatment: every file that names it
+        // names it in a parameter list or a local, and there is no version on which both names exist.
+        //
+        // The newer name is longer, so the older rule must not run after it -- hence the separate
+        // package-sensitive rule first, then the bare name, both one-way.
+        regex(current.parsed >= "26.1") {
+            replace("net\\.minecraft\\.client\\.gui\\.GuiGraphics",
+                    "net.minecraft.client.gui.GuiGraphicsExtractor", "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("\\bGuiGraphics\\b", "GuiGraphicsExtractor", "NO_REVERSE", "NO_REVERSE")
+        }
+        // The element-state interface moved from the GUI package to the renderer's own state package,
+        // which is where the renderer that plays it back lives.
+        regex(current.parsed >= "26.1") {
+            replace("net\\.minecraft\\.client\\.gui\\.render\\.state\\.GuiElementRenderState",
+                    "net.minecraft.client.renderer.state.gui.GuiElementRenderState",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
+        // Xaero's element renderer stopped taking a vanilla buffer source at 26.1: the mod's
+        // MultiBufferSource.BufferSource parameters are XaeroBufferProvider there. Its own interface
+        // moved with it, and the vanilla class the parameters named is gone.
+        regex(current.parsed >= "26.1") {
+            replace("net\\.minecraft\\.client\\.renderer\\.MultiBufferSource",
+                    "xaero.lib.client.graphics.XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("MultiBufferSource\\.BufferSource", "XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
+        }
+        // The render pipeline left the blaze3d package for the new renderpearl API, and the builder
+        // chain is otherwise unchanged -- same snippets, same withLocation/withCull/build.
+        regex(current.parsed >= "26.1") {
+            replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
+                    "com.mojang.renderpearl.api.pipeline.RenderPipeline", "NO_REVERSE", "NO_REVERSE")
+        }
+        // A screen no longer renders itself but states what should be rendered, so its entry point was
+        // renamed and the two delegated calls in the screens go with it. Anchored on the receiver and
+        // the leading parameters so the many other render* methods here are left alone.
+        regex(current.parsed >= "26.1") {
+            replace("super\\.render\\(graphics, mouseX, mouseY, partialTick\\)",
+                    "super.extractRenderState(graphics, mouseX, mouseY, partialTick)",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("parent\\.render\\(graphics, mouseX, mouseY, partialTick\\)",
+                    "parent.extractRenderState(graphics, mouseX, mouseY, partialTick)",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
+        // The map's viewport question is NOT a rule here, and neither is its text call. Xaero's own
+        // MapElementGraphics reports no size of its own and keeps drawString -- it is not the vanilla
+        // type and did not follow it -- so the blanket .drawString( rule above must not reach it.
+        // Both live behind conditions in RoadElementRenderer instead. The general lesson: a rename
+        // rule cannot tell one receiver's method from another's, so it is only safe when every
+        // receiver in the tree agrees. That is worth checking before writing one.
     }
 }
