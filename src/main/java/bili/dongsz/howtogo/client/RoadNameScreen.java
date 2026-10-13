@@ -403,7 +403,7 @@ public final class RoadNameScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().setScreen(parent);
+        Screens.set(parent);
     }
 
     /** No dim, no blur: the map underneath is the context for the name being typed. */

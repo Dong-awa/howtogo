@@ -4,6 +4,7 @@ import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.client.DestinationScreen;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.RoadStore;
+import bili.dongsz.howtogo.client.Screens;
 import bili.dongsz.howtogo.client.SelfTest;
 import bili.dongsz.howtogo.client.WorldFiles;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -138,7 +139,7 @@ public final class HowToGoCommand {
     private static int terminal(CommandContext<CommandSourceStack> context) {
         pending = () -> {
             Minecraft minecraft = Minecraft.getInstance();
-            minecraft.setScreen(new DestinationScreen(minecraft.screen));
+            Screens.set(new DestinationScreen(Screens.of(minecraft)));
         };
         say(context, Component.translatable("command.howtogo.terminal"));
         return 1;

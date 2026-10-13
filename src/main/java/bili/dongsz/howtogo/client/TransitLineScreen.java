@@ -666,7 +666,7 @@ public final class TransitLineScreen extends Screen {
         }
         LineStop stop = line.stops().get(index);
         commitName();
-        Minecraft.getInstance().setScreen(new RoadNameScreen(this, RoadNameScreen.TITLE_POI,
+        Screens.set(new RoadNameScreen(this, RoadNameScreen.TITLE_POI,
                 liveName(stop), stopsX + columnW, listY + index * ROW_HEIGHT, name -> {
                     if (stop.editable()) {
                         // A place: the name belongs to the place, and this is only how the line remembers
@@ -1036,7 +1036,7 @@ public final class TransitLineScreen extends Screen {
     @Override
     public void onClose() {
         commitName();
-        Minecraft.getInstance().setScreen(parent);
+        Screens.set(parent);
     }
 
 }

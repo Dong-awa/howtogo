@@ -1860,7 +1860,7 @@ public final class DestinationScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().setScreen(parent);
+        Screens.set(parent);
     }
 
 }

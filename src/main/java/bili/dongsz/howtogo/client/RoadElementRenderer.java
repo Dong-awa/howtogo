@@ -267,28 +267,53 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One name on the map, centred on a point and drawn at the size the map is zoomed to.
+     * The map's right and bottom edges, in GUI pixels.
      *
-     * <p>Text is drawn after the pose has been flattened to screen space, so the scaling has to be put
-     * back for the text alone: the pose is pushed, moved to the point and scaled, and the name is written
-     * at the origin of that frame. The offsets inside it are in the name's own units, so a centred name
-     * stays centred at every size.
-     */
-    /**
-     * The map's viewport, in GUI pixels.
+     * <p>Xaero's {@code MapElementGraphics} gained {@code guiWidth}/{@code guiHeight} at 26.1; before
+     * that the same two numbers were read off the window, which is where the 1.21.1 {@code GuiGraphics}
+     * read them from as well.
      *
-     * <p>1.21.8's {@code MapElementGraphics} has no {@code guiWidth}/{@code guiHeight} of its own;
-     * these are the same numbers the 1.21.1 {@code GuiGraphics} reported, read straight from the
-     * window -- which is where it read them from too.
+     * <p>The size is asked through these two rather than at each of the five call sites, so that the
+     * call sites read the same on every version. It also keeps the condition out of reach of the
+     * build's replacement rules, which matters here: a rename rule aimed at those call sites matched
+     * this declaration too, because an unqualified call reads exactly like the declaration it names.
      */
-    private static int guiWidth() {
+    //? if >=26.1 {
+    /*private static int mapViewRight(MapElementGraphics graphics) {
+        return graphics.guiWidth();
+    }
+
+    private static int mapViewBottom(MapElementGraphics graphics) {
+        return graphics.guiHeight();
+    }
+    *///?}
+    //? if >=1.21.6 && <26.1 {
+    /*private static int mapViewRight(MapElementGraphics graphics) {
         return Minecraft.getInstance().getWindow().getGuiScaledWidth();
     }
 
-    private static int guiHeight() {
+    private static int mapViewBottom(MapElementGraphics graphics) {
         return Minecraft.getInstance().getWindow().getGuiScaledHeight();
     }
+    *///?}
+    //? if <1.21.6 {
+    private static int mapViewRight(GuiGraphics graphics) {
+        return Minecraft.getInstance().getWindow().getGuiScaledWidth();
+    }
 
+    private static int mapViewBottom(GuiGraphics graphics) {
+        return Minecraft.getInstance().getWindow().getGuiScaledHeight();
+    }
+    //?}
+
+    /**
+     * One name on the map, centred on a point and drawn at the size the map is zoomed to.
+     *
+     * <p>Text is drawn after the pose has been flattened to screen space, so the scaling has to be put
+     * back for the text alone: the pose is pushed, moved to the point and scaled, and the name is
+     * written at the origin of that frame. The offsets inside it are in the name's own units, so a
+     * centred name stays centred at every size.
+     */
     //? if >=1.21.6 {
     /*private static void drawMapLabel(MapElementGraphics graphics, Font font, String name, double x, double y,
     *///?} else {
@@ -414,13 +439,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // element sits in the map's own order. Not while one of this mod's panels is up, for the
             // reason the labels pass gives: this pass draws over the map, and a panel is not the map.
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
-            if (!(minecraft.screen instanceof TransitLineScreen)
-                    && !(minecraft.screen instanceof RoadNameScreen)) {
+            if (!(Screens.of(minecraft) instanceof TransitLineScreen)
+                    && !(Screens.of(minecraft) instanceof RoadNameScreen)) {
                 int markMargin = 64;
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
-                drawMarks(pose, vc, markMargin, guiWidth() + markMargin,
-                        guiHeight() + markMargin, Math.abs(info.scale), projection);
+                drawMarks(pose, vc, markMargin, mapViewRight(graphics) + markMargin,
+                        mapViewBottom(graphics) + markMargin, Math.abs(info.scale), projection);
             }
             return true;
         }
@@ -438,8 +463,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // sets the destination, and the map's own panel is clicked through it. The raw position only:
             // snapping costs a walk of the whole network and is the editor's business.
             RoadEditSession.setMouse(info.mouseX, info.mouseZ);
-            if (!(minecraft.screen instanceof TransitLineScreen)
-                    && !(minecraft.screen instanceof RoadNameScreen)) {
+            if (!(Screens.of(minecraft) instanceof TransitLineScreen)
+                    && !(Screens.of(minecraft) instanceof RoadNameScreen)) {
                 // Shapes before text, and the lines before the names: a line name drawn under a stop
                 // marker is a name nobody can read. The line names go last of all, after the place
                 // markers renderLabels emits, for the same reason.
@@ -455,8 +480,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // two cannot disagree while the map is moving.
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
-                drawTransitLines(pose, vc, lineMargin, guiWidth() + lineMargin,
-                        guiHeight() + lineMargin, Math.abs(info.scale), interchanges,
+                drawTransitLines(pose, vc, lineMargin, mapViewRight(graphics) + lineMargin,
+                        mapViewBottom(graphics) + lineMargin, Math.abs(info.scale), interchanges,
                         projection);
                 renderLabels(graphics, pose, info, vc, interchanges, projection);
                 // The map's switches are not drawn here. They are not part of the map: drawn from this
@@ -675,8 +700,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // a line can land far outside the window. Skip those instead of asking the font renderer to
         // lay out text nobody will see.
         int margin = 64;
-        int viewRight = guiWidth() + margin;
-        int viewBottom = guiHeight() + margin;
+        int viewRight = mapViewRight(graphics) + margin;
+        int viewBottom = mapViewBottom(graphics) + margin;
 
         pose.pushPose();
         pose.last().pose().identity();
@@ -1651,8 +1676,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     //?}
         net.minecraft.client.gui.Font font = net.minecraft.client.Minecraft.getInstance().font;
         int margin = 64;
-        int viewRight = guiWidth() + margin;
-        int viewBottom = guiHeight() + margin;
+        int viewRight = mapViewRight(graphics) + margin;
+        int viewBottom = mapViewBottom(graphics) + margin;
         for (LineLabel label : labels) {
             if (label.x() < -margin || label.x() > viewRight || label.y() < -margin
                     || label.y() > viewBottom) {

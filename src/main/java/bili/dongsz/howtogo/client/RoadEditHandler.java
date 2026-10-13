@@ -90,7 +90,13 @@ public final class RoadEditHandler {
 
     public static final KeyMapping TOGGLE_EDIT = new KeyMapping(
             "key.howtogo.toggle_edit",
+            // 26.1 narrowed the key-type enum to two members and renamed the one for ordinary keys:
+            // what was KEYSYM is KEYBOARD. Same codes, same meaning.
+            //? if >=26.1 {
+            /*InputConstants.Type.KEYBOARD,
+            *///?} else {
             InputConstants.Type.KEYSYM,
+            //?}
             // 1.21.9 reads key codes from the SDL-backed platform layer, so the GLFW constants this
             // used to name are gone; InputConstants carries the same values.
             //? if >=1.21.9 {
@@ -109,7 +115,11 @@ public final class RoadEditHandler {
      */
     public static final KeyMapping LINES = new KeyMapping(
             "key.howtogo.lines",
+            //? if >=26.1 {
+            /*InputConstants.Type.KEYBOARD,
+            *///?} else {
             InputConstants.Type.KEYSYM,
+            //?}
             //? if >=1.21.9 {
             /*InputConstants.KEY_L,
             *///?} else {
@@ -128,7 +138,7 @@ public final class RoadEditHandler {
     // ------------------------------------------------------------------ mouse
 
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
-        Screen screen = Minecraft.getInstance().screen;
+        Screen screen = Screens.current();
         if (event.getAction() != InputConstants.PRESS) {
             return;
         }

@@ -103,14 +103,12 @@ stonecutter parameters {
         regex(current.parsed >= "26.1") {
             replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
         }
-        // The window's scaled size is asked of the graphics object itself now. Worded so it matches
-        // the helper's CALLS and not its definition -- the definition reads `guiWidth()` right after
-        // a return type, and rewriting that would give the method a body that calls itself.
-        regex(current.parsed >= "26.1") {
-            replace("(?<=[=(,\\s])guiWidth\\(\\)", "graphics.guiWidth()", "NO_REVERSE", "NO_REVERSE")
-        }
-        regex(current.parsed >= "26.1") {
-            replace("(?<=[=(,\\s])guiHeight\\(\\)", "graphics.guiHeight()", "NO_REVERSE", "NO_REVERSE")
-        }
+        // The map's viewport question is NOT a rule here. Xaero's MapElementGraphics reports its own
+        // size from 26.1 and not before, and the five places that ask read `guiWidth()` unqualified --
+        // the same text as the helper's own declaration. A rule repointing them therefore rewrote the
+        // declaration too, twice over, once as `private static int graphics.guiWidth()`. RoadElement
+        // Renderer asks through mapViewRight/mapViewBottom instead, which take the graphics object and
+        // carry the condition in one place. That is the pattern to reach for when a rename's target
+        // text also appears in its own definition.
     }
 }
