@@ -225,8 +225,20 @@ public final class RoadEditHandler {
     public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
+        // 26.1 renamed the key event's second component: what was scancode() is keycode() there. The
+        // dispatch below takes the two numbers separately, so the accessor is chosen here rather than
+        // in it -- one place, and the same one place that already unpacks the event.
+        //
+        // Two independent markers rather than an if/else, because the two arms declare the same local
+        // and an else pair here emitted both of them on the newer node.
+        //? if >=26.1 {
+        /*boolean consumed = gate
+                && handleKey(screen, event.getKeyCode(), event.getKeyEvent().keycode(), InputConstants.PRESS);
+        *///?}
+        //? if <26.1 {
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.PRESS);
+        //?}
         if (consumed) {
             event.setCanceled(true);
         }
@@ -236,8 +248,14 @@ public final class RoadEditHandler {
     public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
+        //? if >=26.1 {
+        /*boolean consumed = gate
+                && handleKey(screen, event.getKeyCode(), event.getKeyEvent().keycode(), InputConstants.RELEASE);
+        *///?}
+        //? if <26.1 {
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.RELEASE);
+        //?}
         if (consumed) {
             event.setCanceled(true);
         }

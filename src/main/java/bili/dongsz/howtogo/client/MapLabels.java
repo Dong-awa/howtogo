@@ -32,7 +32,7 @@ final class MapLabels {
     //? if >=1.21.6 {
     /*static void drawOnMap(xaero.map.element.MapElementGraphics graphics, Font font, String text,
                           int x, int y, int colour, boolean shadow) {
-        graphics.drawString(font, text, x, y, colour, shadow);
+        graphics.HTG_MAP_TEXT(font, text, x, y, colour, shadow);
     }
     *///?}
     //? if <1.21.6 {

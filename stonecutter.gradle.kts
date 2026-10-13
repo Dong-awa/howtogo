@@ -96,35 +96,32 @@ stonecutter parameters {
         //
         // One receiver in this tree disagrees and is deliberately excluded: Xaero's own
         // MapElementGraphics kept drawString in 26.3, because it is not the vanilla type and did not
-        // follow it. Its calls live in MapLabels.java, a whole-file condition on the era, so this rule
-        // never reaches them -- a rule cannot be told to skip one file, but it can be kept away from
-        // one by moving the dissenting call somewhere the rule does not look.
+        // follow it.
+        //
+        // The exclusion is done by NOT going through this rule at all for that call. A rule matches
+        // text and cannot see a receiver's declared type, and the type appears on the method's
+        // signature line while the call sits several lines below it -- so a single-line lookahead
+        // cannot connect the two, which two attempts at this established. MapLabels.java writes that
+        // one call through a placeholder instead, and the placeholder is resolved by the rule below.
         regex(current.parsed >= "26.1") {
             replace("\\.drawString\\(", ".text(", "NO_REVERSE", "NO_REVERSE")
         }
         regex(current.parsed >= "26.1") {
             replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
         }
-        // The map's text call is written through this placeholder so that the rule above -- which
-        // rewrites every .drawString( it finds, because a rule cannot tell one receiver from another
-        // and cannot be told to skip one method -- never sees it. Xaero's MapElementGraphics kept
-        // drawString through 26.3; vanilla's graphics object did not. Resolved back to the real name
-        // here, after the rename has had its turn. HTG_MAP_TEXT appears nowhere else in the tree.
+        // Puts Xaero's method name back. A placeholder rather than a second rename rule, because
+        // replacements are applied as one set and no rule sees another's output -- a rule matching
+        // the renamed text never fires. HTG_MAP_TEXT appears nowhere else in the tree.
         //
-        // MapLabels.java is the one file that must keep the OLD name, and a rule cannot skip a file.
-        // So the rename is undone for it by a second rule that matches the renamed text only in that
-        // one method's shape: its signature is unlike anything else in the tree, which makes it a safe
-        // anchor. That is a narrower thing to say than "not this file", and the only durable way to
-        // say it -- the alternative, gating the rename itself on the receiving type, cannot work
-        // because a rule sees text and not types.
-        regex(current.parsed >= "26.1") {
-            replace("graphics\\.text\\(font, text, x, y, colour, shadow\\)",
-                    "graphics.drawString(font, text, x, y, colour, shadow)",
-                    "NO_REVERSE", "NO_REVERSE")
+        // Gated at the anchor rather than at 26.1: every node compiles MapLabels, so every node has
+        // to resolve the token. Gating it at 26.1 left the older nodes with the literal placeholder in
+        // their source, which is what the previous build said.
+        regex(current.parsed >= "1.21.1") {
+            replace("HTG_MAP_TEXT", "drawString", "NO_REVERSE", "NO_REVERSE")
         }
         // The type itself moved too, and with the same one-way treatment: every file that names it
         // names it in a parameter list or a local, and there is no version on which both names exist.
-        //        // The newer name is longer, so the older rule must not run after it -- hence the separate
+        // The newer name is longer, so the older rule must not run after it -- hence the separate
         // package-sensitive rule first, then the bare name, both one-way.
         regex(current.parsed >= "26.1") {
             replace("net\\.minecraft\\.client\\.gui\\.GuiGraphics",
@@ -156,21 +153,20 @@ stonecutter parameters {
             replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
                     "com.mojang.renderpearl.api.pipeline.RenderPipeline", "NO_REVERSE", "NO_REVERSE")
         }
-        // A screen no longer renders itself but states what should be rendered, so its entry point was
-        // renamed and the two delegated calls in the screens go with it. Anchored on the receiver and
-        // the leading parameters so the many other render* methods here are left alone.
-        //
-        // The declarations need their own rules: the delegated calls above are only half the change,
-        // and a signature is not a call. Both are anchored on the parameter list, which is the same in
-        // every one of these overrides and does not appear on any other method.
+        // A screen states rather than renders from 26.1: the entry point is extractRenderState and the
+        // background hook is extractBackground. Matched on the whole signature including the parameter
+        // types, which is what tells these two apart from the many other render* methods here -- an
+        // earlier attempt anchored on `void render(GuiGraphicsExtractor ...)` and matched nothing,
+        // because the rename that produced GuiGraphicsExtractor runs in the same pass and the two
+        // rules cannot see each other's output.
         regex(current.parsed >= "26.1") {
-            replace("void render\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
-                    "void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
+            replace("void renderBackground\\(GuiGraphics graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
                     "NO_REVERSE", "NO_REVERSE")
         }
         regex(current.parsed >= "26.1") {
-            replace("void renderBackground\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
-                    "void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
+            replace("void render\\(GuiGraphics graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
                     "NO_REVERSE", "NO_REVERSE")
         }
         regex(current.parsed >= "26.1") {

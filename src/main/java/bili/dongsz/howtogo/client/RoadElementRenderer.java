@@ -269,25 +269,19 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * The map's right and bottom edges, in GUI pixels.
      *
-     * <p>Xaero's {@code MapElementGraphics} gained {@code guiWidth}/{@code guiHeight} at 26.1; before
-     * that the same two numbers were read off the window, which is where the 1.21.1 {@code GuiGraphics}
-     * read them from as well.
+     * <p>Read from the window on every version, because Xaero's {@code MapElementGraphics} never
+     * reports a size of its own -- not through 26.3, which I checked against the jar after an earlier
+     * note claimed otherwise. Its 1.21.1 counterpart {@code GuiGraphics} read these same numbers from
+     * the window too, so nothing about this is a compromise.
      *
-     * <p>The size is asked through these two rather than at each of the five call sites, so that the
-     * call sites read the same on every version. It also keeps the condition out of reach of the
-     * build's replacement rules, which matters here: a rename rule aimed at those call sites matched
-     * this declaration too, because an unqualified call reads exactly like the declaration it names.
+     * <p>The size is asked through these two rather than at each of the five call sites, so that those
+     * call sites read the same on every version. It also keeps the question out of reach of the build's
+     * replacement rules, which matters here: a rename rule aimed at the call sites matched this
+     * declaration too, because an unqualified call reads exactly like the declaration it names.
+     *
+     * <p>The parameter is there only to name which graphics type the caller holds; it is not used.
      */
-    //? if >=26.1 {
-    /*private static int mapViewRight(MapElementGraphics graphics) {
-        return graphics.guiWidth();
-    }
-
-    private static int mapViewBottom(MapElementGraphics graphics) {
-        return graphics.guiHeight();
-    }
-    *///?}
-    //? if >=1.21.6 && <26.1 {
+    //? if >=1.21.6 {
     /*private static int mapViewRight(MapElementGraphics graphics) {
         return Minecraft.getInstance().getWindow().getGuiScaledWidth();
     }
@@ -906,7 +900,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         pose.pushPose();
         pose.translate(x, y, 0.0);
+        // 26.1 gave PoseStack a rotate(Axis, angle) that takes the angle directly, so the quaternion
+        // this used to build and multiply in is no longer needed. Same rotation, one step instead of
+        // two -- and the two-argument form is what the older nodes still have to spell out.
+        //? if >=26.1 {
+        /*pose.rotate(Axis.ZP, (float) screenAngle(segment, projection));
+        *///?} else {
         pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));
+        //?}
         pose.scale(factor, factor, 1.0F);
         mapLabel(graphics, font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
         pose.popPose();
