@@ -15,12 +15,16 @@ import bili.dongsz.howtogo.route.Route;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
+// 1.21.6 replaced the GUI's PoseStack with JOML's 2D matrix stack for label drawing.
+//? if >=1.21.6 {
+/*import org.joml.Matrix3x2fStack;
+*///?}
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 // 1.21.8 changed what Xaero hands its element renderer: the map supplies its own graphics
 // interface rather than the vanilla GUI context. Same role, and the mod's drawing calls -- pose(),
 // drawString -- are the same on both, so only the type name differs.
-//? if >=1.21.8 {
+//? if >=1.21.6 {
 /*import xaero.map.element.MapElementGraphics;
 *///?} else {
 import net.minecraft.client.gui.GuiGraphics;
@@ -285,12 +289,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return Minecraft.getInstance().getWindow().getGuiScaledHeight();
     }
 
-    //? if >=1.21.8 {
+    //? if >=1.21.6 {
     /*private static void drawMapLabel(MapElementGraphics graphics, Font font, String name, double x, double y,
     *///?} else {
     private static void drawMapLabel(GuiGraphics graphics, Font font, String name, double x, double y,
     //?}
                                      int colour, float factor) {
+        // A PoseStack on every version here, which is worth saying because it is not the rule
+        // elsewhere in this file: a map label is drawn through Xaero's own graphics type, and that
+        // type kept handing out a PoseStack after vanilla's GuiGraphics moved to JOML's 2D stack.
         PoseStack pose = graphics.pose();
         pose.pushPose();
         pose.translate(x, y, 0.0);
@@ -336,7 +343,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     @Override
     public void renderElementShadow(RoadElement element, boolean hovered, float screenSizeBasedScale,
                                     double fracX, double fracY, ElementRenderInfo info,
-                                    //? if >=1.21.8 {
+                                    //? if >=1.21.6 {
                                     /*MapElementGraphics graphics,
                                     *///?} else {
                                     GuiGraphics graphics,
@@ -348,7 +355,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     @Override
     public boolean renderElement(RoadElement element, boolean hovered, double depth, float screenSizeBasedScale,
                                  double fracX, double fracY, ElementRenderInfo info,
-                                 //? if >=1.21.8 {
+                                 //? if >=1.21.6 {
                                  /*MapElementGraphics graphics,
                                  *///?} else {
                                  GuiGraphics graphics,
@@ -652,7 +659,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <p>Only shown past {@link #LABEL_MIN_SCALE}; at lower zoom the labels would overlap into an
      * unreadable smear.
      */
-    //? if >=1.21.8 {
+    //? if >=1.21.6 {
     /*private void renderLabels(MapElementGraphics graphics, PoseStack pose, ElementRenderInfo info,
     *///?} else {
     private void renderLabels(GuiGraphics graphics, PoseStack pose, ElementRenderInfo info,
@@ -837,7 +844,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * placed by hand. Half a line of text is the whole of the offset, so the road runs through the
      * middle of the word at every size.
      */
-    //? if >=1.21.8 {
+    //? if >=1.21.6 {
     /*private void drawLineLabel(MapElementGraphics graphics, PoseStack pose, Font font, String name,
     *///?} else {
     private void drawLineLabel(GuiGraphics graphics, PoseStack pose, Font font, String name,
@@ -1637,7 +1644,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * stop markers would leave them being emitted into a buffer that had already been sent, which is
      * how a map ends up with no shapes on it and an exception in the log.
      */
-    //? if >=1.21.8 {
+    //? if >=1.21.6 {
     /*private void drawLineNames(MapElementGraphics graphics, List<LineLabel> labels) {
     *///?} else {
     private void drawLineNames(GuiGraphics graphics, List<LineLabel> labels) {
@@ -1811,7 +1818,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * emitted after one would have to go through a consumer fetched afresh; keeping the fills in a
      * single pass removes the question, and this method borrows no consumer of its own.
      */
-    //? if >=1.21.8 {
+    //? if >=1.21.6 {
     /*private void renderHud(MapElementGraphics graphics, PoseStack pose) {
     *///?} else {
     private void renderHud(GuiGraphics graphics, PoseStack pose) {
