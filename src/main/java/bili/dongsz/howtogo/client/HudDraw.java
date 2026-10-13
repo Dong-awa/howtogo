@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 
@@ -124,7 +125,14 @@ public final class HudDraw {
 
     /** A fresh vertex consumer for the shared layer. */
     public static VertexConsumer consumer(GuiGraphics graphics) {
+        // 1.21.4 removed GuiGraphics.bufferSource(): the render buffers now hang off the game
+        // rather than off the drawing context, so the same BufferSource is fetched from Minecraft
+        // instead. The source on disk carries 1.21.1's form; Stonecutter swaps the pair per node.
+        //? if >=1.21.4 {
+        /*return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(QUADS);
+        *///?} else {
         return graphics.bufferSource().getBuffer(QUADS);
+        //?}
     }
 
     // ------------------------------------------------------------------ shapes
