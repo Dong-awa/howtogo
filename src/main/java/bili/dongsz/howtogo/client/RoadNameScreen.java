@@ -6,7 +6,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
@@ -334,7 +340,14 @@ public final class RoadNameScreen extends Screen {
     }
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
         if (isPlaceEditor() && button == 0) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
@@ -349,27 +362,43 @@ public final class RoadNameScreen extends Screen {
                 }
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
+            return super.mouseClicked(mouseX, mouseY, button);
+            //?}
     }
 
     // ---------------------------------------------------------------- screen
 
     @Override
+    // 1.21.9 made key input a record and moved the key codes onto the SDL-backed InputConstants.
+    // The dispatch still wants the code as a number -- it compares against three of them -- so the
+    // record is unpacked on entry and the body below reads the same on either side.
+    //? if >=1.21.9 {
+    /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+        int keyCode = event.key();
+    *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    //?}
         // Enter confirms, so a road can be named and given a storey without reaching for the mouse.
-        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
-                || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER) {
+        if (keyCode == InputConstants.KEY_RETURN || keyCode == InputConstants.KEY_NUMPADENTER) {
             accept();
             return true;
         }
         // Tab between the two fields of the road editor. A plain Screen has no tab order of its own, so
         // without this the storey box could only be reached with the mouse -- the wrong half of the
         // panel to make the player reach for, and the one an input method does not help with either.
-        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_TAB && layerField != null) {
+        if (keyCode == InputConstants.KEY_TAB && layerField != null) {
             setFocused(getFocused() == layerField ? field : layerField);
             return true;
         }
+        //? if >=1.21.9 {
+        /*return super.keyPressed(event);
+        *///?} else {
         return super.keyPressed(keyCode, scanCode, modifiers);
+        //?}
     }
 
     @Override
@@ -409,4 +438,5 @@ public final class RoadNameScreen extends Screen {
                     0xFFFF6B6B, false);
         }
     }
+
 }

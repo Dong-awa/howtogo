@@ -21,6 +21,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -1604,9 +1609,21 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------- input
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
         if (button != 0) {
+            //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
             return super.mouseClicked(mouseX, mouseY, button);
+            //?}
         }
         if (insideMap(mouseX, mouseY)) {
             if (insideRecenter(mouseX, mouseY)) {
@@ -1702,7 +1719,12 @@ public final class DestinationScreen extends Screen {
             onClose();
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
+            return super.mouseClicked(mouseX, mouseY, button);
+            //?}
     }
 
     /** Chooses a destination to preview, planning the route it implies. */
@@ -1748,7 +1770,14 @@ public final class DestinationScreen extends Screen {
     }
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+    //?}
         if (button == 0 && mapPressed) {
             // Move the centre opposite to the drag, so the map follows the cursor.
             double scale = mapW / (viewRadius * 2.0);
@@ -1756,11 +1785,23 @@ public final class DestinationScreen extends Screen {
             mapCenterZ -= dragY / scale;
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        //? if >=1.21.9 {
+            /*return super.mouseDragged(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), dragX, dragY);
+            *///?} else {
+            return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+            //?}
     }
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseReleased(MouseButtonEvent event) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+    //?}
         if (button == 0 && mapPressed) {
             mapPressed = false;
             double moved = Math.hypot(mouseX - mapPressX, mouseY - mapPressY);
@@ -1779,7 +1820,12 @@ public final class DestinationScreen extends Screen {
             }
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        //? if >=1.21.9 {
+            /*return super.mouseReleased(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)));
+            *///?} else {
+            return super.mouseReleased(mouseX, mouseY, button);
+            //?}
     }
 
     @Override
@@ -1816,4 +1862,5 @@ public final class DestinationScreen extends Screen {
     public void onClose() {
         Minecraft.getInstance().setScreen(parent);
     }
+
 }

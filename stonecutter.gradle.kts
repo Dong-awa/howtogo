@@ -72,6 +72,13 @@ stonecutter parameters {
             replace("net\\.minecraft\\.client\\.renderer\\.RenderType",
                     "net.minecraft.client.renderer.rendertype.RenderTypes", "NO_REVERSE", "NO_REVERSE")
         }
+        // The ready-made render types moved with it onto that class: RenderType.debugQuads() is
+        // RenderTypes.debugQuads() now. Matched as a qualified call so the name alone is not
+        // rewritten inside MultiTextureRenderTypeRendererProvider and the renderer signatures, which
+        // keep their own names.
+        regex(current.parsed >= "1.21.9") {
+            replace("RenderType\\.", "RenderTypes.", "NO_REVERSE", "NO_REVERSE")
+        }
         // The keyboard-modifier helpers left Screen for Minecraft, where the window and its input
         // state already live. Same three questions about the current keystate, asked of the game.
         regex(current.parsed >= "1.21.9") {

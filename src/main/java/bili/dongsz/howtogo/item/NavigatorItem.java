@@ -12,10 +12,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-// 1.21.6 added the display context to the tooltip hook.
-//? if >=1.21.6 {
-/*import net.minecraft.world.item.component.TooltipDisplay;
-*///?}
+// The tooltip hook's display context is named in full at its use below rather than imported: an
+// import line cannot carry a condition reliably, because Stonecutter rewrites the file for whichever
+// node is active and a gated import was observed to stay commented on one node and uncomment on
+// another. A qualified name has no such problem.
 import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLEnvironment;
@@ -72,16 +72,18 @@ public final class NavigatorItem extends Item {
     // to, the method receives a Consumer and the display context the lines will be shown in. The
     // lines themselves are unchanged, so the readout is built the same way and merely handed over
     // through the consumer rather than appended.
-    //? if >=26.1 {
-    /*public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
+    //? if >=1.21.9 {
+    /*public void appendHoverText(ItemStack stack, TooltipContext context,
+                                net.minecraft.world.item.component.TooltipDisplay display,
                                 java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
-        // FMLEnvironment.dist is a public field; 26.1 made it a getter.
+        // 1.21.9 made FMLEnvironment.dist a getter; before that it was a public field.
         if (FMLEnvironment.getDist() == Dist.CLIENT) {
             NavigatorClient.appendTooltip(tooltip);
         }
     }
     *///?} else if >=1.21.6 {
-    /*public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
+    /*public void appendHoverText(ItemStack stack, TooltipContext context,
+                                net.minecraft.world.item.component.TooltipDisplay display,
                                 java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.

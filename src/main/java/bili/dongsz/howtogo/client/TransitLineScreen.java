@@ -18,6 +18,11 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
@@ -934,9 +939,21 @@ public final class TransitLineScreen extends Screen {
     // ----------------------------------------------------------------- input
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
         if (button != 0) {
+            //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
             return super.mouseClicked(mouseX, mouseY, button);
+            //?}
         }
         List<TransitLine> lines = listed();
 
@@ -995,7 +1012,12 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
+            return super.mouseClicked(mouseX, mouseY, button);
+            //?}
     }
 
     private int kindAt(double mouseX, double mouseY) {
@@ -1016,4 +1038,5 @@ public final class TransitLineScreen extends Screen {
         commitName();
         Minecraft.getInstance().setScreen(parent);
     }
+
 }

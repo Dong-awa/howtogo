@@ -11,7 +11,17 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled the cursor position and the button into a record, and moved the mouse-button
+// constants onto the SDL-backed InputConstants.
+//? if >=1.21.9 {
+/*import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
+// The GLFW mouse-button constants are named only on the pre-1.21.9 nodes.
+//? if <1.21.9 {
 import org.lwjgl.glfw.GLFW;
+//?}
 
 /**
  * Client-side state for the road editing mode: whether it is on, where the cursor is, and what the
@@ -841,7 +851,12 @@ public final class RoadEditSession {
         panStartScreenX = cursor[0];
         panStartScreenY = cursor[1];
         panMoved = false;
+        //? if >=1.21.9 {
+        /*screen.mouseClicked(new MouseButtonEvent(cursor[0], cursor[1],
+                new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)), false);
+        *///?} else {
         screen.mouseClicked(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        //?}
     }
 
     /**
@@ -867,7 +882,12 @@ public final class RoadEditSession {
             panMoved = true;
         }
         if (Minecraft.getInstance().screen == screen) {
+            //? if >=1.21.9 {
+            /*screen.mouseReleased(new MouseButtonEvent(cursor[0], cursor[1],
+                    new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0)));
+            *///?} else {
             screen.mouseReleased(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            //?}
         }
         if (!panMoved) {
             editor().clearSelection();

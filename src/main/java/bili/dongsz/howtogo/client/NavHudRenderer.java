@@ -17,7 +17,11 @@ import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+// 1.21.9 dissolved RenderStateShard: what a render type used to be assembled from is the render
+// pipeline's business now, and this file has no use for the class beyond the import it carried.
+//? if <1.21.9 {
 import net.minecraft.client.renderer.RenderStateShard;
+//?}
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;

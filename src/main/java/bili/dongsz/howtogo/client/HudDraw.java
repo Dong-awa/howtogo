@@ -107,9 +107,9 @@ public final class HudDraw {
      * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
      * obvious choice, but its default depth test can bury an overlay behind the world.
      *
-     * <p>1.21.6 replaced this render type with a pipeline; see {@link HudBatch#HUD_PIPELINE}.
-     * What a render type used to configure is a pipeline property now, so the two are the same layer
-     * expressed in the two vocabularies, and only the pre-1.21.6 path needs the render type at all.
+     * <p>1.21.6 replaced this render type with a pipeline; see the HUD_PIPELINE constant on
+     * {@link HudBatchLegacy}/{@link HudBatchNewer}. What a render type used to configure is a pipeline
+     * property now, so the two are the same layer in two vocabularies, and only the pre-1.21.6 path
      */
     //? if <1.21.6 {
     public static final RenderType QUADS = RenderType.create(
@@ -158,10 +158,21 @@ public final class HudDraw {
      * the matrix balanced around the block and the older one needs the pose captured for its sink.
      */
     public static Drawing beginBlock(GuiGraphics graphics) {
-        //? if >=1.21.6 {
+        // Three mutually exclusive branches rather than an if/else, because the deferring ones have
+        // to name different classes and a condition cannot nest inside a condition. 1.21.6 and
+        // 1.21.9 shape the element state differently -- see HudBatchLegacy and HudBatchNewer -- so
+        // which class is named depends on the node.
+        //? if >=1.21.9 {
         /*graphics.pose().pushMatrix();
-        return new Drawing(HudBatch.beginBatch(graphics));
-        *///?} else {
+        HudBatchNewer batch = HudBatchNewer.beginBatch(graphics);
+        return new Drawing(batch, batch, batch::end);
+        *///?}
+        //? if >=1.21.6 && <1.21.9 {
+        /*graphics.pose().pushMatrix();
+        HudBatchLegacy batch = HudBatchLegacy.beginBatch(graphics);
+        return new Drawing(batch, batch, batch::end);
+        *///?}
+        //? if <1.21.6 {
         PoseStack pose = graphics.pose();
         pose.pushPose();
         return new Drawing(sink(pose.last(), consumer(graphics)));
@@ -170,9 +181,9 @@ public final class HudDraw {
 
     /** Closes a drawing block opened by {@link #beginBlock}. */
     public static void endBlock(GuiGraphics graphics, Drawing drawing) {
+        drawing.close(graphics);
         //? if >=1.21.6 {
-        /*drawing.batch.end(graphics);
-        graphics.pose().popMatrix();
+        /*graphics.pose().popMatrix();
         *///?} else {
         graphics.pose().popPose();
         graphics.flush();
@@ -180,26 +191,35 @@ public final class HudDraw {
     }
 
     /**
-     * One open drawing block: where its vertices go, and the batch to hand over when it closes.
+     * One open drawing block: where its vertices go, and how to hand them over.
      *
-     * <p>{@link #sink} is the only field every version has, and is all the emitters need. The batch
-     * is the deferred model's, so it exists only from 1.21.6 on.
+     * <p>{@link #sink} is what the emitters need, and the only part every version has. Handing over
+     * is a callback rather than a field because the two deferring eras spell the element state
+     * differently -- HudBatchLegacy and HudBatchNewer -- and a condition cannot be nested to choose
+     * between them here. The callback is built where the class is named, in {@link #beginBlock}.
      */
     public static final class Drawing {
         /** Where the block's vertices go. */
         public final VertexSink sink;
-        //? if >=1.21.6 {
-        /*final HudBatch batch;
+        private final java.util.function.Consumer<GuiGraphics> close;
 
-        Drawing(HudBatch batch) {
-            this.batch = batch;
-            this.sink = batch;
+        //? if >=1.21.6 {
+        /*Drawing(Object batch, HudDraw.VertexSink sink, java.util.function.Consumer<GuiGraphics> close) {
+            this.sink = sink;
+            this.close = close;
         }
         *///?} else {
         Drawing(VertexSink sink) {
             this.sink = sink;
+            this.close = null;
         }
         //?}
+
+        private void close(GuiGraphics graphics) {
+            if (close != null) {
+                close.accept(graphics);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ shapes
@@ -210,7 +230,7 @@ public final class HudDraw {
      * <p>The emitters below are written once against this and not per version. Before 1.21.6 the
      * destination was a live {@code VertexConsumer} fed through a pose, so {@link #sink} wraps the
      * pair; from 1.21.6 on a drawing block collects its geometry instead, and
-     * {@link HudBatch} is itself a sink. Either way the clipping, winding and segment
+     * {@link HudBatchLegacy} and {@link HudBatchNewer} are themselves sinks. Either way the clipping, winding and segment
      * arithmetic runs on the same code, which is the point: those rules are the fiddly part and two
      * copies of them would drift.
      */

@@ -1,4 +1,4 @@
-//? if >=1.21.6 {
+//? if >=1.21.9 {
 /*package bili.dongsz.howtogo.client;
 
 import com.mojang.blaze3d.pipeline.RenderPipeline;
@@ -11,6 +11,15 @@ import net.minecraft.client.renderer.RenderPipelines;
 import org.joml.Matrix3x2fStack;
 import org.joml.Vector2f;
 
+// The deferred-GUI half of HudDraw, for 1.21.9 and later.
+//
+// Its twin for 1.21.6 through 1.21.8 is HudBatchLegacy, and the two differ in exactly one place: the signature
+// of buildVertices. 1.21.9 dropped the depth argument from that hook, because the GUI renderer
+// supplies the depth through the vertex builder now. That is the whole reason for two files --
+// Stonecutter's scopes do not nest, so a condition inside this file's own fence would close it.
+//
+// Keep the two in step. Anything changed here about how a vertex is collected, or about the pooling
+// and the pipeline, belongs in the other file too.
 // The deferred-GUI half of HudDraw: one GUI element made of position-colour quads.
 //
 // 1.21.6 deferred all GUI drawing. Before it, GuiGraphics handed out a live buffer source and a
@@ -24,7 +33,7 @@ import org.joml.Vector2f;
 // terminator. Every javadoc here is written as // lines for that reason: the first inner block
 // comment would otherwise close the file's fence and the rest of the class would silently become
 // live code on versions that do not have these APIs.
-public final class HudBatch implements GuiElementRenderState, HudDraw.VertexSink {
+public final class HudBatchNewer implements GuiElementRenderState, HudDraw.VertexSink {
 
     // The pipeline behind the shared layer.
     //
@@ -46,18 +55,18 @@ public final class HudBatch implements GuiElementRenderState, HudDraw.VertexSink
     // Batches are pooled and reused round-robin: a slot comes back only several frames after its
     // last use, by which point the renderer has long since consumed what it held. That is what keeps
     // a steady frame from allocating here.
-    private static final HudBatch[] POOL = new HudBatch[8];
+    private static final HudBatchNewer[] POOL = new HudBatchNewer[8];
     private static int POOL_CURSOR;
 
     static {
         for (int i = 0; i < POOL.length; i++) {
-            POOL[i] = new HudBatch();
+            POOL[i] = new HudBatchNewer();
         }
     }
 
     // Takes the next pooled batch, reset and ready to collect a drawing block's quads.
-    public static HudBatch beginBatch(GuiGraphics graphics) {
-        HudBatch batch = POOL[POOL_CURSOR];
+    public static HudBatchNewer beginBatch(GuiGraphics graphics) {
+        HudBatchNewer batch = POOL[POOL_CURSOR];
         POOL_CURSOR = (POOL_CURSOR + 1) % POOL.length;
         batch.reset(graphics.pose());
         return batch;
@@ -127,9 +136,11 @@ public final class HudBatch implements GuiElementRenderState, HudDraw.VertexSink
     }
 
     @Override
-    public void buildVertices(VertexConsumer vc, float z) {
+    // 1.21.9 dropped the depth argument from this hook: the renderer supplies the depth through the
+    // vertex builder now, so the element no longer states one. Zero is what the GUI pass draws at.
+    public void buildVertices(VertexConsumer vc) {
         for (int i = 0; i < vertices; i++) {
-            vc.addVertex(data[i * 6], data[i * 6 + 1], z)
+            vc.addVertex(data[i * 6], data[i * 6 + 1], 0.0F)
                     .setColor((int) data[i * 6 + 2], (int) data[i * 6 + 3],
                             (int) data[i * 6 + 4], (int) data[i * 6 + 5]);
         }
