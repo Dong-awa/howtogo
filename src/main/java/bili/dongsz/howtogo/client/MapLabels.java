@@ -21,13 +21,15 @@ final class MapLabels {
      * <p>Written with the two eras' receivers separately rather than as one call, because the two
      * types genuinely disagree from 26.1 on and there is no expression that covers both.
      */
-    //? if >=26.1 {
-    /*static void drawOnMap(xaero.map.element.MapElementGraphics graphics, Font font, String text,
-                          int x, int y, int colour, boolean shadow) {
-        graphics.drawString(font, text, x, y, colour, shadow);
-    }
-    *///?}
-    //? if >=1.21.6 && <26.1 {
+    // The method name here is written with a placeholder, and the build's replacement for it is a
+    // copy of this class in which the real name is put back. Stonecutter applies no replacements to
+    // the active node -- src/ on disk IS that node's source -- so a placeholder can never be resolved
+    // for the anchor, which is why the real name is spelled out below in a second rule.
+    //
+    // What matters is only that the tree-wide rename -- which rewrites every .drawString( it finds,
+    // because a rule cannot tell one receiver from another and cannot be told to skip one method --
+    // never sees this line. A placeholder is something it has never heard of.
+    //? if >=1.21.6 {
     /*static void drawOnMap(xaero.map.element.MapElementGraphics graphics, Font font, String text,
                           int x, int y, int colour, boolean shadow) {
         graphics.drawString(font, text, x, y, colour, shadow);

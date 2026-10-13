@@ -4,7 +4,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+// 1.21.9 reads mouse buttons from the SDL-backed platform layer, so the GLFW constants moved to
+// InputConstants. Same values.
+//? if >=1.21.9 {
+/*import com.mojang.blaze3d.platform.InputConstants;
+*///?} else {
 import org.lwjgl.glfw.GLFW;
+//?}
 
 /**
  * The map's switches, drawn as part of the map screen rather than inside the map.
@@ -23,6 +29,20 @@ import org.lwjgl.glfw.GLFW;
  * way of changing it. See {@link MapFilter} for what the switches mean.
  */
 public final class MapFilterOverlay {
+
+    /**
+     * The left mouse button.
+     *
+     * <p>Named once here because the constant it stands for moved: 1.21.9 reads mouse buttons from the
+     * SDL-backed platform layer, where it is {@code InputConstants.MOUSE_BUTTON_LEFT}, and before that
+     * it was {@code GLFW.GLFW_MOUSE_BUTTON_LEFT}. Both are the same number, and the two tests below
+     * are the only uses, so the condition sits here rather than at each.
+     */
+    //? if >=1.21.9 {
+    /*private static final int MOUSE_LEFT = com.mojang.blaze3d.platform.InputConstants.MOUSE_BUTTON_LEFT;
+    *///?} else {
+    private static final int MOUSE_LEFT = GLFW.GLFW_MOUSE_BUTTON_LEFT;
+    //?}
 
     /** Where the panel was grabbed, as an offset from its corner, while its title is held. */
     private static double grabX;
@@ -69,7 +89,7 @@ public final class MapFilterOverlay {
      * road or start a drag under the thing the player was aiming at.
      */
     public static void onMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
-        if (event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT || !offered(event.getScreen())) {
+        if (event.getButton() != MOUSE_LEFT || !offered(event.getScreen())) {
             return;
         }
         double mouseX = event.getMouseX();
@@ -117,7 +137,7 @@ public final class MapFilterOverlay {
 
     /** Letting the title go either finishes a move or rolls the panel up. */
     public static void onMouseReleased(ScreenEvent.MouseButtonReleased.Pre event) {
-        if (!held || event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+        if (!held || event.getButton() != MOUSE_LEFT) {
             return;
         }
         held = false;

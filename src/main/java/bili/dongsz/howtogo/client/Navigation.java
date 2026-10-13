@@ -249,10 +249,19 @@ public final class Navigation {
         if (player == null) {
             return;
         }
+        // 26.1 removed the overlay flag from this call, so what was an action-bar line is now a plain
+        // system message. The line says which travel mode the player has just switched to, which they
+        // asked for by pressing the key, so it losing the action bar is no loss.
+        //? if >=26.1 {
+        /*player.sendSystemMessage(
+                net.minecraft.network.chat.Component.translatable(
+                        "hud.howtogo.mode_switched", mode.label()));
+        *///?} else {
         player.displayClientMessage(
                 net.minecraft.network.chat.Component.translatable(
                         "hud.howtogo.mode_switched", mode.label()),
                 true);
+        //?}
     }
 
     /** Starts navigating to the given destination, replacing any current route. */
@@ -325,8 +334,12 @@ public final class Navigation {
         if (tripDimension != null && dimension != null && !tripDimension.equals(dimension)) {
             HowToGo.LOGGER.info("[HowToGo] the trip was planned in {} and the player is now in {}; "
                     + "ending it rather than guiding the wrong world's roads", tripDimension, dimension);
+            //? if >=26.1 {
+            /*player.sendSystemMessage(Component.translatable("hud.howtogo.dimension_changed"));
+            *///?} else {
             player.displayClientMessage(
                     Component.translatable("hud.howtogo.dimension_changed"), true);
+            //?}
             clear();
             return;
         }

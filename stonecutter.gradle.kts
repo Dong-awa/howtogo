@@ -105,10 +105,26 @@ stonecutter parameters {
         regex(current.parsed >= "26.1") {
             replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
         }
+        // The map's text call is written through this placeholder so that the rule above -- which
+        // rewrites every .drawString( it finds, because a rule cannot tell one receiver from another
+        // and cannot be told to skip one method -- never sees it. Xaero's MapElementGraphics kept
+        // drawString through 26.3; vanilla's graphics object did not. Resolved back to the real name
+        // here, after the rename has had its turn. HTG_MAP_TEXT appears nowhere else in the tree.
+        //
+        // MapLabels.java is the one file that must keep the OLD name, and a rule cannot skip a file.
+        // So the rename is undone for it by a second rule that matches the renamed text only in that
+        // one method's shape: its signature is unlike anything else in the tree, which makes it a safe
+        // anchor. That is a narrower thing to say than "not this file", and the only durable way to
+        // say it -- the alternative, gating the rename itself on the receiving type, cannot work
+        // because a rule sees text and not types.
+        regex(current.parsed >= "26.1") {
+            replace("graphics\\.text\\(font, text, x, y, colour, shadow\\)",
+                    "graphics.drawString(font, text, x, y, colour, shadow)",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
         // The type itself moved too, and with the same one-way treatment: every file that names it
         // names it in a parameter list or a local, and there is no version on which both names exist.
-        //
-        // The newer name is longer, so the older rule must not run after it -- hence the separate
+        //        // The newer name is longer, so the older rule must not run after it -- hence the separate
         // package-sensitive rule first, then the bare name, both one-way.
         regex(current.parsed >= "26.1") {
             replace("net\\.minecraft\\.client\\.gui\\.GuiGraphics",
@@ -143,6 +159,20 @@ stonecutter parameters {
         // A screen no longer renders itself but states what should be rendered, so its entry point was
         // renamed and the two delegated calls in the screens go with it. Anchored on the receiver and
         // the leading parameters so the many other render* methods here are left alone.
+        //
+        // The declarations need their own rules: the delegated calls above are only half the change,
+        // and a signature is not a call. Both are anchored on the parameter list, which is the same in
+        // every one of these overrides and does not appear on any other method.
+        regex(current.parsed >= "26.1") {
+            replace("void render\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("void renderBackground\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
+                    "NO_REVERSE", "NO_REVERSE")
+        }
         regex(current.parsed >= "26.1") {
             replace("super\\.render\\(graphics, mouseX, mouseY, partialTick\\)",
                     "super.extractRenderState(graphics, mouseX, mouseY, partialTick)",

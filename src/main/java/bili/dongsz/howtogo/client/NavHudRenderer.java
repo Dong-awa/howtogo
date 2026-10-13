@@ -8,7 +8,11 @@ import bili.dongsz.howtogo.route.Route;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+// 26.1 moved the vertex-format types into the renderpearl API, and this file only ever carried the
+// import -- nothing here names VertexFormat. Dropped rather than moved.
+//? if <26.1 {
 import com.mojang.blaze3d.vertex.VertexFormat;
+//?}
 // 1.21.6 replaced the GUI's PoseStack with JOML's 2D matrix stack.
 //? if >=1.21.6 {
 /*import org.joml.Matrix3x2fStack;
