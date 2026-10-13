@@ -34,3 +34,6 @@ local-first.gradle
 
 # per-branch worktrees
 .worktrees/
+
+# Scratch from API reconnaissance, not part of the tree.
+.recon-tmp/
