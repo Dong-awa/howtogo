@@ -2,11 +2,8 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadSegment;
-import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.input.KeyEvent;
-import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -282,7 +279,7 @@ public final class RoadNameScreen extends Screen {
      * <p>Live rather than as a second label, because the number is the thing being chosen and "2"
      * tells a player nothing about whether they have the second overpass or the second basement.
      */
-    private void drawLayerRow(GuiGraphicsExtractor graphics) {
+    private void drawLayerRow(GuiGraphics graphics) {
         int y = extraRowY();
         Integer typed = parseLayer(layerField.getValue());
         String beside;
@@ -298,7 +295,7 @@ public final class RoadNameScreen extends Screen {
             beside = Navigation.roadLayerLabel(typed);
             colour = 0xFFA8D8FF;
         }
-        graphics.text(this.font, this.font.plainSubstrByWidth(beside,
+        graphics.drawString(this.font, this.font.plainSubstrByWidth(beside,
                         FIELD_WIDTH - LAYER_FIELD_WIDTH - 4), fieldX + LAYER_FIELD_WIDTH + 4, y + 4,
                 colour, false);
     }
@@ -316,7 +313,7 @@ public final class RoadNameScreen extends Screen {
         return fieldX + index * (typeWidth() + TYPE_GAP);
     }
 
-    private void drawTypes(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+    private void drawTypes(GuiGraphics graphics, int mouseX, int mouseY) {
         PlaceKind[] kinds = PlaceKind.values();
         for (int i = 0; i < kinds.length; i++) {
             int x = typeX(i);
@@ -330,17 +327,15 @@ public final class RoadNameScreen extends Screen {
             String label = Component.translatable("screen.howtogo.place_kind." + kinds[i].id())
                     .getString();
             String shown = this.font.plainSubstrByWidth(label, typeWidth() - 2);
-            graphics.text(this.font, shown,
+            graphics.drawString(this.font, shown,
                     x + Math.max(0, (typeWidth() - this.font.width(shown)) / 2), y + 4,
                     selected ? 0xFFFFFFFF : 0xFFA8B4C0, false);
         }
     }
 
     @Override
-    public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
-        double mouseX = event.x();
-        double mouseY = event.y();
-        if (isPlaceEditor() && event.button() == 0) {
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (isPlaceEditor() && button == 0) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
                 int x = typeX(i);
@@ -354,44 +349,44 @@ public final class RoadNameScreen extends Screen {
                 }
             }
         }
-        return super.mouseClicked(event, doubled);
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     // ---------------------------------------------------------------- screen
 
     @Override
-    public boolean keyPressed(KeyEvent event) {
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // Enter confirms, so a road can be named and given a storey without reaching for the mouse.
-        if (event.key() == InputConstants.KEY_RETURN
-                || event.key() == InputConstants.KEY_NUMPADENTER) {
+        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
+                || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER) {
             accept();
             return true;
         }
         // Tab between the two fields of the road editor. A plain Screen has no tab order of its own, so
         // without this the storey box could only be reached with the mouse -- the wrong half of the
         // panel to make the player reach for, and the one an input method does not help with either.
-        if (event.key() == InputConstants.KEY_TAB && layerField != null) {
+        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_TAB && layerField != null) {
             setFocused(getFocused() == layerField ? field : layerField);
             return true;
         }
-        return super.keyPressed(event);
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     @Override
     public void onClose() {
-        MinecraftCompat.openScreen(parent);
+        Minecraft.getInstance().setScreen(parent);
     }
 
     /** No dim, no blur: the map underneath is the context for the name being typed. */
     @Override
-    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         if (parent != null) {
             try {
-                parent.extractRenderState(graphics, mouseX, mouseY, partialTick);
+                parent.render(graphics, mouseX, mouseY, partialTick);
             } catch (Throwable t) {
                 // The map is only backdrop here; if it cannot be re-rendered we still want the
                 // prompt to be usable.
@@ -400,17 +395,17 @@ public final class RoadNameScreen extends Screen {
 
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xE0181818);
-        graphics.text(this.font, this.title, panelX + PANEL_PAD, panelY + PANEL_PAD,
+        graphics.drawString(this.font, this.title, panelX + PANEL_PAD, panelY + PANEL_PAD,
                 0xFFFFE070, false);
 
-        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         if (isPlaceEditor()) {
             drawTypes(graphics, mouseX, mouseY);
         } else if (isRoadEditor()) {
             drawLayerRow(graphics);
         }
         if (error != null) {
-            graphics.text(this.font, error.getString(), fieldX, extraRowY() + TYPE_HEIGHT + 1,
+            graphics.drawString(this.font, error.getString(), fieldX, extraRowY() + TYPE_HEIGHT + 1,
                     0xFFFF6B6B, false);
         }
     }

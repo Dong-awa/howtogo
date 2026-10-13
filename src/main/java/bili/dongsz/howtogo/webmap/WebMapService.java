@@ -145,7 +145,7 @@ public final class WebMapService {
             throw new RoadMapUnavailableException("no world is loaded in the game client");
         }
         RoadNetwork network = RoadStore.get();
-        String dimension = minecraft.level.dimension().identifier().toString();
+        String dimension = minecraft.level.dimension().location().toString();
         return RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension, network);
     }
 

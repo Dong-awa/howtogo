@@ -1,46 +1,26 @@
 package bili.dongsz.howtogo.client;
 
-// 26.3 moved RenderPipeline out of blaze3d into the renderpearl API; 26.1/26.2 still have it
-// where it has always been. Everything else in this file is identical across the 26.x nodes.
-//? if >=26.3 {
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-//?} else {
-/*import com.mojang.blaze3d.pipeline.RenderPipeline;
-*///?}
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.state.gui.GuiElementRenderState;
-import net.minecraft.client.gui.navigation.ScreenRectangle;
-import net.minecraft.client.gui.render.TextureSetup;
-import org.joml.Matrix3x2f;
-import org.joml.Matrix3x2fc;
-import org.joml.Vector2f;
-import org.jspecify.annotations.Nullable;
-
-import java.util.Arrays;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.RenderStateShard;
+import net.minecraft.client.renderer.RenderType;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
- * <p>Vanilla GUI drawing only offers axis-aligned rectangles, which is not enough for road lines,
- * circular markers, turn arrows or rounded cards. Everything here builds on position-colour quads.
+ * <p>Vanilla {@code GuiGraphics} only offers axis-aligned rectangles, which is not enough for
+ * road lines, circular markers, turn arrows or rounded cards. Everything here builds on a single
+ * position-colour layer with depth testing off, so the results can be drawn over the world as well
+ * as over a screen.
  *
- * <p>MC 26.x split drawing in two. GUI drawing is an extraction pass: a screen or HUD handler is
- * handed a {@link GuiGraphicsExtractor}, describes what should be drawn as render states, and the
- * game builds the meshes later, in its own buffers. Free-form geometry is submitted through a
- * {@link GuiElementRenderState} -- see {@link Batch}, which collects the quads emitted while it is
- * open and hands them to the game as one element. The map, on the other hand, still draws through
- * Xaero's live {@link MultiBufferSource}-backed buffers, so the shape emitters come in both
- * flavours: one writing into a {@link Batch} through a 2D pose, one writing straight into a
- * {@link VertexConsumer} through a 3D {@link PoseStack.Pose}.
- *
- * <p><b>Draw all text after all shapes.</b> In the extraction pass this is no longer a flush-order
- * trap (nothing flushes until the game is ready), but it is still the reading order the panels
- * want: labels sit on top of the shapes they name, and vanilla's layering puts an element drawn
- * later over the earlier one whose bounds it intersects. Keep the same order and the panels read
- * the way they always have.
+ * <p><b>Draw all text after all shapes.</b> {@code GuiGraphics.drawString} flushes the buffer
+ * source, which ends the QUADS {@code BufferBuilder} behind a consumer obtained from
+ * {@link #consumer}. Emitting one more quad through that stale consumer throws
+ * {@code IllegalStateException: Not building!} and takes the whole frame -- and with it the game --
+ * down. Mixing the two inside one quad sequence is the trap; a label pass belongs at the tail.
  */
 public final class HudDraw {
 
@@ -105,163 +85,6 @@ public final class HudDraw {
         return new double[] {width * cos + height * sin, width * sin + height * cos};
     }
 
-    private HudDraw() {
-    }
-
-    // -------------------------------------------------------------------- batch
-
-    /**
-     * One open element of position-colour quads in the GUI extraction pass.
-     *
-     * <p>The old HUD drew through a live {@code VertexConsumer} obtained from the graphics object;
-     * MC 26.x no longer offers one there -- the game builds its meshes itself, after the extraction
-     * pass has ended. So the quads are collected here, transformed by the pose current when they
-     * were emitted (the same captured-pose model vanilla's own {@code ColoredRectangleRenderState}
-     * uses), and a <em>snapshot</em> of them is handed over as one {@link GuiElementRenderState} on
-     * submit. The game then replays them through the vanilla GUI pipeline -- the same position-colour,
-     * blended, depth-free layer the old custom {@code RenderType} was.
-     *
-     * <p>Reuse one batch per frame segment rather than allocating per shape: a mini-map pass emits
-     * thousands of quads, and this runs every frame. Reuse is why {@link #submit} copies: the game
-     * reads the submitted state after the pass has ended, so a batch that is opened again -- the
-     * navigation panel does exactly that, mini-map then turn arrow -- must not still be the object
-     * the game is going to read.
-     */
-    public static final class Batch {
-
-        /** Scratch for the pose transform, confined to the render thread like the rest of drawing. */
-        private static final Vector2f SCRATCH = new Vector2f();
-
-        private float[] xy = new float[4096];
-        private int[] col = new int[2048];
-        private int count;
-        private Matrix3x2fc pose;
-        @Nullable
-        private ScreenRectangle scissor;
-        private float minX;
-        private float minY;
-        private float maxX;
-        private float maxY;
-
-        /**
-         * Opens the batch under the graphics object's current pose and scissor.
-         *
-         * <p>The pose is captured, not referenced: an extraction pass owns a mutable stack, and the
-         * quads have to keep the transform they were emitted under even if the caller keeps drawing.
-         */
-        public void begin(GuiGraphicsExtractor graphics) {
-            this.pose = new Matrix3x2f(graphics.pose());
-            this.scissor = graphics.peekScissorStack();
-            this.count = 0;
-        }
-
-        /** Adds one corner, in the units the batch's pose was captured in. */
-        public void addVertex(double x, double y, int argb) {
-            if (this.count * 2 + 1 >= this.xy.length) {
-                int vertexCapacity = this.xy.length * 2;
-                this.xy = new float[vertexCapacity];
-                this.col = new int[vertexCapacity / 2];
-            }
-            SCRATCH.set((float) x, (float) y);
-            this.pose.transformPosition(SCRATCH);
-            float tx = SCRATCH.x;
-            float ty = SCRATCH.y;
-            if (this.count == 0) {
-                this.minX = this.maxX = tx;
-                this.minY = this.maxY = ty;
-            } else {
-                this.minX = Math.min(this.minX, tx);
-                this.minY = Math.min(this.minY, ty);
-                this.maxX = Math.max(this.maxX, tx);
-                this.maxY = Math.max(this.maxY, ty);
-            }
-            this.xy[this.count * 2] = tx;
-            this.xy[this.count * 2 + 1] = ty;
-            this.col[this.count] = argb;
-            this.count++;
-        }
-
-        /**
-         * Hands the collected quads to the game as a snapshot. An empty batch submits nothing.
-         *
-         * <p><b>The quads must be copied out here, not handed over by reference.</b> The extraction
-         * pass only <em>describes</em> the frame: the game walks the submitted states after the pass
-         * has ended and calls {@code GuiElementRenderState.buildVertices} on each one then -- see
-         * {@code GuiRenderer.prepare()}, which runs {@code addElementsToMeshes} over the whole
-         * {@code GuiRenderState} once the screen or HUD handler has returned. A batch reused for a
-         * second figure in the same frame -- which the navigation panel does, for the mini-map and
-         * then for the turn arrow -- would otherwise be {@code begin()}--ed again before the game
-         * ever read it, and the earlier element would be built from the later figure's vertices.
-         * The same hazard exists across frames, since the game may still be walking last frame's
-         * states while this frame's are recorded. This is why the deferred-GUI version of this file
-         * copied its arrays in {@code flush}, and the copy is the load-bearing part of it.
-         */
-        public void submit(GuiGraphicsExtractor graphics) {
-            if (this.count == 0) {
-                return;
-            }
-            float[] xy = Arrays.copyOf(this.xy, this.count * 2);
-            int[] col = Arrays.copyOf(this.col, this.count);
-            ScreenRectangle bounds = this.bounds();
-            ScreenRectangle scissor = this.scissor;
-            graphics.submitGuiElementRenderState(new GuiElementRenderState() {
-                @Override
-                public void buildVertices(VertexConsumer vertexConsumer) {
-                    for (int i = 0; i < col.length; i++) {
-                        vertexConsumer.addVertex(xy[i * 2], xy[i * 2 + 1], 0.0F).setColor(col[i]);
-                    }
-                }
-
-                @Override
-                public RenderPipeline pipeline() {
-                    return RenderPipelines.GUI;
-                }
-
-                @Override
-                public TextureSetup textureSetup() {
-                    return TextureSetup.noTexture();
-                }
-
-                @Override
-                @Nullable
-                public ScreenRectangle scissorArea() {
-                    return scissor;
-                }
-
-                @Override
-                @Nullable
-                public ScreenRectangle bounds() {
-                    return bounds;
-                }
-            });
-        }
-
-        /** How many corners the batch holds; four per quad. */
-        public int vertexCount() {
-            return this.count;
-        }
-
-        /**
-         * The screen-space box the collected quads cover, or null when the batch is empty.
-         *
-         * <p>Only decides which elements this one must layer above -- the game walks the submitted
-         * states by these boxes -- so a pixel of slack cannot change what is drawn.
-         */
-        @Nullable
-        private ScreenRectangle bounds() {
-            if (this.count == 0) {
-                return null;
-            }
-            int x = (int) Math.floor(this.minX);
-            int y = (int) Math.floor(this.minY);
-            int width = Math.max(1, (int) Math.ceil(this.maxX) - x);
-            int height = Math.max(1, (int) Math.ceil(this.maxY) - y);
-            return new ScreenRectangle(x, y, width, height);
-        }
-    }
-
-    // ------------------------------------------------------------------ shapes
-
     /**
      * A place's marker: the yellow square the editor draws for a hand-placed place.
      *
@@ -277,17 +100,39 @@ public final class HudDraw {
                 cx - half, cy + half, argb);
     }
 
-    /** The same marker for the GUI extraction pass. */
-    public static void emitPlaceMarker(Batch batch, double cx, double cy,
-                                       double half, int argb) {
-        emitQuad(batch, cx - half, cy - half, cx + half, cy - half, cx + half, cy + half,
-                cx - half, cy + half, argb);
+    /**
+     * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
+     * obvious choice, but its default depth test can bury an overlay behind the world.
+     */
+    public static final RenderType QUADS = RenderType.create(
+            "howtogo_hud",
+            DefaultVertexFormat.POSITION_COLOR,
+            VertexFormat.Mode.QUADS,
+            1536,
+            false,
+            true,
+            RenderType.CompositeState.builder()
+                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
+                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
+                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
+                    .setCullState(RenderStateShard.NO_CULL)
+                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
+                    .createCompositeState(false));
+
+    private HudDraw() {
     }
+
+    /** A fresh vertex consumer for the shared layer. */
+    public static VertexConsumer consumer(GuiGraphics graphics) {
+        return graphics.bufferSource().getBuffer(QUADS);
+    }
+
+    // ------------------------------------------------------------------ shapes
 
     /** Emits a thick line as one quad. */
     public static void emitLine(PoseStack.Pose pose, VertexConsumer vc,
-                                double x1, double y1, double x2, double y2,
-                                double halfWidth, int argb, int alpha) {
+                            double x1, double y1, double x2, double y2,
+                            double halfWidth, int argb, int alpha) {
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
@@ -308,66 +153,38 @@ public final class HudDraw {
         vertex(pose, vc, x1 - nx, y1 - ny, r, g, b, a);
     }
 
-    /** The same thick line, into the GUI extraction pass. */
-    public static void emitLine(Batch batch,
-                                double x1, double y1, double x2, double y2,
-                                double halfWidth, int argb, int alpha) {
-        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
-        int argbA = (a << 24) | (argb & 0xFFFFFF);
-
-        double dx = x2 - x1;
-        double dy = y2 - y1;
-        double length = Math.hypot(dx, dy);
-        if (length < 1.0E-6) {
-            return;
-        }
-        double nx = -dy / length * halfWidth;
-        double ny = dx / length * halfWidth;
-
-        batch.addVertex(x1 + nx, y1 + ny, argbA);
-        batch.addVertex(x2 + nx, y2 + ny, argbA);
-        batch.addVertex(x2 - nx, y2 - ny, argbA);
-        batch.addVertex(x1 - nx, y1 - ny, argbA);
-    }
-
     /** Emits a filled triangle. */
     public static void emitTriangle(PoseStack.Pose pose, VertexConsumer vc,
-                                    double x1, double y1, double x2, double y2,
-                                    double x3, double y3, int argb) {
+                                double x1, double y1, double x2, double y2,
+                                double x3, double y3, int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
         // QUADS mode, so a triangle is written as a quad with its last corner repeated.
-        emitQuad(pose, vc, x1, y1, x2, y2, x3, y3, x3, y3, argb);
-    }
-
-    /** The same triangle, into the GUI extraction pass. */
-    public static void emitTriangle(Batch batch,
-                                    double x1, double y1, double x2, double y2,
-                                    double x3, double y3, int argb) {
-        emitQuad(batch, x1, y1, x2, y2, x3, y3, x3, y3, argb);
+        vertex(pose, vc, x1, y1, r, g, b, a);
+        vertex(pose, vc, x2, y2, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
     }
 
     /** Emits a filled convex quad, corners given in winding order. */
     public static void emitQuad(PoseStack.Pose pose, VertexConsumer vc,
                                 double x1, double y1, double x2, double y2,
                                 double x3, double y3, double x4, double y4, int argb) {
-        vertex(pose, vc, x1, y1, argb);
-        vertex(pose, vc, x2, y2, argb);
-        vertex(pose, vc, x3, y3, argb);
-        vertex(pose, vc, x4, y4, argb);
-    }
-
-    /** The same quad, into the GUI extraction pass. */
-    public static void emitQuad(Batch batch,
-                                double x1, double y1, double x2, double y2,
-                                double x3, double y3, double x4, double y4, int argb) {
-        batch.addVertex(x1, y1, argb);
-        batch.addVertex(x2, y2, argb);
-        batch.addVertex(x3, y3, argb);
-        batch.addVertex(x4, y4, argb);
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = (argb >>> 24) & 0xFF;
+        vertex(pose, vc, x1, y1, r, g, b, a);
+        vertex(pose, vc, x2, y2, r, g, b, a);
+        vertex(pose, vc, x3, y3, r, g, b, a);
+        vertex(pose, vc, x4, y4, r, g, b, a);
     }
 
     /** Emits a filled circle as a fan of degenerate quads. */
     public static void emitDisc(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
-                                double radius, int argb, int alpha) {
+                            double radius, int argb, int alpha) {
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
@@ -387,33 +204,9 @@ public final class HudDraw {
         }
     }
 
-    /** The same disc, into the GUI extraction pass. */
-    public static void emitDisc(Batch batch, double cx, double cy,
-                                double radius, int argb, int alpha) {
-        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
-        int argbA = (a << 24) | (argb & 0xFFFFFF);
-        final int segments = 12;
-        for (int i = 0; i < segments; i++) {
-            double a0 = i * Math.PI * 2 / segments;
-            double a1 = (i + 1) * Math.PI * 2 / segments;
-            double x0 = cx + Math.cos(a0) * radius;
-            double y0 = cy + Math.sin(a0) * radius;
-            double x1 = cx + Math.cos(a1) * radius;
-            double y1 = cy + Math.sin(a1) * radius;
-            batch.addVertex(cx, cy, argbA);
-            batch.addVertex(x0, y0, argbA);
-            batch.addVertex(x1, y1, argbA);
-            batch.addVertex(x0, y0, argbA);
-        }
-    }
-
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
-    }
-
-    private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y, int argb) {
-        vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(argb);
     }
 
     // ------------------------------------------------------------ rounded cards
@@ -424,7 +217,7 @@ public final class HudDraw {
      * <p>Drawn as one span per row with the ends inset along a quarter circle, which is cheap and
      * needs no shader or texture.
      */
-    public static void fillRounded(GuiGraphicsExtractor graphics, int x1, int y1, int x2, int y2,
+    public static void fillRounded(GuiGraphics graphics, int x1, int y1, int x2, int y2,
                                    int radius, int color) {
         int r = cornerRadius(x1, y1, x2, y2, radius);
         for (int y = y1; y < y2; y++) {
@@ -434,7 +227,7 @@ public final class HudDraw {
     }
 
     /** One-pixel rounded outline. */
-    public static void outlineRounded(GuiGraphicsExtractor graphics, int x1, int y1, int x2, int y2,
+    public static void outlineRounded(GuiGraphics graphics, int x1, int y1, int x2, int y2,
                                       int radius, int color) {
         int r = cornerRadius(x1, y1, x2, y2, radius);
         for (int y = y1; y < y2; y++) {
@@ -532,7 +325,14 @@ public final class HudDraw {
         return true;
     }
 
-    /** Clips a segment to a rectangle, returning its surviving endpoints, or null for nothing left. */
+    /**
+     * The segment clipped to the rectangle, as end points.
+     *
+     * <p>Allocates, deliberately: it is the readable form of the clip for a caller that wants the
+     * points, and the per-frame callers use {@link #emitClipped} instead.
+     *
+     * @return {@code {x1, y1, x2, y2}} clipped to the rect, or null when wholly outside
+     */
     public static double[] clipToRect(double x1, double y1, double x2, double y2,
                                       double minX, double minY, double maxX, double maxY) {
         if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
@@ -555,20 +355,6 @@ public final class HudDraw {
         double dx = x2 - x1;
         double dy = y2 - y1;
         emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
-                x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
-    }
-
-    /** The same clipped line, into the GUI extraction pass. */
-    public static void emitClipped(Batch batch,
-                                   double x1, double y1, double x2, double y2,
-                                   double halfWidth, int argb, int alpha,
-                                   double minX, double minY, double maxX, double maxY) {
-        if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
-            return;
-        }
-        double dx = x2 - x1;
-        double dy = y2 - y1;
-        emitLine(batch, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
                 x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
     }
 }

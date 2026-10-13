@@ -207,7 +207,7 @@ final class MtrWholeMap {
                 // MTR's server has not started in this process -- usually the world is still loading.
                 return null;
             }
-            String wanted = player.level().dimension().identifier().toString().replace(':', '/');
+            String wanted = player.level().dimension().location().toString().replace(':', '/');
             Object only = null;
             int count = 0;
             for (Object simulator : simulators(main)) {

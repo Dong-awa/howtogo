@@ -4,7 +4,7 @@ import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -144,7 +144,7 @@ final class MapFilterPanel {
     }
 
     /** Draws the panel. */
-    static void draw(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+    static void draw(GuiGraphics graphics, int mouseX, int mouseY) {
         Font font = Minecraft.getInstance().font;
         List<Toggle> boxes = toggles(font);
         if (boxes.isEmpty()) {
@@ -168,7 +168,7 @@ final class MapFilterPanel {
                 graphics.fill(box.x() - 1, boxY, box.x(), boxY + BOX, OUTLINE);
                 graphics.fill(box.x() + BOX, boxY, box.x() + BOX + 1, boxY + BOX, OUTLINE);
             }
-            graphics.text(font, box.label(), box.x() + BOX + BOX_GAP, box.y() + 2,
+            graphics.drawString(font, box.label(), box.x() + BOX + BOX_GAP, box.y() + 2,
                     box.on() ? TEXT : TEXT_DIM, false);
         }
     }

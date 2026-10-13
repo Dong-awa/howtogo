@@ -7,7 +7,6 @@ import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.text2speech.Narrator;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
-import net.minecraft.sounds.SoundSource;
 
 /**
  * Spoken navigation announcements, through the text-to-speech engine Minecraft ships with.
@@ -727,11 +726,9 @@ public final class Narration {
                 HowToGo.diagnostic("[HowToGo] speaking: {}", phrase);
                 // The same sequence the vanilla wrapper uses: drop whatever is being said, then
                 // interrupt, which is what a turn prompt wants -- the previous instruction is out of
-                // date by then. The volume is the voice slider's own gain: 26.x moved the mixing into
-                // the say call, and MC picks the value the same way at its own call sites.
+                // date by then.
                 narrator.clear();
-                narrator.say(phrase, true, Minecraft.getInstance().options
-                        .getFinalSoundSourceVolume(SoundSource.VOICE));
+                narrator.say(phrase, true);
             } catch (Throwable t) {
                 // The loop must not die: a dead speaker is silence with no explanation, and the
                 // readout would still be claiming the engine is fine.

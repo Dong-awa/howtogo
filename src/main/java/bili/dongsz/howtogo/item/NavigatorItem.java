@@ -3,17 +3,16 @@ package bili.dongsz.howtogo.item;
 import bili.dongsz.howtogo.client.NavigatorClient;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLEnvironment;
 
-import java.util.function.Consumer;
+import java.util.List;
 
 /**
  * Right-clicking opens the destination picker; the tooltip reports the trip currently being
@@ -34,28 +33,23 @@ public final class NavigatorItem extends Item {
     }
 
     @Override
-    public InteractionResult use(Level level, Player player, InteractionHand hand) {
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        ItemStack stack = player.getItemInHand(hand);
         // Asked of the level rather than of anything global, because use() runs on both sides: the server
         // calls it to decide what happened, the client calls it to open the screen.
         if (level.isClientSide()) {
             NavigatorClient.openPicker();
-            // 26.x folded InteractionResultHolder away: success is a constant now, and the client side
-            // is the swing the player sees. The old sidedSuccess(stack, isClientSide) said the same
-            // thing -- client success swings the hand, server success marks the action done.
-            return InteractionResult.SUCCESS;
         }
-        return InteractionResult.SUCCESS_SERVER;
+        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
     }
 
     @Override
-    public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
-                                Consumer<Component> builder, TooltipFlag flag) {
+    public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
+                                TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
-        // be asked for its lines there), so the side is asked before the readout is touched. The
-        // callback the client half fills is this method's builder itself: 26.x replaced the gathered
-        // List<Component> with this callback, and the client half already speaks that shape.
-        if (FMLEnvironment.getDist() == Dist.CLIENT) {
-            NavigatorClient.appendTooltip(builder);
+        // be asked for its lines there), so the side is asked before the readout is touched.
+        if (FMLEnvironment.dist == Dist.CLIENT) {
+            NavigatorClient.appendTooltip(tooltip);
         }
     }
 }

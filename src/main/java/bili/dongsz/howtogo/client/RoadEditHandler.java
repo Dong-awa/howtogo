@@ -7,10 +7,10 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.KeyEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import org.lwjgl.glfw.GLFW;
 
 /**
  * Mouse and keyboard control for the road editor.
@@ -62,42 +62,12 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
  */
 public final class RoadEditHandler {
 
-    /**
-     * SDL scancode of the keypad minus key ("key.keyboard.keypad.subtract"). 26.x has no named
-     * constant for it (its named keypad set stops at KEY_NUMPADENTER), so the scancode is spelled
-     * out here with its registered name in the comment.
-     */
-    private static final int KEY_KP_SUBTRACT = 86;
-
-    /**
-     * The controls-list section both editor keys sit under.
-     *
-     * <p>26.x made a category a {@code KeyMapping.Category} record over an {@link net.minecraft.resources.Identifier}
-     * instead of a bare translation string, so the label is not the id itself but a key derived from
-     * it: the screen reads the name through {@code id.toLanguageKey("key.category")}, which is
-     * {@code "key.category." + namespace + "." + path}. The id is {@code howtogo:main}, so the game
-     * looks up {@code key.category.howtogo.main} and the lang files have to carry exactly that key --
-     * the bare {@code toLanguageKey()} of a category id never matches, which is why the controls
-     * screen used to print a raw key instead of a name.
-     */
-    public static final KeyMapping.Category KEY_CATEGORY = new KeyMapping.Category(
-            net.minecraft.resources.Identifier.fromNamespaceAndPath("howtogo", "main"));
-
-    /**
-     * The input type the editor keys are registered under. 26.3 renamed {@code KEYSYM} to
-     * {@code KEYBOARD} when input moved from GLFW to SDL; both name the same keyboard-key space,
-     * so the constants below resolve to the same kind on every 26.x node.
-     */
-    //? if >=26.3 {
-    private static final InputConstants.Type KEY_TYPE = InputConstants.Type.KEYBOARD;
-    //?} else {
-    /*private static final InputConstants.Type KEY_TYPE = InputConstants.Type.KEYSYM;
-    *///?}
+    public static final String KEY_CATEGORY = "category.howtogo";
 
     public static final KeyMapping TOGGLE_EDIT = new KeyMapping(
             "key.howtogo.toggle_edit",
-            KEY_TYPE,
-            InputConstants.KEY_R,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_R,
             KEY_CATEGORY);
 
     /**
@@ -109,17 +79,14 @@ public final class RoadEditHandler {
      */
     public static final KeyMapping LINES = new KeyMapping(
             "key.howtogo.lines",
-            KEY_TYPE,
-            InputConstants.KEY_L,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_L,
             KEY_CATEGORY);
 
     private RoadEditHandler() {
     }
 
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
-        // A modded category is its own registration now: without it the mappings screen drops the
-        // section header and lists the two keys under nothing.
-        event.registerCategory(KEY_CATEGORY);
         event.register(TOGGLE_EDIT);
         event.register(LINES);
     }
@@ -127,8 +94,8 @@ public final class RoadEditHandler {
     // ------------------------------------------------------------------ mouse
 
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
-        Screen screen = MinecraftCompat.currentScreen();
-        if (event.getAction() != InputConstants.PRESS) {
+        Screen screen = Minecraft.getInstance().screen;
+        if (event.getAction() != GLFW.GLFW_PRESS) {
             return;
         }
 
@@ -138,8 +105,8 @@ public final class RoadEditHandler {
         //
         // The map's own switches are not handled here at all: they belong to the screen rather than to
         // the map, and are handled and drawn by MapFilterOverlay.
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_LEFT && isMapScreen(screen)
-                && !RoadEditSession.isActive() && Minecraft.getInstance().hasControlDown()) {
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT && isMapScreen(screen)
+                && !RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
             return;
@@ -147,8 +114,8 @@ public final class RoadEditHandler {
 
         // And while editing, the same click is a destination too: the editor places points on a bare
         // click and picks a destination on a Ctrl one.
-        if (isMapOpen(screen) && event.getButton() == InputConstants.MOUSE_BUTTON_LEFT
-                && RoadEditSession.isActive() && Minecraft.getInstance().hasControlDown()) {
+        if (isMapOpen(screen) && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
+                && RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
             event.setCanceled(true);
             return;
@@ -162,15 +129,15 @@ public final class RoadEditHandler {
         }
 
         switch (event.getButton()) {
-            case InputConstants.MOUSE_BUTTON_LEFT -> {
-                if (Minecraft.getInstance().hasShiftDown()) {
+            case GLFW.GLFW_MOUSE_BUTTON_LEFT -> {
+                if (Screen.hasShiftDown()) {
                     safely("begin drag", RoadEditSession::beginDragAtCursor);
                 } else {
                     safely("place point", RoadEditSession::clickPlace);
                 }
                 event.setCanceled(true);
             }
-            case InputConstants.MOUSE_BUTTON_RIGHT -> {
+            case GLFW.GLFW_MOUSE_BUTTON_RIGHT -> {
                 if (RoadEditSession.isDrawing()) {
                     // A line is on the map -- the purple rubber band -- so this is the gesture that ends
                     // it, exactly as it always was.
@@ -191,14 +158,14 @@ public final class RoadEditHandler {
     }
 
     public static void onMouseButtonReleased(InputEvent.MouseButton.Post event) {
-        if (event.getAction() != InputConstants.RELEASE) {
+        if (event.getAction() != GLFW.GLFW_RELEASE) {
             return;
         }
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_LEFT
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT
                 && RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
             RoadEditSession.endDrag();
         }
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_RIGHT && RoadEditSession.isPanningMap()) {
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_RIGHT && RoadEditSession.isPanningMap()) {
             safely("end map pan", RoadEditSession::endMapPan);
         }
     }
@@ -215,7 +182,7 @@ public final class RoadEditHandler {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
         boolean consumed = gate
-                && handleKey(screen, event.getKeyEvent(), InputConstants.PRESS);
+                && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_PRESS);
         if (consumed) {
             event.setCanceled(true);
         }
@@ -226,7 +193,7 @@ public final class RoadEditHandler {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
         boolean consumed = gate
-                && handleKey(screen, event.getKeyEvent(), InputConstants.RELEASE);
+                && handleKey(screen, event.getKeyCode(), event.getScanCode(), GLFW.GLFW_RELEASE);
         if (consumed) {
             event.setCanceled(true);
         }
@@ -237,23 +204,20 @@ public final class RoadEditHandler {
      *
      * @return whether the editor used it, which is what decides if the screen is allowed to see it
      */
-    private static boolean handleKey(Screen screen, KeyEvent event, int action) {
-        int key = event.key();
-        if (key == InputConstants.KEY_LSHIFT || key == InputConstants.KEY_RSHIFT) {
-            if (action == InputConstants.RELEASE) {
+    private static boolean handleKey(Screen screen, int key, int scanCode, int action) {
+        if (key == GLFW.GLFW_KEY_LEFT_SHIFT || key == GLFW.GLFW_KEY_RIGHT_SHIFT) {
+            if (action == GLFW.GLFW_RELEASE) {
                 RoadEditSession.endDrag();
                 return true;
             }
             return false;
         }
 
-        if (action != InputConstants.PRESS) {
+        if (action != GLFW.GLFW_PRESS) {
             return false;
         }
 
-        // 26.x folded the (key, scancode) pair into the KeyEvent record, and KeyMapping.matches takes
-        // that record -- the same data, one argument fewer.
-        if (TOGGLE_EDIT.matches(event)) {
+        if (TOGGLE_EDIT.matches(key, scanCode)) {
             RoadEditSession.toggle();
             HowToGo.LOGGER.info("[HowToGo] road editing {}",
                     RoadEditSession.isActive() ? "enabled" : "disabled");
@@ -263,37 +227,37 @@ public final class RoadEditHandler {
             return false;
         }
 
-        boolean ctrl = Minecraft.getInstance().hasControlDown();
-        if (ctrl && key == InputConstants.KEY_Z) {
+        boolean ctrl = Screen.hasControlDown();
+        if (ctrl && key == GLFW.GLFW_KEY_Z) {
             safely("undo", RoadEditSession::undo);
-        } else if (ctrl && key == InputConstants.KEY_Y) {
+        } else if (ctrl && key == GLFW.GLFW_KEY_Y) {
             safely("redo", RoadEditSession::redo);
-        } else if (key == InputConstants.KEY_DELETE || key == InputConstants.KEY_BACKSPACE) {
+        } else if (key == GLFW.GLFW_KEY_DELETE || key == GLFW.GLFW_KEY_BACKSPACE) {
             safely("delete", RoadEditSession::deleteSelected);
-        } else if (key == InputConstants.KEY_COMMA) {
+        } else if (key == GLFW.GLFW_KEY_COMMA) {
             // '<' on most layouts; '[' and ']' are taken by Xaero's own map shortcuts.
             safely("change class", () -> RoadEditSession.cycleActiveClass(-1));
-        } else if (key == InputConstants.KEY_PERIOD) {
+        } else if (key == GLFW.GLFW_KEY_PERIOD) {
             // '>'
             safely("change class", () -> RoadEditSession.cycleActiveClass(1));
-        } else if (key == InputConstants.KEY_MINUS || key == KEY_KP_SUBTRACT) {
+        } else if (key == GLFW.GLFW_KEY_MINUS || key == GLFW.GLFW_KEY_KP_SUBTRACT) {
             // '-' and its numpad twin: one storey down. The keypad is included because the two keys are
             // the same idea and a player on a full keyboard reaches for whichever is nearer.
             safely("lower storey", () -> RoadEditSession.stepActiveLayer(-1));
-        } else if (key == InputConstants.KEY_EQUALS || key == InputConstants.KEY_ADD) {
+        } else if (key == GLFW.GLFW_KEY_EQUAL || key == GLFW.GLFW_KEY_KP_ADD) {
             // '=' -- which is also the '+' most layouts write on the shifted key -- and the numpad plus.
             // Both act on the press of the unshifted key, so '+' and '=' are one binding rather than two
             // that a player has to guess between.
             safely("raise storey", () -> RoadEditSession.stepActiveLayer(1));
-        } else if (key == InputConstants.KEY_N) {
+        } else if (key == GLFW.GLFW_KEY_N) {
             safely("name road", RoadEditSession::nameSelectedRoad);
-        } else if (key == InputConstants.KEY_P) {
+        } else if (key == GLFW.GLFW_KEY_P) {
             safely("place landmark", RoadEditSession::placePoi);
-        } else if (key == InputConstants.KEY_O) {
+        } else if (key == GLFW.GLFW_KEY_O) {
             // One-way. A bare letter like N and P, and not a registered mapping, for the same reason
             // those are not: it acts on a selection the editor owns and only exists while editing is on.
             safely("toggle one-way", RoadEditSession::toggleOneWay);
-        } else if (LINES.matches(event)) {
+        } else if (LINES.matches(key, scanCode)) {
             // The lines are a property of the network rather than of whatever is selected, so this
             // opens on the map itself and needs no selection first. Deferred to the next tick, like
             // every other screen here: opening one from the input handler is what makes a key look

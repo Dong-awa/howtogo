@@ -57,7 +57,7 @@ stonecutter {
 
         // The newest supported version. VCS-facing: it is the state src/ is kept in, so what
         // you read on disk is modern API and older versions are the commented-out branches.
-        vcsVersion = "26.3-neoforge"
+        vcsVersion = "1.21.1-neoforge"
     }
 }
 

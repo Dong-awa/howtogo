@@ -211,7 +211,7 @@ final class MtrMapOverlay {
         }
         // MTR names its world "minecraft/overworld" and the snapshot is keyed the same way, which is
         // the spelling MtrWholeMap matches its own simulators by.
-        String dimension = player.level().dimension().identifier().toString().replace(':', '/');
+        String dimension = player.level().dimension().location().toString().replace(':', '/');
         try {
             if (!Boolean.TRUE.equals(hasServerDataMethod.invoke(null, dimension))) {
                 // Either the server does not run the overlay, or it has not answered yet. What the
