@@ -42,5 +42,41 @@ stonecutter parameters {
     // Add rules here as each newer node is ported, not in advance: a rule declared before the
     // version that needs it exists is a rule nothing tests.
     replacements {
+        // 1.21.9 renamed ResourceLocation to Identifier and rehomed it, and renamed the accessor
+        // that hands one out from location() to identifier().
+        //
+        // Each rename is its own regex block, with the reverse pinned to NO_REVERSE, for the reasons
+        // the header gives: the two-argument form is bidirectional and would rewrite the older nodes
+        // backwards. Two rules for the type because the package moved as well -- a bare-name rule
+        // alone would leave an import of a package the newer node does not have.
+        //
+        // Add rules here only when the shared source genuinely cannot express both shapes; a rename
+        // that a condition at the call site can carry is clearer left as a condition.
+        regex(current.parsed >= "1.21.9") {
+            replace("net\\.minecraft\\.resources\\.ResourceLocation",
+                    "net.minecraft.resources.Identifier", "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "1.21.9") {
+            replace("ResourceLocation", "Identifier", "NO_REVERSE", "NO_REVERSE")
+        }
+        // The accessor that hands out that type was renamed with it: location() became identifier().
+        // Matched with its receiver and arguments so it cannot touch an unrelated location() on some
+        // other class.
+        regex(current.parsed >= "1.21.9") {
+            replace("\\.location\\(\\)", ".identifier()", "NO_REVERSE", "NO_REVERSE")
+        }
+        // 1.21.9 moved the static render types onto a class of their own. RenderType.create is gone
+        // in favour of RenderTypes, and the ready-made ones -- debugQuads and friends -- moved with
+        // it, so the import has to move too.
+        regex(current.parsed >= "1.21.9") {
+            replace("net\\.minecraft\\.client\\.renderer\\.RenderType",
+                    "net.minecraft.client.renderer.rendertype.RenderTypes", "NO_REVERSE", "NO_REVERSE")
+        }
+        // The keyboard-modifier helpers left Screen for Minecraft, where the window and its input
+        // state already live. Same three questions about the current keystate, asked of the game.
+        regex(current.parsed >= "1.21.9") {
+            replace("Screen\\.has(Control|Shift|Alt)Down\\(\\)",
+                    "Minecraft.getInstance().has$1Down()", "NO_REVERSE", "NO_REVERSE")
+        }
     }
 }
