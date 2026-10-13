@@ -85,5 +85,32 @@ stonecutter parameters {
             replace("Screen\\.has(Control|Shift|Alt)Down\\(\\)",
                     "Minecraft.getInstance().has$1Down()", "NO_REVERSE", "NO_REVERSE")
         }
+
+        // ---------------------------------------------------------------------------------------
+        // 26.x, where the GUI's drawing facade was replaced rather than renamed around.
+        //
+        // GuiGraphics is gone. What a screen is handed now is a GuiGraphicsExtractor, and the verbs
+        // moved with it: a string is no longer drawn but extracted, so drawString is text() and
+        // drawCenteredString is centeredText(). Sixty-odd call sites across six files, which is why
+        // these are replacements and not conditions.
+        //
+        // The matches are anchored on the call's receiver and its opening parenthesis so that the
+        // bare words are not rewritten where they appear as something else -- a local variable, a
+        // helper's own name, or a comment. Each is one-way for the reason the header gives.
+        regex(current.parsed >= "26.1") {
+            replace("\\.drawString\\(", ".text(", "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
+        }
+        // The window's scaled size is asked of the graphics object itself now. Worded so it matches
+        // the helper's CALLS and not its definition -- the definition reads `guiWidth()` right after
+        // a return type, and rewriting that would give the method a body that calls itself.
+        regex(current.parsed >= "26.1") {
+            replace("(?<=[=(,\\s])guiWidth\\(\\)", "graphics.guiWidth()", "NO_REVERSE", "NO_REVERSE")
+        }
+        regex(current.parsed >= "26.1") {
+            replace("(?<=[=(,\\s])guiHeight\\(\\)", "graphics.guiHeight()", "NO_REVERSE", "NO_REVERSE")
+        }
     }
 }
