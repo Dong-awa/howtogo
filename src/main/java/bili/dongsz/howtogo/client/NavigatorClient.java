@@ -7,6 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * What the navigator item does when there is a client to do it on.
@@ -34,16 +35,19 @@ public final class NavigatorClient {
     }
 
     /** The item's tooltip: the trip being navigated, or an invitation to pick one. */
-    public static void appendTooltip(List<Component> tooltip) {
+    // Takes a Consumer rather than a List because that is the shape 1.21.6 gives the item tooltip
+    // hook, and the lines are the same either way: the older caller passes a List, whose add() is
+    // exactly the consumer being asked for.
+    public static void appendTooltip(Consumer<Component> tooltip) {
         Destination target = Navigation.target();
         if (target == null) {
-            tooltip.add(Component.translatable("tooltip.howtogo.navigator.idle")
+            tooltip.accept(Component.translatable("tooltip.howtogo.navigator.idle")
                     .withStyle(ChatFormatting.GRAY));
             return;
         }
-        tooltip.add(Component.translatable("tooltip.howtogo.navigator.target", target.name())
+        tooltip.accept(Component.translatable("tooltip.howtogo.navigator.target", target.name())
                 .withStyle(ChatFormatting.AQUA));
-        tooltip.add(Component.translatable("tooltip.howtogo.navigator.remaining",
+        tooltip.accept(Component.translatable("tooltip.howtogo.navigator.remaining",
                         Route.formatDistance(Navigation.remainingLength()),
                         Navigation.modeLabel(),
                         Route.formatDuration(Navigation.remainingSeconds()))

@@ -6,6 +6,10 @@ import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.text2speech.Narrator;
 import net.minecraft.client.Minecraft;
+// 1.21.6 made the narrator's voice channel explicit at the call site.
+//? if >=1.21.6 {
+/*import net.minecraft.sounds.SoundSource;
+*///?}
 import net.minecraft.network.chat.Component;
 
 /**
@@ -728,7 +732,16 @@ public final class Narration {
                 // interrupt, which is what a turn prompt wants -- the previous instruction is out of
                 // date by then.
                 narrator.clear();
+                // 1.21.6 made the voice channel explicit: say() takes the volume the line is to be
+                // spoken at, because the narrator has no stream of its own to infer it from. Asking
+                // the options for the voice channel is what vanilla's narration does, so a player
+                // who has turned voice down is respected here too.
+                //? if >=1.21.6 {
+                /*narrator.say(phrase, true, Minecraft.getInstance().options
+                        .getFinalSoundSourceVolume(SoundSource.VOICE));
+                *///?} else {
                 narrator.say(phrase, true);
+                //?}
             } catch (Throwable t) {
                 // The loop must not die: a dead speaker is silence with no explanation, and the
                 // readout would still be claiming the engine is fine.

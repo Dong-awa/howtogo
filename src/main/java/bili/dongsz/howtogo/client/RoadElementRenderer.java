@@ -17,7 +17,14 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
+// 1.21.8 changed what Xaero hands its element renderer: the map supplies its own graphics
+// interface rather than the vanilla GUI context. Same role, and the mod's drawing calls -- pose(),
+// drawString -- are the same on both, so only the type name differs.
+//? if >=1.21.8 {
+/*import xaero.map.element.MapElementGraphics;
+*///?} else {
 import net.minecraft.client.gui.GuiGraphics;
+//?}
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
@@ -263,7 +270,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * at the origin of that frame. The offsets inside it are in the name's own units, so a centred name
      * stays centred at every size.
      */
+    /**
+     * The map's viewport, in GUI pixels.
+     *
+     * <p>1.21.8's {@code MapElementGraphics} has no {@code guiWidth}/{@code guiHeight} of its own;
+     * these are the same numbers the 1.21.1 {@code GuiGraphics} reported, read straight from the
+     * window -- which is where it read them from too.
+     */
+    private static int guiWidth() {
+        return Minecraft.getInstance().getWindow().getGuiScaledWidth();
+    }
+
+    private static int guiHeight() {
+        return Minecraft.getInstance().getWindow().getGuiScaledHeight();
+    }
+
+    //? if >=1.21.8 {
+    /*private static void drawMapLabel(MapElementGraphics graphics, Font font, String name, double x, double y,
+    *///?} else {
     private static void drawMapLabel(GuiGraphics graphics, Font font, String name, double x, double y,
+    //?}
                                      int colour, float factor) {
         PoseStack pose = graphics.pose();
         pose.pushPose();
@@ -310,14 +336,24 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     @Override
     public void renderElementShadow(RoadElement element, boolean hovered, float screenSizeBasedScale,
                                     double fracX, double fracY, ElementRenderInfo info,
-                                    GuiGraphics graphics, MultiBufferSource.BufferSource buffers,
+                                    //? if >=1.21.8 {
+                                    /*MapElementGraphics graphics,
+                                    *///?} else {
+                                    GuiGraphics graphics,
+                                    //?}
+                                    MultiBufferSource.BufferSource buffers,
                                     MultiTextureRenderTypeRendererProvider textureProvider) {
     }
 
     @Override
     public boolean renderElement(RoadElement element, boolean hovered, double depth, float screenSizeBasedScale,
                                  double fracX, double fracY, ElementRenderInfo info,
-                                 GuiGraphics graphics, MultiBufferSource.BufferSource buffers,
+                                 //? if >=1.21.8 {
+                                 /*MapElementGraphics graphics,
+                                 *///?} else {
+                                 GuiGraphics graphics,
+                                 //?}
+                                 MultiBufferSource.BufferSource buffers,
                                  MultiTextureRenderTypeRendererProvider textureProvider) {
         PoseStack pose = graphics.pose();
         PoseStack.Pose last = pose.last();
@@ -376,8 +412,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 int markMargin = 64;
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
-                drawMarks(pose, vc, markMargin, graphics.guiWidth() + markMargin,
-                        graphics.guiHeight() + markMargin, Math.abs(info.scale), projection);
+                drawMarks(pose, vc, markMargin, guiWidth() + markMargin,
+                        guiHeight() + markMargin, Math.abs(info.scale), projection);
             }
             return true;
         }
@@ -412,8 +448,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // two cannot disagree while the map is moving.
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
-                drawTransitLines(pose, vc, lineMargin, graphics.guiWidth() + lineMargin,
-                        graphics.guiHeight() + lineMargin, Math.abs(info.scale), interchanges,
+                drawTransitLines(pose, vc, lineMargin, guiWidth() + lineMargin,
+                        guiHeight() + lineMargin, Math.abs(info.scale), interchanges,
                         projection);
                 renderLabels(graphics, pose, info, vc, interchanges, projection);
                 // The map's switches are not drawn here. They are not part of the map: drawn from this
@@ -616,7 +652,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <p>Only shown past {@link #LABEL_MIN_SCALE}; at lower zoom the labels would overlap into an
      * unreadable smear.
      */
+    //? if >=1.21.8 {
+    /*private void renderLabels(MapElementGraphics graphics, PoseStack pose, ElementRenderInfo info,
+    *///?} else {
     private void renderLabels(GuiGraphics graphics, PoseStack pose, ElementRenderInfo info,
+    //?}
                               VertexConsumer vc,
                               java.util.List<TransitInterchanges.Interchange> interchanges,
                               Projection projection) {
@@ -628,8 +668,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // a line can land far outside the window. Skip those instead of asking the font renderer to
         // lay out text nobody will see.
         int margin = 64;
-        int viewRight = graphics.guiWidth() + margin;
-        int viewBottom = graphics.guiHeight() + margin;
+        int viewRight = guiWidth() + margin;
+        int viewBottom = guiHeight() + margin;
 
         pose.pushPose();
         pose.last().pose().identity();
@@ -797,7 +837,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * placed by hand. Half a line of text is the whole of the offset, so the road runs through the
      * middle of the word at every size.
      */
+    //? if >=1.21.8 {
+    /*private void drawLineLabel(MapElementGraphics graphics, PoseStack pose, Font font, String name,
+    *///?} else {
     private void drawLineLabel(GuiGraphics graphics, PoseStack pose, Font font, String name,
+    //?}
                                RoadSegment segment, int color, Projection projection,
                                float factor) {
         double[] mid = segment.midpoint();
@@ -1314,9 +1358,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                     continue;
                 }
-                HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf + 1.0,
+                HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, stopHalf + 1.0,
                         COLOR_LINE_STOP_EDGE);
-                HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf, lineColour(line));
+                HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, stopHalf, lineColour(line));
             }
         }
 
@@ -1346,9 +1390,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         continue;
                     }
                     if (group.size() == 1) {
-                        HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf + 1.0,
+                        HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, stopHalf + 1.0,
                                 COLOR_LINE_STOP_EDGE);
-                        HudDraw.emitPlaceMarker(screenPose, vc, x, y, stopHalf, COLOR_LINE_TRANSFER);
+                        HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, stopHalf, COLOR_LINE_TRANSFER);
                     } else {
                         // A square, and the same size as a stop's round marker: the fused place is a thing
                         // of its own rather than a stop of either line, and the shape is what says so.
@@ -1593,11 +1637,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * stop markers would leave them being emitted into a buffer that had already been sent, which is
      * how a map ends up with no shapes on it and an exception in the log.
      */
+    //? if >=1.21.8 {
+    /*private void drawLineNames(MapElementGraphics graphics, List<LineLabel> labels) {
+    *///?} else {
     private void drawLineNames(GuiGraphics graphics, List<LineLabel> labels) {
+    //?}
         net.minecraft.client.gui.Font font = net.minecraft.client.Minecraft.getInstance().font;
         int margin = 64;
-        int viewRight = graphics.guiWidth() + margin;
-        int viewBottom = graphics.guiHeight() + margin;
+        int viewRight = guiWidth() + margin;
+        int viewBottom = guiHeight() + margin;
         for (LineLabel label : labels) {
             if (label.x() < -margin || label.x() > viewRight || label.y() < -margin
                     || label.y() > viewBottom) {
@@ -1642,7 +1690,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                 continue;
             }
-            HudDraw.emitPlaceMarker(screenPose, vc, x, y, half, HudDraw.COLOR_PLACE);
+            HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, half, HudDraw.COLOR_PLACE);
         }
     }
 
@@ -1763,7 +1811,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * emitted after one would have to go through a consumer fetched afresh; keeping the fills in a
      * single pass removes the question, and this method borrows no consumer of its own.
      */
+    //? if >=1.21.8 {
+    /*private void renderHud(MapElementGraphics graphics, PoseStack pose) {
+    *///?} else {
     private void renderHud(GuiGraphics graphics, PoseStack pose) {
+    //?}
         Minecraft mc = Minecraft.getInstance();
         Font font = mc.font;
 
@@ -2117,11 +2169,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double wingY = ny * size * 0.62;
         double rim = size * 0.22;
 
-        HudDraw.emitTriangle(pose, vc,
+        HudDraw.emitTriangle(HudDraw.sink(pose, vc),
                 tipX + ux * rim, tipY + uy * rim,
                 backX + wingX - nx * rim, backY + wingY - ny * rim,
                 backX - wingX + nx * rim, backY - wingY + ny * rim, COLOR_ARROW_RIM);
-        HudDraw.emitTriangle(pose, vc,
+        HudDraw.emitTriangle(HudDraw.sink(pose, vc),
                 tipX, tipY,
                 backX + wingX, backY + wingY,
                 backX - wingX, backY - wingY, COLOR_ARROW);

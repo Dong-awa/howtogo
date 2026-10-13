@@ -276,7 +276,14 @@ public final class HowToGoCommand {
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
+                // 1.21.6 replaced the ClickEvent(Action, String) constructor with one subclass per
+                // action. OpenUrl is the same event carrying the same link, but it holds a URI, so
+                // the string is parsed here rather than deep inside the event's own constructor.
+                //? if >=1.21.6 {
+                /*.withClickEvent(new ClickEvent.OpenUrl(java.net.URI.create(url))));
+                *///?} else {
                 .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
+                //?}
     }
 
     /** Ends the trip, if there is one. */

@@ -44,11 +44,22 @@ public final class MapFilterOverlay {
             return;
         }
         GuiGraphics graphics = event.getGuiGraphics();
+        // The panel is drawn in plain screen coordinates, so the GUI matrix starts from identity.
+        // Before 1.21.6 that meant clearing the pose and the normal of the top PoseStack entry; from
+        // 1.21.6 on the GUI stack is JOML's Matrix3x2fStack, where the same intent is one call --
+        // there is no separate normal matrix once the stack is 2D.
+        //? if >=1.21.6 {
+        /*graphics.pose().pushMatrix();
+        graphics.pose().identity();
+        MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
+        graphics.pose().popMatrix();
+        *///?} else {
         graphics.pose().pushPose();
         graphics.pose().last().pose().identity();
         graphics.pose().last().normal().identity();
         MapFilterPanel.draw(graphics, event.getMouseX(), event.getMouseY());
         graphics.pose().popPose();
+        //?}
     }
 
     /**

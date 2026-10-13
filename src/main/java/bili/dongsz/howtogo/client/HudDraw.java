@@ -1,13 +1,15 @@
 package bili.dongsz.howtogo.client;
 
+//? if <1.21.6 {
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
+//?}
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import net.minecraft.client.gui.GuiGraphics;
 
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
@@ -93,18 +95,23 @@ public final class HudDraw {
      * on the panel's mini-map reads as two different kinds of thing. It is a square rather than a
      * disc for the same reason: that is what a place already looked like in edit mode.
      *
-     * @param half half the marker's side, in the units of {@code pose}
+     * @param half half the marker's side, in the units of the sink's coordinates
      */
-    public static void emitPlaceMarker(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
+    public static void emitPlaceMarker(VertexSink out, double cx, double cy,
                                        double half, int argb) {
-        emitQuad(pose, vc, cx - half, cy - half, cx + half, cy - half, cx + half, cy + half,
+        emitQuad(out, cx - half, cy - half, cx + half, cy - half, cx + half, cy + half,
                 cx - half, cy + half, argb);
     }
 
     /**
      * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
      * obvious choice, but its default depth test can bury an overlay behind the world.
+     *
+     * <p>1.21.6 replaced this render type with a pipeline; see {@link HudBatch#HUD_PIPELINE}.
+     * What a render type used to configure is a pipeline property now, so the two are the same layer
+     * expressed in the two vocabularies, and only the pre-1.21.6 path needs the render type at all.
      */
+    //? if <1.21.6 {
     public static final RenderType QUADS = RenderType.create(
             "howtogo_hud",
             DefaultVertexFormat.POSITION_COLOR,
@@ -119,10 +126,12 @@ public final class HudDraw {
                     .setCullState(RenderStateShard.NO_CULL)
                     .setWriteMaskState(RenderStateShard.COLOR_WRITE)
                     .createCompositeState(false));
+    //?}
 
     private HudDraw() {
     }
 
+    //? if <1.21.6 {
     /** A fresh vertex consumer for the shared layer. */
     public static VertexConsumer consumer(GuiGraphics graphics) {
         // 1.21.4 removed GuiGraphics.bufferSource(): the render buffers now hang off the game
@@ -134,11 +143,93 @@ public final class HudDraw {
         return graphics.bufferSource().getBuffer(QUADS);
         //?}
     }
+    //?}
+
+    /**
+     * Opens a drawing block on a screen or the HUD, and returns where its vertices go.
+     *
+     * <p>This is the seam the two GUI drawing models meet at. Before 1.21.6 a block took a live
+     * consumer from {@link #consumer} and wrote into it through the pose; from 1.21.6 on it opens a
+     * deferred batch instead, which the GUI renderer plays back at the end of the frame. The emitters
+     * themselves do not care -- they write into a {@link VertexSink} either way -- so a caller does
+     * exactly two things differently: this call, and {@link #endBlock}.
+     *
+     * <p>The block's pose push happens here and its pop in {@code endBlock}, because both models need
+     * the matrix balanced around the block and the older one needs the pose captured for its sink.
+     */
+    public static Drawing beginBlock(GuiGraphics graphics) {
+        //? if >=1.21.6 {
+        /*graphics.pose().pushMatrix();
+        return new Drawing(HudBatch.beginBatch(graphics));
+        *///?} else {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        return new Drawing(sink(pose.last(), consumer(graphics)));
+        //?}
+    }
+
+    /** Closes a drawing block opened by {@link #beginBlock}. */
+    public static void endBlock(GuiGraphics graphics, Drawing drawing) {
+        //? if >=1.21.6 {
+        /*drawing.batch.end(graphics);
+        graphics.pose().popMatrix();
+        *///?} else {
+        graphics.pose().popPose();
+        graphics.flush();
+        //?}
+    }
+
+    /**
+     * One open drawing block: where its vertices go, and the batch to hand over when it closes.
+     *
+     * <p>{@link #sink} is the only field every version has, and is all the emitters need. The batch
+     * is the deferred model's, so it exists only from 1.21.6 on.
+     */
+    public static final class Drawing {
+        /** Where the block's vertices go. */
+        public final VertexSink sink;
+        //? if >=1.21.6 {
+        /*final HudBatch batch;
+
+        Drawing(HudBatch batch) {
+            this.batch = batch;
+            this.sink = batch;
+        }
+        *///?} else {
+        Drawing(VertexSink sink) {
+            this.sink = sink;
+        }
+        //?}
+    }
 
     // ------------------------------------------------------------------ shapes
 
+    /**
+     * Where a transformed position-colour vertex goes.
+     *
+     * <p>The emitters below are written once against this and not per version. Before 1.21.6 the
+     * destination was a live {@code VertexConsumer} fed through a pose, so {@link #sink} wraps the
+     * pair; from 1.21.6 on a drawing block collects its geometry instead, and
+     * {@link HudBatch} is itself a sink. Either way the clipping, winding and segment
+     * arithmetic runs on the same code, which is the point: those rules are the fiddly part and two
+     * copies of them would drift.
+     */
+    public interface VertexSink {
+        void vertex(double x, double y, int r, int g, int b, int a);
+    }
+
+    /**
+     * Adapts a pose and a live consumer to a {@link VertexSink}, for everything before 1.21.6.
+     *
+     * <p>The pose is applied here rather than by the consumer, which is what the old code did too:
+     * {@code VertexConsumer.addVertex} takes already-transformed coordinates in this layer's usage.
+     */
+    public static VertexSink sink(PoseStack.Pose pose, VertexConsumer vc) {
+        return (x, y, r, g, b, a) -> vertex(pose, vc, x, y, r, g, b, a);
+    }
+
     /** Emits a thick line as one quad. */
-    public static void emitLine(PoseStack.Pose pose, VertexConsumer vc,
+    public static void emitLine(VertexSink out,
                             double x1, double y1, double x2, double y2,
                             double halfWidth, int argb, int alpha) {
         int r = (argb >> 16) & 0xFF;
@@ -155,14 +246,14 @@ public final class HudDraw {
         double nx = -dy / length * halfWidth;
         double ny = dx / length * halfWidth;
 
-        vertex(pose, vc, x1 + nx, y1 + ny, r, g, b, a);
-        vertex(pose, vc, x2 + nx, y2 + ny, r, g, b, a);
-        vertex(pose, vc, x2 - nx, y2 - ny, r, g, b, a);
-        vertex(pose, vc, x1 - nx, y1 - ny, r, g, b, a);
+        out.vertex(x1 + nx, y1 + ny, r, g, b, a);
+        out.vertex(x2 + nx, y2 + ny, r, g, b, a);
+        out.vertex(x2 - nx, y2 - ny, r, g, b, a);
+        out.vertex(x1 - nx, y1 - ny, r, g, b, a);
     }
 
     /** Emits a filled triangle. */
-    public static void emitTriangle(PoseStack.Pose pose, VertexConsumer vc,
+    public static void emitTriangle(VertexSink out,
                                 double x1, double y1, double x2, double y2,
                                 double x3, double y3, int argb) {
         int r = (argb >> 16) & 0xFF;
@@ -170,28 +261,28 @@ public final class HudDraw {
         int b = argb & 0xFF;
         int a = (argb >>> 24) & 0xFF;
         // QUADS mode, so a triangle is written as a quad with its last corner repeated.
-        vertex(pose, vc, x1, y1, r, g, b, a);
-        vertex(pose, vc, x2, y2, r, g, b, a);
-        vertex(pose, vc, x3, y3, r, g, b, a);
-        vertex(pose, vc, x3, y3, r, g, b, a);
+        out.vertex(x1, y1, r, g, b, a);
+        out.vertex(x2, y2, r, g, b, a);
+        out.vertex(x3, y3, r, g, b, a);
+        out.vertex(x3, y3, r, g, b, a);
     }
 
     /** Emits a filled convex quad, corners given in winding order. */
-    public static void emitQuad(PoseStack.Pose pose, VertexConsumer vc,
+    public static void emitQuad(VertexSink out,
                                 double x1, double y1, double x2, double y2,
                                 double x3, double y3, double x4, double y4, int argb) {
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
         int a = (argb >>> 24) & 0xFF;
-        vertex(pose, vc, x1, y1, r, g, b, a);
-        vertex(pose, vc, x2, y2, r, g, b, a);
-        vertex(pose, vc, x3, y3, r, g, b, a);
-        vertex(pose, vc, x4, y4, r, g, b, a);
+        out.vertex(x1, y1, r, g, b, a);
+        out.vertex(x2, y2, r, g, b, a);
+        out.vertex(x3, y3, r, g, b, a);
+        out.vertex(x4, y4, r, g, b, a);
     }
 
     /** Emits a filled circle as a fan of degenerate quads. */
-    public static void emitDisc(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
+    public static void emitDisc(VertexSink out, double cx, double cy,
                             double radius, int argb, int alpha) {
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
@@ -205,10 +296,10 @@ public final class HudDraw {
             double y0 = cy + Math.sin(a0) * radius;
             double x1 = cx + Math.cos(a1) * radius;
             double y1 = cy + Math.sin(a1) * radius;
-            vertex(pose, vc, cx, cy, r, g, b, a);
-            vertex(pose, vc, x0, y0, r, g, b, a);
-            vertex(pose, vc, x1, y1, r, g, b, a);
-            vertex(pose, vc, x0, y0, r, g, b, a);
+            out.vertex(cx, cy, r, g, b, a);
+            out.vertex(x0, y0, r, g, b, a);
+            out.vertex(x1, y1, r, g, b, a);
+            out.vertex(x0, y0, r, g, b, a);
         }
     }
 
@@ -353,7 +444,7 @@ public final class HudDraw {
     }
 
     /** Clips a segment to a rectangle and emits it if anything survives. */
-    public static void emitClipped(PoseStack.Pose pose, VertexConsumer vc,
+    public static void emitClipped(VertexSink out,
                                    double x1, double y1, double x2, double y2,
                                    double halfWidth, int argb, int alpha,
                                    double minX, double minY, double maxX, double maxY) {
@@ -362,7 +453,7 @@ public final class HudDraw {
         }
         double dx = x2 - x1;
         double dy = y2 - y1;
-        emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
+        emitLine(out, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
                 x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
     }
 }
