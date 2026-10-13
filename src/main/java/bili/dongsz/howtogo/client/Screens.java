@@ -8,7 +8,7 @@ import net.minecraft.client.gui.screens.Screen;
  *
  * <h2>Why the shapes differ</h2>
  * Reading and replacing the current screen used to be a field on the game -- {@code minecraft.screen},
- * which the mod wrote and replaced directly, and which {@code setScreen} set. From 26.1 both moved
+ * which the mod wrote and replaced directly, and which {@code setScreen} set. From 26.2 both moved
  * onto the game's GUI layer, where they are a getter and a setter: {@code minecraft.gui.screen()} and
  * {@code minecraft.gui.setScreen(...)}. The GUI layer is the right home for them: whether a screen is
  * showing and what replaces it is the GUI's business, not the game loop's.
@@ -35,10 +35,10 @@ public final class Screens {
     /**
      * The screen showing now, or null if none is.
      *
-     * <p>26.1 moved this onto the GUI layer; before that it was a field on the game.
+     * <p>26.2 moved this onto the GUI layer; before that it was a field on the game.
      */
     public static Screen current() {
-        //? if >=26.1 {
+        //? if >=26.2 {
         /*return Minecraft.getInstance().gui.screen();
         *///?} else {
         return Minecraft.getInstance().screen;
@@ -57,7 +57,7 @@ public final class Screens {
 
     /** Replaces the showing screen, or closes it when given null. */
     public static void set(Screen screen) {
-        //? if >=26.1 {
+        //? if >=26.2 {
         /*Minecraft.getInstance().gui.setScreen(screen);
         *///?} else {
         Minecraft.getInstance().setScreen(screen);
@@ -66,7 +66,7 @@ public final class Screens {
 
     /** The screen as {@code mc.screen} would read, for callers holding the game already. */
     public static Screen of(Minecraft minecraft) {
-        //? if >=26.1 {
+        //? if >=26.2 {
         /*return minecraft.gui.screen();
         *///?} else {
         return minecraft.screen;

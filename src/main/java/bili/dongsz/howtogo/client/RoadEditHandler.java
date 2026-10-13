@@ -92,7 +92,7 @@ public final class RoadEditHandler {
             "key.howtogo.toggle_edit",
             // 26.1 narrowed the key-type enum to two members and renamed the one for ordinary keys:
             // what was KEYSYM is KEYBOARD. Same codes, same meaning.
-            //? if >=26.1 {
+            //? if >=26.3 {
             /*InputConstants.Type.KEYBOARD,
             *///?} else {
             InputConstants.Type.KEYSYM,
@@ -115,7 +115,7 @@ public final class RoadEditHandler {
      */
     public static final KeyMapping LINES = new KeyMapping(
             "key.howtogo.lines",
-            //? if >=26.1 {
+            //? if >=26.3 {
             /*InputConstants.Type.KEYBOARD,
             *///?} else {
             InputConstants.Type.KEYSYM,
@@ -231,11 +231,11 @@ public final class RoadEditHandler {
         //
         // Two independent markers rather than an if/else, because the two arms declare the same local
         // and an else pair here emitted both of them on the newer node.
-        //? if >=26.1 {
+        //? if >=26.3 {
         /*boolean consumed = gate
                 && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.PRESS);
         *///?}
-        //? if <26.1 {
+        //? if <26.3 {
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.PRESS);
         //?}
@@ -248,11 +248,11 @@ public final class RoadEditHandler {
     public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
         Screen screen = event.getScreen();
         boolean gate = isMapOpen(screen);
-        //? if >=26.1 {
+        //? if >=26.3 {
         /*boolean consumed = gate
                 && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.RELEASE);
         *///?}
-        //? if <26.1 {
+        //? if <26.3 {
         boolean consumed = gate
                 && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.RELEASE);
         //?}

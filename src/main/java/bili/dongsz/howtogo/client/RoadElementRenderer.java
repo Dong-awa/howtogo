@@ -903,7 +903,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // 26.1 gave PoseStack a rotate(Axis, angle) that takes the angle directly, so the quaternion
         // this used to build and multiply in is no longer needed. Same rotation, one step instead of
         // two -- and the two-argument form is what the older nodes still have to spell out.
-        //? if >=26.1 {
+        //? if >=26.3 {
         /*pose.rotate(Axis.ZP, (float) screenAngle(segment, projection));
         *///?} else {
         pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));

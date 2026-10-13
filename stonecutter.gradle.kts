@@ -140,16 +140,25 @@ stonecutter parameters {
         // Xaero's element renderer stopped taking a vanilla buffer source at 26.1: the mod's
         // MultiBufferSource.BufferSource parameters are XaeroBufferProvider there. Its own interface
         // moved with it, and the vanilla class the parameters named is gone.
-        regex(current.parsed >= "26.1") {
+        // Xaero's element renderer stopped taking a vanilla buffer source at 26.2: the mod's
+        // MultiBufferSource.BufferSource parameters are XaeroBufferProvider from there on. Bounded
+        // there and not at 26.1, where Xaero still used the vanilla type -- the same lesson as the
+        // render pipeline below, and one I got wrong twice.
+        regex(current.parsed >= "26.2") {
             replace("net\\.minecraft\\.client\\.renderer\\.MultiBufferSource",
                     "xaero.lib.client.graphics.XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
+        regex(current.parsed >= "26.2") {
             replace("MultiBufferSource\\.BufferSource", "XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
         }
         // The render pipeline left the blaze3d package for the new renderpearl API, and the builder
         // chain is otherwise unchanged -- same snippets, same withLocation/withCull/build.
-        regex(current.parsed >= "26.1") {
+        //
+        // Bounded at 26.3 and not at 26.1, which is where I first put it: 26.2 still has the old
+        // package. The 26.x line is not uniform across its own minor versions, so each of these
+        // boundaries is worth checking against the node's own jar rather than assumed from the
+        // major version.
+        regex(current.parsed >= "26.3") {
             replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
                     "com.mojang.renderpearl.api.pipeline.RenderPipeline", "NO_REVERSE", "NO_REVERSE")
         }
