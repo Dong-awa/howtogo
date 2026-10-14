@@ -20,13 +20,6 @@ import org.joml.Vector2f;
 //
 // Keep the two in step. Anything changed here about how a vertex is collected, or about the pooling
 // and the pipeline, belongs in the other file too.
-// The deferred-GUI half of HudDraw: one GUI element made of position-colour quads.
-//
-// 1.21.6 deferred all GUI drawing. Before it, GuiGraphics handed out a live buffer source and a
-// drawing block wrote into it as it went; from 1.21.6 on, custom geometry is described as a
-// GuiElementRenderState that the GUI renderer plays back at the end of the frame with the GUI's own
-// projection. This class is that element, and it is what HudDraw's emitters write into from 1.21.6
-// on -- they take a HudDraw.VertexSink, and this is one.
 //
 // It sits in its own file rather than in a condition-fenced block inside HudDraw because the whole
 // file is commented out on the older nodes and a block comment cannot contain another one's
@@ -47,8 +40,23 @@ public final class HudBatchLegacy implements GuiElementRenderState, HudDraw.Vert
     //
     // Depth testing and the write mask need no saying here: the GUI pipeline runs in the GUI pass,
     // which has no depth fight to lose.
+    //
+    // The location is a bare path with no namespace and no colon in it, and both of those matter.
+    // withLocation(String) routes through Identifier.withDefaultNamespace, so the argument is read as
+    // a PATH and the namespace is filled in for you -- "howtogo:pipeline/hud_quads" was therefore
+    // parsed as a path of that whole text under the namespace "minecraft", and a colon is an illegal
+    // path character. The static initialiser threw, which took the class down with it and crashed the
+    // game the first time the HUD drew:
+    //
+    //     IdentifierException: Non [a-z0-9/._-] character in path of location:
+    //     minecraft:howtogo:pipeline/hud_quads
+    //
+    // Underscores rather than slashes because this class compiles on 1.21.6 through 1.21.8, and a
+    // slash is not accepted there either. One flat name works on every node and costs nothing: the
+    // location is an identity for the renderer's own bookkeeping, not something a player or a
+    // resource pack ever sees.
     public static final RenderPipeline HUD_PIPELINE = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
-            .withLocation("howtogo:pipeline/hud_quads")
+            .withLocation("howtogo_pipeline_hud_quads")
             .withCull(false)
             .build();
 

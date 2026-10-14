@@ -47,8 +47,23 @@ public final class HudBatchNewer implements GuiElementRenderState, HudDraw.Verte
     //
     // Depth testing and the write mask need no saying here: the GUI pipeline runs in the GUI pass,
     // which has no depth fight to lose.
+    //
+    // The location is a bare path with no namespace and no colon in it, and both of those matter.
+    // withLocation(String) routes through Identifier.withDefaultNamespace, so the argument is read as
+    // a PATH and the namespace is filled in for you -- "howtogo:pipeline/hud_quads" was therefore
+    // parsed as a path of that whole text under the namespace "minecraft", and a colon is an illegal
+    // path character. The static initialiser threw, which took the class down with it and crashed the
+    // game the first time the HUD drew:
+    //
+    //     IdentifierException: Non [a-z0-9/._-] character in path of location:
+    //     minecraft:howtogo:pipeline/hud_quads
+    //
+    // Underscores rather than slashes so that this file and its twin are the same in this respect;
+    // the twin compiles on nodes where a slash is not accepted, and one flat name works everywhere.
+    // The location is an identity for the renderer's own bookkeeping, not something a player or a
+    // resource pack ever sees.
     public static final RenderPipeline HUD_PIPELINE = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
-            .withLocation("howtogo:pipeline/hud_quads")
+            .withLocation("howtogo_pipeline_hud_quads")
             .withCull(false)
             .build();
 
