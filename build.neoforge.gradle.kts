@@ -28,6 +28,36 @@ val neoForgeVersion = property("deps.neo_loader") as String
 val xaeroCoordinate = property("deps.xaero") as String
 val modVersion = rootProject.property("mod_version") as String
 
+// The NeoForge and Minecraft ranges this jar declares in its metadata.
+//
+// These have to be computed rather than written into the template, because one template serves every
+// node and a hardcoded range is wrong on all but one of them. It was hardcoded to the 1.21.1 values
+// for a while, which made every node's jar claim to be 1.21.1 -- the 26.2 jar refused to load with
+// "requires minecraft 1.21.1 or above, and below 1.21.2; currently 26.2", which reads like a version
+// mix-up in the build and is really just a stale literal in a resource file.
+//
+// The upper bound is the next minor release, and it is closed deliberately: an open-ended range
+// claims compatibility with every later NeoForge, none of which this has been run against. A wrong
+// upper bound is worse than a missing feature, because it lets a player load the mod on a version it
+// was never tested on and then report the breakage as a bug.
+//
+// Worked out from the node's own versions rather than from a table, so that adding a node needs no
+// edit here. The two names for a release differ by a leading "1.": Minecraft calls it 1.21.11 where
+// NeoForge calls it 21.11, and both call 26.2 by the same name. So the Minecraft range is the version
+// with its last part incremented, and the NeoForge range is that same base after dropping the "1.".
+fun nextVersion(version: String): String {
+    val parts = version.split(".")
+    return (parts.dropLast(1) + (parts.last().toInt() + 1).toString()).joinToString(".")
+}
+
+val mcRange = "[$minecraftVersion,${nextVersion(minecraftVersion)})"
+val neoBase = if (minecraftVersion.startsWith("1.")) {
+    minecraftVersion.removePrefix("1.")
+} else {
+    minecraftVersion
+}
+val neoRange = "[$neoBase.0,${nextVersion(neoBase)})"
+
 version = "$modVersion+$minecraftVersion"
 group = rootProject.property("maven_group") as String
 base.archivesName = "${rootProject.property("archives_name") as String}-neoforge-$minecraftVersion"
@@ -151,6 +181,11 @@ tasks.named<ProcessResources>("processResources") {
         "minecraft_version" to minecraftVersion,
         "neoforge_version" to neoForgeVersion,
         "mod_version" to modVersion,
+        // The dependency ranges the mod declares. Computed above rather than written into the
+        // template, because the template is shared by every node and a literal there is right on
+        // exactly one of them.
+        "minecraft_range" to mcRange,
+        "neoforge_range" to neoRange,
     )
     inputs.properties(replaceProperties)
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.

@@ -12,21 +12,23 @@ Road marking and real-time navigation for Minecraft
 '''
 authors = "DongSZ"
 
-# The 21.1.x series only. The range used to be open-ended ([21.1.0,)), which claimed compatibility
-# with every later NeoForge -- 21.2 and beyond -- none of which this has ever been run against.
-# A wrong upper bound is worse than a missing feature: it lets a player load the mod on a version it
-# was never tested on and then report the breakage as a bug.
+# One node's release only, and the bounds are computed per node by the build script rather than
+# written here -- this file is shared by all eight, so a literal in it would be right on exactly one
+# and would make the other seven refuse to load on the version they were built for. The upper bound
+# is closed deliberately: an open-ended range claims compatibility with every later NeoForge, none of
+# which this has been run against, and a wrong upper bound is worse than a missing feature -- it lets
+# a player load the mod on a version it was never tested on and then report the breakage as a bug.
 [[dependencies.howtogo]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1.0,21.2)"
+versionRange = "${neoforge_range}"
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.howtogo]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.21.2)"
+versionRange = "${minecraft_range}"
 ordering = "NONE"
 side = "BOTH"
 
