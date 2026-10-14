@@ -8,9 +8,13 @@
 Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a destination, pick a travel mode, pick a route preference, look at the route before you set off — with optional voice announcements.
 
 - 模组 ID：`howtogo`
-- 支持版本：Minecraft **1.21.1** / NeoForge **21.1.x**
+- 支持版本：Minecraft **1.21.1 / 1.21.4 / 1.21.6 / 1.21.8 / 1.21.11 / 26.1 / 26.2 / 26.3**（NeoForge）
 - 运行侧：**纯客户端**。道路数据、寻路、渲染全在客户端，服务端不需要装它。模组确实带一个**服务端入口**，但它只做一件事——注册导航仪物品，好让 `data/howtogo/recipe/navigator.json` 在服务端也能解析、多人服务器里那个物品做得出也拿得到；除注册之外没有服务端逻辑、没有命令、没有网络包，所以装不装随你，装了也无害。
 - 最新版本：0.2.1
+
+**下载哪个文件**：按你的 Minecraft 版本选一个，文件名里带着版本号，例如 `howtogo-0.2.1+mc1.21.8-neoforge.jar` 是给 1.21.8 的。每个 jar 只在自己那个版本上加载——它在 `neoforge.mods.toml` 里声明了 NeoForge 与 Minecraft 的版本范围，装错版本会在启动时报明是哪两个版本对不上，而不是进去以后才出问题。
+
+这八份 jar 由**同一份源码**构建（见 [多版本布局](#多版本布局)）。当前是**测试版**：编译与自查都过了，但除了 1.21.1 和 26.2 之外还没有在真实游戏里逐个走查过，遇到问题请带上 `latest.log` 反馈。
 
 ---
 
@@ -25,7 +29,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 | MTR（我的世界铁路）          | 可选     | 读取 MTR 的车站与线路，作为本模组自己的目的地与公共交通线路。               |
 | MCPhone               | 可选     | 在手机里多出一个「问道导航」应用（打开目的地选择界面）。                    |
 
-可选模组**全部通过注册名或反射读取**，`build.gradle` 里没有任何一个的依赖：没装它们时对应图层为空，其余功能不受影响，它们改版本也不会让本模组编译不过。
+可选模组**全部通过注册名或反射读取**，构建脚本里没有任何一个的依赖：没装它们时对应图层为空，其余功能不受影响，它们改版本也不会让本模组编译不过。
 
 ---
 
@@ -112,7 +116,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 装了 **Create（机械动力）** 时，铁路会被**自动识别**并画在世界地图上，无需手画：
 
 - **数据来自 Create 自己的轨道图**。优先读 Create 客户端的轨道网络（`CreateClient.RAILWAYS`），读到的是 Create 自己的节点坐标与贝塞尔曲线，所以弯道是平滑曲线而不是阶梯。读不到时（没装 Create、类被改名、图还没同步）回退为**扫描 `create:track` 方块**，按方块自己的 `shape` 轴相连。两种来源**只有一种会成为当前图层**，不会重复计数。
-- **识别靠方块注册名，不引用任何 Create 类**。所以 `build.gradle` 里没有 Create 依赖，Create 改名或换版本不会让我们编译不过；日志前缀 `[HowToGo] Create track layer:` 会说明当前用的是哪种来源。
+- **识别靠方块注册名，不引用任何 Create 类**。所以构建脚本里没有 Create 依赖，Create 改名或换版本不会让我们编译不过；日志前缀 `[HowToGo] Create track layer:` 会说明当前用的是哪种来源。
 - **铁路只读，但可以命名**。Create 拥有那段几何：移动节点、拆分、删除、改等级都不会提供，因为下一次读取（最多 1 秒后）就会覆盖掉。名称是**唯一**可以改的东西，也存在**单独的文件**里（见下方数据文件），不写进道路网络。
   - 命名与选中都按**整条铁路线**生效：`Shift` 点击选中时高亮整条线，`N` 命名时整条线共用同一个名字（与手画道路一致）。名字随地图缩放显示为浅蓝色标签。
   - 名称不绑在路段 id 上（每次重建 id 都会重排），而是绑在**该段的两个端点坐标**上，所以重建、重载、切换识别来源都不会丢。
@@ -145,7 +149,7 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
   | 4.0.4 + 1.20.1 / 1.20.4（Forge）、4.0.4 + 1.20.1（Fabric） | 认，绑到 `org.mtr.mod.client.MinecraftClientData` | 认，`org.mtr.mod.Init` | 全部通过 |
   | 4.1.0-beta.2 + 1.21.1（NeoForge） | 认，绑到 `org.mtr.client.MinecraftClientData` | 认，`org.mtr.MTR`（4.1 的新名字） | 全部通过 |
 
-  **MTR 4.0.4 没有 1.21.1 的构建**（4.0.x 到 1.20.4 为止；1.21.1 只有 4.1.0-beta.1/2），所以在这条分支上它装不上——4.0.4 属于 `1.20.1-*` / `1.20.4-neoforge` 那几条分支。上表证明的是**读取器的名字表覆盖 4.0.4**（反射按描述符解析，与 Minecraft 版本无关），真正的一局里能不能用，仍然要在对应分支上用那个版本跑一次。
+  **MTR 4.0.4 没有 1.21.1 的构建**（4.0.x 到 1.20.4 为止；1.21.1 只有 4.1.0-beta.1/2），所以在这条线上它装不上——4.0.4 覆盖到 1.20.4 为止。上表证明的是**读取器的名字表覆盖 4.0.4**（反射按描述符解析，与 Minecraft 版本无关），真正的一局里能不能用，仍然要在对应版本上用那个版本跑一次。
 
 ### 地图显示面板
 
@@ -284,15 +288,31 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 
 ## 构建此模组
 
-需要 JDK 21。
+需要 JDK 21（Gradle 自己用它跑），26.x 的节点另外需要 JDK 25——工具链按节点自动选，两个 JDK 都装上即可。
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.11"
-.\gradlew.bat build          # 产物：build/libs/howtogo-0.2.1.jar
-.\gradlew.bat runClient      # 开发环境启动客户端
+.\gradlew.bat build                              # 只构建「当前版本」，产物在 versions/<版本>/build/libs/
+.\gradlew.bat :1.21.8-neoforge:build             # 构建指定版本
+.\gradlew.bat chiseledBuild                      # 构建全部八个版本
+.\gradlew.bat "Set active project to 1.21.8-neoforge"   # 切换当前版本
 ```
 
-`libs/xaeroworldmap-neoforge-1.21.1-*.jar` 以 `compileOnly` 方式参与编译——Xaero 的地图是闭源的，不在公共 Maven 上。它使用官方映射，因此不需要 reobf。开发环境运行时该 jar 会被放入 `run/mods/`。
+八个版本共用一份源码，差异写在注释里（Stonecutter 读的 `//?` 条件），所以**切换当前版本会改写 `src/`**。切换前先提交，切换产生的 diff 就是那个版本的差异清单。详见 [MIGRATION.md](MIGRATION.md)。
+
+`libs/` 里的 Xaero 地图 jar 以 `compileOnly` 方式参与编译——Xaero 是闭源的，不在公共 Maven 上。**每个版本一个 jar**，按文件名里的版本号选取，并且从 26.2 起 Xaero 拆成两部分：编译要用的渲染 API 在 **XaeroLib** 里，而它以 jar-in-jar 形式打包在 world map jar 内，需要手动解出来放进 `libs/`（`libs/README.md` 写了文件名与解包方式）。它使用官方映射，因此不需要 reobf。开发环境运行时这些 jar 会被放入 `run/mods/`。
+
+### 多版本布局
+
+```
+src/main/java, src/main/resources   共用源码（内容是「当前版本」那一份）
+src/common/java                     与版本、加载器无关的纯逻辑（路网、寻路、线路模型）
+versions/<mc>-neoforge/             每个版本一个 Gradle 子项目
+build.neoforge.gradle.kts           单版本构建脚本
+stonecutter.gradle.kts              当前版本、常量、替换规则
+```
+
+新增一个版本只需要在 `settings.gradle.kts` 里加一行、建一个 `versions/<版本>-neoforge/gradle.properties`，共用源码不用动。要加别的加载器（Fabric）也是同样的形状。
 
 `tools/routing-harness/` 是不需要启动游戏的检查器：把纯逻辑（路网、规划、MTR 导入、缩放取舍）在一份手写的桩上跑一遍断言，`run-fast.ps1` 复用已解析的 classpath，几秒钟出结果。`run/mods` 里有 MTR / MTR Map Overlay 的 jar 时，它还会用那两个 mod 的**真 jar**核对一遍本模组反射读取的每一个类名、字段名与方法名（`-MtrJar <jar>` / `-MtrMapJar <jar>` 可指定任意版本，不必放进 `run/mods`），所以「这个版本还认不认」是一条命令的事。
 
@@ -302,22 +322,17 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.11"
 
 ---
 
-### 切换分支后构建失败？先清缓存
+### 切换版本后构建失败？先清缓存
 
-`.gradle/`、`build/`、`run/` 都在 `.gitignore` 里，所以**切分支不会清掉它们**。而每条分支是不同的 Minecraft、不同的加载器，Fabric 分支还是不同的映射命名空间——Loom 按映射的哈希给缓存文件命名，不按分支名，于是同一个目录里会堆出好几套。用错了那一套，就报成这样：
-
-```
-Failed to setup Minecraft
-java.lang.IllegalArgumentException: Cannot remap access widener from namespace 'official'. Expected: 'intermediary'
-```
-
-这是 Loom 在建 Minecraft 的时候抛的，看着像源码问题，**不是**。本分支源码里根本没有 access widener（`validateAccessWidener` 是 `NO-SOURCE`）。
+`.gradle/`、`build/` 都在 `.gitignore` 里，所以**切换当前版本不会清掉它们**。八个版本是不同的 Minecraft、不同的 JDK 工具链，共用同一个 `.gradle-home`，缓存用错了一套时症状往往看着像源码问题，**不是**。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\reset-caches.ps1
 ```
 
-它清掉本项目的构建缓存，然后**从冷状态重新构建**来验证。加 `-Deep` 会连全局 Loom 存储（按 Minecraft 版本）和 Gradle 构建缓存一起清；那一步要重新下载，慢一些，只有上一条没解决时才需要。
+它清掉本项目的构建缓存，然后**从冷状态重新构建**来验证。加 `-Deep` 会把 Gradle 构建缓存一起清，那一步要重新下载，慢一些，只有上一条没解决时才需要。
+
+另外：**永远不要给构建加 `--refresh-dependencies`**。有几个依赖只有本地镜像提供，而那份镜像存的是模块元数据、没有 POM，重新校验它们会失败。
 
 ---
 
@@ -392,7 +407,7 @@ bili.dongsz.howtogo
 - **自检**。注册的检查出现在 `/howtogo selftest` 里（抛异常变成一行失败，不会吃掉整份报告）。**不进**启动器驱动的自动化自检（`run-user-test.ps1 -Auto`）：那是本模组自己的构建检查，它的通过与否是个退出码，让别的模组的源把本模组的检查变红是在报告错的模组。
 - **延后一刻执行**。指令是在聊天界面处理那一行的过程中跑的，在那里直接开界面会被旧界面的关闭流程顶掉，看起来像指令没生效。本模组自己为这件事延后过两次，所以把机制交出来，而不是让每个附属再踩一遍。
 
-编译依赖：本模组尚未发布到 Maven，附属目前只能把构建产物 `build/libs/howtogo-<版本>.jar` 以 `compileOnly` 方式参与编译——和本模组对 Xaero 地图 jar 的做法一样。
+编译依赖：本模组尚未发布到 Maven，附属目前只能把构建产物 `versions/<版本>-neoforge/build/libs/howtogo-neoforge-<版本>-<模组版本>.jar` 以 `compileOnly` 方式参与编译——和本模组对 Xaero 地图 jar 的做法一样。
 
 **这一批还没有的**：注册自己的铁路图层、往地图显示面板加开关、加 HUD 控件、以及新增道路等级/出行方式（后两者是枚举，动它们会碰到存档与配置按名字序列化的契约）。
 
