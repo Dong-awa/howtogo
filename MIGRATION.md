@@ -96,6 +96,21 @@ applies *no* replacements at all to the active node, because `src/` on disk is a
 node's source — which is why a placeholder token written in the anchor's branch survives into
 javac unresolved.
 
+**`src/main/resources` is shared too, and a literal in it is right on one node.** The
+`neoforge.mods.toml` declared `versionRange = "[1.21.1,1.21.2)"` as a literal for a while, so
+every jar claimed to be 1.21.1 and the 26.2 one refused to load:
+
+```
+Mod howtogo requires minecraft 1.21.1 or above, and below 1.21.2
+Currently, minecraft is 26.2
+```
+
+That reads like a version mix-up in the build and is really a stale resource. Anything in
+`src/main/resources` that names a version must go through `expand(...)` in `processResources` —
+`minecraft_version`, `neoforge_version` and `mod_version` are already set up there, and
+`minecraft_range`/`neoforge_range` were added for this. When a node behaves as though it is the
+wrong version, read the built jar's `META-INF/neoforge.mods.toml` before anything else.
+
 Mechanical renames belong in `replacements` in `stonecutter.gradle.kts`. Two rules about them:
 
 - The two-argument `replace(a, b)` is **bidirectional**: it applies the pair in whichever
