@@ -26,7 +26,7 @@ import org.joml.Vector2f;
 // terminator. Every javadoc here is written as // lines for that reason: the first inner block
 // comment would otherwise close the file's fence and the rest of the class would silently become
 // live code on versions that do not have these APIs.
-public final class HudBatchLegacy implements GuiElementRenderState, HudDraw.VertexSink {
+public final class HudBatchLegacy implements HudDraw.VertexSink {
 
     // The pipeline behind the shared layer.
     //
@@ -99,12 +99,71 @@ public final class HudBatchLegacy implements GuiElementRenderState, HudDraw.Vert
         this.maxX = this.maxY = -Float.MAX_VALUE;
     }
 
-    // Hands the collected quads to the GUI renderer. An empty batch submits nothing.
+    // Hands the collected quads to the GUI renderer as a snapshot. An empty batch submits nothing.
+    //
+    // THE QUADS MUST BE COPIED OUT HERE, not handed over by reference as `this`. The extraction pass
+    // only describes the frame: the game walks the submitted states after the pass has ended and calls
+    // buildVertices on each one then. A batch reused for a second figure in the same frame -- which
+    // the navigation panel does, mini-map then turn arrow -- would otherwise be reset and refilled
+    // before the game ever read it, and the earlier element would be built from the later figure's
+    // vertices. The mini-map is the figure that loses: its several thousand quads are never built at
+    // all, and what the player sees is the panel chrome drawn correctly around an empty map box.
+    //
+    // The same hazard spans frames, since the game may still be walking last frame's states while
+    // this frame's are recorded. The deferred-GUI version of this code copied in its flush() for
+    // exactly this reason, and the rewrite that produced these two files kept the pooling but dropped
+    // the copy.
     public void end(GuiGraphics graphics) {
         if (vertices > 0) {
-            graphics.submitGuiElementRenderState(this);
+            graphics.submitGuiElementRenderState(snapshot());
         }
         this.pose = null;
+    }
+
+    // An immutable copy of what this batch has collected.
+    //
+    // Anonymous rather than a second class, because what it adds over this one is only that it cannot
+    // be written to again -- the pooling, the pipeline and the bounds logic are all shared, and
+    // splitting them would mean keeping two copies of the same arithmetic in step.
+    private GuiElementRenderState snapshot() {
+        float[] owned = java.util.Arrays.copyOf(data, vertices * 6);
+        int count = vertices;
+        float x0 = minX;
+        float y0 = minY;
+        float x1 = maxX;
+        float y1 = maxY;
+        return new GuiElementRenderState() {
+            @Override
+            public void buildVertices(VertexConsumer vc, float z) {
+                for (int i = 0; i < count; i++) {
+                    vc.addVertex(owned[i * 6], owned[i * 6 + 1], z)
+                            .setColor((int) owned[i * 6 + 2], (int) owned[i * 6 + 3],
+                                    (int) owned[i * 6 + 4], (int) owned[i * 6 + 5]);
+                }
+            }
+
+            @Override
+            public RenderPipeline pipeline() {
+                return HUD_PIPELINE;
+            }
+
+            @Override
+            public TextureSetup textureSetup() {
+                return TextureSetup.noTexture();
+            }
+
+            @Override
+            public ScreenRectangle scissorArea() {
+                return null;
+            }
+
+            @Override
+            public ScreenRectangle bounds() {
+                int x = (int) Math.floor(x0);
+                int y = (int) Math.floor(y0);
+                return new ScreenRectangle(x, y, (int) Math.ceil(x1) - x, (int) Math.ceil(y1) - y);
+            }
+        };
     }
 
     @Override
@@ -141,41 +200,6 @@ public final class HudBatchLegacy implements GuiElementRenderState, HudDraw.Vert
             maxY = py;
         }
         vertices++;
-    }
-
-    @Override
-    public void buildVertices(VertexConsumer vc, float z) {
-        for (int i = 0; i < vertices; i++) {
-            vc.addVertex(data[i * 6], data[i * 6 + 1], z)
-                    .setColor((int) data[i * 6 + 2], (int) data[i * 6 + 3],
-                            (int) data[i * 6 + 4], (int) data[i * 6 + 5]);
-        }
-    }
-
-    @Override
-    public RenderPipeline pipeline() {
-        return HUD_PIPELINE;
-    }
-
-    @Override
-    public TextureSetup textureSetup() {
-        return TextureSetup.noTexture();
-    }
-
-    @Override
-    public ScreenRectangle scissorArea() {
-        return null;
-    }
-
-    @Override
-    public ScreenRectangle bounds() {
-        if (vertices == 0) {
-            return null;
-        }
-        int x = (int) Math.floor(minX);
-        int y = (int) Math.floor(minY);
-        return new ScreenRectangle(x, y,
-                (int) Math.ceil(maxX) - x, (int) Math.ceil(maxY) - y);
     }
 }
 *///?}
