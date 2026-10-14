@@ -18,8 +18,21 @@ public final class ModItems {
     public static final DeferredRegister.Items ITEMS =
             DeferredRegister.createItems(HowToGo.MODID);
 
-    public static final DeferredItem<Item> NAVIGATOR = ITEMS.register("navigator",
-            () -> new NavigatorItem(new Item.Properties().stacksTo(1)));
+    // registerItem, not register. The two look interchangeable and are not: since 1.21.2 an
+    // Item.Properties has to carry the id it will be registered under, and register(name, supplier)
+    // passes the supplier's own Properties through untouched. The item then registers fine and
+    // throws the first time anything asks it for its id -- which is during RegisterEvent, so the
+    // mod does not load at all:
+    //
+    //     HowToGo (howtogo) encountered an error while dispatching the
+    //     net.neoforged.neoforge.registries.RegisterEvent event
+    //     java.lang.NullPointerException: Item id not set
+    //
+    // registerItem builds the Properties with the name already in it, which is the whole reason the
+    // overload exists. The same trap bit the per-version branches this tree replaced; it is not
+    // specific to any one node, and this file is shared by all eight.
+    public static final DeferredItem<Item> NAVIGATOR = ITEMS.registerItem("navigator",
+            properties -> new NavigatorItem(properties.stacksTo(1)));
 
     private ModItems() {
     }
