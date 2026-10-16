@@ -219,11 +219,14 @@ and `GuiGraphics` holds one in a **private** field:
 
     guiRenderState    Lnet/minecraft/client/gui/render/state/GuiRenderState;    (field f)
 
-So the Fabric side needs that field reached, and an access widener is the wrong tool: the field
-is private rather than package-private, and -- more to the point -- a Mixin accessor is the
-Fabric idiom for exactly this and the tree already has the Mixin infrastructure for
-`MouseHandlerMixin`. An `@Accessor("guiRenderState")` on a `GuiGraphics` mixin, then
-`.submitGuiElement(state)` on the result.
+So the Fabric side reaches through that field, and an access widener IS the right tool after all:
+`accessible` widens a private field as readily as a package-private one, and the modern widener is
+already scoped to `>=1.21.6`, which is exactly the range in which both members exist. No Mixin was
+needed. The fix is `HudSubmit.submit(graphics, state)`, which calls `graphics.guiRenderState`
+`.submitGuiElement(state)` on Fabric and `graphics.submitGuiElementRenderState(state)` on NeoForge.
+
+The helper exists because the two call sites, `HudBatchLegacy` and `HudBatchNewer`, are each fenced
+whole by a version condition, so the loader difference cannot go inline in either.
 
 **Do not repeat the mistake made here**: an access widener entry was written for
 `submitGuiElementRenderState` first, and its acceptance by Loom proved nothing, because Loom

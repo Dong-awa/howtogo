@@ -1,14 +1,21 @@
 accessWidener v2 named
 
-# GuiGraphics.submitGuiElementRenderState is NeoForge-added: NeoForge patches GuiGraphics to expose
-# it, and vanilla keeps it out of reach. The HUD batch layers -- HudBatchLegacy from 1.21.6 and
-# HudBatchNewer from 1.21.9 -- both need it to hand their accumulated quads to the game's GUI
-# render state pipeline, so it is widened here.
+# submitGuiElementRenderState is NeoForge-ADDED and does not exist in vanilla at all: it is absent
+# from the 1.21.6 layered mappings, where every vanilla member is listed by official, intermediary
+# and named name, and vanilla GuiGraphics has only a family of specific submitters -- submitBlit,
+# submitItem, submitEntityRenderState and so on -- with no generic one.
+#
+# Vanilla puts the generic route one level down: GuiGraphics holds a GuiRenderState in a private
+# field, and GuiRenderState.submitGuiElement takes the element. So the field and that method are
+# what get widened, not a method that is not there. Writing an entry for submitGuiElementRenderState
+# first cost a round: Loom validates an access widener when it REMAPS THE JAR, after compileJava, so
+# Loom accepting an entry is no evidence that the member exists.
 #
 # This is a second access widener rather than a line in the first one, and the reason is a property
 # of the format: an entry naming a member that does not exist on the node being built is a BUILD
-# FAILURE, not a no-op. submitGuiElementRenderState does not exist below 1.21.6, and the other file's
+# FAILURE, not a no-op. Neither entry here exists below 1.21.6, and the other file's
 # RenderType.CompositeState entry is only meaningful below 1.21, so one file cannot serve both.
 # The build script picks between them and renames the chosen one to howtogo.accesswidener, which is
 # the name fabric.mod.json asks for.
-accessible method net/minecraft/client/gui/GuiGraphics submitGuiElementRenderState (Lnet/minecraft/client/gui/render/state/GuiElementRenderState;)V
+accessible field net/minecraft/client/gui/GuiGraphics guiRenderState Lnet/minecraft/client/gui/render/state/GuiRenderState;
+accessible method net/minecraft/client/gui/render/state/GuiRenderState submitGuiElement (Lnet/minecraft/client/gui/render/state/GuiElementRenderState;)V

@@ -122,7 +122,7 @@ public final class HudBatchNewer implements HudDraw.VertexSink {
     // the copy.
     public void end(GuiGraphics graphics) {
         if (vertices > 0) {
-            graphics.submitGuiElementRenderState(snapshot());
+            HudSubmit.submit(graphics, snapshot());
         }
         this.pose = null;
     }
