@@ -84,12 +84,24 @@ dependencies {
             "XaerosWorldMap_*_Fabric_$minecraftVersion.jar") })
 }
 
-// Minecraft 1.20.x marks RenderType.CompositeState protected inside RenderType, and that is the
-// flag javac enforces, so the HUD's own render type cannot be built without widening it. 1.21.1
-// made it public and needs no widener. The file is shared by every fabric node -- it is a no-op
-// where it is not needed -- but the entry only means anything below 1.21.
+// The access widener is chosen per version generation, because an entry naming a member that does
+// not exist on the node being built is a build failure rather than a no-op:
+//
+//   legacy (< 1.21.6)  RenderType.CompositeState is protected there, and javac enforces that flag,
+//                      so the HUD's own render type cannot be built without widening it.
+//   modern (>= 1.21.6) GuiGraphics.submitGuiElementRenderState, which is NeoForge-added and that
+//                      HudBatchLegacy and HudBatchNewer both need.
+//
+// The two do not overlap, so two files cover the range. The chosen one is renamed to
+// howtogo.accesswidener, which is the name fabric.mod.json asks for; the templates themselves are
+// excluded from the jar.
+val awGeneration = if (stonecutter.eval(minecraftVersion, ">=1.21.6")) "modern" else "legacy"
+// The templates live outside the resources directory on purpose. Inside it, an exclude meant to keep
+// them out of the jar also matches the copy this adds back, because the exclude is tested against the
+// source name before the rename -- which silently removed the access widener from the jar entirely.
+val awTemplate = rootProject.file("src/fabric/aw/$awGeneration.accesswidener")
 loom {
-    accessWidenerPath = rootProject.file("src/fabric/resources/howtogo.accesswidener")
+    accessWidenerPath = awTemplate
 }
 
 // The shared tree, exactly as the NeoForge nodes take it: src/common is loader-free and
@@ -150,6 +162,9 @@ tasks.named<ProcessResources>("processResources") {
     // first and had no effect, because the default resources directory is wired into this task before
     // that filter is consulted.
     exclude("META-INF/neoforge.mods.toml")
+    // The access widener templates are build inputs, not jar contents: the chosen one is added below
+    // under the name fabric.mod.json asks for, and neither template belongs in the jar.
+    from(awTemplate) { rename { "howtogo.accesswidener" } }
     inputs.properties(replaceProperties)
     filesMatching(listOf("fabric.mod.json")) { expand(replaceProperties) }
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.

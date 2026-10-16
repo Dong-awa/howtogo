@@ -1,0 +1,14 @@
+accessWidener v2 named
+
+# GuiGraphics.submitGuiElementRenderState is NeoForge-added: NeoForge patches GuiGraphics to expose
+# it, and vanilla keeps it out of reach. The HUD batch layers -- HudBatchLegacy from 1.21.6 and
+# HudBatchNewer from 1.21.9 -- both need it to hand their accumulated quads to the game's GUI
+# render state pipeline, so it is widened here.
+#
+# This is a second access widener rather than a line in the first one, and the reason is a property
+# of the format: an entry naming a member that does not exist on the node being built is a BUILD
+# FAILURE, not a no-op. submitGuiElementRenderState does not exist below 1.21.6, and the other file's
+# RenderType.CompositeState entry is only meaningful below 1.21, so one file cannot serve both.
+# The build script picks between them and renames the chosen one to howtogo.accesswidener, which is
+# the name fabric.mod.json asks for.
+accessible method net/minecraft/client/gui/GuiGraphics submitGuiElementRenderState (Lnet/minecraft/client/gui/render/state/GuiElementRenderState;)V
