@@ -240,3 +240,27 @@ and on the nodes where the fence is false the inner `*/` would close the outer c
 leave the rest of the class live. So the differing line goes in a helper whose own conditions are
 top level (`fabric && >=1.21.6 && <1.21.9` against `neoforge && ...`), not inline in the fenced
 file.
+
+### Forge on Gradle 9: the version check is optional
+
+ForgeGradle 6.0.54 refuses Gradle 9 by design:
+
+    Found Gradle version Gradle 9.5.1. Versions Gradle 9.0 and newer are not supported yet.
+
+That check is skippable, and the switch is in the plugin's own constant pool rather than in its
+documentation. `net.minecraftforge.gradle.common.util.EnvironmentChecks` declares
+
+    ENABLE_GRADLE_CHECK_VARIABLE = "net.minecraftforge.gradle.check.gradle"
+
+and the range it enforces is 8.1 to 9.0. Running Gradle with
+
+    -Dnet.minecraftforge.gradle.check.gradle=false
+
+turns it off, and the plugin then applies on Gradle 9.5.1 -- the scratch project gets past the
+refusal and on to ForgeGradle's own "Missing 'minecraft' dependency" check, which is the next
+thing it validates.
+
+This means the two-build split the tree was going to need may not be necessary after all: the
+refusal was the only thing keeping Forge on Gradle 8. It has NOT been proven past that point --
+nothing has resolved a Forge userdev artifact yet -- so the split stays the fallback until a real
+Forge node builds.
