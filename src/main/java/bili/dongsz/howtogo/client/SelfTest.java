@@ -522,8 +522,36 @@ public final class SelfTest {
                     network);
 
             server = WebMapServer.start(() -> snapshot, freePort());
-            try (HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10)).build()) {
+            // Java 17's HttpClient is not AutoCloseable, and the 1.20.1 and 1.20.4 nodes are
+            // Java 17 -- the same boundary that decides the rest of the Java-version differences.
+            // The probing body is one method either way; only the statement around it differs.
+            //? if >=1.20.5 {
+            try (HttpClient client = newClient()) {
+                return probeWebMap(client, server, network);
+            }
+            //?} else {
+            /*HttpClient client = newClient();
+            return probeWebMap(client, server, network);
+            *///?}
+        } catch (IOException | RuntimeException failed) {
+            // Most likely here: no port could be bound, or the JDK's HTTP module is not in this
+            // launcher's graph. Both are worth the whole line the command gives them.
+            return new Result("command.howtogo.selftest.check.webmap", false,
+                    "the browser map could not be served: " + failed);
+        } finally {
+            if (server != null) {
+                server.stop();
+            }
+        }
+    }
+
+    private static HttpClient newClient() {
+        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    }
+
+    /** Asks the running map server for its own assets and reports what came back. */
+    private static Result probeWebMap(HttpClient client, WebMapServer server, RoadNetwork network)
+            throws IOException {
                 Reply page = fetch(client, server.url());
                 Reply script = fetch(client, server.url() + "js/app.js");
                 Reply library = fetch(client, server.url() + "vendor/html2canvas.min.js");
@@ -554,17 +582,6 @@ public final class SelfTest {
                 }
                 return new Result("command.howtogo.selftest.check.webmap",
                         pageOk && scriptOk && libraryOk && apiOk, detail);
-            }
-        } catch (IOException | RuntimeException failed) {
-            // Most likely here: no port could be bound, or the JDK's HTTP module is not in this
-            // launcher's graph. Both are worth the whole line the command gives them.
-            return new Result("command.howtogo.selftest.check.webmap", false,
-                    "the browser map could not be served: " + failed);
-        } finally {
-            if (server != null) {
-                server.stop();
-            }
-        }
     }
 
     /** One HTTP reply, as the check above reads it. */

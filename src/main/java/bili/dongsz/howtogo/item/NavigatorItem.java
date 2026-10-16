@@ -98,6 +98,10 @@ public final class NavigatorItem extends Item {
     // to, the method receives a Consumer and the display context the lines will be shown in. The
     // lines themselves are unchanged, so the readout is built the same way and merely handed over
     // through the consumer rather than appended.
+    // The chain below is four arms because the signature changed twice: 1.21.6 replaced the List
+    // with a Consumer and a TooltipDisplay, and 1.20.5 introduced TooltipContext -- before it the
+    // same override took the Level, which the readout never looks at. Explanations live here rather
+    // than inside an arm, because Stonecutter strips the comment prefix when it uncomments one.
     //? if >=1.21.9 {
     /*public void appendHoverText(ItemStack stack, TooltipContext context,
                                 net.minecraft.world.item.component.TooltipDisplay display,
@@ -117,7 +121,7 @@ public final class NavigatorItem extends Item {
             NavigatorClient.appendTooltip(tooltip);
         }
     }
-    *///?} else {
+    *///?} else if >=1.20.5 {
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
                                 TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
@@ -126,5 +130,15 @@ public final class NavigatorItem extends Item {
             NavigatorClient.appendTooltip(tooltip::add);
         }
     }
-    //?}
+    //?} else {
+    /*public void appendHoverText(ItemStack stack, net.minecraft.world.level.Level level,
+                                List<Component> tooltip, TooltipFlag flag) {
+        // A tooltip is built on the client, but this method is reachable from a server (an item
+        // stack can be asked for its lines there), so the side is asked before the readout is
+        // touched.
+        if (isClient()) {
+            NavigatorClient.appendTooltip(tooltip::add);
+        }
+    }
+    *///?}
 }
