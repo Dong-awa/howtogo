@@ -2285,6 +2285,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
+        // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the
+        // method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...).
+        // The pose carries the same matrix, so only the wrapper and the two names differ.
+        //? if >=1.21 {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
+        //?} else {
+        /*vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a);
+        *///?}
     }
 }

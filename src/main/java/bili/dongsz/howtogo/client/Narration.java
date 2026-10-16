@@ -403,7 +403,14 @@ public final class Narration {
         }
         long millis = (long) SPOKEN_BASE_MS + (long) syllables * SPOKEN_SYLLABLE_MS
                 + (long) letters * SPOKEN_LETTER_MS;
+        // Math.clamp(long, int, int) arrived in Java 21, and the 1.20.1 and 1.20.4 nodes are Java 17.
+        // The two spellings mean the same thing; only the JDK differs, which is why this is a
+        // condition on the Minecraft version rather than on the loader.
+        //? if >=1.20.5 {
         return ticksFor(Math.clamp(millis, SPOKEN_MIN_MS, SPOKEN_MAX_MS));
+        //?} else {
+        /*return ticksFor(Math.max(SPOKEN_MIN_MS, Math.min(SPOKEN_MAX_MS, (int) millis)));
+        *///?}
     }
 
     /** A length of time as client ticks, never less than one. */
