@@ -3,7 +3,11 @@ package bili.dongsz.howtogo.api;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.WorldFiles;
 import bili.dongsz.howtogo.route.DestinationSource;
+//? if fabric {
+/*import net.fabricmc.loader.api.FabricLoader;
+*///?} else {
 import net.neoforged.fml.ModList;
+//?}
 
 import java.nio.file.Path;
 import java.util.Objects;
@@ -68,9 +72,19 @@ public final class HowToGoApi {
      */
     public static String version() {
         try {
+            // The two loaders answer "what version of this mod is loaded" from different places and
+            // in different shapes: NeoForge hands back a ModInfo whose version is a MavenVersion,
+            // Fabric a ModMetadata whose version is a Version. Both are asked for a friendly string,
+            // which is the same thing the player sees in the mod list.
+            //? if fabric {
+            /*return FabricLoader.getInstance().getModContainer(HowToGo.MODID)
+                    .map(container -> container.getMetadata().getVersion().getFriendlyString())
+                    .orElse("");
+            *///?} else {
             return ModList.get().getModContainerById(HowToGo.MODID)
                     .map(container -> container.getModInfo().getVersion().toString())
                     .orElse("");
+            //?}
         } catch (Throwable notLoadedYet) {
             return "";
         }

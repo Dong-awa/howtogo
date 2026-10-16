@@ -1,13 +1,17 @@
 package bili.dongsz.howtogo;
 
 import bili.dongsz.howtogo.item.ModItems;
+//? if fabric {
+/*import net.fabricmc.api.ModInitializer;
+*///?} else {
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+//?}
 
 /**
- * The dedicated-server entry point.
+ * The entry point that runs on both sides, and it exists for one reason: the item.
  *
  * <h2>Why a client-side mod needs one</h2>
  * Nothing this mod does for a player happens on a server: roads are the client's own data, the routing
@@ -26,11 +30,39 @@ import net.neoforged.fml.common.Mod;
  * business -- see {@code NavigatorClient} and {@code NavigatorItem}, where every client-only line sits
  * behind a side check.
  *
- * <p>NeoForge constructs exactly one of the two entry points: this one on a dedicated server, and
- * {@link HowToGo} on a physical client (where the integrated server shares the client's registries). Two
- * classes rather than one guarded class, because a {@code dist}-annotated class is the one thing the
- * loader promises not to touch on the other side -- and a promise is better than a hand-written check.
+ * <h2>How the two loaders express "exactly one of these runs"</h2>
+ * NeoForge gives the author two {@code @Mod} classes, one {@code dist = CLIENT} and one
+ * {@code dist = DEDICATED_SERVER}, and constructs exactly one of them -- and a {@code dist}-annotated
+ * class is the one thing the loader promises not to touch on the other side, so a promise is doing the
+ * work here rather than a hand-written check.
+ *
+ * <p>Fabric's equivalent is the entrypoint list in {@code fabric.mod.json}: this class is the
+ * {@code main} entrypoint, which runs on a dedicated server <em>and</em> on a physical client, and
+ * {@link HowToGo} is the {@code client} entrypoint, which Fabric skips on a dedicated server. Item
+ * registration therefore happens exactly once on each side -- the same guarantee, expressed in the
+ * loader's own vocabulary instead of in an annotation.
+ *
+ * <p>One consequence worth stating plainly, because it is a property of the design rather than of
+ * either port: the mod is declared for both environments, so a server that has it installed will have
+ * the item and a server that does not have it will not -- identically on both loaders.
  */
+// The class is written twice rather than conditioned inside, because the two loaders disagree about
+// what an entry point *is*: NeoForge constructs a class with a constructor it hands the mod bus to,
+// Fabric calls a no-argument method on a class it instantiates itself. The body is two lines either
+// way, so a shared shell with the differences inside would be more scaffolding than code.
+//
+// The javadoc above stays outside the condition: a `/** ... */` inside the `/* ... */` a condition is
+// written with would close that comment early -- the trap MIGRATION.md records.
+//? if fabric {
+/*public final class HowToGoServer implements ModInitializer {
+
+    @Override
+    public void onInitialize() {
+        ModItems.register();
+        HowToGo.LOGGER.info("[HowToGo] constructed (common entry point: item registration only)");
+    }
+}
+*///?} else {
 @Mod(value = HowToGo.MODID, dist = Dist.DEDICATED_SERVER)
 public final class HowToGoServer {
 
@@ -39,3 +71,4 @@ public final class HowToGoServer {
         HowToGo.LOGGER.info("[HowToGo] constructed (dedicated server: item registration only)");
     }
 }
+//?}

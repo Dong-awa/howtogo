@@ -1,8 +1,14 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+//? if fabric {
+/*import net.fabricmc.loader.api.FabricLoader;
+*///?} else {
 import net.neoforged.fml.ModList;
+//?}
+//? if neoforge {
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+//?}
 import xaero.map.WorldMap;
 import xaero.map.element.MapElementRenderHandler;
 
@@ -21,11 +27,22 @@ public final class RoadLayer {
     private RoadLayer() {
     }
 
+    // The two loaders hand a tick callback different things: NeoForge passes an event object the
+    // handler may ignore, Fabric passes the client and this one is registered as a lambda that
+    // drops it. Neither is used here, so only the signature differs.
+    //? if fabric {
+    /*public static void onClientTick() {
+    *///?} else {
     public static void onClientTick(ClientTickEvent.Post event) {
+    //?}
         if (attempted) {
             return;
         }
+        //? if fabric {
+        /*if (!FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
+        *///?} else {
         if (!ModList.get().isLoaded("xaeroworldmap")) {
+        //?}
             // Should not happen (declared as a required dependency), but fail soft rather than
             // spamming the log every tick.
             attempted = true;
