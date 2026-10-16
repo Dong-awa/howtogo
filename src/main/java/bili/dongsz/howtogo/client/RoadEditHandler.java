@@ -306,7 +306,7 @@ public final class RoadEditHandler {
     //
     // On Fabric the two numbers arrive as plain ints, so the scancode/keycode rename the accessors
     // above exist for does not reach this side at all.
-    //? if fabric {
+    //? if fabric && <1.21.9 {
     /*public static void registerScreenHandlers() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (!isMapScreen(screen)) {
@@ -316,6 +316,22 @@ public final class RoadEditHandler {
                     !(isMapOpen(open) && handleKey(open, keyCode, scanCode, InputConstants.PRESS)));
             ScreenKeyboardEvents.allowKeyRelease(screen).register((open, keyCode, scanCode, modifiers) ->
                     !(isMapOpen(open) && handleKey(open, keyCode, scanCode, InputConstants.RELEASE)));
+        });
+    }
+    *///?}
+    // The same registration from 1.21.9 on, where the key callbacks stopped taking the key, the
+    // scancode and the modifiers as separate arguments and started taking a KeyEvent. Two whole
+    // methods for the same reason as MapFilterOverlay.register().
+    //? if fabric && >=1.21.9 {
+    /*public static void registerScreenHandlers() {
+        ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (!isMapScreen(screen)) {
+                return;
+            }
+            ScreenKeyboardEvents.allowKeyPress(screen).register((open, event) ->
+                    !(isMapOpen(open) && handleKey(open, event.key(), event.scancode(), InputConstants.PRESS)));
+            ScreenKeyboardEvents.allowKeyRelease(screen).register((open, event) ->
+                    !(isMapOpen(open) && handleKey(open, event.key(), event.scancode(), InputConstants.RELEASE)));
         });
     }
     *///?}

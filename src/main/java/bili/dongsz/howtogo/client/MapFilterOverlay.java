@@ -80,7 +80,7 @@ public final class MapFilterOverlay {
     //
     // NeoForge has no equivalent and needs none: its screen events are global, so the handlers are
     // subscribed once at construction and filter by screen themselves.
-    //? if fabric {
+    //? if fabric && <1.21.9 {
     /*public static void register() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (!RoadEditHandler.isMapScreen(screen)) {
@@ -89,6 +89,24 @@ public final class MapFilterOverlay {
             ScreenEvents.afterRender(screen).register(MapFilterOverlay::onScreenRender);
             ScreenMouseEvents.allowMouseClick(screen).register(MapFilterOverlay::onMousePressed);
             ScreenMouseEvents.allowMouseRelease(screen).register(MapFilterOverlay::onMouseReleased);
+        });
+    }
+    *///?}
+    // The same registration from 1.21.9 on, where the mouse callbacks stopped taking the
+    // coordinates and the button as separate arguments and started taking a MouseButtonEvent.
+    // Two whole methods rather than a condition inside one: the anchor node compiles src/ verbatim,
+    // so an inner terminator inside this fence would close it early there and leave the rest live.
+    //? if fabric && >=1.21.9 {
+    /*public static void register() {
+        ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (!RoadEditHandler.isMapScreen(screen)) {
+                return;
+            }
+            ScreenEvents.afterRender(screen).register(MapFilterOverlay::onScreenRender);
+            ScreenMouseEvents.allowMouseClick(screen).register((open, event) ->
+                    onMousePressed(open, event.x(), event.y(), event.button()));
+            ScreenMouseEvents.allowMouseRelease(screen).register((open, event) ->
+                    onMouseReleased(open, event.x(), event.y(), event.button()));
         });
     }
     *///?}
