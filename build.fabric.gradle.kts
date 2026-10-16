@@ -83,6 +83,14 @@ dependencies {
     //
     // Loom remaps this jar to the official names on the way in, which is why the file name does
     // not have to say so; see libs/README.md.
+    // From 26.2 on Xaero ships in two parts and the second one -- XaeroLib, which owns the
+    // rendering API this mod compiles against -- is a separate jar in libs/ rather than being
+    // bundled. Named by property so the nodes that do not need it say nothing; the NeoForge
+    // script does the same.
+    val xaerolib = findProperty("deps.xaerolib")?.toString().orEmpty()
+    if (xaerolib.isNotEmpty()) {
+        modCompileOnly(fileTree(rootProject.file("libs")) { include(xaerolib) })
+    }
     modCompileOnly(fileTree(rootProject.file("libs")) { // Xaero names its Fabric jars two ways: "xaeroworldmap-fabric-<mc>-<ver>.jar" from 1.21.8 on, and
     // "XaerosWorldMap_<ver>_Fabric_<mc>.jar" before that. Both are accepted rather than renaming the
     // download, because a local file whose name is not the one upstream publishes is a trap for

@@ -98,6 +98,13 @@ stonecutter {
         fabric("1.21.6")
         fabric("1.21.8")
         fabric("1.21.11")
+        // 26.1 and later are NOT registered yet. Loom insists that the Gradle JVM itself be the
+        // Java the Minecraft version requires -- "Minecraft 26.1 requires Java 25 but Gradle is
+        // using 21" -- and Gradle 8.14.6 cannot RUN on Java 25 (IllegalArgumentException: 25.0.3),
+        // which is the same wall Gradle 8.12 hit. A node that fails to configure takes every other
+        // node down with it, so it stays unregistered until that is solved. Its gradle.properties
+        // are in place. Gradle 9.5.1 is installed and does run on Java 25, but Stonecutter 0.7.11
+        // needs Gradle 8 and ForgeGradle 6 refuses Gradle 9, so the whole tree cannot move.
 
         // 1.21.11 and later are NOT registered yet: their Fabric API needs a newer Loom than
         // the one the rest of the tree uses, and a node that cannot configure takes every
