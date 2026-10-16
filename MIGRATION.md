@@ -196,3 +196,44 @@ one. `chiseledBuild` builds them all.
 - The 1.21.6 node needed a dependency substitution (FML 9.0.2 has no POMs on either reachable
   host); see `versions/1.21.6-neoforge/gradle.properties`.
 - `dist/` is refreshed by hand; there is no Gradle task for it in this layout.
+
+### Fabric: the HUD batch submit, and why it is not an access widener
+
+`HudBatchLegacy` (>=1.21.6) and `HudBatchNewer` (>=1.21.9) both end with
+
+    graphics.submitGuiElementRenderState(snapshot());
+
+`submitGuiElementRenderState` is **added by NeoForge**, not vanilla. Two independent checks:
+
+- It appears **0 times** in the 1.21.6 layered mappings (`mappings.tiny`), where every vanilla
+  member is listed by official, intermediary and named name.
+- Vanilla `GuiGraphics` has a family of specific submitters -- `submitBlit`,
+  `submitColoredRectangle`, `submitItem`, `submitEntityRenderState`, `submitMapRenderState` and
+  several more -- and **no generic one** taking a `GuiElementRenderState`.
+
+The vanilla route is one level down. `GuiRenderState` (intermediary `class_11246`) has
+
+    submitGuiElement(Lnet/minecraft/client/gui/render/state/GuiElementRenderState;)V
+
+and `GuiGraphics` holds one in a **private** field:
+
+    guiRenderState    Lnet/minecraft/client/gui/render/state/GuiRenderState;    (field f)
+
+So the Fabric side needs that field reached, and an access widener is the wrong tool: the field
+is private rather than package-private, and -- more to the point -- a Mixin accessor is the
+Fabric idiom for exactly this and the tree already has the Mixin infrastructure for
+`MouseHandlerMixin`. An `@Accessor("guiRenderState")` on a `GuiGraphics` mixin, then
+`.submitGuiElement(state)` on the result.
+
+**Do not repeat the mistake made here**: an access widener entry was written for
+`submitGuiElementRenderState` first, and its acceptance by Loom proved nothing, because Loom
+validates an access widener when it *remaps the jar* -- after `compileJava` has already run.
+The compile error was identical with and without the entry. Verify a member exists in the
+mappings before writing anything that targets it.
+
+One structural consequence, since it decides how the fix has to be written: `HudBatchLegacy` is
+fenced whole by `//? if >=1.21.6 && <1.21.9`. A loader condition **inside** that fence would nest,
+and on the nodes where the fence is false the inner `*/` would close the outer comment early and
+leave the rest of the class live. So the differing line goes in a helper whose own conditions are
+top level (`fabric && >=1.21.6 && <1.21.9` against `neoforge && ...`), not inline in the fenced
+file.
