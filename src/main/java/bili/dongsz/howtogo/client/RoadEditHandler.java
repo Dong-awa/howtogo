@@ -152,11 +152,39 @@ public final class RoadEditHandler {
 
     // ------------------------------------------------------------------ mouse
 
-    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
-        Screen screen = Screens.current();
-        if (event.getAction() != InputConstants.PRESS) {
-            return;
+    // Mouse, in the two shapes the loaders offer.
+    //
+    // NeoForge posts InputEvent.MouseButton.Pre/Post from MouseHandler.onPress, ahead of any screen
+    // seeing the click. Fabric has no global mouse event at all, so that vantage point is recreated
+    // by MouseHandlerMixin, which calls the two entry points below from the same method NeoForge
+    // posts from. The bodies are shared: mousePress answers whether the editor used the click, which
+    // the NeoForge adapter turns into a cancellation and the Mixin into its own return value.
+    //? if fabric {
+    /*public static boolean onMouseButtonPre(int button, int action) {
+        return action == InputConstants.PRESS && mousePress(button);
+    }
+
+    public static void onMouseButtonPost(int button, int action) {
+        if (action == InputConstants.RELEASE) {
+            mouseRelease(button);
         }
+    }
+    *///?} else {
+    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+        if (event.getAction() == InputConstants.PRESS && mousePress(event.getButton())) {
+            event.setCanceled(true);
+        }
+    }
+
+    public static void onMouseButtonReleased(InputEvent.MouseButton.Post event) {
+        if (event.getAction() == InputConstants.RELEASE) {
+            mouseRelease(event.getButton());
+        }
+    }
+    //?}
+
+    private static boolean mousePress(int button) {
+        Screen screen = Screens.current();
 
         // Picking a destination comes before the typing gate: a click is not a typed character, so a
         // focused text field -- the map's search box, most of the time -- must not swallow it. With that
@@ -164,37 +192,35 @@ public final class RoadEditHandler {
         //
         // The map's own switches are not handled here at all: they belong to the screen rather than to
         // the map, and are handled and drawn by MapFilterOverlay.
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_LEFT && isMapScreen(screen)
+        if (button == InputConstants.MOUSE_BUTTON_LEFT && isMapScreen(screen)
                 && !RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
-            event.setCanceled(true);
-            return;
+            return true;
         }
 
         // And while editing, the same click is a destination too: the editor places points on a bare
         // click and picks a destination on a Ctrl one.
-        if (isMapOpen(screen) && event.getButton() == InputConstants.MOUSE_BUTTON_LEFT
+        if (isMapOpen(screen) && button == InputConstants.MOUSE_BUTTON_LEFT
                 && RoadEditSession.isActive() && Screen.hasControlDown()) {
             safely("pick destination on map", RoadEditSession::navigateToCursor);
-            event.setCanceled(true);
-            return;
+            return true;
         }
 
         if (!isMapOpen(screen)) {
-            return;
+            return false;
         }
         if (!RoadEditSession.isActive()) {
-            return;
+            return false;
         }
 
-        switch (event.getButton()) {
+        switch (button) {
             case InputConstants.MOUSE_BUTTON_LEFT -> {
                 if (Screen.hasShiftDown()) {
                     safely("begin drag", RoadEditSession::beginDragAtCursor);
                 } else {
                     safely("place point", RoadEditSession::clickPlace);
                 }
-                event.setCanceled(true);
+                return true;
             }
             case InputConstants.MOUSE_BUTTON_RIGHT -> {
                 if (RoadEditSession.isDrawing()) {
@@ -208,73 +234,108 @@ public final class RoadEditHandler {
                     // would open the map's right-click menu on the release. See RoadEditSession.
                     safely("pan map", RoadEditSession::beginMapPan);
                 }
-                event.setCanceled(true);
+                return true;
             }
             default -> {
                 // Middle click and friends stay with Xaero.
             }
         }
+        return false;
     }
 
-    public static void onMouseButtonReleased(InputEvent.MouseButton.Post event) {
-        if (event.getAction() != InputConstants.RELEASE) {
-            return;
-        }
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_LEFT
+    private static void mouseRelease(int button) {
+        if (button == InputConstants.MOUSE_BUTTON_LEFT
                 && RoadEditSession.draggingNodeId() != RoadSegment.NO_NODE) {
             RoadEditSession.endDrag();
         }
-        if (event.getButton() == InputConstants.MOUSE_BUTTON_RIGHT && RoadEditSession.isPanningMap()) {
+        if (button == InputConstants.MOUSE_BUTTON_RIGHT && RoadEditSession.isPanningMap()) {
             safely("end map pan", RoadEditSession::endMapPan);
         }
     }
 
     // --------------------------------------------------------------- keyboard
 
-    /**
-     * A key was pressed while some screen is open: the editor's only way in.
-     *
-     * <p>Cancels the event only when the editor uses the key, so the map screen keeps every shortcut
-     * the editor does not claim.
-     */
+    // The key numbers behind a screen key event, per version.
+    //
+    // 26.1 renamed the key event's second component: what was scancode() is keycode() there. Pulling
+    // the two out here rather than inside the handlers below is not tidiness -- it is what keeps
+    // those handlers free of conditions, and they have to be, because they sit inside a loader
+    // condition and Stonecutter's scopes do not nest. A version condition inside a loader condition
+    // would close it and leave the handler live on the wrong loader.
+    //? if neoforge && >=26.3 {
+    /*private static int keyOf(ScreenEvent.KeyPressed.Pre event) {
+        return event.getKeyEvent().key();
+    }
+
+    private static int scanOf(ScreenEvent.KeyPressed.Pre event) {
+        return event.getKeyEvent().keycode();
+    }
+
+    private static int keyOf(ScreenEvent.KeyReleased.Pre event) {
+        return event.getKeyEvent().key();
+    }
+
+    private static int scanOf(ScreenEvent.KeyReleased.Pre event) {
+        return event.getKeyEvent().keycode();
+    }
+    *///?}
+    //? if neoforge && <26.3 {
+    private static int keyOf(ScreenEvent.KeyPressed.Pre event) {
+        return event.getKeyCode();
+    }
+
+    private static int scanOf(ScreenEvent.KeyPressed.Pre event) {
+        return event.getScanCode();
+    }
+
+    private static int keyOf(ScreenEvent.KeyReleased.Pre event) {
+        return event.getKeyCode();
+    }
+
+    private static int scanOf(ScreenEvent.KeyReleased.Pre event) {
+        return event.getScanCode();
+    }
+    //?}
+
+    // Keys, in the two shapes the loaders offer.
+    //
+    // Both are handled from ahead of the screen, and both answer the same question: may the screen
+    // see this key? NeoForge answers by cancelling the event, Fabric by returning false from the
+    // per-screen callback -- so the dispatch itself, handleKey, is shared and only the entry points
+    // differ. The map screen keeps every shortcut the editor does not claim either way.
+    //
+    // On Fabric the two numbers arrive as plain ints, so the scancode/keycode rename the accessors
+    // above exist for does not reach this side at all.
+    //? if fabric {
+    /*public static void registerScreenHandlers() {
+        ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (!isMapScreen(screen)) {
+                return;
+            }
+            ScreenKeyboardEvents.allowKeyPress(screen).register((open, keyCode, scanCode, modifiers) ->
+                    !(isMapOpen(open) && handleKey(open, keyCode, scanCode, InputConstants.PRESS)));
+            ScreenKeyboardEvents.allowKeyRelease(screen).register((open, keyCode, scanCode, modifiers) ->
+                    !(isMapOpen(open) && handleKey(open, keyCode, scanCode, InputConstants.RELEASE)));
+        });
+    }
+    *///?}
+    //? if neoforge {
+    // A key was pressed while some screen is open: the editor's only way in.
     public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
-        Screen screen = event.getScreen();
-        boolean gate = isMapOpen(screen);
-        // 26.1 renamed the key event's second component: what was scancode() is keycode() there. The
-        // dispatch below takes the two numbers separately, so the accessor is chosen here rather than
-        // in it -- one place, and the same one place that already unpacks the event.
-        //
-        // Two independent markers rather than an if/else, because the two arms declare the same local
-        // and an else pair here emitted both of them on the newer node.
-        //? if >=26.3 {
-        /*boolean consumed = gate
-                && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.PRESS);
-        *///?}
-        //? if <26.3 {
-        boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.PRESS);
-        //?}
-        if (consumed) {
+        if (isMapOpen(event.getScreen())
+                && handleKey(event.getScreen(), keyOf(event), scanOf(event), InputConstants.PRESS)) {
             event.setCanceled(true);
         }
     }
 
-    /** A key was released: only a shift release matters, and it ends a drag. */
+    // A key was released: only a shift release matters, and it ends a drag.
     public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
-        Screen screen = event.getScreen();
-        boolean gate = isMapOpen(screen);
-        //? if >=26.3 {
-        /*boolean consumed = gate
-                && handleKey(screen, event.getKeyEvent().key(), event.getKeyEvent().keycode(), InputConstants.RELEASE);
-        *///?}
-        //? if <26.3 {
-        boolean consumed = gate
-                && handleKey(screen, event.getKeyCode(), event.getScanCode(), InputConstants.RELEASE);
-        //?}
-        if (consumed) {
+        if (isMapOpen(event.getScreen())
+                && handleKey(event.getScreen(), keyOf(event), scanOf(event), InputConstants.RELEASE)) {
             event.setCanceled(true);
         }
     }
+    //?}
 
     /**
      * Runs one key against the editor.
