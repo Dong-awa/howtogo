@@ -18,6 +18,11 @@ import bili.dongsz.howtogo.item.ModItems;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.webmap.WebMapService;
 import com.mojang.logging.LogUtils;
+//? if fabric {
+/*import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+*///?} else {
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -26,15 +31,44 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.common.NeoForge;
+//?}
 import org.slf4j.Logger;
 
 /**
  * Entry point.
  * This mod is deliberately client-only: roads are stored on the client and every feature
  * (rendering, editing, routing) is a pure client concern for now.
+ *
+ * <h2>How the two loaders differ here, and why the class is written twice</h2>
+ * NeoForge constructs this class with the mod bus and a container, and everything is subscribed to
+ * two buses from that constructor: thirteen listeners on the game bus for the tick jobs, the HUD,
+ * the editing input and the map's switches, and three on the mod bus for the key mappings, the
+ * config reload and the client-setup step.
+ *
+ * <p>Fabric has neither a bus on a mod container nor a constructor to subscribe from. There is one
+ * {@code onInitializeClient} call, the thirteen tick listeners collapse into one
+ * {@code END_CLIENT_TICK} callback run in the same order the original registered them, the HUD
+ * listener becomes {@code HudRenderCallback}, and the registrations that belong to a class are made
+ * by that class -- see {@code RoadEditHandler.registerKeys()},
+ * {@code RoadEditHandler.registerScreenHandlers()}, {@code MapFilterOverlay.register()} and
+ * {@code HowToGoCommand.register()}.
+ *
+ * <p>The config is read by this class on Fabric rather than by the loader, because Fabric has no
+ * config service; see {@link RoadConfig} for what that cost and what it deliberately preserved.
+ *
+ * <p>So the class declaration and the entry point are written once per loader, and everything else
+ * in the file -- the id, the logger and {@link #diagnostic} -- is shared and sits between them.
  */
+// The two halves are whole declarations rather than conditions inside one, for the same reason as
+// HowToGoServer: the loaders disagree about what an entry point is, so a shared shell with the
+// differences inside would be more scaffolding than code. The javadoc above stays outside, because a
+// `/** ... */` inside the `/* ... */` a condition is written with would close it early.
+//? if fabric {
+/*public final class HowToGo implements ClientModInitializer {
+*///?} else {
 @Mod(value = HowToGo.MODID, dist = Dist.CLIENT)
 public final class HowToGo {
+//?}
 
     public static final String MODID = "howtogo";
     public static final Logger LOGGER = LogUtils.getLogger();
@@ -60,6 +94,69 @@ public final class HowToGo {
         }
     }
 
+    //? if fabric {
+    /*@Override
+    public void onInitializeClient() {
+        // The config first: the calls below read it, and on NeoForge it had already been read by the
+        // time the client-setup event this replaces was posted.
+        RoadConfig.load();
+        // Client setup runs after the config files have been read, so this is the first point at which
+        // the configured travel mode is genuinely available -- and the only point at which the saved
+        // route preferences sit in front of config values that are known to be loaded.
+        Navigation.loadConfiguredMode();
+        RoutePreferenceStore.load();
+
+        // One callback rather than thirteen listeners, run in the order the original registered them.
+        // Registration into Xaero's render pipeline has to wait until Xaero has built its handler, so
+        // RoadLayer polls from the client tick instead of doing it during initialisation.
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            RoadLayer.onClientTick();
+            // The addon API's two tick jobs, and in this order: the deferred queue is drained before
+            // the registration event is posted, so work queued by a registration handler waits for the
+            // next tick and ClientScheduler's promise -- "the tick after the one that queued it" --
+            // holds for addons exactly as it does for this mod's own commands.
+            ClientScheduler.tick();
+            ApiBootstrap.fireOnce();
+            RoadStore.tick();
+            TransitLineStore.tick();
+            RailTrackStore.tick();
+            MtrClientData.tick();
+            RoadEditSession.tick();
+            // The browser map's server, when the config asks for it to start itself: it waits for a
+            // world to be loaded, because a page opened onto a 503 is worse than a socket opened a
+            // moment later.
+            WebMapService.tick();
+            Navigation.tick();
+            // The commands' own deferral: a screen cannot be opened from inside the command that asked
+            // for it, so the work is run on the tick after.
+            HowToGoCommand.tick();
+            // Ticked rather than drawn: the readout is recomputed per frame, so deciding what to say
+            // there would repeat the same instruction continuously, and the HUD does not run at all
+            // while a screen is open. The speaking itself is on the narration thread; this only feeds
+            // it.
+            Narration.tick();
+            // The in-game self-test, when a launcher has asked for one: see AutoSelfTest and
+            // tools/user-test. Silent unless the property is set.
+            AutoSelfTest.tick();
+        });
+
+        // Drawn rather than ticked: the readout is recomputed per frame from the state the tick left.
+        HudRenderCallback.EVENT.register(NavHudRenderer::onRenderGui);
+        // Client commands: opening the terminal, ending the trip and switching travel mode are all
+        // client state, so they run here with no server involved and no permission needed.
+        HowToGoCommand.register();
+        // Editing keys are offered to the screen before the screen itself sees them, and editing clicks
+        // arrive through a Mixin on the mouse handler, because Fabric has no global mouse event. See
+        // RoadEditHandler.
+        RoadEditHandler.registerKeys();
+        RoadEditHandler.registerScreenHandlers();
+        // The map's switches: a screen overlay rather than part of the map, so that nothing the map
+        // draws can end up over them. See MapFilterOverlay.
+        MapFilterOverlay.register();
+
+        LOGGER.info("[HowToGo] constructed");
+    }
+    *///?} else {
     public HowToGo(IEventBus modEventBus, ModContainer modContainer) {
         // Registration into Xaero's render pipeline has to wait until Xaero has built its
         // handler, so we poll from the client tick instead of doing it here.
@@ -131,4 +228,5 @@ public final class HowToGo {
 
         LOGGER.info("[HowToGo] constructed");
     }
+    //?}
 }
