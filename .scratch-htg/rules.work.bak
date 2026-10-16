@@ -1,0 +1,95 @@
+// The project controller: settings shared by every node.
+//
+// `stonecutter active` is the node you are editing right now. src/ on disk always holds the
+// state of that node, and switching it rewrites src/ in place -- the per-version branches are
+// toggled by commenting and uncommenting the `//?` markers, which is why the file you read is
+// plain Java and Stonecutter's own view lives in those comments.
+plugins {
+    id("dev.kikugie.stonecutter")
+}
+
+stonecutter active "26.3-neoforge"
+
+stonecutter parameters {
+    // `//? if neoforge {` -- available in conditions, so loader-specific code can be written
+    // next to version-specific code. The fabric constant arrives with the fabric nodes.
+    constants["neoforge"] = true
+
+    // Swaps replace a token in the source with a string computed here. mod_version is read by
+    // HowToGo.MOD_VERSION via a literal that this keeps in step with gradle.properties.
+    swaps["mod_version"] = "\"${properties.get<String>("mod_version")}\";"
+
+    // Replacements rewrite the shared source per version, so a rename that a release made once
+    // does not have to be written by hand at every site. They are textual and global within the
+    // node they apply to, so each one is declared only where the new name really exists: the
+    // shared source is written against the NEWEST spelling, and an older node gets the older
+    // name substituted back in.
+    //
+    // Direction, which is not what the argument order suggests: `replace(a, b)` records b as the
+    // TARGET and a as an alias of it, and Stonecutter rewrites the pair either way round -- to
+    // b when the enclosing condition holds, to a when it does not. So the SECOND argument must
+    // be the spelling the shared source is written in (the newest one) and the first the older
+    // alternative. Written the other way round the rule does not merely fail to help, it
+    // actively corrupts every node the condition excludes: a rule meant to turn
+    // GuiGraphicsExtractor into GuiGraphics on 1.21.x will, on 26.1 and 26.2, turn their
+    // GuiGraphics back into GuiGraphicsExtractor and break three nodes that were building.
+    replacements {
+        // Xaero's element renderer swapped its live-buffer parameter when the third-tier
+        // rendering API arrived. 26.1 hands the renderer a vanilla BufferSource; 26.2 moved the
+        // same role into XaeroLib's own provider. The call shape is identical --
+        // getBuffer(RenderType) returns a VertexConsumer either way -- so only the type name
+        // changes. The import is rewritten first and in full, because the two types live in
+        // different packages: a bare name replacement alone would leave a nonsense import.
+        string(current.parsed < "26.2") {
+            replace("import net.minecraft.client.renderer.MultiBufferSource;",
+                    "import xaero.lib.client.graphics.XaeroBufferProvider;")
+            replace("MultiBufferSource.BufferSource", "XaeroBufferProvider")
+        }
+
+        // 26.1 rebuilt GUI drawing around an extraction pass: what used to be GuiGraphics -- the
+        // object a screen or HUD handler draws through -- is now GuiGraphicsExtractor. The object
+        // plays the same role, every call site keeps its shape, and the two live in different
+        // packages, so the import line is rewritten in full first: a bare name replacement alone
+        // would leave an import of a class the node does not have.
+        string(current.parsed < "26.1") {
+            replace("import net.minecraft.client.gui.GuiGraphics;",
+                    "import net.minecraft.client.gui.GuiGraphicsExtractor;")
+            replace("GuiGraphics", "GuiGraphicsExtractor")
+        }
+
+        // The same 26.1 wave renamed the text call on that object: the long-standing
+        // GuiGraphics.drawString was shortened to GuiGraphicsExtractor.text, overload for overload
+        // (String, Component and FormattedCharSequence, each with and without the drop-shadow
+        // flag). The receiver is part of the pattern because Xaero's buffer source keeps its own
+        // drawString and the map renderers legitimately call that one, so only the GUI drawing
+        // object the panels are handed is rewritten.
+        string(current.parsed < "26.1") {
+            replace("graphics.drawString(", "graphics.text(")
+        }
+
+        // The extraction pass renamed the state hook alongside the context: what a screen now
+        // overrides as extractRenderState is what it used to override as render, and
+        // extractBackground was renderBackground. Same arguments, same contract -- the method is
+        // simply called by vanilla's new pass rather than by the old one -- so the two are one
+        // substitution each. There are exactly two shapes to cover, the declaration (spelled
+        // `void extractRenderState(`) and the super/parent call (spelled `.extractRenderState(`),
+        // and both patterns carry the whole method name so that RenderPipeline.render(...) and
+        // the element renderer's preRender/postRender -- which all keep their names -- are never
+        // touched. Notably NOT `replace("render(", ...)`: that would also rewrite
+        // RenderPipeline.render on every 1.21.x node, where that call is correct as written.
+        string(current.parsed < "26.1") {
+            replace("void render(GuiGraphics", "void extractRenderState(GuiGraphics")
+            replace("void renderBackground(GuiGraphics", "void extractBackground(GuiGraphics")
+            replace(".render(GuiGraphics", ".extractRenderState(GuiGraphics")
+            replace(".renderBackground(GuiGraphics", ".extractBackground(GuiGraphics")
+        }
+
+        // The GUI render state moved package in the same release. As with the other import
+        // rewrites this one is done in full, because the bare name alone would leave an import of
+        // a package that no longer exists.
+        string(current.parsed < "26.1") {
+            replace("import net.minecraft.client.gui.render.state.GuiElementRenderState;",
+                    "import net.minecraft.client.renderer.state.gui.GuiElementRenderState;")
+        }
+    }
+}

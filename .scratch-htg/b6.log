@@ -1,0 +1,87 @@
+Running Stonecutter 0.9.8
+> Task :1.21.11-neoforge:createMinecraftArtifacts UP-TO-DATE
+> Task :1.21.11-neoforge:stonecutterPrepare
+> Task :1.21.11-neoforge:stonecutterGenerate
+
+> Task :1.21.11-neoforge:compileJava FAILED
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\DestinationScreen.java:815: 错误: 找不到符号
+    public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                 ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 DestinationScreen
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\DestinationScreen.java:820: 错误: 找不到符号
+    public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                       ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 DestinationScreen
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadNameScreen.java:387: 错误: 找不到符号
+    public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                 ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 RoadNameScreen
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadNameScreen.java:391: 错误: 找不到符号
+    public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                       ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 RoadNameScreen
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\TransitLineScreen.java:380: 错误: 找不到符号
+    public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                 ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 TransitLineScreen
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\TransitLineScreen.java:397: 错误: 找不到符号
+    public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                       ^
+  符号:   类 GuiGraphicsExtractor
+  位置: 类 TransitLineScreen
+注: E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\item\NavigatorItem.java使用或覆盖了已过时的 API。
+注: 有关详细信息, 请使用 -Xlint:deprecation 重新编译。
+6 个错误
+
+[Incubating] Problems report is available at: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':1.21.11-neoforge:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').
+> Compilation failed; see the compiler output below.
+  注: E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\item\NavigatorItem.java使用或覆盖了已过时的 API。
+  注: 有关详细信息, 请使用 -Xlint:deprecation 重新编译。
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\DestinationScreen.java:815: 错误: 找不到符号
+      public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                   ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 DestinationScreen
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\DestinationScreen.java:820: 错误: 找不到符号
+      public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                         ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 DestinationScreen
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadNameScreen.java:387: 错误: 找不到符号
+      public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                   ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 RoadNameScreen
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadNameScreen.java:391: 错误: 找不到符号
+      public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                         ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 RoadNameScreen
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\TransitLineScreen.java:380: 错误: 找不到符号
+      public void renderBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                                   ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 TransitLineScreen
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\1.21.11-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\TransitLineScreen.java:397: 错误: 找不到符号
+      public void render(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+                         ^
+    符号:   类 GuiGraphicsExtractor
+    位置: 类 TransitLineScreen
+  6 个错误
+
+* Try:
+> Check your code and dependencies to fix the compilation error(s)
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+BUILD FAILED in 3s
+4 actionable tasks: 3 executed, 1 up-to-date

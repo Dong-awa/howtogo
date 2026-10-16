@@ -13,9 +13,12 @@ plugins {
     id("net.neoforged.moddev") version "2.0.148"
 }
 
-val minecraftVersion = sc.current.version
+// Stonecutter 0.7 names this accessor `stonecutter` rather than `sc`, and has no `parsed`
+// property -- version tests go through eval(version, predicate) instead of a >= on a parsed
+// value. Same two questions, older spelling.
+val minecraftVersion = stonecutter.current.version
 val requiredJava = when {
-    sc.current.parsed >= "26.1" -> JavaVersion.VERSION_25
+    stonecutter.eval(minecraftVersion, ">=26.1") -> JavaVersion.VERSION_25
     else -> JavaVersion.VERSION_21
 }
 

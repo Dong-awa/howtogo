@@ -22,22 +22,28 @@ stonecutter parameters {
 
     // Swaps replace a token in the source with a string computed here. mod_version is read by
     // HowToGo.MOD_VERSION via a literal that this keeps in step with gradle.properties.
-    swaps["mod_version"] = "\"${properties.get<String>("mod_version")}\";"
+    swaps["mod_version"] = "\"${properties.get("mod_version")}\";"
 
     // Replacements rewrite the shared source per version, so a rename a release made once does
     // not have to be written by hand at every site.
     //
-    // DIRECTION, and why every rule here must be the four-argument regex form. The shared source
-    // is written in the OLDEST supported version's API, so a rule is needed when a NEWER release
-    // renamed something. Stonecutter's two-argument `replace(a, b)` is BIDIRECTIONAL: it records
-    // one spelling plus an alias and applies the pair in whichever direction the node being
-    // generated needs. A rule meant to give 26.x a new name therefore also runs, backwards, on
-    // 1.21.x -- and written with the arguments the other way round it rewrites the nodes that
-    // were already correct. An earlier attempt did exactly that and broke three building nodes.
+    // DIRECTION. The shared source is written in the OLDEST supported version's API, so a rule is
+    // needed when a NEWER release renamed something. Stonecutter's bare `replace(a, b)` is
+    // BIDIRECTIONAL: it records one spelling plus an alias and applies the pair in whichever
+    // direction the node being generated needs. A rule meant to give 26.x a new name therefore also
+    // runs, backwards, on 1.21.x -- and written with the arguments the other way round it rewrites
+    // the nodes that were already correct. An earlier attempt did exactly that and broke three
+    // building nodes.
     //
-    // The regex form takes the reverse pattern explicitly, so pinning it to a token that appears
-    // nowhere in the source pins the rule to one direction. That is the only safe way to state a
-    // rename where one spelling is a prefix of the other, as GuiGraphics is of GuiGraphicsExtractor.
+    // So every rule here states both directions: `replace(from, to)` for the forward one and
+    // `reverse("NO_REVERSE", "NO_REVERSE")` to pin the backward one to a token that appears nowhere
+    // in the source. (On Stonecutter 0.9 this was one four-argument call; 0.7 split it into two
+    // methods with the same meaning.) That is the only safe way to state a rename where one spelling
+    // is a prefix of the other, as GuiGraphics is of GuiGraphicsExtractor.
+    //
+    // ORDER matters here, which it did not before: 0.7 applies these in sequence, so a rule's
+    // pattern must be written against what the earlier rules will have produced, not against the
+    // source as written. The two screen-signature rules below are the ones where that bites.
     //
     // Add rules here as each newer node is ported, not in advance: a rule declared before the
     // version that needs it exists is a rule nothing tests.
@@ -52,38 +58,44 @@ stonecutter parameters {
         //
         // Add rules here only when the shared source genuinely cannot express both shapes; a rename
         // that a condition at the call site can carry is clearer left as a condition.
-        regex(current.parsed >= "1.21.9") {
+        regex(eval(current.version, ">=1.21.9")) {
             replace("net\\.minecraft\\.resources\\.ResourceLocation",
-                    "net.minecraft.resources.Identifier", "NO_REVERSE", "NO_REVERSE")
+                    "net.minecraft.resources.Identifier")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "1.21.9") {
-            replace("ResourceLocation", "Identifier", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=1.21.9")) {
+            replace("ResourceLocation", "Identifier")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The accessor that hands out that type was renamed with it: location() became identifier().
         // Matched with its receiver and arguments so it cannot touch an unrelated location() on some
         // other class.
-        regex(current.parsed >= "1.21.9") {
-            replace("\\.location\\(\\)", ".identifier()", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=1.21.9")) {
+            replace("\\.location\\(\\)", ".identifier()")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // 1.21.9 moved the static render types onto a class of their own. RenderType.create is gone
         // in favour of RenderTypes, and the ready-made ones -- debugQuads and friends -- moved with
         // it, so the import has to move too.
-        regex(current.parsed >= "1.21.9") {
+        regex(eval(current.version, ">=1.21.9")) {
             replace("net\\.minecraft\\.client\\.renderer\\.RenderType",
-                    "net.minecraft.client.renderer.rendertype.RenderTypes", "NO_REVERSE", "NO_REVERSE")
+                    "net.minecraft.client.renderer.rendertype.RenderTypes")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The ready-made render types moved with it onto that class: RenderType.debugQuads() is
         // RenderTypes.debugQuads() now. Matched as a qualified call so the name alone is not
         // rewritten inside MultiTextureRenderTypeRendererProvider and the renderer signatures, which
         // keep their own names.
-        regex(current.parsed >= "1.21.9") {
-            replace("RenderType\\.", "RenderTypes.", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=1.21.9")) {
+            replace("RenderType\\.", "RenderTypes.")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The keyboard-modifier helpers left Screen for Minecraft, where the window and its input
         // state already live. Same three questions about the current keystate, asked of the game.
-        regex(current.parsed >= "1.21.9") {
+        regex(eval(current.version, ">=1.21.9")) {
             replace("Screen\\.has(Control|Shift|Alt)Down\\(\\)",
-                    "Minecraft.getInstance().has$1Down()", "NO_REVERSE", "NO_REVERSE")
+                    "Minecraft.getInstance().has$1Down()")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
 
         // ---------------------------------------------------------------------------------------
@@ -103,11 +115,13 @@ stonecutter parameters {
         // signature line while the call sits several lines below it -- so a single-line lookahead
         // cannot connect the two, which two attempts at this established. MapLabels.java writes that
         // one call through a placeholder instead, and the placeholder is resolved by the rule below.
-        regex(current.parsed >= "26.1") {
-            replace("\\.drawString\\(", ".text(", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=26.1")) {
+            replace("\\.drawString\\(", ".text(")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
-            replace("\\.drawCenteredString\\(", ".centeredText(", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=26.1")) {
+            replace("\\.drawCenteredString\\(", ".centeredText(")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // Puts Xaero's method name back. A placeholder rather than a second rename rule, because
         // replacements are applied as one set and no rule sees another's output -- a rule matching
@@ -116,26 +130,29 @@ stonecutter parameters {
         // Gated at the anchor rather than at 26.1: every node compiles MapLabels, so every node has
         // to resolve the token. Gating it at 26.1 left the older nodes with the literal placeholder in
         // their source, which is what the previous build said.
-        regex(current.parsed >= "1.21.1") {
-            replace("HTG_MAP_TEXT", "drawString", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=1.21.1")) {
+            replace("HTG_MAP_TEXT", "drawString")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The type itself moved too, and with the same one-way treatment: every file that names it
         // names it in a parameter list or a local, and there is no version on which both names exist.
         // The newer name is longer, so the older rule must not run after it -- hence the separate
         // package-sensitive rule first, then the bare name, both one-way.
-        regex(current.parsed >= "26.1") {
+        regex(eval(current.version, ">=26.1")) {
             replace("net\\.minecraft\\.client\\.gui\\.GuiGraphics",
-                    "net.minecraft.client.gui.GuiGraphicsExtractor", "NO_REVERSE", "NO_REVERSE")
+                    "net.minecraft.client.gui.GuiGraphicsExtractor")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
-            replace("\\bGuiGraphics\\b", "GuiGraphicsExtractor", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=26.1")) {
+            replace("\\bGuiGraphics\\b", "GuiGraphicsExtractor")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The element-state interface moved from the GUI package to the renderer's own state package,
         // which is where the renderer that plays it back lives.
-        regex(current.parsed >= "26.1") {
+        regex(eval(current.version, ">=26.1")) {
             replace("net\\.minecraft\\.client\\.gui\\.render\\.state\\.GuiElementRenderState",
-                    "net.minecraft.client.renderer.state.gui.GuiElementRenderState",
-                    "NO_REVERSE", "NO_REVERSE")
+                    "net.minecraft.client.renderer.state.gui.GuiElementRenderState")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // Xaero's element renderer stopped taking a vanilla buffer source at 26.1: the mod's
         // MultiBufferSource.BufferSource parameters are XaeroBufferProvider there. Its own interface
@@ -144,12 +161,14 @@ stonecutter parameters {
         // MultiBufferSource.BufferSource parameters are XaeroBufferProvider from there on. Bounded
         // there and not at 26.1, where Xaero still used the vanilla type -- the same lesson as the
         // render pipeline below, and one I got wrong twice.
-        regex(current.parsed >= "26.2") {
+        regex(eval(current.version, ">=26.2")) {
             replace("net\\.minecraft\\.client\\.renderer\\.MultiBufferSource",
-                    "xaero.lib.client.graphics.XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
+                    "xaero.lib.client.graphics.XaeroBufferProvider")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.2") {
-            replace("MultiBufferSource\\.BufferSource", "XaeroBufferProvider", "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=26.2")) {
+            replace("MultiBufferSource\\.BufferSource", "XaeroBufferProvider")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The render pipeline left the blaze3d package for the new renderpearl API, and the builder
         // chain is otherwise unchanged -- same snippets, same withLocation/withCull/build.
@@ -158,35 +177,40 @@ stonecutter parameters {
         // package. The 26.x line is not uniform across its own minor versions, so each of these
         // boundaries is worth checking against the node's own jar rather than assumed from the
         // major version.
-        regex(current.parsed >= "26.3") {
+        regex(eval(current.version, ">=26.3")) {
             replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
-                    "com.mojang.renderpearl.api.pipeline.RenderPipeline", "NO_REVERSE", "NO_REVERSE")
+                    "com.mojang.renderpearl.api.pipeline.RenderPipeline")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // A screen states rather than renders from 26.1: the entry point is extractRenderState and the
         // background hook is extractBackground. Matched on the whole signature including the parameter
-        // types, which is what tells these two apart from the many other render* methods here -- an
-        // earlier attempt anchored on `void render(GuiGraphicsExtractor ...)` and matched nothing,
-        // because the rename that produced GuiGraphicsExtractor runs in the same pass and the two
-        // rules cannot see each other's output.
-        regex(current.parsed >= "26.1") {
-            replace("void renderBackground\\(GuiGraphics graphics, int mouseX, int mouseY, float partialTick\\)",
-                    "void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
-                    "NO_REVERSE", "NO_REVERSE")
+        // types, which is what tells these two apart from the many other render* methods here.
+        //
+        // These two patterns name GuiGraphicsExtractor, the POST-rename spelling, and that is load
+        // bearing. Stonecutter 0.7 applies replacements in sequence -- each rule sees the previous
+        // rule's output -- so by the time these run, the GuiGraphics rule above has already rewritten
+        // the parameter type and a pattern looking for `GuiGraphics` matches nothing. 0.9 applied them
+        // in a single pass over the original text, where the opposite was true. This is the one place
+        // the two behaviours differ in this file, and it cost a build cycle to find.
+        regex(eval(current.version, ">=26.1")) {
+            replace("void renderBackground\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
-            replace("void render\\(GuiGraphics graphics, int mouseX, int mouseY, float partialTick\\)",
-                    "void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)",
-                    "NO_REVERSE", "NO_REVERSE")
+        regex(eval(current.version, ">=26.1")) {
+            replace("void render\\(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick\\)",
+                    "void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick)")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
+        regex(eval(current.version, ">=26.1")) {
             replace("super\\.render\\(graphics, mouseX, mouseY, partialTick\\)",
-                    "super.extractRenderState(graphics, mouseX, mouseY, partialTick)",
-                    "NO_REVERSE", "NO_REVERSE")
+                    "super.extractRenderState(graphics, mouseX, mouseY, partialTick)")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
-        regex(current.parsed >= "26.1") {
+        regex(eval(current.version, ">=26.1")) {
             replace("parent\\.render\\(graphics, mouseX, mouseY, partialTick\\)",
-                    "parent.extractRenderState(graphics, mouseX, mouseY, partialTick)",
-                    "NO_REVERSE", "NO_REVERSE")
+                    "parent.extractRenderState(graphics, mouseX, mouseY, partialTick)")
+            reverse("NO_REVERSE", "NO_REVERSE")
         }
         // The map's viewport question is NOT a rule here, and neither is its text call. Xaero's own
         // MapElementGraphics reports no size of its own and keeps drawString -- it is not the vanilla
