@@ -17,8 +17,15 @@ import net.minecraft.world.item.TooltipFlag;
 // node is active and a gated import was observed to stay commented on one node and uncomment on
 // another. A qualified name has no such problem.
 import net.minecraft.world.level.Level;
+//? if fabric {
+/*import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.FabricLoader;
+*///?} else {
 import net.neoforged.api.distmarker.Dist;
+//?}
+//? if neoforge {
 import net.neoforged.fml.loading.FMLEnvironment;
+//?}
 
 import java.util.List;
 
@@ -67,6 +74,25 @@ public final class NavigatorItem extends Item {
     }
     //?}
 
+    // Whether this code is running on a physical client.
+    //
+    // Written once rather than at each of the three tooltip branches, because the question has two
+    // answers per loader -- NeoForge reads it off FMLEnvironment, Fabric off the loader's
+    // environment type -- and three copies of that would be three places to keep in step.
+    //
+    // The three conditions are independent rather than nested: `fabric` and `neoforge` are mutually
+    // exclusive, and Stonecutter's condition scopes do not nest.
+    private static boolean isClient() {
+        //? if fabric {
+        /*return FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT;
+        *///?}
+        //? if neoforge && >=1.21.9 {
+        /*return FMLEnvironment.getDist() == Dist.CLIENT;
+        *///?}
+        //? if neoforge && <1.21.9 {
+        return FMLEnvironment.dist == Dist.CLIENT;
+        //?}
+    }
     @Override
     // 1.21.6 changed how an item contributes tooltip lines: instead of being handed a List to add
     // to, the method receives a Consumer and the display context the lines will be shown in. The
@@ -77,7 +103,7 @@ public final class NavigatorItem extends Item {
                                 net.minecraft.world.item.component.TooltipDisplay display,
                                 java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
         // 1.21.9 made FMLEnvironment.dist a getter; before that it was a public field.
-        if (FMLEnvironment.getDist() == Dist.CLIENT) {
+        if (isClient()) {
             NavigatorClient.appendTooltip(tooltip);
         }
     }
@@ -87,7 +113,7 @@ public final class NavigatorItem extends Item {
                                 java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.
-        if (FMLEnvironment.dist == Dist.CLIENT) {
+        if (isClient()) {
             NavigatorClient.appendTooltip(tooltip);
         }
     }
@@ -96,7 +122,7 @@ public final class NavigatorItem extends Item {
                                 TooltipFlag flag) {
         // A tooltip is built on the client, but this method is reachable from a server (an item stack can
         // be asked for its lines there), so the side is asked before the readout is touched.
-        if (FMLEnvironment.dist == Dist.CLIENT) {
+        if (isClient()) {
             NavigatorClient.appendTooltip(tooltip::add);
         }
     }

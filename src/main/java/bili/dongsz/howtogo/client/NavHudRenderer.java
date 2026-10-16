@@ -29,7 +29,9 @@ import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
+//? if neoforge {
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
+//?}
 
 import static bili.dongsz.howtogo.client.HudDraw.*;
 
@@ -109,7 +111,15 @@ public final class NavHudRenderer {
     private NavHudRenderer() {
     }
 
-    public static void onRenderGui(RenderGuiEvent.Post event) {
+    // The two loaders hand the HUD pass different things. NeoForge posts an event carrying the
+// graphics object; Fabric's HudRenderCallback takes the graphics object and the partial tick as
+// arguments. Only the parameter list and where the graphics object comes from differ, so the body
+// is shared.
+//? if fabric {
+/*public static void onRenderGui(GuiGraphics graphics, float tickDelta) {
+*///?} else {
+public static void onRenderGui(RenderGuiEvent.Post event) {
+//?}
         Minecraft mc = Minecraft.getInstance();
         if (Screens.of(mc) != null || mc.player == null || mc.level == null) {
             return;
@@ -117,7 +127,11 @@ public final class NavHudRenderer {
         if (Navigation.target() == null) {
             return;
         }
+        //? if fabric {
+        /*draw(graphics, mc);
+        *///?} else {
         draw(event.getGuiGraphics(), mc);
+        //?}
     }
 
     // -------------------------------------------------------------------- panel
