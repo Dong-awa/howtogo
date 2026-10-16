@@ -11,9 +11,15 @@ import net.minecraft.client.gui.screens.Screen;
 //? if >=1.21.9 {
 /*import net.minecraft.client.input.KeyEvent;
 *///?}
+//? if fabric {
+/*import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
+*///?} else {
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+//?}
 // The GLFW key codes are named only on the pre-1.21.9 nodes; from 1.21.9 on the SDL-backed
 // InputConstants carries them and this import would go unused.
 //? if <1.21.9 {
@@ -130,10 +136,19 @@ public final class RoadEditHandler {
     private RoadEditHandler() {
     }
 
+    // NeoForge registers mappings from an event; Fabric's KeyBindingHelper registers them on the
+    // spot, called once from the client initialiser.
+    //? if fabric {
+    /*public static void registerKeys() {
+        KeyBindingHelper.registerKeyBinding(TOGGLE_EDIT);
+        KeyBindingHelper.registerKeyBinding(LINES);
+    }
+    *///?} else {
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(TOGGLE_EDIT);
         event.register(LINES);
     }
+    //?}
 
     // ------------------------------------------------------------------ mouse
 
