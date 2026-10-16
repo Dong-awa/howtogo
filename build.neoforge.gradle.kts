@@ -9,6 +9,20 @@
 import java.util.zip.ZipFile
 import org.gradle.api.artifacts.repositories.MavenArtifactRepository
 
+// Declares this node's loader for the //? if neoforge conditions in the shared source. Set here
+// rather than in stonecutter.gradle.kts because that block is shared by every node.
+// Declares the loader this node builds for, for the `//? if <loader>` conditions in the shared
+// source. All three are declared on every node, not just the true one: a condition naming a
+// constant that was never declared is an error ("Unresolved constant") rather than a false, so a
+// neoforge node still has to be told it is not fabric.
+//
+// Set here rather than in stonecutter.gradle.kts because that block is shared by every node, and a
+// constant set there would be true on all of them -- which would compile the NeoForge half of
+// every loader condition into the fabric jars.
+stonecutter.const("neoforge", true)
+stonecutter.const("fabric", false)
+stonecutter.const("forge", false)
+
 plugins {
     id("net.neoforged.moddev") version "2.0.148"
 }

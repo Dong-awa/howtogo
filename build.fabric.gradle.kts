@@ -11,6 +11,19 @@
 // one of the three this tree uses that runs on both Gradle 8 and Gradle 9. It was the Forge
 // side that forced Gradle 8 on the whole tree; see MIGRATION.md.
 
+// Declares this node's loader for the //? if fabric conditions in the shared source.
+// Declares the loader this node builds for, for the `//? if <loader>` conditions in the shared
+// source. All three are declared on every node, not just the true one: a condition naming a
+// constant that was never declared is an error ("Unresolved constant") rather than a false, so a
+// neoforge node still has to be told it is not fabric.
+//
+// Set here rather than in stonecutter.gradle.kts because that block is shared by every node, and a
+// constant set there would be true on all of them -- which would compile the NeoForge half of
+// every loader condition into the fabric jars.
+stonecutter.const("neoforge", false)
+stonecutter.const("fabric", true)
+stonecutter.const("forge", false)
+
 plugins {
     id("fabric-loom")
     id("java")
@@ -87,6 +100,17 @@ sourceSets {
         resources.srcDir(rootProject.file("src/fabric/resources"))
     }
 }
+
+// No MCPhone integration on Fabric. The phone mod is NeoForge-only, so the two classes that
+// implement the "问道导航" app have nothing to register against here, and the Fabric branch this
+// tree absorbed never had them at all. Excluded rather than conditioned: there is no version or
+// loader combination on which a fabric node would want them, so a condition would be a branch
+// that is false everywhere.
+//
+// The NeoForge script excludes these too, but conditionally -- only when the phone API jar is
+// absent from libs/, because a NeoForge user may supply it. Fabric has no such case.
+sourceSets.main.get().java.exclude("**/compat/mcphone/**")
+sourceSets.main.get().resources.exclude("META-INF/services/com.november.mcphone.api.client.app.IPhoneApp")
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"

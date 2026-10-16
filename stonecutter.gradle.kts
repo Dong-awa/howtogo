@@ -16,9 +16,11 @@ plugins {
 stonecutter active "1.21.1-neoforge"
 
 stonecutter parameters {
-    // `//? if neoforge {` -- available in conditions, so loader-specific code can be written
-    // next to version-specific code. The fabric constant arrives with the fabric nodes.
-    constants["neoforge"] = true
+    // Loader constants are NOT set here. This block is shared by every node, so a constant set
+    // here would be true on all of them -- and `//? if neoforge` being true on a fabric node
+    // would compile the NeoForge half of every loader condition in the tree. Each loader's build
+    // script declares its own instead, which is the only place that knows which node it is
+    // building: see the `stonecutter.const(...)` call at the top of build.<loader>.gradle.kts.
 
     // Swaps replace a token in the source with a string computed here. mod_version is read by
     // HowToGo.MOD_VERSION via a literal that this keeps in step with gradle.properties.
