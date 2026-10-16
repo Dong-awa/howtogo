@@ -19,6 +19,7 @@ pluginManagement {
     plugins {
         id("fabric-loom") version providers.gradleProperty("fabric_loom_version").get()
     }
+
     repositories {
         mavenCentral()
         gradlePluginPortal()
