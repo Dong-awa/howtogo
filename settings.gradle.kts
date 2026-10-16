@@ -83,8 +83,10 @@ stonecutter {
         // NeoForge half covers plus the three older ones.
         fabric("1.21.1")
         fabric("1.21.4")
+        fabric("1.21.6")
+        fabric("1.21.8")
 
-        // 1.21.6 and later are NOT registered yet: their Fabric API needs a newer Loom than
+        // 1.21.11 and later are NOT registered yet: their Fabric API needs a newer Loom than
         // the one the rest of the tree uses, and a node that cannot configure takes every
         // other fabric task down with it -- Gradle configures all projects, so the failure is
         // not confined to the node that caused it. Their gradle.properties are in place.
