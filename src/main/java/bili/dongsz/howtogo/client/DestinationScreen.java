@@ -814,7 +814,14 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------ render
 
     @Override
+    // 1.20.2 added the mouse position and the partial tick to this override; 1.20.1 takes only the
+    // graphics. Both do nothing here -- the dimming is handled in render so the panel sits between
+    // it and the widgets -- so the bodies are the same and only the signature differs.
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
         // Dimming is handled in render so the panel sits between it and the widgets.
     }
 
@@ -1829,7 +1836,13 @@ public final class DestinationScreen extends Screen {
     }
 
     @Override
+    // 1.20.2 split the wheel delta into a horizontal and a vertical component; 1.20.1 passes one.
+    // Every use in this mod reads the vertical one, so only the signature and the super call differ.
+    //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    //?} else {
+    /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+    *///?}
         if (insideMap(mouseX, mouseY)) {
             // Zoom about the centre. Anchoring on the centre rather than the cursor is simpler and
             // predictable enough at this size.

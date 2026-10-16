@@ -408,7 +408,14 @@ public final class RoadNameScreen extends Screen {
 
     /** No dim, no blur: the map underneath is the context for the name being typed. */
     @Override
+    // 1.20.2 added the mouse position and the partial tick to this override; 1.20.1 takes only the
+    // graphics. Both do nothing here -- the dimming is handled in render so the panel sits between
+    // it and the widgets -- so the bodies are the same and only the signature differs.
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
     }
 
     @Override

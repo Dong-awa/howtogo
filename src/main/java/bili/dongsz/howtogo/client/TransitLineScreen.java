@@ -381,7 +381,14 @@ public final class TransitLineScreen extends Screen {
     // ---------------------------------------------------------------- render
 
     @Override
+    // 1.20.2 added the mouse position and the partial tick to this override; 1.20.1 takes only the
+    // graphics. Both do nothing here -- the dimming is handled in render so the panel sits between
+    // it and the widgets -- so the bodies are the same and only the signature differs.
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
     }
 
     /**
@@ -909,10 +916,20 @@ public final class TransitLineScreen extends Screen {
      * take the line the player is reading out from under them while they looked for a stop to add.
      */
     @Override
+    // 1.20.2 split the wheel delta into a horizontal and a vertical component; 1.20.1 passes one.
+    // Every use in this mod reads the vertical one, so only the signature and the super call differ.
+    //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    //?} else {
+    /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+    *///?}
         int step = (int) Math.signum(scrollY);
         if (step == 0) {
-            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+            //? if >=1.20.2 {
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        //?} else {
+        /*return super.mouseScrolled(mouseX, mouseY, scrollY);
+        *///?}
         }
         if (inColumn(mouseX, mouseY, linesX)) {
             lineScroll = clampScroll(lineScroll - step, listed().size());
@@ -927,7 +944,11 @@ public final class TransitLineScreen extends Screen {
             candidatesScroll = clampScroll(candidatesScroll - step, offered().size());
             return true;
         }
+        //? if >=1.20.2 {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        //?} else {
+        /*return super.mouseScrolled(mouseX, mouseY, scrollY);
+        *///?}
     }
 
     /** Whether the pointer is anywhere in one column, list area and header alike. */
