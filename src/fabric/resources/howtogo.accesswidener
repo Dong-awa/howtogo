@@ -1,0 +1,15 @@
+accessWidener v2 named
+
+# RenderType.CompositeState is public final as a class, but on 1.20.x the InnerClasses attribute
+# marks it protected static final inside RenderType, and that is the flag javac actually enforces --
+# so HudDraw's RenderType.CompositeState.builder() is a compile error there and was legal from 1.21
+# on, where the nested class was widened to public.
+#
+# Fabric's answer to an access transformer is an access widener, and this is the one member the
+# whole port needs: the HUD's quad layer builds its own render type, and there is no public route to
+# a CompositeState below 1.21. Applied at build time by Loom and at run time by the loader, so the
+# jar carries it and no runtime patch is needed.
+#
+# It is a no-op on the nodes that do not need it, and the Forge nodes need no equivalent: Forge's
+# own patch makes the class public in the jar, so there is nothing left to widen there.
+accessible class net/minecraft/client/renderer/RenderType$CompositeState

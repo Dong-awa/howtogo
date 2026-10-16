@@ -13,9 +13,19 @@
 // nothing about the shared source has to move.
 
 pluginManagement {
+    // A plugins block cannot read a node's properties -- it is evaluated before the node's
+    // gradle.properties is in scope -- so the loader toolchain versions are declared here, where
+    // the root properties are readable, and the build scripts apply the plugins by id alone.
+    plugins {
+        id("fabric-loom") version providers.gradleProperty("fabric_loom_version").get()
+    }
     repositories {
         mavenCentral()
         gradlePluginPortal()
+        // Fabric Loom. On Fabric's own Maven, not the plugin portal.
+        maven("https://maven.fabricmc.net/") { name = "Fabric" }
+        // ForgeGradle. Forge's Maven, likewise.
+        maven("https://maven.minecraftforge.net/") { name = "MinecraftForge" }
         // Stonecutter itself. Not on Maven Central -- this is its home repository.
         maven("https://maven.kikugie.dev/releases") { name = "KikuGie Releases" }
         maven("https://maven.kikugie.dev/snapshots") { name = "KikuGie Snapshots" }
@@ -43,6 +53,17 @@ stonecutter {
             version("$version-neoforge", version).buildscript("build.neoforge.gradle.kts")
         }
 
+        // Fabric and Forge nodes take the same shape: the loader is a suffix on the node name and
+        // selects the build script, so `//? if >=26.1` still evaluates against 26.1 whichever
+        // loader the node builds for. That is what lets one source tree serve all three loaders.
+        fun fabric(version: String) {
+            version("$version-fabric", version).buildscript("build.fabric.gradle.kts")
+        }
+
+        fun forge(version: String) {
+            version("$version-forge", version).buildscript("build.forge.gradle.kts")
+        }
+
         // The MC versions this project supports. Ported nodes build; the rest are the
         // migration queue -- `./gradlew build` only touches the active one, so a half-ported
         // tree still builds the version you are working on. `chiseledBuild` needs them all.
@@ -54,6 +75,12 @@ stonecutter {
         neoforge("26.1")
         neoforge("26.2")
         neoforge("26.3")
+
+        // Fabric is registered one node at a time as its loader glue lands, because a fabric node
+        // whose source has no `//? if fabric` branches yet does not compile and would take
+        // chiseledBuild down with it. The rest of the list is the same eleven versions the
+        // NeoForge half covers plus the three older ones.
+        fabric("1.21.1")
 
         // The newest supported version. VCS-facing: it is the state src/ is kept in, so what
         // you read on disk is modern API and older versions are the commented-out branches.
