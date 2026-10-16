@@ -80,6 +80,8 @@ stonecutter {
         // The MC versions this project supports. Ported nodes build; the rest are the
         // migration queue -- `./gradlew build` only touches the active one, so a half-ported
         // tree still builds the version you are working on. `chiseledBuild` needs them all.
+        neoforge("1.20.4")
+        neoforge("1.20.6")
         neoforge("1.21.1")
         neoforge("1.21.4")
         neoforge("1.21.6")
