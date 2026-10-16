@@ -81,6 +81,12 @@ stonecutter {
         // chiseledBuild down with it. The rest of the list is the same eleven versions the
         // NeoForge half covers plus the three older ones.
         fabric("1.21.1")
+        fabric("1.21.4")
+
+        // 1.21.6 and later are NOT registered yet: their Fabric API needs a newer Loom than
+        // the one the rest of the tree uses, and a node that cannot configure takes every
+        // other fabric task down with it -- Gradle configures all projects, so the failure is
+        // not confined to the node that caused it. Their gradle.properties are in place.
 
         // The newest supported version. VCS-facing: it is the state src/ is kept in, so what
         // you read on disk is modern API and older versions are the commented-out branches.

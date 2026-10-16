@@ -76,7 +76,12 @@ dependencies {
     //
     // Loom remaps this jar to the official names on the way in, which is why the file name does
     // not have to say so; see libs/README.md.
-    modCompileOnly(fileTree(rootProject.file("libs")) { include("xaeroworldmap-fabric-$minecraftVersion-*.jar") })
+    modCompileOnly(fileTree(rootProject.file("libs")) { // Xaero names its Fabric jars two ways: "xaeroworldmap-fabric-<mc>-<ver>.jar" from 1.21.8 on, and
+    // "XaerosWorldMap_<ver>_Fabric_<mc>.jar" before that. Both are accepted rather than renaming the
+    // download, because a local file whose name is not the one upstream publishes is a trap for
+    // whoever has to replace it.
+    include("xaeroworldmap-fabric-$minecraftVersion-*.jar",
+            "XaerosWorldMap_*_Fabric_$minecraftVersion.jar") })
 }
 
 // Minecraft 1.20.x marks RenderType.CompositeState protected inside RenderType, and that is the
