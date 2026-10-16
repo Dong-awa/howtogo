@@ -59,7 +59,12 @@ repositories {
 }
 
 dependencies {
-    minecraft("com.mojang:minecraft:$minecraftVersion")
+    // The node's NAME is the logical version; the Minecraft version it compiles against can be a
+// patch of it -- the 26.1 node's is 26.1.2. A NeoForge node gets this for free, because
+// ModDevGradle derives the Minecraft version from the NeoForge version it is given; a Fabric node
+// has to be told, so deps.minecraft_version overrides it where the two differ.
+val minecraftArtifactVersion = findProperty("deps.minecraft_version")?.toString() ?: minecraftVersion
+minecraft("com.mojang:minecraft:$minecraftArtifactVersion")
     // Official Mojang mappings, NOT Yarn. The whole codebase is written against net.minecraft.*
     // official names -- 33k lines of it, shared with the NeoForge and Forge nodes -- so moving to
     // Yarn would be a rename pass with no functional gain, and would be the one thing that made

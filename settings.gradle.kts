@@ -98,18 +98,20 @@ stonecutter {
         fabric("1.21.6")
         fabric("1.21.8")
         fabric("1.21.11")
-        // 26.1 and later are NOT registered yet. Loom insists that the Gradle JVM itself be the
-        // Java the Minecraft version requires -- "Minecraft 26.1 requires Java 25 but Gradle is
-        // using 21" -- and Gradle 8.14.6 cannot RUN on Java 25 (IllegalArgumentException: 25.0.3),
-        // which is the same wall Gradle 8.12 hit. A node that fails to configure takes every other
-        // node down with it, so it stays unregistered until that is solved. Its gradle.properties
-        // are in place. Gradle 9.5.1 is installed and does run on Java 25, but Stonecutter 0.7.11
-        // needs Gradle 8 and ForgeGradle 6 refuses Gradle 9, so the whole tree cannot move.
 
-        // 1.21.11 and later are NOT registered yet: their Fabric API needs a newer Loom than
-        // the one the rest of the tree uses, and a node that cannot configure takes every
-        // other fabric task down with it -- Gradle configures all projects, so the failure is
-        // not confined to the node that caused it. Their gradle.properties are in place.
+        // 26.x Fabric is NOT registered. Two walls, in order:
+        //
+        //  1. Loom requires the Gradle JVM itself to be the Java the Minecraft version needs
+        //     ("Minecraft 26.1 requires Java 25 but Gradle is using 21"), which is why the tree
+        //     is on Gradle 9.5.1 with Java 25 rather than 8.14.6. Gradle 9 is fine for
+        //     everything except ForgeGradle, which is why Forge moves to its own build.
+        //  2. Mojang publishes NO client_mappings or server_mappings for 26.1.2, 26.2 or 26.3
+        //     -- both keys are absent from the version JSON. Loom's officialMojangMappings()
+        //     has nothing to fetch, so a Fabric node cannot be given Mojang names at all.
+        //
+        // NeoForge is unaffected because ModDevGradle takes its names from the NeoForge
+        // artifact, which carries them. Their gradle.properties are in place.
+
 
         // The newest supported version. VCS-facing: it is the state src/ is kept in, so what
         // you read on disk is modern API and older versions are the commented-out branches.
