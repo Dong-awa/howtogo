@@ -37,3 +37,7 @@ local-first.gradle
 
 # Scratch from API reconnaissance, not part of the tree.
 .recon-tmp/
+
+# Agent scratch, not part of the tree.
+.scratch-htg/
+.workbuddy-ai/
