@@ -19,6 +19,18 @@ pluginManagement {
     plugins {
         id("fabric-loom") version providers.gradleProperty("fabric_loom_version").get()
     }
+    // Loom publishes a plugin marker for some versions and not others -- 1.10.5 has none on either
+    // Fabric's Maven or the plugin portal, yet resolves; 1.14.10 has one on Fabric's Maven. Mapping
+    // the id straight to the module removes the marker from the question entirely, which is what
+    // makes it possible to test a version whose marker is missing. requested.version is null here
+    // when the version comes from pluginManagement.plugins, so the property is read directly.
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "fabric-loom") {
+                useModule("net.fabricmc:fabric-loom:" + providers.gradleProperty("fabric_loom_version").get())
+            }
+        }
+    }
 
     repositories {
         mavenCentral()
@@ -85,6 +97,7 @@ stonecutter {
         fabric("1.21.4")
         fabric("1.21.6")
         fabric("1.21.8")
+        fabric("1.21.11")
 
         // 1.21.11 and later are NOT registered yet: their Fabric API needs a newer Loom than
         // the one the rest of the tree uses, and a node that cannot configure takes every

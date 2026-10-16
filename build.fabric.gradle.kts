@@ -68,7 +68,14 @@ dependencies {
     mappings(loom.officialMojangMappings())
 
     modImplementation("net.fabricmc:fabric-loader:$loaderVersion")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
+    modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion") {
+    // fabric-content-registries-v0 ships javadoc in a namespace Loom 1.10.5 cannot read, and its
+    // presence fails the whole "setup Minecraft" step on 1.21.11. This mod uses none of it: the
+    // Fabric API surface it needs is key bindings, lifecycle events, rendering, screen events,
+    // client commands and item groups. Excluded rather than pinned to an older API, because the
+    // exclusion names the one thing that is in the way instead of moving everything back.
+    exclude(group = "net.fabricmc.fabric-api", module = "fabric-content-registries-v0")
+}
 
     // Xaero's World Map, as the FABRIC build of it -- the NeoForge jar is a different artifact
     // and its classes will not load here. Only the world map is a compile input: MTR, Create and
