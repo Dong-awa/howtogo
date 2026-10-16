@@ -50,6 +50,20 @@ stonecutter parameters {
     // Add rules here as each newer node is ported, not in advance: a rule declared before the
     // version that needs it exists is a rule nothing tests.
     replacements {
+        // 1.21 made ResourceLocation's constructor private and added fromNamespaceAndPath. The one
+        // place this mod constructs one directly is the Fabric item registration -- NeoForge registers
+        // through registerItem, which builds the id itself -- and that call site is inside a loader
+        // condition, so the difference has to be a rule rather than a condition there.
+        //
+        // It is placed BEFORE the ResourceLocation-to-Identifier rename below, because replacements
+        // apply in sequence: on 1.21.9 and later the rename would otherwise have already rewritten
+        // the type name and this pattern would match nothing. Both spellings are accepted here so
+        // that the two rules compose whichever order the versions put them in.
+        regex(eval(current.version, ">=1.21")) {
+            replace("new (ResourceLocation|Identifier)\\(([^,]+), ([^)]+)\\)",
+                    "$1.fromNamespaceAndPath($2, $3)")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // 1.21.9 renamed ResourceLocation to Identifier and rehomed it, and renamed the accessor
         // that hands one out from location() to identifier().
         //

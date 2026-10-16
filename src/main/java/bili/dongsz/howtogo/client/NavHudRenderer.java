@@ -115,9 +115,15 @@ public final class NavHudRenderer {
 // graphics object; Fabric's HudRenderCallback takes the graphics object and the partial tick as
 // arguments. Only the parameter list and where the graphics object comes from differ, so the body
 // is shared.
-//? if fabric {
+// Fabric's callback took a float partial tick through 1.20.x and a DeltaTracker from 1.21 on, so the
+// second parameter is a third axis. The three conditions are independent rather than nested.
+//? if fabric && <1.21 {
 /*public static void onRenderGui(GuiGraphics graphics, float tickDelta) {
-*///?} else {
+*///?}
+//? if fabric && >=1.21 {
+/*public static void onRenderGui(GuiGraphics graphics, net.minecraft.client.DeltaTracker tickDelta) {
+*///?}
+//? if neoforge {
 public static void onRenderGui(RenderGuiEvent.Post event) {
 //?}
         Minecraft mc = Minecraft.getInstance();
