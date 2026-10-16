@@ -45,7 +45,7 @@ base.archivesName = "${rootProject.property("archives_name") as String}-fabric-$
 // and the same reason it is computed rather than written down: one build script serves them all.
 val requiredJava = when {
     stonecutter.eval(minecraftVersion, ">=26.1") -> JavaVersion.VERSION_25
-    stonecutter.eval(minecraftVersion, ">=1.21.1") -> JavaVersion.VERSION_21
+    stonecutter.eval(minecraftVersion, ">=1.20.5") -> JavaVersion.VERSION_21
     else -> JavaVersion.VERSION_17
 }
 java.toolchain.languageVersion = JavaLanguageVersion.of(requiredJava.majorVersion)

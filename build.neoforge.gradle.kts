@@ -33,7 +33,11 @@ plugins {
 val minecraftVersion = stonecutter.current.version
 val requiredJava = when {
     stonecutter.eval(minecraftVersion, ">=26.1") -> JavaVersion.VERSION_25
-    else -> JavaVersion.VERSION_21
+    // 1.20.5 is the boundary, not 1.21: 1.20.5 and 1.20.6 are Java 21, and 1.20.4 and earlier are
+    // Java 17. The Fabric script carries the same three-way split, and the reason it is computed
+    // rather than written down is that one script serves every node.
+    stonecutter.eval(minecraftVersion, ">=1.20.5") -> JavaVersion.VERSION_21
+    else -> JavaVersion.VERSION_17
 }
 
 // Read the per-node properties ONCE, here, where property() resolves against this node's

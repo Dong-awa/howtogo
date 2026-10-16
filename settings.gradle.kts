@@ -93,6 +93,9 @@ stonecutter {
         // whose source has no `//? if fabric` branches yet does not compile and would take
         // chiseledBuild down with it. The rest of the list is the same eleven versions the
         // NeoForge half covers plus the three older ones.
+        fabric("1.20.1")
+        fabric("1.20.4")
+        fabric("1.20.6")
         fabric("1.21.1")
         fabric("1.21.4")
         fabric("1.21.6")
