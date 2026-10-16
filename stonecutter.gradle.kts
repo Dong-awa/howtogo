@@ -179,6 +179,19 @@ stonecutter parameters {
         // package. The 26.x line is not uniform across its own minor versions, so each of these
         // boundaries is worth checking against the node's own jar rather than assumed from the
         // major version.
+        // 1.21.6 replaced ClickEvent(Action, String) with one subclass per action. The mod only ever
+        // makes one: a clickable link in the chat message a command sends back. OpenUrl carries the
+        // same link but holds a URI, so the string is parsed at the construction site.
+        //
+        // A rule rather than a condition at that site because the command tree is written once per
+        // loader and a version condition inside a loader condition would nest -- Stonecutter's scopes
+        // do not allow it. A version-gated replacement is exactly the tool for a difference that is
+        // purely a spelling, which this one is: same event, same link, same click.
+        regex(eval(current.version, ">=1.21.6")) {
+            replace("new ClickEvent\\(ClickEvent\\.Action\\.OPEN_URL, ([A-Za-z_][A-Za-z0-9_]*)\\)",
+                    "new ClickEvent.OpenUrl(java.net.URI.create($1))")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         regex(eval(current.version, ">=26.3")) {
             replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
                     "com.mojang.renderpearl.api.pipeline.RenderPipeline")

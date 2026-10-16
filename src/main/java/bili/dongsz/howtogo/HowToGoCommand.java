@@ -277,30 +277,14 @@ public final class HowToGoCommand {
         return Component.literal(url).withStyle(Style.EMPTY
                 .withColor(ChatFormatting.AQUA)
                 .withUnderlined(true)
-                .withClickEvent(openUrl(url)));
+                // 1.21.6 replaced the ClickEvent(Action, String) constructor with one subclass per
+                // action. OpenUrl is the same event carrying the same link but holds a URI, and the
+                // build's own replacement rule rewrites this line for the nodes that need it -- see
+                // the header of stonecutter.gradle.kts. It is a rule rather than a condition here
+                // because the whole command tree is written once per loader, and a version condition
+                // inside a loader condition would nest.
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url)));
     }
-
-    /**
-     * A clickable "open this link" event, per version.
-     *
-     * <p>1.21.6 replaced the {@code ClickEvent(Action, String)} constructor with one subclass per
-     * action. {@code OpenUrl} is the same event carrying the same link, but it holds a URI, so the
-     * string is parsed here rather than deep inside the event's own constructor.
-     *
-     * <p>This is a method rather than a condition at the call site for a reason worth stating: the
-     * command tree around it is written once per loader, and a version condition inside a loader
-     * condition would nest -- which Stonecutter's scopes do not allow. Lifting the one version
-     * difference out into a top-level condition keeps the tree free of them.
-     */
-    //? if >=1.21.6 {
-    /*private static ClickEvent openUrl(String url) {
-        return new ClickEvent.OpenUrl(java.net.URI.create(url));
-    }
-    *///?} else {
-    private static ClickEvent openUrl(String url) {
-        return new ClickEvent(ClickEvent.Action.OPEN_URL, url);
-    }
-    //?}
 
     /** Ends the trip, if there is one. */
     private static int stop(CommandContext<CommandSourceStack> context) {
