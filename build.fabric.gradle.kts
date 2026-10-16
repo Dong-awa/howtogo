@@ -109,6 +109,10 @@ sourceSets {
 //
 // The NeoForge script excludes these too, but conditionally -- only when the phone API jar is
 // absent from libs/, because a NeoForge user may supply it. Fabric has no such case.
+// The NeoForge mod metadata lives in src/main/resources, which every node shares, so the fabric
+// jars would otherwise carry a neoforge.mods.toml. Fabric ignores it, but a jar should say what it
+// is for: the loader metadata belongs to the loader. The reverse cannot happen -- fabric.mod.json
+// and the mixin config are in src/fabric/resources, which no NeoForge node compiles.
 sourceSets.main.get().java.exclude("**/compat/mcphone/**")
 sourceSets.main.get().resources.exclude("META-INF/services/com.november.mcphone.api.client.app.IPhoneApp")
 
@@ -135,6 +139,12 @@ tasks.named<ProcessResources>("processResources") {
             "[$minecraftVersion,$next)"
         },
     )
+    // The NeoForge mod metadata lives in src/main/resources, which every node shares, so without this
+    // the fabric jars carry a neoforge.mods.toml. Fabric ignores it, but a jar should say what it is
+    // for. Excluded on the task rather than on the source set: the source-set exclusion was written
+    // first and had no effect, because the default resources directory is wired into this task before
+    // that filter is consulted.
+    exclude("META-INF/neoforge.mods.toml")
     inputs.properties(replaceProperties)
     filesMatching(listOf("fabric.mod.json")) { expand(replaceProperties) }
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.
