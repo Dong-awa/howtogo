@@ -3,7 +3,11 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
+//? if fabric {
+/*import net.fabricmc.loader.api.FabricLoader;
+*///?} else {
 import net.neoforged.fml.ModList;
+//?}
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -1005,7 +1009,11 @@ public final class MtrClientData {
      */
     private static boolean mtrLoaded() {
         try {
-            return ModList.get() != null && ModList.get().isLoaded(MOD_ID);
+            //? if fabric {
+        /*return FabricLoader.getInstance().isModLoaded(MOD_ID);
+        *///?} else {
+        return ModList.get() != null && ModList.get().isLoaded(MOD_ID);
+        //?}
         } catch (RuntimeException | LinkageError notBootstrapped) {
             return false;
         }

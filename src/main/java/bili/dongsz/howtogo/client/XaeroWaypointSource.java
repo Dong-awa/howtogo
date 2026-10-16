@@ -7,7 +7,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
+//? if fabric {
+/*import net.fabricmc.loader.api.FabricLoader;
+*///?} else {
 import net.neoforged.fml.ModList;
+//?}
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -269,7 +273,11 @@ public final class XaeroWaypointSource implements DestinationSource {
         }
         resolved = true;
         try {
-            if (!ModList.get().isLoaded(MINIMAP_MOD_ID)) {
+            //? if fabric {
+        /*if (!FabricLoader.getInstance().isModLoaded(MINIMAP_MOD_ID)) {
+        *///?} else {
+        if (!ModList.get().isLoaded(MINIMAP_MOD_ID)) {
+        //?}
                 return;
             }
             getCurrentSession = Class.forName(MINIMAP_SESSION_CLASS)

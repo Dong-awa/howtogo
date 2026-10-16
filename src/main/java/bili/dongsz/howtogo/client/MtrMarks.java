@@ -5,7 +5,7 @@ import bili.dongsz.howtogo.RoadConfig;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
-import net.neoforged.fml.loading.FMLPaths;
+import bili.dongsz.howtogo.GamePaths;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -220,7 +220,7 @@ public final class MtrMarks {
      * <p>Client-wide rather than per world: which of MTR's lines are worth reading is the player's taste.
      */
     private static Path file() {
-        Path config = FMLPaths.CONFIGDIR.get();
+        Path config = GamePaths.configDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
