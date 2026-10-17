@@ -453,3 +453,19 @@ What that leaves is either a helper in its own file with two top-level condition
 twelve listener registrations written out twice, or a replacement rule -- but the phase guard is a
 statement, not a spelling, so a replacement rule cannot express it. The helper is the way, and the
 question is whether twelve duplicated lines are worth one node.
+
+### 1.20.4 NeoForge: the last four errors
+
+After HowToGoTicks, 1.20.4 is down to four, and they are two API changes:
+
+  HowToGo.java:68, HowToGoServer.java:66   @Mod(value = ..., dist = Dist.CLIENT)
+  HowToGo.java:226                          modContainer.registerConfig(ModConfig.Type.CLIENT, ...)
+
+Neither class is in the NeoForge merged jar -- net.neoforged.fml.common.Mod and
+net.neoforged.fml.config.ModConfig come from the FML library jars -- so reading their 20.4 shapes
+means looking in the fmlcore / fmlloader artifacts rather than neoforge-20.4.253-merged.jar.
+
+That is where the next attempt starts. The dist attribute on @Mod is the 1.20.5 addition that
+made a mod client-only declaratively, so 20.4 predates it and the node needs whatever that version
+did instead -- most likely a DistExecutor-style guard or simply no restriction, since this mod is
+client-only by construction anyway.
