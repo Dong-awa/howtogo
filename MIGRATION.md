@@ -523,3 +523,23 @@ The honest summary of six rounds on this node: five of them were spent on routes
 unconditional removal would have eliminated in one. The order was wrong -- the cheapest experiment
 that falsifies the most assumptions should come first, and "turn the whole thing off and see" was
 available from the start.
+
+### 26.1 Fabric: the missing classes are missing from the jars, not from the classpath
+
+The 40 errors name HudRenderCallback, KeyBindingHelper, ClientCommandManager and ItemGroupEvents.
+Opened every remapped jar Loom produced for that node -- 90 of them under
+build/loom-cache/remapped_working -- and none of the four classes is present in any of them.
+
+The dependency tree does list the modules, and fabric-command-api-v2 and fabric-rendering-v1 are
+remapped and on disk. fabric-key-binding-api-v1 is NOT among the 90, which is the shape of the
+problem: some modules remapped and some did not, and nothing reported the ones that did not.
+
+Two candidates, both worth checking before changing code:
+
+  - the umbrella fabric-api jar for 26.x has only 51 entries and keeps its modules under
+    META-INF/jars/, so Loom may be expected to explode them and for this node did not
+  - or Fabric API 0.155.3 genuinely reorganised those modules, in which case the classes have
+    moved rather than vanished
+
+The distinction matters: the first is a build problem and the second is a port. Nothing so far
+says which.
