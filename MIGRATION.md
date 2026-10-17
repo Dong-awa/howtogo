@@ -497,3 +497,14 @@ That leaves the widener being found by convention somewhere in the srcDir set, w
 the NeoForge access transformer behaved -- and the fix there was to move the file out of the
 directory that gets scanned. The templates already live in src/fabric/aw/ rather than in resources
 for that reason, so the thing to look for is something else under src/fabric/resources.
+
+A println settled the one thing that was still assumed: the condition is right. For the 26.1 node,
+
+    mc=26.1  eval=26.1 >= 26.1 -> true  needsAccessWidener=false  awGeneration=modern-intermediary
+
+so accessWidenerPath is genuinely not being set, and Loom still reports a widener it cannot remap.
+Every node that builds prints eval=false and needsAW=true, which is the expected spread.
+
+That rules out the condition and leaves Loom finding the widener from something other than all five
+routes now closed. Worth noting for whoever picks this up: the debug line is three lines in
+build.fabric.gradle.kts and it should have been the first thing done, not the fifth.
