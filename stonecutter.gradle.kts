@@ -50,6 +50,20 @@ stonecutter parameters {
     // Add rules here as each newer node is ported, not in advance: a rule declared before the
     // version that needs it exists is a rule nothing tests.
     replacements {
+        // @Mod gained its dist attribute at 1.20.5, which is what made "this mod is client-only" a
+        // declaration rather than a convention. Below that the annotation takes the id alone.
+        //
+        // A rule rather than a condition because it is purely a spelling: same annotation, same id,
+        // and the restriction it expressed did not exist to lose. The alternative was a version
+        // condition on the class declaration, which sits inside the loader fence in HowToGo and
+        // HowToGoServer and would nest.
+        regex(eval(current.version, "<1.20.5")) {
+            // One replace per block -- the second call is rejected with "the value for property
+            // 'fromPattern' cannot be changed any further" -- so the two dist values alternate.
+            replace("@Mod\\(value = HowToGo\\.MODID, dist = Dist\\.(?:CLIENT|DEDICATED_SERVER)\\)",
+                    "@Mod(HowToGo.MODID)")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // 1.21 made ResourceLocation's constructor private and added fromNamespaceAndPath. The one
         // place this mod constructs one directly is the Fabric item registration -- NeoForge registers
         // through registerItem, which builds the id itself -- and that call site is inside a loader
