@@ -469,3 +469,21 @@ That is where the next attempt starts. The dist attribute on @Mod is the 1.20.5 
 made a mod client-only declaratively, so 20.4 predates it and the node needs whatever that version
 did instead -- most likely a DistExecutor-style guard or simply no restriction, since this mod is
 client-only by construction anyway.
+
+### 26.x Fabric: three ways in, all closed by the same remap
+
+Tried in this round, and each was reverted:
+
+  1. accessWidenerPath conditional on >=26.1 -- already was, and the error did not change
+  2. the accessWidener key dropped from the BUILT fabric.mod.json via a processResources line filter
+  3. the from(awTemplate) copy skipped on those nodes, so no howtogo.accesswidener reaches the resources
+
+All three together still produce "Cannot remap access widener from namespace official. Expected:
+intermediary", which means the widener Loom is complaining about is not coming from any of them.
+The remaining candidates are that Loom caches the widener from an earlier run, or that something
+else in src/fabric is picked up by convention the way META-INF/accesstransformer.cfg was on the
+NeoForge side.
+
+Worth noting before trying again: this is the same class of problem as the AT was, and the AT's
+answer was "it is picked up by convention, move it". The difference is that the fabric.mod.json key
+and the resource copy are both supposed to be the only two routes, and both are now closed.
