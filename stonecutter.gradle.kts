@@ -64,6 +64,14 @@ stonecutter parameters {
             reverse("NO_REVERSE", "NO_REVERSE")
         }
         regex(eval(current.version, ">=26.1")) {
+            replace("net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents", "net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("ItemGroupEvents.modifyEntriesEvent", "CreativeModeTabEvents.modifyOutputEvent")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
             replace("KeyBindingHelper", "KeyMappingHelper")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
