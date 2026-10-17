@@ -543,3 +543,18 @@ Two candidates, both worth checking before changing code:
 
 The distinction matters: the first is a build problem and the second is a port. Nothing so far
 says which.
+
+### Answered by the docs, not by elimination: those classes were renamed
+
+FabricMC/fabric-docs carries a 26.1 porting guide, and it settles the question the last round left
+open. The classes are not missing from the classpath; they were renamed or removed:
+
+  client/command/v2/ClientCommandManager   -> ClientCommands
+  client/keybinding/v1/KeyBindingHelper    -> client/keymapping/v1/KeyMappingHelper
+  registerKeyBinding                       -> registerKeyMapping
+  client/itemgroup/v1                      -> client/creativetab/v1
+  client/rendering/v1/hud/...              -> HudElementRegistry; HudRenderCallback was REMOVED
+
+So this is a port, not a build problem -- the second of the two candidates, and the one that costs
+source changes. A copy of the guide is in docs/fabric-api-26.1-porting.md because it is the
+authority for every remaining 26.x Fabric question and re-fetching it costs a round each time.
