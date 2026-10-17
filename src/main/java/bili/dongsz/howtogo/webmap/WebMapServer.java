@@ -218,7 +218,24 @@ public final class WebMapServer implements AutoCloseable {
                         failed.toString());
             }
         }
-        workers.shutdownNow();
+        // Graceful shutdown with timeout: try to let tasks finish, then force if needed
+        workers.shutdown();
+        try {
+            if (!workers.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                java.util.List<Runnable> dropped = workers.shutdownNow();
+                if (!dropped.isEmpty()) {
+                    HowToGo.LOGGER.warn("[HowToGo] webmap | {} tasks dropped on shutdown", 
+                            dropped.size());
+                }
+                // Wait briefly for forced shutdown to take effect
+                if (!workers.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                    HowToGo.LOGGER.warn("[HowToGo] webmap | executor did not terminate cleanly");
+                }
+            }
+        } catch (InterruptedException interrupted) {
+            workers.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         HowToGo.LOGGER.info("[HowToGo] webmap | stopped");
     }
 

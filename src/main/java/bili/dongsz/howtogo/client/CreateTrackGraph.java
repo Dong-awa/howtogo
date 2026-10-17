@@ -67,9 +67,9 @@ public final class CreateTrackGraph {
     /** How far a sampled end may sit from the node it should be, before the edge is counted as odd. */
     private static final double ENDS_MATCH_BLOCKS = 4.0;
 
-    private static boolean resolved;
-    private static boolean available;
-    private static boolean warned;
+    private static volatile boolean resolved;
+    private static volatile boolean available;
+    private static volatile boolean warned;
 
     private static Field railwaysField;
     private static Field trackNetworksField;
@@ -432,12 +432,22 @@ public final class CreateTrackGraph {
      * <p>Guarded because this is read on a client tick, and a failure is permanent: a missing class
      * does not appear later. Every lookup is public API of Create, so no privileged access is asked
      * for -- which also means this cannot break a Create that keeps its API but changes its innards.
+     *
+     * <p>Uses double-checked locking with volatile to avoid synchronized overhead on every call after
+     * the first successful resolution.
      */
-    private static synchronized void resolve() {
+    private static void resolve() {
+        // Fast path: already resolved, no lock needed
         if (resolved) {
             return;
         }
-        resolved = true;
+        // Slow path: first call or concurrent initialization
+        synchronized (CreateTrackGraph.class) {
+            // Check again inside lock in case another thread just finished
+            if (resolved) {
+                return;
+            }
+            resolved = true;
         try {
             if (!ModList.get().isLoaded(MOD_ID)) {
                 return;

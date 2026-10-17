@@ -131,6 +131,10 @@ public final class Navigation {
      * trip.
      */
     private static String tripDimension;
+    
+    // Cache for dimension check optimization to avoid repeated string allocations and comparisons
+    private static Object lastCheckedLevel;
+    private static String lastCheckedDimension;
 
     /**
      * The mode the last plan gave up on, or null when the mode that was asked for was kept.
@@ -295,7 +299,16 @@ public final class Navigation {
     /** The dimension the player is in, or null when no world is loaded. */
     private static String currentDimension() {
         net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
-        return level == null ? null : level.dimension().location().toString();
+        if (level == null) {
+            return null;
+        }
+        // Cache to avoid repeated string allocation and dimension key extraction
+        if (level == lastCheckedLevel) {
+            return lastCheckedDimension;
+        }
+        lastCheckedLevel = level;
+        lastCheckedDimension = level.dimension().location().toString();
+        return lastCheckedDimension;
     }
 
     /** Where the trip started; stays fixed even after the route is re-planned. */
