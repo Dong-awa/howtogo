@@ -112,6 +112,13 @@ stonecutter parameters {
                     "HudElementRegistry.addLast(net.minecraft.resources.Identifier.fromNamespaceAndPath(HowToGo.MODID, \"nav_hud\"), NavHudRenderer::onRenderGui)")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
+        // 26.3 replaced the key event with net.minecraft.client.input.KeyEvent, a record with key(),
+        // keycode(), input(), shortcutKey() and modifiers() -- and no scancode(). keycode() is the
+        // physical key, which is what the old scancode() meant at these call sites.
+        regex(eval(current.version, ">=26.3")) {
+            replace("event\\.scancode\\(\\)", "event.keycode()")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // @Mod gained its dist attribute at 1.20.5, which is what made "this mod is client-only" a
         // declaration rather than a convention. Below that the annotation takes the id alone.
         //
