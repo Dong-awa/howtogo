@@ -27,7 +27,6 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 //?}
@@ -223,7 +222,7 @@ public final class HowToGo {
             RoutePreferenceStore.load();
         });
         ModItems.register(modEventBus);
-        modContainer.registerConfig(ModConfig.Type.CLIENT, RoadConfig.SPEC);
+        HowToGoConfig.registerClient(modContainer);
 
         LOGGER.info("[HowToGo] constructed");
     }
