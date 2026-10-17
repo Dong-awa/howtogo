@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.route;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import net.minecraft.network.chat.Component;
 
@@ -28,32 +29,28 @@ public enum TravelMode {
      * <p>A made road is fast on foot because a player can sprint along it without watching every
      * step, which a footpath does not allow.
      *
-     * <h2>Why walking has no connector distance to speak of</h2>
-     * The cap exists to stop the router drawing a straight line across open country and calling it a
-     * road trip. Walking is not that: a straight line across open country is what a person does when
-     * there is no road, and it is walked at the off-road pace, which is what the estimate says. A cap
-     * of sixty-four blocks meant that a destination further than that from any road could not be walked
-     * to at all -- the mode answered "no route" to a place plainly in sight, which is the one answer
-     * that cannot be acted on. The number here is large enough to be no cap in practice and finite only
-     * so that a coordinate nobody meant to type does not become a route to the edge of the world.
+     * <h2>How far a walk may leave the network</h2>
+     * A straight line across open country is what a person does when there is no road, but it is
+     * still a choice: past {@code walk_offroad_blocks} (thirty-two by default, and configurable) the
+     * hop stops being "stepping off the path" and becomes a beeline across the map, and the answer is
+     * that there is no road route. The same number is the furthest a walker may cross between two
+     * road ends that do not quite meet -- and that only on the surface, because a footpath over a
+     * bridge and the one under it are different ground.
      */
-    WALK("walk", 4096.0, 2.0, Map.of(
+    WALK("walk", 2.0, Map.of(
             RoadClass.HIGHWAY, 5.612,
             RoadClass.ROAD, 5.612,
             RoadClass.PATH, 4.0,
             RoadClass.ICE, 4.317)),
     /**
-     * By vehicle: proper roads only, and a car cannot start its trip across a field.
+     * By vehicle: proper roads only, and a car does not cross a field.
      *
-     * <p>Its connector distance is the walker's, not a tighter one of its own. The first and last hop
-     * of every trip is walked whatever the mode -- that is what the connector is -- so the cap on it is
-     * a statement about how far the player will walk to reach the network, and that does not change
-     * because there happens to be a vehicle waiting at the other end. It used to be thirty-two, which
-     * meant a road network that is thinner than thirty-two blocks of field around wherever the player
-     * stands could not be driven to at all: the mode answered "no route" from a car parked beside a
-     * footpath, with the road itself plainly in sight.
+     * <p>Its connector distance is the widest half-road this mode may use, and no more: a car may
+     * start parked anywhere on the carriageway or beside it, but it does not cross the field next to
+     * the road. A drive whose first or last hop would leave the road that far is refused rather than
+     * drawn as a straight line, and the player is offered the walk instead.
      */
-    DRIVE("drive", 64.0, 12.0, Map.of(
+    DRIVE("drive", 12.0, Map.of(
             RoadClass.HIGHWAY, 9.0,
             RoadClass.ROAD, 9.0)),
     /**
@@ -74,8 +71,16 @@ public enum TravelMode {
      * joined at stations, so the walking that is genuinely unavoidable is walked at walking pace and
      * is visible as walking. {@code TransitPlanner} is where that happens; the station data it needs
      * is {@code PlaceKind.STATION}.
+     *
+     * <h2>Why a ride may not leave its line</h2>
+     * The riding part of a journey follows its line and nothing else. The only distance allowed at
+     * the ends is the platform's own: a station is a place, not a point, and its stop can stand a
+     * good many blocks from the track (see {@code station_snap_blocks}). Past that the hop is not
+     * boarding any more, it is a line across the country. The walking legs use walking's own
+     * allowance instead, so a trip that needs to cross a field to reach the station still can -- on
+     * foot, where that is honest.
      */
-    TRANSIT("transit", 64.0, 12.0, Map.of(
+    TRANSIT("transit", 12.0, Map.of(
             RoadClass.RAIL, 8.0,
             RoadClass.WATER, 8.0,
             RoadClass.ICE, 40.0));
@@ -91,14 +96,11 @@ public enum TravelMode {
     private static final double CONNECTOR_SPEED = 4.317;
 
     private final String id;
-    private final double maxConnectorDistance;
     private final double offRoadCostFactor;
     private final Map<RoadClass, Double> speeds;
 
-    TravelMode(String id, double maxConnectorDistance, double offRoadCostFactor,
-               Map<RoadClass, Double> speeds) {
+    TravelMode(String id, double offRoadCostFactor, Map<RoadClass, Double> speeds) {
         this.id = id;
-        this.maxConnectorDistance = maxConnectorDistance;
         this.offRoadCostFactor = offRoadCostFactor;
         this.speeds = speeds;
     }
@@ -141,9 +143,36 @@ public enum TravelMode {
      * at, and a route whose connector would be longer than this is refused rather than drawn: a
      * connector past the cap is not a hop onto the network, it is a straight line across open
      * country pretending to be a road trip.
+     *
+     * <p>Only walking's number is a preference, so only it has a config key: {@code
+     * walk_offroad_blocks}. A car's allowance is the width of the road it may use, and a ride's is
+     * the platform's reach ({@code station_snap_blocks}) -- neither is something a player should be
+     * able to widen into a field. Read through the config on every call so an edit takes effect on
+     * the next plan rather than after a restart.
      */
     public double maxConnectorDistance() {
-        return maxConnectorDistance;
+        return switch (this) {
+            case WALK -> RoadConfig.walkOffroadBlocks();
+            // A car may not leave its road: the only distance it gets is the road's own half-width,
+            // so standing anywhere on the carriageway still starts a drive and standing in the field
+            // beside it does not. Not a config value because it is not a preference -- it is how wide
+            // the widest road this vehicle may use is drawn.
+            case DRIVE -> widestHalfWidth();
+            // A ride may not leave its line either. What it does get is the platform: a station is a
+            // place, and the platform it is boarded from can stand a good many blocks from the
+            // track's centreline (see station_snap_blocks). Past that the hop is not boarding any
+            // more, it is a line across the country.
+            case TRANSIT -> RoadConfig.stationSnapBlocks();
+        };
+    }
+
+    /** Half the width of the widest road this mode may use, in blocks. */
+    private double widestHalfWidth() {
+        double widest = 0;
+        for (RoadClass roadClass : speeds.keySet()) {
+            widest = Math.max(widest, roadClass.width());
+        }
+        return widest / 2.0;
     }
 
     /**

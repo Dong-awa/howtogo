@@ -148,6 +148,17 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
     private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
+    /**
+     * How far a walking trip may leave the network, in blocks.
+     *
+     * <p>Walking may step off a road and cross a field, but not for ever: past this the straight hop
+     * is a beeline across the map rather than a step off the path, and the answer becomes "no road
+     * route". It is also the furthest two road ends a walker may cross between, and only on the
+     * surface. A car and a ride have their own rules in {@link bili.dongsz.howtogo.route.TravelMode},
+     * because their numbers are not about taste: a car may only be as far from its road's centre as
+     * the road is wide, and a ride may only be as far from its track as a station platform is from it.
+     */
+    private static final ModConfigSpec.DoubleValue WALK_OFFROAD_BLOCKS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
     private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
     private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
@@ -220,6 +231,20 @@ public final class RoadConfig {
                         "measured against.")
                 .translation("howtogo.configuration.station_snap_blocks")
                 .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
+
+        WALK_OFFROAD_BLOCKS = builder.comment(
+                        "How far a walking trip may leave the road network, in blocks.",
+                        "Walking can cross open country, but not for ever: past this distance the",
+                        "straight hop is no longer 'stepping off the path' but a beeline across the",
+                        "map, and the answer is that there is no road route from here.",
+                        "It is also the furthest two road ends a walker may cross between: only ends on",
+                        "the surface (storey 0) can be joined this way, because a footpath on a bridge",
+                        "and the one under it are not the same ground.",
+                        "A car and a ride do not use this number. A car may only be as far from its",
+                        "road's centre as the road is wide, and a ride may only be as far from its",
+                        "track as a station platform is from it (station_snap_blocks).")
+                .translation("howtogo.configuration.walk_offroad_blocks")
+                .defineInRange("walk_offroad_blocks", 32.0, 0.0, 4096.0);
 
         DEFAULT_TRAVEL_MODE = builder.comment(
                         "Travel mode navigation starts in, and the one the estimates are made for.",
@@ -774,6 +799,15 @@ public final class RoadConfig {
     public static double stationSnapBlocks() {
         try {
             return STATION_SNAP_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 32.0;
+        }
+    }
+
+    /** How far a walking trip may leave the network, in blocks. */
+    public static double walkOffroadBlocks() {
+        try {
+            return WALK_OFFROAD_BLOCKS.get();
         } catch (IllegalStateException notLoadedYet) {
             return 32.0;
         }

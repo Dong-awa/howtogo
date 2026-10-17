@@ -193,6 +193,18 @@ public final class RoadStorage {
                     s.xs[i] = segment.x(i);
                     s.zs[i] = segment.z(i);
                 }
+                RoadCurve curve = segment.curve();
+                if (curve != null) {
+                    // The display line travels with the road it belongs to. It is optional and
+                    // absent from every road that has none, so a file written by this version is
+                    // byte-for-byte what the old one wrote until a road actually has a curve.
+                    double[][] points = new double[curve.size()][2];
+                    for (int i = 0; i < curve.size(); i++) {
+                        points[i][0] = curve.x(i);
+                        points[i][1] = curve.z(i);
+                    }
+                    s.curve = points;
+                }
                 dto.segments.add(s);
             }
 
@@ -270,7 +282,40 @@ public final class RoadStorage {
         // rather than the road.
         segment.setLayer(s.layer);
         segment.setName(s.name);
+        RoadCurve curve = curveOf(s);
+        if (curve != null) {
+            segment.setCurve(curve);
+        }
         return segment;
+    }
+
+    /**
+     * A segment's display curve, or null when the file has none or it does not describe a line.
+     *
+     * <p>Tolerant like every other optional field in this format: a curve with fewer than two points,
+     * a point that is not a finite number, or a mismatched pair is dropped as a whole. A display
+     * line is never worth refusing a road over -- the vertices are the road.
+     */
+    private static RoadCurve curveOf(SegmentDto s) {
+        if (s.curve == null || s.curve.length < 2) {
+            return null;
+        }
+        double[] xs = new double[s.curve.length];
+        double[] zs = new double[s.curve.length];
+        for (int i = 0; i < s.curve.length; i++) {
+            double[] point = s.curve[i];
+            if (point == null || point.length < 2
+                    || !Double.isFinite(point[0]) || !Double.isFinite(point[1])) {
+                return null;
+            }
+            xs[i] = point[0];
+            zs[i] = point[1];
+        }
+        try {
+            return new RoadCurve(xs, zs);
+        } catch (IllegalArgumentException notALine) {
+            return null;
+        }
     }
 
     /**
@@ -344,5 +389,13 @@ public final class RoadStorage {
         String name;
         int[] xs;
         int[] zs;
+        /**
+         * The smoothed display line, as {@code [[x, z], ...]}, or absent for a road with none.
+         *
+         * <p>Added after the first release. Written only when it exists, read tolerantly, and never
+         * used for routing -- see {@link RoadCurve}. An older build reading this file ignores the
+         * field, which is what keeps a save from this one readable by it.
+         */
+        double[][] curve;
     }
 }

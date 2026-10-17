@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.HowToGoCommand;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -211,6 +212,9 @@ public final class MainScreen extends Screen {
         }
         try {
             String url = WebMapService.start();
+            // The same manual start as the command: open the page rather than leave a bare address
+            // that only a click would turn into a browser, and a click would ask for confirmation.
+            HowToGoCommand.openInBrowser(url);
             notice(Component.translatable("screen.howtogo.main.webmap_running", url).getString());
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] webmap | could not start: {}", failed.toString());
@@ -392,14 +396,16 @@ public final class MainScreen extends Screen {
         double worldTop = worldYAt(minY) - 4;
         double worldBottom = worldYAt(maxY) + 4;
 
-        for (RoadSegment segment : RoadStore.get().segments()) {
-            drawRoad(pose, vc, segment, minX, minY, maxX, maxY);
-        }
+        HudDraw.emitNetwork(pose, vc, RoadStore.get(), pathM00(), 0, pathM02(), 0, pathM11(),
+                pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY, MainScreen::roadHalfWidth);
         RoadWeaverLayer.forEachSegmentInBox(worldLeft, worldTop, worldRight, worldBottom,
                 segment -> drawRoad(pose, vc, segment, minX, minY, maxX, maxY));
-        for (RoadSegment segment : RailLayers.all()) {
-            drawRoad(pose, vc, segment, minX, minY, maxX, maxY);
-        }
+        HudDraw.emitNetwork(pose, vc, RailTrackStore.network(), pathM00(), 0, pathM02(), 0,
+                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                MainScreen::roadHalfWidth);
+        HudDraw.emitNetwork(pose, vc, MtrTransit.railLayer(), pathM00(), 0, pathM02(), 0,
+                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                MainScreen::roadHalfWidth);
         // Addon layers are roads of classes this mod knows, drawn by the world map in the same pass;
         // the viewer shows what the world map shows, so they are here too.
         for (RoadSegment segment : AddonRoadStore.segments()) {
@@ -409,13 +415,8 @@ public final class MainScreen extends Screen {
         // The current route over everything, so it reads as the one thing to follow.
         Route route = Navigation.route();
         if (route.isPresent()) {
-            List<double[]> points = route.points();
-            for (int i = 1; i < points.size(); i++) {
-                double[] a = points.get(i - 1);
-                double[] b = points.get(i);
-                HudDraw.emitClipped(pose, vc, screenX(a[0]), screenY(a[1]), screenX(b[0]),
-                        screenY(b[1]), 1.6, COLOR_ROUTE, 0xFF, minX, minY, maxX, maxY);
-            }
+            HudDraw.emitPath(pose, vc, route.points(), pathM00(), 0, pathM02(), 0, pathM11(),
+                    pathM12(), 1.6, COLOR_ROUTE, 0xFF, minX, minY, maxX, maxY);
         }
 
         // Places, and the labels to draw after the shapes. The names are thinned by the same rule
@@ -461,16 +462,29 @@ public final class MainScreen extends Screen {
         return labels;
     }
 
-    /** One segment, thinned to the screen: edges are clipped, and thickness follows the class. */
+    /** One segment as a continuous stroke: its bends are mitred and its smoothed curve used. */
     private void drawRoad(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
                           int minX, int minY, int maxX, int maxY) {
         int color = RoadConfig.roadColor(segment.roadClass());
         double half = roadHalfWidth(segment.roadClass());
-        for (int i = 1; i < segment.vertexCount(); i++) {
-            HudDraw.emitClipped(pose, vc, screenX(segment.x(i - 1)), screenY(segment.z(i - 1)),
-                    screenX(segment.x(i)), screenY(segment.z(i)), half, color, 0xD0,
-                    minX, minY, maxX, maxY);
-        }
+        HudDraw.emitPath(pose, vc, segment, pathM00(), 0, pathM02(), 0, pathM11(), pathM12(),
+                half, color, 0xD0, minX, minY, maxX, maxY);
+    }
+
+    private double pathM00() {
+        return scale;
+    }
+
+    private double pathM02() {
+        return mapX + mapW / 2.0 - centerX * scale;
+    }
+
+    private double pathM11() {
+        return scale;
+    }
+
+    private double pathM12() {
+        return mapY + mapH / 2.0 - centerZ * scale;
     }
 
     /** Half the stroke width of a class, in pixels: wide enough to see at the default zoom. */

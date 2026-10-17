@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -356,6 +357,7 @@ final class MtrLineTracks {
         }
         segment.setFromNode(from.id());
         segment.setToNode(to.id());
+        segment.setCurve(RoadCurve.of(segment));
         marks.putSegment(segment);
     }
 

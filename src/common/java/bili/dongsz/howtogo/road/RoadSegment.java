@@ -61,6 +61,14 @@ public final class RoadSegment {
      */
     private int layer;
 
+    /**
+     * A smoothed display line for this segment, or null when there is none.
+     *
+     * <p>Presentation only: see {@link RoadCurve}. Routing, length and every hit test stay on the
+     * integer vertices above, so a curve cannot change what connects to what or how far a trip is.
+     */
+    private RoadCurve curve;
+
     /** The lowest storey a road may be on. */
     public static final int MIN_LAYER = -32;
 
@@ -93,6 +101,15 @@ public final class RoadSegment {
             this.layer = clamped;
             layerChanges++;
         }
+    }
+
+    /** The smoothed display line, or null when this road is drawn from its vertices. */
+    public RoadCurve curve() {
+        return curve;
+    }
+
+    public void setCurve(RoadCurve curve) {
+        this.curve = curve;
     }
 
     /** Interleaved vertex data: xs[i], zs[i] form the i-th vertex. */
@@ -310,6 +327,7 @@ public final class RoadSegment {
         c.direction = direction;
         c.layer = layer;
         c.name = name;
+        c.curve = curve;
         return c;
     }
 

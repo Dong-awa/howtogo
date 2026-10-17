@@ -299,10 +299,12 @@ public final class HowToGoCommand {
     /**
      * Starts the browser map's server, or says where it already is.
      *
-     * <p>The URL is a clickable link: the point of this feature is a page in the player's own browser,
-     * and asking them to copy a port number out of a chat line by hand is the kind of friction that
-     * makes a feature not get used. The link opens the default browser through the game's own
-     * platform helper, which is the same path the chat's other links take.
+     * <h2>Why the browser is opened here rather than by the player clicking</h2>
+     * The chat's own links go through vanilla's {@code ConfirmLinkScreen} -- "open this URL?" -- which
+     * is a dialog in the middle of a command that already said what it is going to do. A manual start
+     * opens the page itself through the game's platform helper, so the feature is one command and no
+     * confirmation; the URL is still printed, plainly, for a player who wants it for a bookmark or for
+     * another machine.
      */
     private static int webMapStart(CommandContext<CommandSourceStack> context) {
         String running = WebMapService.url();
@@ -311,8 +313,9 @@ public final class HowToGoCommand {
             return 1;
         }
         try {
-            say(context, Component.translatable("command.howtogo.webmap.started",
-                    urlLink(WebMapService.start())));
+            String url = WebMapService.start();
+            openInBrowser(url);
+            say(context, Component.translatable("command.howtogo.webmap.started", urlLink(url)));
             return 1;
         } catch (IOException | RuntimeException failed) {
             // Reported rather than logged and forgotten: the usual cause is a port the player could
@@ -321,6 +324,21 @@ public final class HowToGoCommand {
             context.getSource().sendFailure(Component.translatable("command.howtogo.webmap.failed",
                     String.valueOf(failed.getMessage())));
             return 0;
+        }
+    }
+
+    /**
+     * Opens the browser map in the player's default browser, without the chat-link confirmation.
+     *
+     * <p>The same thing clicking a chat link does after its dialog. A failure here is not a failed
+     * start: the server is up and the URL is on screen, so it is logged and nothing else changes.
+     */
+    public static void openInBrowser(String url) {
+        try {
+            net.minecraft.Util.getPlatform().openUri(url);
+        } catch (RuntimeException | LinkageError failed) {
+            HowToGo.LOGGER.info("[HowToGo] webmap | could not open a browser at {} ({}); "
+                    + "the address is on screen", url, failed.toString());
         }
     }
 

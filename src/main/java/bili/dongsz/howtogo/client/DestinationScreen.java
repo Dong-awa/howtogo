@@ -968,79 +968,38 @@ public final class DestinationScreen extends Screen {
         List<PlaceHit> places = placeHits();
 
         RoadNetwork network = RoadStore.get();
-        for (RoadSegment segment : network.segments()) {
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                double ax = segment.x(i - 1);
-                double az = segment.z(i - 1);
-                double bx = segment.x(i);
-                double bz = segment.z(i);
-                if (Math.min(ax, bx) > mapCenterX + reach || Math.max(ax, bx) < mapCenterX - reach
-                        || Math.min(az, bz) > mapCenterZ + reach
-                        || Math.max(az, bz) < mapCenterZ - reach) {
-                    continue;
-                }
-                int color = RoadConfig.roadColor(segment.roadClass());
-                HudDraw.emitClipped(last, vc,
-                        centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
-                        centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
-                        0.7, color, 0x9A, minX, minY, maxX, maxY);
-            }
-        }
+        // One affine map for every line this map draws, so the stroke pass can miter the bends of a
+        // road instead of leaving a notch at each vertex of a railway sampled once per block.
+        double m00 = scale;
+        double m02 = centerX - mapCenterX * scale;
+        double m11 = scale;
+        double m12 = centerY - mapCenterZ * scale;
+        HudDraw.emitNetwork(last, vc, network, m00, 0, m02, 0, m11, m12,
+                0.7, 0x9A, minX, minY, maxX, maxY);
 
         // The machine-read rails -- Create's tracks and MTR's -- drawn with the roads and before the
         // labels: a station on the list should be a station the player can see the line to, and for a
         // station that exists only in MTR that line is the one MTR's own rails run along. The whole
         // quad sequence stays ahead of the name pass below, which is what keeps the emit order legal.
-        for (RoadSegment segment : RailLayers.all()) {
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                double ax = segment.x(i - 1);
-                double az = segment.z(i - 1);
-                double bx = segment.x(i);
-                double bz = segment.z(i);
-                if (Math.min(ax, bx) > mapCenterX + reach || Math.max(ax, bx) < mapCenterX - reach
-                        || Math.min(az, bz) > mapCenterZ + reach
-                        || Math.max(az, bz) < mapCenterZ - reach) {
-                    continue;
-                }
-                int color = RoadConfig.roadColor(segment.roadClass());
-                HudDraw.emitClipped(last, vc,
-                        centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
-                        centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
-                        0.7, color, 0x9A, minX, minY, maxX, maxY);
-            }
-        }
+        HudDraw.emitNetwork(last, vc, RailTrackStore.network(), m00, 0, m02, 0, m11, m12,
+                0.7, 0x9A, minX, minY, maxX, maxY);
+        HudDraw.emitNetwork(last, vc, MtrTransit.railLayer(), m00, 0, m02, 0, m11, m12,
+                0.7, 0x9A, minX, minY, maxX, maxY);
 
         // The roads read out of RoadWeaver, drawn with the roads: a route to one of its villages is
         // planned partly over them, and a preview that omitted them would show a line across ground
         // it cannot explain. Boxed by the view rectangle -- the layer can hold a whole region's worth.
         RoadWeaverLayer.forEachSegmentInBox(mapCenterX - reach, mapCenterZ - reach,
                 mapCenterX + reach, mapCenterZ + reach, segment -> {
-                    for (int i = 1; i < segment.vertexCount(); i++) {
-                        double ax = segment.x(i - 1);
-                        double az = segment.z(i - 1);
-                        double bx = segment.x(i);
-                        double bz = segment.z(i);
-                        int color = RoadConfig.roadColor(segment.roadClass());
-                        HudDraw.emitClipped(last, vc,
-                                centerX + (ax - mapCenterX) * scale,
-                                centerY + (az - mapCenterZ) * scale,
-                                centerX + (bx - mapCenterX) * scale,
-                                centerY + (bz - mapCenterZ) * scale,
-                                0.7, color, 0x9A, minX, minY, maxX, maxY);
-                    }
+                    int color = RoadConfig.roadColor(segment.roadClass());
+                    HudDraw.emitPath(last, vc, segment, m00, 0, m02, 0, m11, m12,
+                            0.7, color, 0x9A, minX, minY, maxX, maxY);
                 });
 
         Route route = Navigation.route();
         if (route.isPresent()) {
-            List<double[]> points = route.points();
-            for (int i = 1; i < points.size(); i++) {
-                double[] a = points.get(i - 1);
-                double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
-                        centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
-                        centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
-                        1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
-            }
+            HudDraw.emitPath(last, vc, route.points(), m00, 0, m02, 0, m11, m12,
+                    1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
         }
 
         // The preview goes down in the same ink as the live route, so a route looked at before
@@ -1049,15 +1008,8 @@ public final class DestinationScreen extends Screen {
         // is being compared with.
         Navigation.RoutePreview planned = preview;
         if (planned != null && planned.isPresent()) {
-            List<double[]> points = planned.route().points();
-            for (int i = 1; i < points.size(); i++) {
-                double[] a = points.get(i - 1);
-                double[] b = points.get(i);
-                HudDraw.emitClipped(last, vc,
-                        centerX + (a[0] - mapCenterX) * scale, centerY + (a[1] - mapCenterZ) * scale,
-                        centerX + (b[0] - mapCenterX) * scale, centerY + (b[1] - mapCenterZ) * scale,
-                        1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
-            }
+            HudDraw.emitPath(last, vc, planned.route().points(), m00, 0, m02, 0, m11, m12,
+                    1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
         }
 
         double originX = Navigation.tripOriginX();

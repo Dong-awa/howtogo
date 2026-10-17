@@ -286,6 +286,7 @@
   "howtogo.configuration.on_road_tolerance_blocks.water": "Water tolerance",
   "howtogo.configuration.on_road_tolerance_blocks.ice": "Ice tolerance",
   "howtogo.configuration.station_snap_blocks": "Station snap distance (blocks)",
+  "howtogo.configuration.walk_offroad_blocks": "Walk off-road distance (blocks)",
   "howtogo.configuration.default_travel_mode": "Default travel mode",
   "howtogo.configuration.route_preference": "Route preference",
   "howtogo.configuration.avoid_road_classes": "Road classes to avoid",

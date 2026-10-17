@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -1193,6 +1194,7 @@ public final class RailTrackStore {
             }
             segment.setFromNode(fromId);
             segment.setToNode(toId);
+            segment.setCurve(RoadCurve.of(segment));
             build.network.putSegment(segment);
         }
 
@@ -1500,6 +1502,7 @@ public final class RailTrackStore {
         }
         segment.setFromNode(fromId);
         segment.setToNode(toId);
+        segment.setCurve(RoadCurve.of(segment));
         build.network.putSegment(segment);
     }
 

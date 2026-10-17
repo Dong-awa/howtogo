@@ -160,6 +160,20 @@ public final class LinePlanner {
      */
     private static final double WALK_DETOUR_LIMIT = 2.0;
 
+    /**
+     * Shortest piece of actual track a leg must ride for it to count as public transport, in blocks.
+     *
+     * <p>A ride is two hops onto and off the line plus the stretch between them. When there is no
+     * stretch -- the two stops are close enough that both hops meet at one node -- the leg is a line
+     * between two platforms, not a ride, and it is refused rather than added to the journey.
+     */
+    private static final double MIN_RIDE_TRACK = 1.0;
+
+    /** The length of the part of a ride that is actually on the line, connectors excluded. */
+    private static double trackLength(Route ride) {
+        return ride.totalLength() - ride.startConnector() - ride.goalConnector();
+    }
+
     private LinePlanner() {
     }
 
@@ -530,6 +544,13 @@ public final class LinePlanner {
                         LineStop from = line.stops().get(at);
                         ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(),
                                 destinationName, mode, ridePolicy);
+                        if (ride.isPresent() && trackLength(ride) < MIN_RIDE_TRACK) {
+                            // Nothing but the two hops onto and off the track: there is no riding in
+                            // this leg, and calling it public transport would be a straight line
+                            // between two platforms dressed up as a train. Refused, and the journey
+                            // planner will look for another way or report none.
+                            ride = Route.empty();
+                        }
                         cache.put(key, ride);
                         if (!ride.isPresent()) {
                             // Named, because "no journey over 1 line(s)" cannot say which stretch of
@@ -887,6 +908,14 @@ public final class LinePlanner {
         // walking away from it first and coming back. Past this factor the road's answer is refused and
         // the walk becomes what it always was at the ends of a trip: a straight connector.
         if (!planned.isPresent() || planned.totalLength() > straight * WALK_DETOUR_LIMIT) {
+            // The straight hop is walking off-road, so it obeys walking's own allowance. Past it the
+            // leg is not "cross the field to the station" any more, it is a beeline across the map,
+            // and the honest answer is that this leg cannot be walked.
+            if (straight > TravelMode.WALK.maxConnectorDistance()) {
+                planned = Route.empty();
+                cache.put(key, planned);
+                return planned;
+            }
             if (!planned.isPresent() && straight > SHORT_HOP) {
                 // Said out loud, because this is the one place a broken road network admits itself.
                 // A public transport journey whose walking legs are straight lines still draws and

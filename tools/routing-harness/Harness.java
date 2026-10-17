@@ -96,6 +96,9 @@ public final class Harness {
         int[] trackRuns = bili.dongsz.howtogo.client.TrackRunsCheck.run();
         checks += trackRuns[0];
         failures += trackRuns[1];
+        int[] smooth = bili.dongsz.howtogo.client.SmoothPathCheck.run();
+        checks += smooth[0];
+        failures += smooth[1];
         int[] thinning = bili.dongsz.howtogo.client.PathThinningCheck.run();
         checks += thinning[0];
         failures += thinning[1];
@@ -361,20 +364,27 @@ public final class Harness {
                 RoutePreferences.DEFAULTS);
         expect("a drive is refused: the two roads share no node", !drive.isPresent());
 
-        // Walking is not refused, and that is the walking mode's own rule rather than a join: walking may
-        // leave the road, so it crosses the field to the side road and walks up that. What it cannot do is
-        // start on the main road and step across the block, because there is no junction there -- and the
-        // drive above is where that shows.
+        // Walking is not refused for the same reason, and it is still not a junction: walking may leave
+        // the road, but only as far as its own off-road allowance. The side road here is a hundred
+        // blocks from where the walk would have to leave the main road, which is past that allowance,
+        // so the answer is "no road route" for the walker too.
         Route walk = RoadRouter.findRoute(net, 0, 0, 100, 200, "up the side road", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("a walk is still planned, reaching the side road across the field", walk.isPresent());
-        if (walk.isPresent()) {
-            System.out.println("   walk " + round(walk.totalLength()) + " blocks, "
-                    + round(walk.startConnector()) + " of it off the road");
-            // It gets onto the side road by walking to it, not by turning off the main road a block
-            // before the end of the road: the hop off the network is the whole ninety-nine blocks.
-            expectNear("reaching the side road on foot, not turning onto it",
-                    walk.startConnector(), 100, 3);
+        expect("a walk is refused: the side road is past walking's off-road allowance",
+                !walk.isPresent());
+
+        // A destination a short way off a road, with no second road to reach: the walk still gets
+        // there, because the hop is inside walking's allowance. This is the other side of the rule
+        // above -- the number refuses a beeline, not an ordinary off-road end.
+        RoadNetwork field = new RoadNetwork();
+        addRoad(field, RoadClass.ROAD, 0, 0, 200, 0);
+        Route nearWalk = RoadRouter.findRoute(field, 20, 0, 200, 24, "out in the field",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("a destination twenty-four blocks off a road is still walkable",
+                nearWalk.isPresent());
+        if (nearWalk.isPresent()) {
+            expectNear("and the walk ends with that twenty-four block hop",
+                    nearWalk.goalConnector(), 24, 3);
         }
 
         // The same shape with a node where the side road meets the main road, which is what the editor
@@ -410,18 +420,14 @@ public final class Harness {
                 RoutePreferences.DEFAULTS);
         expect("a drive from one road to the other is refused", !drive.isPresent());
 
-        // Walking is not refused, because walking may leave the road: what it gets is the straight line
-        // across the field (200 blocks), not the 283-block route through the crossing that the pass used
-        // to make available.
+        // Walking is refused as well, and for the newer reason: leaving one road for the other means
+        // crossing the field to the far corner, which is two hundred blocks away from either road's end
+        // -- far past the walking off-road allowance. The old answer here was a straight beeline across
+        // the whole map, which is exactly the line the allowance exists to refuse.
         Route walk = RoadRouter.findRoute(net, 0, 0, 200, 0, "the far corner", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("a walk is planned as the straight line across the field", walk.isPresent());
-        if (walk.isPresent()) {
-            System.out.println("   " + round(walk.totalLength()) + " blocks, "
-                    + round(walk.roadLength()) + " of them on a road");
-            expectNear("straight across rather than through the crossing", walk.totalLength(), 200, 5);
-            expectNear("and none of it on a road", walk.roadLength(), 0, 1);
-        }
+        expect("a walk is refused: the other road is past walking's off-road allowance",
+                !walk.isPresent());
 
         // With a node at the crossing -- the two roads split there, sharing the node -- a car drives
         // through it, and that is the whole of what changed.
@@ -487,10 +493,9 @@ public final class Harness {
      * under it rather than a junction. What must not happen is a route that turns from one onto the
      * other at the crossing -- a walker going over the bridge has not found a junction.
      *
-     * <p>Walking there is a straight hop across the field, which is the honest answer now that walking
-     * has no connector distance to speak of, so the assertion is on the shape rather than on whether a
-     * route exists: through a junction the trip would be 100 blocks along one road and 50 along the
-     * other, and as a hop it is the 112 blocks between the two points.
+     * <p>Walking is refused as well: the bridge is more than the walking off-road allowance from the
+     * road below it, and a walker may only step off the path as far as that allowance -- the old
+     * straight hop across the whole gap is exactly what the cap now refuses.
      */
     private static void scenarioBridgeIsNotAJunction() {
         System.out.println("== a bridge is not a junction ==");
@@ -500,12 +505,8 @@ public final class Harness {
 
         Route walk = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("a walk is planned", walk.isPresent());
-        if (walk.isPresent()) {
-            System.out.println("   " + round(walk.totalLength()) + " blocks");
-            expect("but it is the straight hop, not a way through the crossing",
-                    walk.totalLength() < 130);
-        }
+        expect("a walk is refused too: the bridge is more than the walking allowance away",
+                !walk.isPresent());
         Route drive = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
         expect("and a drive is refused: the two roads are at two heights", !drive.isPresent());
@@ -514,10 +515,10 @@ public final class Harness {
     /**
      * A destination a long way from any road.
      *
-     * <p>Walking has no connector distance to speak of, because a straight line across open country is
-     * what a person does when there is no road -- the mode answering "no route" to a place plainly in
-     * sight is the one answer that cannot be acted on. A drive is still refused, because there is no
-     * road there to drive on.
+     * <p>Walking may step off a road, but only as far as its own off-road allowance: a destination
+     * three hundred blocks out in a field is not a step off the path, it is a beeline, and the answer
+     * is that there is no road route from here. A drive is refused for its own reason -- there is no
+     * road out there to drive on -- and the same is true of a ride.
      */
     private static void scenarioWalkReachesOffNetworkDestinations() {
         System.out.println("== a destination off the network ==");
@@ -526,11 +527,8 @@ public final class Harness {
 
         Route walk = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("the walk is planned", walk.isPresent());
-        if (walk.isPresent()) {
-            System.out.println("   " + round(walk.totalLength()) + " blocks");
-            expectNear("90 blocks of road and 300 across the field", walk.totalLength(), 390, 10);
-        }
+        expect("the walk is refused: the destination is past walking's off-road allowance",
+                !walk.isPresent());
         Route drive = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field",
                 TravelMode.DRIVE, RoutePreferences.DEFAULTS);
         expect("and the drive is refused: there is no road out there", !drive.isPresent());
@@ -889,27 +887,27 @@ public final class Harness {
     }
 
     /**
-     * The cap the fallback now respects must not become a refusal of ordinary off-road ends.
+     * The new drive rule: a car may be as far from its road as the road is wide, and no further.
      *
-     * <p>A trip does not begin or end on a road: both ends are a short walk, and a destination beside
-     * the road with nothing drawn up to it is the commonest kind there is. This is the other side of the
-     * rule above -- the fallback's endpoints have to be within the mode's connector distance, and a
-     * destination that is within it still has to be reachable.
+     * <p>A drive route is not allowed to leave the carriageway, so a destination thirty or forty
+     * blocks off in a field is refused rather than drawn as a straight line. The same trip with both
+     * ends on the road still routes, which is what keeps the rule from being a refusal of driving.
      */
     private static void scenarioOffRoadEndsStillRoute() {
         System.out.println("== a destination off the road ==");
         RoadNetwork net = new RoadNetwork();
         road(net, RoadClass.ROAD, 0, 0, 400, 0);
 
-        // Thirty blocks off the middle of the road, which is well inside the sixty-four a drive allows
-        // to reach a road and far outside the three a junction is joined at.
-        Route close = RoadRouter.findRoute(net, 200, 30, 350, -40, "off road", TravelMode.DRIVE,
+        Route offRoad = RoadRouter.findRoute(net, 200, 30, 350, -40, "off road", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
-        expect("a destination a short hop off the road is still reachable", close.isPresent());
-        if (close.isPresent()) {
-            expectNear("and the trip ends where it was asked to",
-                    Math.hypot(close.points().get(close.points().size() - 1)[0] - 350,
-                            close.points().get(close.points().size() - 1)[1] + 40), 0, 0.5);
+        expect("a destination off the road is refused: a car does not cross the field",
+                !offRoad.isPresent());
+
+        Route onRoad = RoadRouter.findRoute(net, 200, 0, 350, 0, "along the road", TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("but two points on the road itself still route", onRoad.isPresent());
+        if (onRoad.isPresent()) {
+            expectNear("150 blocks along it", onRoad.totalLength(), 150, 2);
         }
     }
 
@@ -990,15 +988,15 @@ public final class Harness {
     private static void scenarioDriveTimingWalksOnlyTheWalkedPart() {
         System.out.println("== a drive that ends in a walk ==");
         RoadNetwork net = new RoadNetwork();
-        // Two kilometres of road with the destination a hundred blocks off its far end: far past the
-        // sixty-four a drive will walk to a road, and well inside the walker's.
+        // Two kilometres of road with the destination twenty blocks off its far end: far past the
+        // couple of blocks a drive allows itself, and inside the walker's off-road allowance.
         road(net, RoadClass.ROAD, 0, 0, 2000, 0);
 
-        Route drive = RoadRouter.findRoute(net, 0, 0, 2000, 100, "off the road",
+        Route drive = RoadRouter.findRoute(net, 0, 0, 2000, 20, "off the road",
                 TravelMode.DRIVE, RoutePreferences.DEFAULTS);
         expect("the drive is refused: no road the car may use reaches it", !drive.isPresent());
 
-        Route walk = RoadRouter.findRoute(net, 0, 0, 2000, 100, "off the road",
+        Route walk = RoadRouter.findRoute(net, 0, 0, 2000, 20, "off the road",
                 TravelMode.WALK, RoutePreferences.DEFAULTS);
         expect("the walk is planned", walk.isPresent());
         if (!walk.isPresent()) {
@@ -1021,11 +1019,11 @@ public final class Harness {
         expectNear("the whole trip is ahead at the start",
                 asDrive.remainingSeconds(0, 0), asDrive.estimatedSeconds(), 0.5);
         expectNear("and nothing is left at the destination",
-                asDrive.remainingSeconds(2000, 100), 0, 0.5);
+                asDrive.remainingSeconds(2000, 20), 0, 0.5);
 
         // A drive that does reach the destination is that mode's own route already: re-timing it for
         // the drive must leave it exactly as it is rather than rebuild it.
-        Route beside = RoadRouter.findRoute(net, 0, 0, 1000, 30, "beside the road",
+        Route beside = RoadRouter.findRoute(net, 0, 0, 1000, 0, "on the road",
                 TravelMode.DRIVE, RoutePreferences.DEFAULTS);
         expect("a drive that does reach the destination is left as it is",
                 beside.isPresent() && beside.timedFor(TravelMode.DRIVE) == beside);
@@ -1209,21 +1207,38 @@ public final class Harness {
                 RoutePreferences.DEFAULTS);
         expect("the same two ends with one of them a storey up are two roads", !up.isPresent());
 
-        // A walker is not a vehicle: it can leave the network and cross the ground between two ends,
-        // so the storey does not take the join away. Asking connection rather than planning is what
-        // makes this a test of the join itself: a walk to a distant point could always be answered
-        // with a straight line across the field, so a planned route would say nothing about whether
-        // the two roads were read as one place.
+        // A walker may step off the path and cross the ground to the next one, but only on the
+        // surface: a footpath over a bridge and the one under it are not the same ground. Asking
+        // connection rather than planning is what makes this a test of the join itself -- a planned
+        // route could always be answered with a straight line across the field.
+        RoadRouter.Connection walkSameLevel = RoadRouter.connection(
+                RoadRouter.workspaceFor(level), 0, 0, 200, 0, TravelMode.WALK,
+                RoutePreferences.DEFAULTS);
+        expect("two surface ends a block apart are one place to a walker",
+                walkSameLevel == RoadRouter.Connection.CONNECTED);
         RoadRouter.Connection walkJoin = RoadRouter.connection(
                 RoadRouter.workspaceFor(stacked), 0, 0, 200, 0, TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("but a walker treats the same two ends as one place whatever storey they are on",
-                walkJoin == RoadRouter.Connection.CONNECTED);
+        expect("but a walker on the surface does not step onto the bridge above it",
+                walkJoin == RoadRouter.Connection.SEPARATE);
         RoadRouter.Connection driveJoin = RoadRouter.connection(
                 RoadRouter.workspaceFor(stacked), 0, 0, 200, 0, TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
         expect("while a car still sees the storey as a bridge rather than a junction",
                 driveJoin == RoadRouter.Connection.SEPARATE);
+
+        // Both ends one storey above the ground: not the surface, so a walker does not cross that gap
+        // either -- only storey zero is ground a step off the path can reach.
+        RoadNetwork elevated = new RoadNetwork();
+        RoadSegment lower = road(elevated, RoadClass.ROAD, 0, 0, 100, 0);
+        lower.setLayer(1);
+        RoadSegment upper = road(elevated, RoadClass.ROAD, 101, 0, 200, 0);
+        upper.setLayer(1);
+        RoadRouter.Connection elevatedJoin = RoadRouter.connection(
+                RoadRouter.workspaceFor(elevated), 0, 0, 200, 0, TravelMode.WALK,
+                RoutePreferences.DEFAULTS);
+        expect("and two elevated ends a block apart are two roads to a walker as well",
+                elevatedJoin == RoadRouter.Connection.SEPARATE);
 
         // Sharing a node: the storey cannot take a junction away.
         RoadNetwork jogged = new RoadNetwork();
@@ -1291,13 +1306,13 @@ public final class Harness {
         List<TransitLine> lines = new ArrayList<>();
         lines.add(line("line", RoadClass.RAIL, stop("West", 0, 0), stop("East", 400, 0)));
 
-        // The destination is 200 blocks off the network, so the last leg is a long off-road hop that
-        // used to vanish from the flattened route's time and length.
-        Trip trip = TransitPlanner.plan(net, lines, 5, 0, 400, 200, "off grid",
+        // The destination is twenty blocks off the network: inside walking's off-road allowance, so
+        // the last leg is a walk hop that must not vanish from the flattened route's time and length.
+        Trip trip = TransitPlanner.plan(net, lines, 5, 0, 400, 20, "off grid",
                 RoutePreferences.DEFAULTS);
         expect("a journey is found", trip.isPresent());
         if (trip.isPresent()) {
-            Route flat = TransitPlanner.planRoute(net, lines, 5, 0, 400, 200, "off grid",
+            Route flat = TransitPlanner.planRoute(net, lines, 5, 0, 400, 20, "off grid",
                     RoutePreferences.DEFAULTS);
             expect("the flattened route is present", flat.isPresent());
             System.out.println("   trip " + round(trip.estimatedSeconds()) + "s / "
@@ -1307,15 +1322,15 @@ public final class Harness {
                     flat.estimatedSeconds(), trip.estimatedSeconds(), 0.01);
             expectNear("flattened length equals the legs' length",
                     flat.totalLength(), trip.totalLength(), 0.01);
-            expect("and the 200 block off-road hop is in it",
-                    flat.estimatedSeconds() > 400 / 8.0 + 200 / 4.317 - 5);
-            // 5 blocks of walk at 5.612, 400 of rail at 8, 200 off-road at the router's off-road pace
+            expect("and the twenty block off-road hop is in it",
+                    flat.estimatedSeconds() > 400 / 8.0 + 20 / 4.317 - 5);
+            // 5 blocks of walk at 5.612, 400 of rail at 8, 20 off-road at the router's off-road pace
             // (walking pace times 0.7), and one wait at a boarding: the default sixty seconds, because
             // the harness runs with no config file. The off-road hop used to come from the walk
             // fallback at full walking pace instead of from the router at the off-road one, which is
-            // the same 200 blocks estimated two different ways depending on which code path answered.
+            // the same hop estimated two different ways depending on which code path answered.
             expectNear("with one boarding's waiting on top of the travelling",
-                    flat.estimatedSeconds(), 5 / 5.612 + 60 + 400 / 8.0 + 200 / (4.317 * 0.7), 2);
+                    flat.estimatedSeconds(), 5 / 5.612 + 60 + 400 / 8.0 + 20 / (4.317 * 0.7), 2);
         }
     }
 

@@ -286,6 +286,7 @@
   "howtogo.configuration.on_road_tolerance_blocks.water": "水路容差",
   "howtogo.configuration.on_road_tolerance_blocks.ice": "冰道容差",
   "howtogo.configuration.station_snap_blocks": "站点吸附距离（格）",
+  "howtogo.configuration.walk_offroad_blocks": "步行越野距离（格）",
   "howtogo.configuration.default_travel_mode": "默认交通方式",
   "howtogo.configuration.route_preference": "路线偏好",
   "howtogo.configuration.avoid_road_classes": "避开的道路类型",

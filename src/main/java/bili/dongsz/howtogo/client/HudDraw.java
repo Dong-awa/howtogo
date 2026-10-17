@@ -1,5 +1,8 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.road.RoadCurve;
+import bili.dongsz.howtogo.road.RoadNetwork;
+import bili.dongsz.howtogo.road.RoadSegment;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -356,5 +359,332 @@ public final class HudDraw {
         double dy = y2 - y1;
         emitLine(pose, vc, x1 + CLIP_T[0] * dx, y1 + CLIP_T[0] * dy,
                 x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
+    }
+
+    // ------------------------------------------------------------------- polylines
+
+    /**
+     * Scratch for a projected polyline: world vertices are transformed into these once, then the
+     * stroke pass reads them per edge.
+     *
+     * <p>Render thread only, like {@link #CLIP_T}. Reused and grown rather than allocated per road:
+     * these maps redraw the same road network every frame, and one array per segment would be more
+     * garbage than a whole screen of UI.
+     */
+    private static double[] PATH_X = new double[64];
+    private static double[] PATH_Y = new double[64];
+
+    private static void ensurePathCapacity(int count) {
+        if (PATH_X.length >= count) {
+            return;
+        }
+        int capacity = Math.max(count, PATH_X.length * 2);
+        PATH_X = new double[capacity];
+        PATH_Y = new double[capacity];
+    }
+
+    /**
+     * Draws one road as a continuous line, using its smoothed curve when it has one.
+     *
+     * <h2>Why this is not a loop of {@link #emitClipped}</h2>
+     * Two strokes that merely meet at a vertex leave a notch on the outside of every bend: each
+     * quad stops flush at the shared point, and at a block-sampled corner there is a wedge of
+     * background between them. On the small maps -- the navigation panel, the destination picker,
+     * the main screen's viewer -- that reads as a jagged, broken road, especially where a railway was
+     * sampled once per block. Here the two ends of a bend are joined by a miter: the offset at a
+     * shared vertex is the bisector of the two edges' normals, so the stroke is continuous round the
+     * corner. The miter length is capped, so a very sharp turn falls back to a plain join rather than
+     * shooting a spike off the road.
+     *
+     * <p>The transform is an affine map from world blocks to screen pixels, which is all these views
+     * use: {@code screenX = m00*x + m01*z + m02}, {@code screenY = m10*x + m11*z + m12}. It is passed
+     * in rather than done by the caller because the projection happens inside the scratch arrays.
+     */
+    public static void emitPath(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
+                                double m00, double m01, double m02,
+                                double m10, double m11, double m12,
+                                double halfWidth, int argb, int alpha,
+                                double minX, double minY, double maxX, double maxY) {
+        if (segment == null) {
+            return;
+        }
+        RoadCurve curve = segment.curve();
+        int count;
+        if (curve != null && curve.size() >= 2) {
+            count = curve.size();
+            ensurePathCapacity(count);
+            for (int i = 0; i < count; i++) {
+                double x = curve.x(i);
+                double z = curve.z(i);
+                PATH_X[i] = m00 * x + m01 * z + m02;
+                PATH_Y[i] = m10 * x + m11 * z + m12;
+            }
+        } else {
+            count = segment.vertexCount();
+            if (count < 2) {
+                return;
+            }
+            ensurePathCapacity(count);
+            for (int i = 0; i < count; i++) {
+                double x = segment.x(i);
+                double z = segment.z(i);
+                PATH_X[i] = m00 * x + m01 * z + m02;
+                PATH_Y[i] = m10 * x + m11 * z + m12;
+            }
+        }
+        emitProjectedPath(pose, vc, count, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    /** The same for a plain list of world points, which is what a planned route is. */
+    public static void emitPath(PoseStack.Pose pose, VertexConsumer vc, java.util.List<double[]> points,
+                                double m00, double m01, double m02,
+                                double m10, double m11, double m12,
+                                double halfWidth, int argb, int alpha,
+                                double minX, double minY, double maxX, double maxY) {
+        if (points == null || points.size() < 2) {
+            return;
+        }
+        int count = points.size();
+        ensurePathCapacity(count);
+        for (int i = 0; i < count; i++) {
+            double[] point = points.get(i);
+            PATH_X[i] = m00 * point[0] + m01 * point[1] + m02;
+            PATH_Y[i] = m10 * point[0] + m11 * point[1] + m12;
+        }
+        emitProjectedPath(pose, vc, count, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    /**
+     * Draws a whole road -- a chain of segments through its pass-through nodes -- as one stroke.
+     *
+     * <h2>Why segment-by-segment still shows notches</h2>
+     * A bend is not always inside one segment: a road drawn with several clicks is stored as several
+     * segments meeting at a pass-through node, and a track read from another mod is cut at every
+     * node. Drawing each segment on its own mitres its own corners and nothing else, so the joint
+     * between two segments is two butt ends with a wedge between them at a bend -- the same notch,
+     * moved to fewer places. The chain is what the road is; this concatenates it into one polyline,
+     * orienting every piece so it continues the previous one, and draws that.
+     *
+     * <p>Segment vertices are integers and the display curve, when there is one, may run the other
+     * way round from the segment's stored order; the orientation is decided by which end is nearer
+     * the point the previous piece stopped at.
+     */
+    public static void emitChain(PoseStack.Pose pose, VertexConsumer vc, RoadNetwork network,
+                                 int[] chain, double m00, double m01, double m02,
+                                 double m10, double m11, double m12,
+                                 double halfWidth, int argb, int alpha,
+                                 double minX, double minY, double maxX, double maxY) {
+        if (network == null || chain == null || chain.length == 0) {
+            return;
+        }
+        int written = 0;
+        double previousWorldX = 0;
+        double previousWorldZ = 0;
+        boolean havePrevious = false;
+        for (int id : chain) {
+            RoadSegment segment = network.segment(id);
+            if (segment == null) {
+                continue;
+            }
+            RoadCurve curve = segment.curve();
+            int count = curve != null ? curve.size() : segment.vertexCount();
+            if (count < 2) {
+                continue;
+            }
+            double firstX = curve != null ? curve.x(0) : segment.x(0);
+            double firstZ = curve != null ? curve.z(0) : segment.z(0);
+            double lastX = curve != null ? curve.x(count - 1) : segment.x(count - 1);
+            double lastZ = curve != null ? curve.z(count - 1) : segment.z(count - 1);
+            boolean reverse = havePrevious
+                    && distanceSq(previousWorldX, previousWorldZ, lastX, lastZ)
+                    < distanceSq(previousWorldX, previousWorldZ, firstX, firstZ);
+            ensurePathCapacity(written + count);
+            for (int i = 0; i < count; i++) {
+                int index = reverse ? count - 1 - i : i;
+                double x = curve != null ? curve.x(index) : segment.x(index);
+                double z = curve != null ? curve.z(index) : segment.z(index);
+                if (havePrevious && written > 0 && Math.abs(previousWorldX - x) < 1.0E-6
+                        && Math.abs(previousWorldZ - z) < 1.0E-6) {
+                    continue;
+                }
+                PATH_X[written] = m00 * x + m01 * z + m02;
+                PATH_Y[written] = m10 * x + m11 * z + m12;
+                previousWorldX = x;
+                previousWorldZ = z;
+                havePrevious = true;
+                written++;
+            }
+        }
+        emitProjectedPath(pose, vc, written, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    private static double distanceSq(double ax, double az, double bx, double bz) {
+        double dx = ax - bx;
+        double dz = az - bz;
+        return dx * dx + dz * dz;
+    }
+
+    /**
+     * Draws a whole network, one continuous stroke per road rather than one per segment.
+     *
+     * <p>The road a stroke belongs to is the chain the editor and the router already use: segments
+     * joined through pass-through nodes with the same class. Drawing chains is what removes the
+     * notches at segment joints as well as at bends inside one segment, and it collapses a road of
+     * twenty pieces into one buffer write.
+     *
+     * <p>Colours still come per class from the config, and a chain is one class by construction (the
+     * chain walk stops at a class change), so the colour of its first segment is the colour of the
+     * whole stroke.
+     */
+    public static void emitNetwork(PoseStack.Pose pose, VertexConsumer vc, RoadNetwork network,
+                                   double m00, double m01, double m02,
+                                   double m10, double m11, double m12,
+                                   double halfWidth, int alpha,
+                                   double minX, double minY, double maxX, double maxY) {
+        emitNetwork(pose, vc, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, null);
+    }
+
+    /**
+     * The same, with each road's half-width taken from its class rather than given once.
+     *
+     * <p>For the viewer that draws every class at its own weight; the small maps use one thickness
+     * because at their size a highway and a footpath are the same line. A null width function is the
+     * uniform case.
+     */
+    public static void emitNetwork(PoseStack.Pose pose, VertexConsumer vc, RoadNetwork network,
+                                   double m00, double m01, double m02,
+                                   double m10, double m11, double m12,
+                                   double halfWidth, int alpha,
+                                   double minX, double minY, double maxX, double maxY,
+                                   java.util.function.ToDoubleFunction<
+                                           bili.dongsz.howtogo.road.RoadClass> widthOf) {
+        if (network == null || network.segmentCount() == 0) {
+            return;
+        }
+        bili.dongsz.howtogo.road.RoadChains.Grouping grouping =
+                bili.dongsz.howtogo.road.RoadChains.cachedGrouping(network);
+        java.util.Set<Integer> drawn = new java.util.HashSet<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            int key = grouping.keyOf(segment);
+            if (!drawn.add(key)) {
+                continue;
+            }
+            int[] chain = grouping.chainOf(segment);
+            double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
+            emitChain(pose, vc, network, chain, m00, m01, m02, m10, m11, m12, width,
+                    bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
+                    minX, minY, maxX, maxY);
+        }
+    }
+
+    /** The stroke pass over {@link #PATH_X} / {@link #PATH_Y}: one mitered quad per visible edge. */
+    private static void emitProjectedPath(PoseStack.Pose pose, VertexConsumer vc, int count,
+                                          double halfWidth, int argb, int alpha,
+                                          double minX, double minY, double maxX, double maxY) {
+        if (count < 2 || !(halfWidth > 0)) {
+            return;
+        }
+        for (int i = 0; i < count - 1; i++) {
+            double x1 = PATH_X[i];
+            double y1 = PATH_Y[i];
+            double x2 = PATH_X[i + 1];
+            double y2 = PATH_Y[i + 1];
+            if (!clip(x1, y1, x2, y2, minX, minY, maxX, maxY)) {
+                continue;
+            }
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            double length = Math.hypot(dx, dy);
+            if (length < 1.0E-9) {
+                continue;
+            }
+            double nx = -dy / length * halfWidth;
+            double ny = dx / length * halfWidth;
+            double startX = x1 + CLIP_T[0] * dx;
+            double startY = y1 + CLIP_T[0] * dy;
+            double endX = x1 + CLIP_T[1] * dx;
+            double endY = y1 + CLIP_T[1] * dy;
+            // A vertex fully inside the view gets the miter of the edges on either side of it; a
+            // point introduced by the clip is mid-edge, so the edge's own normal is the right one.
+            double[] start = CLIP_T[0] <= 0.0 ? jointOffset(i, count, halfWidth)
+                    : new double[]{nx, ny};
+            double[] end = CLIP_T[1] >= 1.0 ? jointOffset(i + 1, count, halfWidth)
+                    : new double[]{nx, ny};
+            emitFlatQuad(pose, vc, startX + start[0], startY + start[1],
+                    endX + end[0], endY + end[1],
+                    endX - end[0], endY - end[1],
+                    startX - start[0], startY - start[1], argb, alpha);
+        }
+    }
+
+    /**
+     * The stroke offset at one polyline vertex, as a miter between the edge before and after it.
+     *
+     * <p>Allocates a two-element array per corner; a map pass has a few thousand of these and they do
+     * not escape, which the JIT elides. Keeping it out of the array bag would mean a second scratch
+     * pair and a wider interface for no measurable gain.
+     */
+    private static double[] jointOffset(int index, int count, double halfWidth) {
+        double prevX;
+        double prevY;
+        if (index > 0) {
+            prevX = PATH_X[index] - PATH_X[index - 1];
+            prevY = PATH_Y[index] - PATH_Y[index - 1];
+        } else {
+            prevX = PATH_X[1] - PATH_X[0];
+            prevY = PATH_Y[1] - PATH_Y[0];
+        }
+        double nextX;
+        double nextY;
+        if (index < count - 1) {
+            // The caller guarantees a vertex index below count; the next point may be the last one
+            // only when this is called for the final vertex, which has no next edge.
+            int next = Math.min(index + 1, count - 1);
+            nextX = PATH_X[next] - PATH_X[index];
+            nextY = PATH_Y[next] - PATH_Y[index];
+        } else {
+            nextX = prevX;
+            nextY = prevY;
+        }
+        double prevLength = Math.hypot(prevX, prevY);
+        double nextLength = Math.hypot(nextX, nextY);
+        if (prevLength < 1.0E-9 || nextLength < 1.0E-9) {
+            return new double[]{0, 0};
+        }
+        double nPrevX = -prevY / prevLength;
+        double nPrevY = prevX / prevLength;
+        double nNextX = -nextY / nextLength;
+        double nNextY = nextX / nextLength;
+        double sumX = nPrevX + nNextX;
+        double sumY = nPrevY + nNextY;
+        double sumLength = Math.hypot(sumX, sumY);
+        if (sumLength < 1.0E-6) {
+            // The line doubles straight back on itself: there is no bisector, so a plain join is the
+            // only sensible stroke.
+            return new double[]{nNextX * halfWidth, nNextY * halfWidth};
+        }
+        double miterX = sumX / sumLength;
+        double miterY = sumY / sumLength;
+        double denominator = miterX * nNextX + miterY * nNextY;
+        if (denominator < 0.25) {
+            return new double[]{nNextX * halfWidth, nNextY * halfWidth};
+        }
+        double miterLength = Math.min(halfWidth / denominator, halfWidth * 3.0);
+        return new double[]{miterX * miterLength, miterY * miterLength};
+    }
+
+    /** A quad from four explicit screen-space corners, in the winding a stroke expects. */
+    private static void emitFlatQuad(PoseStack.Pose pose, VertexConsumer vc,
+                                     double x1, double y1, double x2, double y2,
+                                     double x3, double y3, double x4, double y4,
+                                     int argb, int alpha) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        vertex(pose, vc, x1, y1, r, g, b, alpha);
+        vertex(pose, vc, x2, y2, r, g, b, alpha);
+        vertex(pose, vc, x3, y3, r, g, b, alpha);
+        vertex(pose, vc, x4, y4, r, g, b, alpha);
     }
 }

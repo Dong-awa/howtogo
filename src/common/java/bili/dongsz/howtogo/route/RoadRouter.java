@@ -1151,13 +1151,16 @@ public final class RoadRouter {
                             continue;
                         }
                         // A storey is a statement about a vehicle: a bridge is not the road under it,
-                        // and a drive must not climb from one onto the other. A walker can leave the
-                        // network and cross the ground between two ends whatever storey either is
-                        // drawn on, so for walking the storey does not refuse a join the way it does
-                        // for a car -- that was the difference between a footpath that could be
-                        // stepped across and an elevated one that could not.
-                        if (mode != TravelMode.WALK
-                                && !shareALayer(layersAtNode.get(a.id()), layersAtNode.get(b.id()))) {
+                        // and a drive must not climb from one onto the other. For walking the join is
+                        // only allowed on the surface: a walker may step off a path and cross the
+                        // ground to the next one, but two paths on different storeys are not the same
+                        // ground -- a footpath over a bridge and the one under it stay two paths.
+                        if (mode == TravelMode.WALK) {
+                            if (!shareSurfaceStorey(layersAtNode.get(a.id()), layersAtNode.get(b.id()))) {
+                                continue;
+                            }
+                        } else if (!shareALayer(layersAtNode.get(a.id()),
+                                layersAtNode.get(b.id()))) {
                             continue;
                         }
                         RoadSegment link = syntheticLink(a, b, junctionClass);
@@ -1281,9 +1284,8 @@ public final class RoadRouter {
      * close together they are on a map that cannot show height. Roads that share a <em>node</em> are
      * untouched by this: they are already joined, and a storey cannot take a junction away.
      *
-     * <p>Only asked of modes that cannot leave the network. A walker can step off and cross the
-     * ground between two ends, so for {@link TravelMode#WALK} a storey does not decide whether a join
-     * is possible at all -- see the call site.
+     * <p>Asked of vehicles, and of walking only through {@link #shareSurfaceStorey}: a walker may
+     * cross the ground between two ends, but only on the surface.
      */
     private static boolean shareALayer(Set<Integer> fromA, Set<Integer> fromB) {
         if (fromA == null || fromB == null) {
@@ -1295,6 +1297,19 @@ public final class RoadRouter {
             }
         }
         return false;
+    }
+
+    /**
+     * Whether both nodes stand on the surface storey (0), which is the only storey a walker may cross
+     * a gap on.
+     *
+     * <p>A footpath over a bridge and the one under it are not the same ground: a walker can step off
+     * a path into a field, but not down through a bridge deck or up a cliff face. Node-sharing still
+     * joins them -- that is what building the junction means -- so this only decides the invented
+     * joins this pass makes.
+     */
+    private static boolean shareSurfaceStorey(Set<Integer> fromA, Set<Integer> fromB) {
+        return fromA != null && fromB != null && fromA.contains(0) && fromB.contains(0);
     }
 
     private static long bucketKey(int cellX, int cellZ) {

@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -1005,6 +1006,7 @@ public final class RoadWeaverLayer {
         segment.setToNode(toNode);
         segment.setLayer(0);
         segment.setDirection(RoadDirection.TWO_WAY);
+        segment.setCurve(RoadCurve.of(segment));
         network.putSegment(segment);
     }
 

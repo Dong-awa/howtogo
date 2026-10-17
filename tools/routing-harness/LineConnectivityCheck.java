@@ -80,15 +80,24 @@ public final class LineConnectivityCheck {
                         LinePlanner.ridePreferences(RoadClass.WATER, RoutePreferences.DEFAULTS)));
 
         // A stop standing beside more than one piece of road: the dead stub it sits at is the nearest
-        // thing to it, and the through line sixty blocks off is the one the journey uses. Judged on the
-        // nearest piece alone the pair would read as a disconnection, which is why every piece within a
-        // traveller's reach of the stop is offered to the search. Sixty blocks is inside the mode's own
-        // connector cap, so this is a piece the ride really could start on.
+        // thing to it, and the through line is the one the journey uses. Judged on the nearest piece
+        // alone the pair would read as a disconnection, which is why every piece within the ride's own
+        // boarding distance is offered to the search -- but that distance is the station platform's,
+        // not a free sixty-block hop: past it the ride does not start there.
+        RoadNetwork nearby = new RoadNetwork();
+        addRail(nearby, 0, 0, 20, 0);
+        addRail(nearby, 44, 0, 400, 0);
+        expect("a stop beside a dead stub and a through line twenty-four blocks off is judged by "
+                        + "the through line",
+                RoadRouter.Connection.CONNECTED, judge(nearby, 20, 0, 300, 0, rail));
+
+        // The same shape with the through line sixty blocks away: past a station's own reach, so it
+        // is not a piece a ride may start on, and the stop is judged at the stub it stands at.
         RoadNetwork stub = new RoadNetwork();
         addRail(stub, 0, 0, 20, 0);
         addRail(stub, 80, 0, 400, 0);
-        expect("a stop beside a dead stub and a through line is judged by the through line",
-                RoadRouter.Connection.CONNECTED, judge(stub, 20, 0, 300, 0, rail));
+        expect("but a through line sixty blocks away is past the boarding distance",
+                RoadRouter.Connection.SEPARATE, judge(stub, 20, 0, 300, 0, rail));
 
         // A one-way is still a disconnection when it faces the way the journey has to go -- the reading
         // the old route-based test got right, and the reason this is a directed question rather than a
