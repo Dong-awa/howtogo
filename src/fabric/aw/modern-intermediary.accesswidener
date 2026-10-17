@@ -14,4 +14,4 @@ accessWidener v2 named
 # Keep this in step with modern.accesswidener. Same members, different names.
 
 accessible field net/minecraft/client/gui/GuiGraphicsExtractor guiRenderState Lnet/minecraft/client/renderer/state/gui/GuiRenderState;
-accessible method net/minecraft/client/renderer/state/gui/GuiRenderState submitGuiElement (Lnet/minecraft/client/renderer/state/gui/GuiElementRenderState;)V
+accessible method net/minecraft/client/renderer/state/gui/GuiRenderState addGuiElement (Lnet/minecraft/client/renderer/state/gui/GuiElementRenderState;)V

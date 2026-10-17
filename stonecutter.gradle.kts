@@ -93,6 +93,25 @@ stonecutter parameters {
             replace("ScreenEvents\\.afterRender", "ScreenEvents.afterExtract")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
+        // GuiRenderState renamed submitGuiElement to addGuiElement in 26.1. Same slot, same
+        // argument; the field is widened for these nodes by modern-intermediary.accesswidener.
+        regex(eval(current.version, ">=26.1")) {
+            replace("guiRenderState\\.submitGuiElement", "guiRenderState.addGuiElement")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        // HudRenderCallback was removed in 26.1 in favour of HudElementRegistry. The element is
+        // (GuiGraphicsExtractor, DeltaTracker) -> void, which is exactly what NavHudRenderer.onRenderGui
+        // already is once the GuiGraphics rule has renamed its parameter.
+        regex(eval(current.version, ">=26.1")) {
+            replace("import net\\.fabricmc\\.fabric\\.api\\.client\\.rendering\\.v1\\.HudRenderCallback;",
+                    "import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("HudRenderCallback\\.EVENT\\.register\\(NavHudRenderer::onRenderGui\\)",
+                    "HudElementRegistry.addLast(net.minecraft.resources.Identifier.fromNamespaceAndPath(HowToGo.MODID, \"nav_hud\"), NavHudRenderer::onRenderGui)")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // @Mod gained its dist attribute at 1.20.5, which is what made "this mod is client-only" a
         // declaration rather than a convention. Below that the annotation takes the id alone.
         //
