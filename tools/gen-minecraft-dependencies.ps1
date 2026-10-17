@@ -33,7 +33,37 @@ foreach ($mc in $Versions) {
         try { $config = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Close() }
     } finally { $zip.Dispose() }
 
-    if (-not $config.libraries) { throw "no libraries key in $mc's config" }
+    # The NeoForm config's own `libraries` key is NOT the Minecraft library set. For 1.20.4 it
+    # holds three entries -- jsr305, java-objc-bridge, annotations -- because the Minecraft libraries
+    # are downloaded later by the runtime's listLibraries step rather than declared there. Using it
+    # produced a module with three dependencies, and the node then failed on org.lwjgl.glfw, org.joml
+    # and com.mojang.text2speech not being on the classpath at all.
+    #
+    # The real set is in Mojang's version JSON, so that is what this reads. Rules are ignored on
+    # purpose: this is a COMPILE classpath, and an extra jar is harmless while a missing one is a
+    # build failure. Natives are skipped -- they carry a classifier and nothing compiles against them.
+    $manifest = Invoke-RestMethod -Uri 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json' -TimeoutSec 60
+    $versionEntry = $manifest.versions | Where-Object { $_.id -eq $mc } | Select-Object -First 1
+    if (-not $versionEntry) { throw "$mc is not in Mojang's version manifest" }
+    $versionJson = Invoke-RestMethod -Uri $versionEntry.url -TimeoutSec 60
+    $allLibs = @()
+    foreach ($lib in $versionJson.libraries) {
+        # Two filters, both needed. `natives` marks a library whose jars are all classifier-
+        # qualified, and `downloads.artifact` is absent for the same reason -- netty-transport-
+        # native-epoll publishes only a linux-x86_64 jar, so asking for the bare coordinate fails
+        # with "Could not find netty-transport-native-epoll-4.1.97.Final.jar". A library with a
+        # real base jar always has downloads.artifact, including the ones that also ship natives
+        # (lwjgl does), so this keeps those and drops only the natives-only entries.
+        if ($lib.natives) { continue }
+        # A classifier-qualified name -- "io.netty:netty-transport-native-epoll:4.1.97.Final:linux-aarch_64"
+        # -- has four segments, and its jar is published under that classifier. Taking the first three
+        # asks for a bare coordinate that does not exist, which is exactly how netty-transport-
+        # native-epoll failed. Nothing compiles against a native, so they are dropped entirely.
+        if (($lib.name -split ':').Count -gt 3) { continue }
+        if (-not $lib.downloads -or -not $lib.downloads.artifact) { continue }
+        if ($lib.name) { $allLibs += $lib.name }
+    }
+    if ($allLibs.Count -eq 0) { throw "no libraries in $mc's version json" }
 
     # The three arrays are already "group:artifact:version", which is what a module dependency
     # wants once split. joined is the union the NeoForm runtime uses when it merges client and
@@ -55,9 +85,9 @@ foreach ($mc in $Versions) {
         return $out
     }
 
-    $clientDeps = ConvertTo-Deps $config.libraries.client
-    $serverDeps = ConvertTo-Deps $config.libraries.server
-    $joinedDeps = ConvertTo-Deps $config.libraries.joined
+    $clientDeps = ConvertTo-Deps $allLibs
+    $serverDeps = ConvertTo-Deps $allLibs
+    $joinedDeps = ConvertTo-Deps $allLibs
 
     $jvm = $config.java_target
     if (-not $jvm) { $jvm = 17 }
