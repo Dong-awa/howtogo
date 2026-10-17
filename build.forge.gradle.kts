@@ -67,6 +67,10 @@ repositories {
 }
 
 dependencies {
+    // The userdev artifact. Naming the classifier explicitly changes nothing -- ForgeGradle appends
+    // it either way and the cache ends up with the same single generated inject_src.jar -- but it
+    // is written out here because "the classifier was missing" is the first thing the failure
+    // suggests and it has been ruled out.
     minecraft("net.minecraftforge:forge:$forgeVersion")
 }
 

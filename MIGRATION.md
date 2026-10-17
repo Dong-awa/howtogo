@@ -296,3 +296,11 @@ The next question is therefore why the userdev fetch is partial, not anything ab
 The likely candidate is the same network problem that shaped the rest of this tree: the Forge
 artifact resolution goes to maven.minecraftforge.net, which is reachable for metadata but may not
 be serving every classifier this needs.
+
+Ruled out since: the userdev artifact is published and reachable. A HEAD against
+maven.minecraftforge.net for 1.20.1-47.4.28 finds forge-1.20.1-47.4.28-userdev.jar (3.0 MB),
+forge-1.20.1-47.4.28-universal.jar (2.5 MB) and the pom; only inject_src.jar is a 404, and that
+one is generated rather than published. Naming the :userdev classifier explicitly in the
+`minecraft(...)` dependency makes no difference -- the cache still ends up with the same single
+generated inject_src.jar. So the artifact is there and ForgeGradle is not fetching it, which
+points at the download rather than at the coordinate.
