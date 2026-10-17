@@ -372,3 +372,22 @@ stays a no-op on the 1.21.x nodes where they are already public.
 
 1.20.4's 27 are a different family: ClientTickEvent does not exist in NeoForge 20.4 at all, so
 the tick wiring in HowToGo and RoadLayer has to be written against whatever that version uses
+
+### 26.3 NeoForge was passing on a cache, not on its merits
+
+26.3-neoforge fails createMinecraftArtifacts with:
+
+    ERROR Line: 44, <..net.minecraft.core.HolderSet$1>..contents()....net.minecraft.core.HolderSet.Named..contents()
+    NodeExecutionException: Node action for recompile failed
+
+That is a NeoForge patch failing to apply during recompile -- upstream, and 26.3 is a beta. It went
+unnoticed for a long time because the task result was cached: createMinecraftArtifacts had run
+successfully at some earlier point and Gradle kept reusing the output, so the node compiled
+against artifacts that a fresh run cannot reproduce.
+
+This was established by removing the access transformer, which was the suspected cause, and
+watching 26.3 fail identically without it. The AT is not involved.
+
+The practical consequence: any change to the NeoForge build script invalidates that cache and 26.3
+stops building until the upstream patch problem is dealt with. Worth knowing before reading it as
+a regression from whatever was just edited.
