@@ -114,6 +114,9 @@ public final class Harness {
         int[] colours = ColorCheck.run();
         checks += colours[0];
         failures += colours[1];
+        int[] worldFiles = bili.dongsz.howtogo.client.WorldFilesCheck.run();
+        checks += worldFiles[0];
+        failures += worldFiles[1];
         int[] drawOrder = DrawOrderCheck.run();
         checks += drawOrder[0];
         failures += drawOrder[1];

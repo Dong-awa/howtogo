@@ -283,11 +283,14 @@ Draw roads on Xaero's World Map, then navigate the way a maps app works: pick a 
 | `config/howtogo/<存档>/<维度>.json`             | 该存档该维度的道路网络（节点、路段、名称、地点与地点类型）                            |
 | `config/howtogo/<存档>/<维度>-rail-names.json`  | 自动识别铁路的**名称**。单独一个文件，因为铁路图层每秒重建、路段 id 每次重排，名称按「路段两端坐标」存储 |
 | `config/howtogo/<存档>/<维度>-lines.json`       | 公共交通线路（线路名、类型、按顺序的站点）。单独一个文件，所以它出问题也碰不到你的路网             |
+| `config/howtogo/<存档>/.world`                  | 这个数据目录属于哪个存档。用来把「清理成同一文件名」的两个存档分开，也是目录改名的依据             |
 | `config/howtogo/route_preferences.json`     | 运行时选择的路线偏好、语音开关与「公交只报站不报转向」（交通方式不在此文件里，重启后回到配置的默认值）                 |
 | `config/howtogo/map_filter.json`            | 地图显示面板的开关、卷起状态与面板位置（与存档无关，是客户端偏好）                        |
 | `config/howtogo-client.toml`                | 客户端配置（上面的表）                                              |
 
 数据为客户端本地存储，**按存档分开**；单人存档按存档名、多人按服务器地址区分。MTR 与机械动力的图层是**只读**的，从不写进这些文件。
+
+**中文存档名按拼音存**：`sp_新世界` 的目录是 `sp_xin_shi_jie` 而不是一排下划线，打开 `config/howtogo` 能认出哪个是哪个。旧版本留下的下划线目录会在升级后第一次打开那个世界时整目录改名到拼音名（`.world` 记录做依据），改名失败或新名字已被占用就继续用旧目录；ASCII 世界名不变。拼音名太长时会截断到 120 个字符，仍用 `.world` + 哈希区分撞车。
 
 ---
 
