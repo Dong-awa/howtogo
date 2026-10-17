@@ -698,3 +698,19 @@ ForgeGradle setup problem and a much better place to be than "no source".
 
 The junction is in .gitignore as forge-build/src, which is right -- it is machine-local -- but that
 means it does not survive a fresh clone and has to be recreated. Worth a line in the build notes.
+
+With the source present, all eight errors are ForgeGradle's, none of them ours:
+
+    build/tmp/.cache/expanded/zip_<hash>/mcp/client/Start.java:5   net.minecraft.client.main
+    build/tmp/.cache/expanded/zip_<hash>/mcp/client/Start.java:17
+
+Start.java is ForgeGradle's own launcher source, extracted from the MCP config zip and compiled
+into the run setup. It needs the Minecraft client jar, and that is exactly what is not arriving:
+forge-1.20.1-47.4.28-inject_src.jar is 1KB, which is an empty jar, and no _mapped_official_ jar
+exists at all.
+
+So the shape is now clear and one level further in. ForgeGradle runs, registers its tasks, expands
+the MCP config, and fails to produce the injected and mapped Minecraft artifacts -- the two steps
+that turn the userdev artifact into something compilable. Our own source contributes zero errors,
+which means the loader plumbing in build.forge.gradle.kts is probably right and the problem is
+purely in that pipeline.
