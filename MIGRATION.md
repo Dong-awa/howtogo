@@ -623,3 +623,18 @@ once by something not yet identified.
 That is recorded rather than chased, because the rename would not have been the answer anyway: the
 render model changed from immediate submission to extraction, so the call sites have to be
 rethought, not respelled. The rule was reverted and 26.1-fabric is back to its eight errors.
+
+### Forge: compile works, reobf does not
+
+All three Forge nodes compile. The build task does not: reobfJar fails with
+
+    Could not find net.minecraftforge:forge:1.20.1-47.4.28_mapped_official_1.20.1
+
+That coordinate is ForgeGradle's own reobf input -- the patched and mapped Minecraft artifact it
+produces during setup -- and nothing on this network serves it. 1.20.6 gets further than the other
+two but its jar is 0 bytes, so "BUILD SUCCESSFUL" there is not yet a usable artifact either.
+
+So the Forge gap is now one layer down from where it was: not "which version number", which is
+settled, but "ForgeGradle cannot produce its reobf input here". That is the same shape as the
+NeoForm runtime download problem and may have the same answer -- find what it wants and put it
+where it looks -- but the reobf input is generated, not published, so there may be nothing to fetch.
