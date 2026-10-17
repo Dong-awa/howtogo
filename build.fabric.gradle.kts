@@ -154,18 +154,22 @@ val awGeneration = when {
 // them out of the jar also matches the copy this adds back, because the exclude is tested against the
 // source name before the rename -- which silently removed the access widener from the jar entirely.
 val awTemplate = rootProject.file("src/fabric/aw/$awGeneration.accesswidener")
+// Computed OUTSIDE the loom block on purpose. Written inline it did not compile:
+// "Unresolved reference 'not' for operator '!'" -- the loom extension shadows `stonecutter`
+// inside its own scope, so the negation has to happen here where the plugin's is in view.
+val needsAccessWidener = !stonecutter.eval(minecraftVersion, ">=26.1")
+
 loom {
-    // The access widener cannot be applied on 26.x at all. Loom refuses before it reads the
-    // file -- "Cannot remap access widener from namespace official, expected intermediary" --
-    // which is what an identity mapping does to the remap: there is no obfuscation to undo, so
-    // the two namespaces are the same and the remap has nothing to work from. An empty widener
-    // fails identically. If a member turns out to need widening there, the answer is a Mixin.
+    // No access widener on 26.x. Loom refuses to apply one there at all:
     //
-    // Left unconditional for now: the conditional form of this line did not compile in the
-    // Kotlin DSL script ("Unresolved reference 'not' for operator '!'" inside loom {}), and
-    // the node is not registered while that is unresolved, so the plain form is correct for
-    // every node that does build.
-    accessWidenerPath = awTemplate
+    //   Cannot remap access widener from namespace 'official'. Expected: 'intermediary'
+    //
+    // which is what an identity mapping does to the remap -- those jars are not obfuscated, so
+    // the two namespaces are the same and there is nothing to remap from. It fails before the
+    // file's contents are read, so an empty widener fails identically.
+    if (needsAccessWidener) {
+        accessWidenerPath = awTemplate
+    }
 }
 
 // The shared tree, exactly as the NeoForge nodes take it: src/common is loader-free and
@@ -209,6 +213,15 @@ tasks.named<ProcessResources>("processResources") {
         "version" to version.toString(),
         "minecraft_version" to minecraftVersion,
         "java_version" to requiredJava.majorVersion.toString(),
+        // The accessWidener key is templated because 26.x must not declare one at all. Loom reads
+        // this key independently of accessWidenerPath, so leaving it out of the loom block was not
+        // enough -- the widener was still being applied, and still failing the same remap.
+        // An empty string leaves a blank line, which JSON allows.
+        "access_widener_entry" to if (needsAccessWidener) {
+            "\"accessWidener\": \"howtogo.accesswidener\","
+        } else {
+            ""
+        },
         // The ranges this jar declares, computed the same way the NeoForge script computes its
         // own -- a literal in a shared resource file is right on exactly one node. See that
         // script for the full reasoning; the short version is that the upper bound is closed on
