@@ -775,3 +775,23 @@ over; the batching layer does not.
 
 This is the one place in the 26.x port where a design change is needed rather than a rename, and it
 is confined to the batch layer. The thirteen files and 110 occurrences are still mostly type names.
+
+### What HudBatchNewer actually needs on 26.x, now measured
+
+HudBatchNewer is fenced whole on >=1.21.9 and ends by calling HudSubmit.submit(graphics, snapshot()),
+where snapshot() returns a GuiElementRenderState that the GUI renderer plays back at the end of the
+frame. HudBatchLegacy does the same for older versions.
+
+GuiGraphicsExtractor offers three fills:
+
+    fill(int, int, int, int, int)
+    fill(RenderPipeline, int, int, int, int, int)
+    fill(RenderPipeline, TextureSetup, int, int, int, int)
+
+All three take ONE colour for the whole rectangle. A GuiElementRenderState built from a vertex batch
+carries a colour per vertex, so the batch cannot be replayed as a single fill call. Whether it can be
+replayed as several depends on what the batch actually draws -- if the HUD only ever emits flat
+quads, a loop of fills is equivalent; if it emits gradients, it is not.
+
+That is the question to answer before writing any of it, and it is the same kind of question as the
+rest of this port: what does the existing code actually do, rather than what does the API offer.
