@@ -18,6 +18,7 @@ pluginManagement {
     // the root properties are readable, and the build scripts apply the plugins by id alone.
     plugins {
         id("fabric-loom") version providers.gradleProperty("fabric_loom_version").get()
+        id("net.minecraftforge.gradle") version providers.gradleProperty("forge_gradle_version").get()
     }
     // Loom publishes a plugin marker for some versions and not others -- 1.10.5 has none on either
     // Fabric's Maven or the plugin portal, yet resolves; 1.14.10 has one on Fabric's Maven. Mapping
@@ -80,6 +81,7 @@ stonecutter {
         // The MC versions this project supports. Ported nodes build; the rest are the
         // migration queue -- `./gradlew build` only touches the active one, so a half-ported
         // tree still builds the version you are working on. `chiseledBuild` needs them all.
+        forge("1.20.1")
         neoforge("1.20.4")
         neoforge("1.20.6")
         neoforge("1.21.1")
