@@ -814,3 +814,19 @@ So the Fabric 26.x path is genuinely a different route to the same result, not a
 keeps the deferred model and vanilla does not, and the Fabric side has to draw through fills.
 Whether a loop of fills is equivalent still depends on whether the batch emits per-vertex colour,
 which is the next thing to check.
+
+### The answer on HudBatchNewer: fills are not enough
+
+VertexSink.vertex takes (x, y, r, g, b, a), so the sink can carry per-vertex colour in principle.
+But every emitter passes one argb to all of a shape's vertices: emitQuad writes the same r,g,b,a to
+four corners, emitTriangle writes the same to three and repeats the last, and emitDisc fans degenerate
+quads with one colour each.
+
+So colour is not the obstacle. Geometry is. GuiGraphicsExtractor's fills are axis-aligned
+rectangles, and a triangle written as a quad with its last corner repeated is not a rectangle. Neither
+is a disc. A loop of fill calls would draw the road markings wrongly rather than approximately.
+
+Which means the Fabric 26.x HUD needs a real geometry submission path, and vanilla does not expose
+one -- that is exactly the gap NeoForge's submitGuiElementRenderState fills. Whether vanilla 26.x has
+some other route, or whether this mod's Fabric 26.x HUD has to give up the custom geometry, is the
+next question and it is a documentation question, not an experiment.
