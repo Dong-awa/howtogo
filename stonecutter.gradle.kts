@@ -87,6 +87,12 @@ stonecutter parameters {
             replace("ClientCommandManager.", "ClientCommands.")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
+        // ScreenEvents.afterRender is gone in 26.1; afterExtract is the same slot with the extractor
+        // as its graphics parameter, which the GuiGraphics rule above has already renamed.
+        regex(eval(current.version, ">=26.1")) {
+            replace("ScreenEvents\\.afterRender", "ScreenEvents.afterExtract")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // @Mod gained its dist attribute at 1.20.5, which is what made "this mod is client-only" a
         // declaration rather than a convention. Below that the annotation takes the id alone.
         //
