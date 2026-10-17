@@ -99,6 +99,9 @@ public final class Harness {
         int[] smooth = bili.dongsz.howtogo.client.SmoothPathCheck.run();
         checks += smooth[0];
         failures += smooth[1];
+        int[] stroke = bili.dongsz.howtogo.client.StrokeOutlineCheck.run();
+        checks += stroke[0];
+        failures += stroke[1];
         int[] thinning = bili.dongsz.howtogo.client.PathThinningCheck.run();
         checks += thinning[0];
         failures += thinning[1];

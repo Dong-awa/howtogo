@@ -75,18 +75,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double SELECTED_HANDLE_PX = 4.5;
     private static final double SNAP_RING_PX = 6.0;
 
-    /** Circle resolution for round joins and caps. */
+    /** Circle resolution for the solid discs the route pass paints. */
     private static final int DISC_SEGMENTS = 10;
-
-    /**
-     * How far a mitred joint may reach past the stroke's own half-width, as a multiple of it.
-     *
-     * <p>The miter offset at a bend is {@code halfWidth / cos(turn/2)}, which grows without bound as
-     * the turn approaches a reversal. A limit is the difference between a full miter and a spike
-     * several road-widths long, and past it the joint falls back to a round one (see
-     * {@link #strokeSegment}).
-     */
-    private static final double MITER_LIMIT = 4.0;
 
     private static final double TWO_PI = Math.PI * 2.0;
 
@@ -620,13 +610,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     COLOR_SELECTED & 0xFF, 0x70);
         }
 
-        // One continuous stroke rather than a quad per edge. The per-edge version left a wedge-shaped
-        // notch on the outside of every vertex -- a sampled curve bends a few degrees at each of its
-        // samples, so the whole curve was a line of tiny notches -- and the round caps that patched
-        // them were only drawn at corners sharp enough to pass a threshold, which is precisely the
-        // gentle bends a smoothed line is made of. Mitring the shared vertices closes every bend
-        // inside the segment; the outward semicircular caps at the two ends close the joint to the
-        // segment next to it.
+        // One continuous stroke rather than a quad per edge. The shape itself -- an offset for each
+        // side of the line, a mitre or a round join at each bend, a round cap at each end -- is worked
+        // out by StrokeOutline, which is also what keeps the width honest: a per-edge quad leaves a
+        // notch on the outside of every gentle bend, and a cross-section taken from the wrong side of
+        // an end, which is what the old code did, paints half the last edge and looks like the road
+        // thinning into its junction. See StrokeOutline for both.
         strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10, halfWidth,
                 r, g, b, a);
 
@@ -2606,15 +2595,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     // ------------------------------------------------------------------ stroke
     //
-    // Scratch for one segment's screen-space polyline and its per-vertex offset. Render thread only,
-    // like every other buffer in this renderer: one road is stroked at a time, and the same map is
-    // redrawn every frame, so allocating two arrays per road would be garbage the frame does not
-    // need. Grown rather than rebuilt when a longer curve comes along.
+    // Scratch for one segment's screen-space polyline, and the outline built from it. Render thread
+    // only, like every other buffer in this renderer: one road is stroked at a time, and the same map
+    // is redrawn every frame, so allocating arrays per road would be garbage the frame does not need.
+    // Grown rather than rebuilt when a longer curve comes along.
     private static double[] PATH_X = new double[128];
     private static double[] PATH_Y = new double[128];
-    private static double[] OFFSET_X = new double[128];
-    private static double[] OFFSET_Y = new double[128];
-    private static boolean[] ROUND_JOINT = new boolean[128];
+    /**
+     * The stroke geometry, kept between segments: it owns the arithmetic (offsets, joins, caps) and
+     * the quads for the road being drawn, so the renderer only has to place and colour them.
+     */
+    private static final StrokeOutline STROKE = new StrokeOutline();
 
     private static void ensureStrokeCapacity(int count) {
         if (count <= PATH_X.length) {
@@ -2623,31 +2614,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int capacity = Math.max(count, PATH_X.length * 2);
         PATH_X = new double[capacity];
         PATH_Y = new double[capacity];
-        OFFSET_X = new double[capacity];
-        OFFSET_Y = new double[capacity];
-        ROUND_JOINT = new boolean[capacity];
     }
 
     /**
-     * Stokes one segment as a single continuous line: shared mitres at every vertex, and outward
-     * semicircular caps at its two ends.
+     * Strokes one segment as a single continuous line of one width.
      *
-     * <h2>Why not a quad per edge</h2>
-     * A quad per edge leaves a wedge of background on the outside of every vertex, because the two
-     * quads only touch at the centreline point. Round caps used to patch the sharp ones, but a
-     * smoothed curve bends a few degrees at each of its samples -- below any cap threshold and
-     * exactly the vertices a curve is made of -- so the outside of every bend was a row of tiny
-     * notches. Here the two edges either side of a vertex share one offset (the miter), so the quads
-     * meet along a common edge and no gap exists at all; the round caps survive only as the fallback
-     * for a joint too sharp to miter.
-     *
-     * <h2>Why the ends are half discs</h2>
-     * Each segment is its own map element here, so the joint to the segment beside it is two butt
-     * ends. A semicircular cap pointing away from the stroke adds only the ground beyond the end, and
-     * two of them at a joint leave the road looking continuous (a straight join reads as the stroke
-     * itself) while still filling the wedge on the outside of a bend. A full disc would instead lie
-     * half on top of its own stroke, which is visible as a darker bead whenever a player configures a
-     * translucent road colour.
+     * <p>The screen-space line is built here, where it belongs to the map's pose; everything about
+     * its shape -- an offset for each side, how the edges meet at a bend, the two caps, a round join
+     * at a bend too sharp to mitre -- is {@link StrokeOutline}'s, and is checked without a game by
+     * the harness. What is left here is placing the quads it returns and colouring them. The same
+     * outline is asked for twice when the segment is selected: once for the halo under the road, once
+     * for the road itself.
      */
     private static void strokeSegment(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
                                       int pointCount, double anchorX, double anchorZ,
@@ -2661,175 +2638,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             PATH_X[i] = localX(displayX(segment, i), anchorX, fracX, p10);
             PATH_Y[i] = localY(displayZ(segment, i), anchorZ, fracY, p10);
         }
-
-        // One offset per vertex: half the perpendicular of its adjacent edge at an end, the miter of
-        // both edges in between. ROUND_JOINT marks the ones the miter gave up on.
-        offsetAt(0, pointCount, halfWidth);
-        offsetAt(pointCount - 1, pointCount, halfWidth);
-        for (int i = 1; i < pointCount - 1; i++) {
-            offsetAt(i, pointCount, halfWidth);
-        }
-
-        for (int i = 0; i < pointCount - 1; i++) {
-            double x1 = PATH_X[i];
-            double y1 = PATH_Y[i];
-            double x2 = PATH_X[i + 1];
-            double y2 = PATH_Y[i + 1];
-            if (Math.hypot(x2 - x1, y2 - y1) < 1.0E-9) {
-                continue;
-            }
-            vertex(pose, vc, x1 + OFFSET_X[i], y1 + OFFSET_Y[i], r, g, b, a);
-            vertex(pose, vc, x2 + OFFSET_X[i + 1], y2 + OFFSET_Y[i + 1], r, g, b, a);
-            vertex(pose, vc, x2 - OFFSET_X[i + 1], y2 - OFFSET_Y[i + 1], r, g, b, a);
-            vertex(pose, vc, x1 - OFFSET_X[i], y1 - OFFSET_Y[i], r, g, b, a);
-        }
-
-        // A joint past the miter limit is closed with a disc, the one place a round join is still
-        // painted: it is a handful of segments on a whole network, not a per-sample patch.
-        for (int i = 1; i < pointCount - 1; i++) {
-            if (ROUND_JOINT[i]) {
-                emitDisc(pose, vc, PATH_X[i], PATH_Y[i], halfWidth, r, g, b, a);
-            }
-        }
-
-        // Both ends capped outward, if there is a direction to cap along.
-        int firstEdge = firstEdge(pointCount, true);
-        if (firstEdge >= 0) {
-            capOutward(pose, vc, PATH_X[0], PATH_Y[0],
-                    PATH_X[0] - PATH_X[firstEdge], PATH_Y[0] - PATH_Y[firstEdge],
-                    halfWidth, r, g, b, a);
-        }
-        int lastEdge = firstEdge(pointCount, false);
-        if (lastEdge >= 0) {
-            capOutward(pose, vc, PATH_X[pointCount - 1], PATH_Y[pointCount - 1],
-                    PATH_X[pointCount - 1] - PATH_X[lastEdge],
-                    PATH_Y[pointCount - 1] - PATH_Y[lastEdge], halfWidth, r, g, b, a);
-        }
-    }
-
-    /**
-     * The offset at one vertex of the scratch path.
-     *
-     * @param vertex the vertex whose offset is wanted
-     */
-    private static void offsetAt(int vertex, int count, double halfWidth) {
-        double previousX;
-        double previousY;
-        double nextX;
-        double nextY;
-        if (vertex == 0 || vertex == count - 1) {
-            int other = vertex == 0 ? 1 : count - 2;
-            previousX = PATH_X[vertex] - PATH_X[other];
-            previousY = PATH_Y[vertex] - PATH_Y[other];
-            nextX = -previousX;
-            nextY = -previousY;
-        } else {
-            previousX = PATH_X[vertex] - PATH_X[vertex - 1];
-            previousY = PATH_Y[vertex] - PATH_Y[vertex - 1];
-            nextX = PATH_X[vertex + 1] - PATH_X[vertex];
-            nextY = PATH_Y[vertex + 1] - PATH_Y[vertex];
-        }
-        double previousLength = Math.hypot(previousX, previousY);
-        double nextLength = Math.hypot(nextX, nextY);
-        if (previousLength < 1.0E-9 && nextLength < 1.0E-9) {
-            OFFSET_X[vertex] = 0;
-            OFFSET_Y[vertex] = 0;
-            ROUND_JOINT[vertex] = false;
-            return;
-        }
-        if (previousLength < 1.0E-9) {
-            previousX = nextX;
-            previousY = nextY;
-            previousLength = nextLength;
-        }
-        if (nextLength < 1.0E-9) {
-            nextX = previousX;
-            nextY = previousY;
-            nextLength = previousLength;
-        }
-        double normalPreviousX = -previousY / previousLength;
-        double normalPreviousY = previousX / previousLength;
-        double normalNextX = -nextY / nextLength;
-        double normalNextY = nextX / nextLength;
-        if (vertex == 0 || vertex == count - 1) {
-            OFFSET_X[vertex] = normalNextX * halfWidth;
-            OFFSET_Y[vertex] = normalNextY * halfWidth;
-            ROUND_JOINT[vertex] = false;
-            return;
-        }
-        double sumX = normalPreviousX + normalNextX;
-        double sumY = normalPreviousY + normalNextY;
-        double sumLength = Math.hypot(sumX, sumY);
-        if (sumLength < 1.0E-6) {
-            // The line doubles straight back on itself: no bisector, so a round join is the only
-            // sensible stroke there.
-            OFFSET_X[vertex] = normalNextX * halfWidth;
-            OFFSET_Y[vertex] = normalNextY * halfWidth;
-            ROUND_JOINT[vertex] = true;
-            return;
-        }
-        double miterX = sumX / sumLength;
-        double miterY = sumY / sumLength;
-        double denominator = miterX * normalNextX + miterY * normalNextY;
-        if (denominator < 1.0 / MITER_LIMIT) {
-            OFFSET_X[vertex] = normalNextX * halfWidth;
-            OFFSET_Y[vertex] = normalNextY * halfWidth;
-            ROUND_JOINT[vertex] = true;
-            return;
-        }
-        double length = Math.min(halfWidth / denominator, halfWidth * MITER_LIMIT);
-        OFFSET_X[vertex] = miterX * length;
-        OFFSET_Y[vertex] = miterY * length;
-        ROUND_JOINT[vertex] = false;
-    }
-
-    /** The first (or last) point that is not on top of the one it is measured from. */
-    private static int firstEdge(int count, boolean fromStart) {
-        if (fromStart) {
-            for (int i = 1; i < count; i++) {
-                if (Math.hypot(PATH_X[i] - PATH_X[0], PATH_Y[i] - PATH_Y[0]) > 1.0E-9) {
-                    return i;
-                }
-            }
-        } else {
-            for (int i = count - 2; i >= 0; i--) {
-                if (Math.hypot(PATH_X[count - 1] - PATH_X[i],
-                        PATH_Y[count - 1] - PATH_Y[i]) > 1.0E-9) {
-                    return i;
-                }
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * A semicircular cap at one end of a stroke, pointing outward along (dx, dy).
-     *
-     * <p>Half a disc rather than a whole one: the cap only owns the ground past the end, so it never
-     * doubles up on the stroke it belongs to, and the round join at a joint is the union of the two
-     * caps rather than a full circle sitting on each end.
-     */
-    private static void capOutward(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
-                                   double dx, double dy, double halfWidth,
-                                   int r, int g, int b, int a) {
-        double length = Math.hypot(dx, dy);
-        if (length < 1.0E-9) {
-            return;
-        }
-        double outwardX = dx / length;
-        double outwardY = dy / length;
-        double base = Math.atan2(outwardY, outwardX);
-        for (int i = 0; i < DISC_SEGMENTS; i++) {
-            double a0 = base - Math.PI / 2.0 + i * Math.PI / DISC_SEGMENTS;
-            double a1 = base - Math.PI / 2.0 + (i + 1) * Math.PI / DISC_SEGMENTS;
-            double x0 = x + Math.cos(a0) * halfWidth;
-            double y0 = y + Math.sin(a0) * halfWidth;
-            double x1 = x + Math.cos(a1) * halfWidth;
-            double y1 = y + Math.sin(a1) * halfWidth;
-            vertex(pose, vc, x, y, r, g, b, a);
-            vertex(pose, vc, x0, y0, r, g, b, a);
-            vertex(pose, vc, x1, y1, r, g, b, a);
-            vertex(pose, vc, x0, y0, r, g, b, a);
+        STROKE.build(PATH_X, PATH_Y, pointCount, halfWidth);
+        double[] quads = STROKE.coordinates();
+        int end = STROKE.quadCount() * StrokeOutline.VALUES_PER_QUAD;
+        for (int at = 0; at < end; at += StrokeOutline.VALUES_PER_QUAD) {
+            vertex(pose, vc, quads[at], quads[at + 1], r, g, b, a);
+            vertex(pose, vc, quads[at + 2], quads[at + 3], r, g, b, a);
+            vertex(pose, vc, quads[at + 4], quads[at + 5], r, g, b, a);
+            vertex(pose, vc, quads[at + 6], quads[at + 7], r, g, b, a);
         }
     }
 

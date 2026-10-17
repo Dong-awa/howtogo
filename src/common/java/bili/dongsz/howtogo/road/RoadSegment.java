@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.road;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * A polyline between two {@link RoadNode}s.
@@ -33,6 +34,23 @@ public final class RoadSegment {
     /** @see #directionChanges */
     public static int directionChanges() {
         return directionChanges;
+    }
+
+    /**
+     * How many times any segment's class or name has been set, over the life of this program run.
+     *
+     * <p>Neither is geometry, so {@link RoadNetwork#revision()} does not move for one -- but both
+     * decide how a road is drawn: the class picks the colour and width, and the name is what a
+     * display-only chain may join on. A cache that groups segments into strokes has to be able to
+     * tell that the answer has changed, and this is the cheap counter that says so. Whole-program
+     * rather than per-network for the same reason as {@link #directionChanges}: the segment is
+     * handed out without a reference to the network holding it.
+     */
+    private static int appearanceChanges;
+
+    /** @see #appearanceChanges */
+    public static int appearanceChanges() {
+        return appearanceChanges;
     }
 
     private final int id;
@@ -157,7 +175,10 @@ public final class RoadSegment {
     }
 
     public void setRoadClass(RoadClass roadClass) {
-        this.roadClass = roadClass;
+        if (roadClass != this.roadClass) {
+            this.roadClass = roadClass;
+            appearanceChanges++;
+        }
     }
 
     public int fromNode() {
@@ -235,7 +256,11 @@ public final class RoadSegment {
     }
 
     public void setName(String name) {
-        this.name = name == null || name.isBlank() ? null : name.trim();
+        String next = name == null || name.isBlank() ? null : name.trim();
+        if (!Objects.equals(next, this.name)) {
+            this.name = next;
+            appearanceChanges++;
+        }
     }
 
     /** Midpoint of the polyline, used to anchor the name label. */
