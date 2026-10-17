@@ -70,7 +70,19 @@ minecraft("com.mojang:minecraft:$minecraftArtifactVersion")
     // Yarn would be a rename pass with no functional gain, and would be the one thing that made
     // the loaders unable to share a source tree at all. Loom remaps Fabric API and mod jars to
     // these names for us.
+    // From 26.1 the Minecraft jar is NOT obfuscated -- 10208 of its 10682 classes already live under
+// net/minecraft/ -- and Mojang publishes no client_mappings for those versions at all. That is not
+// an obstacle, it is the reason no mappings are needed: the NeoForm config for 26.1.2 has no
+// mappings step either, it decompiles and patches directly. So an identity mapping is the correct
+// description of those jars rather than a workaround for a missing file.
+//
+// The identity mappings are a Tiny v2 header with no entries, inside a jar because that is what
+// Loom reads mappings from. It says the names are already right.
+if (stonecutter.eval(minecraftVersion, ">=26.1")) {
+    mappings(files(rootProject.file("src/fabric/aw/identity-mappings.jar")))
+} else {
     mappings(loom.officialMojangMappings())
+}
 
     modImplementation("net.fabricmc:fabric-loader:$loaderVersion")
     modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion") {

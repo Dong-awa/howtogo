@@ -111,6 +111,24 @@ stonecutter {
         fabric("1.21.6")
         fabric("1.21.8")
         fabric("1.21.11")
+        // 26.x Fabric: the blocker is a BROKEN UPSTREAM PUBLICATION, not a missing mapping.
+        //
+        // The Minecraft jar from 26.1 on is not obfuscated -- 10208 of its 10682 classes are
+        // already under net/minecraft/ -- and Mojang publishes no client_mappings for it, which is
+        // why Loom's officialMojangMappings() finds nothing. But no mappings are needed: an identity
+        // mapping is the correct description of that jar, and the NeoForm config for 26.1.2 has no
+        // mappings step either. src/fabric/aw/identity-mappings.jar is that identity mapping and it
+        // is accepted.
+        //
+        // What stops it is Fabric's own intermediary artifact for these versions:
+        //
+        //   inconsistent module metadata found. Descriptor: net.fabricmc:intermediary:0.0.0
+        //   Errors: bad version: expected='26.1.2' found='0.0.0'
+        //
+        // The jar exists -- 572 bytes, an empty mapping set, which is right for an unobfuscated
+        // jar -- but its POM declares version 0.0.0. That is a publication bug upstream, and it is
+        // workaroundable from here: a corrected POM in the workspace mirror plus a repository
+        // content filter so the good one is consulted first.
 
         // 26.x Fabric is NOT registered. Two walls, in order:
         //
