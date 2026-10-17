@@ -81,7 +81,13 @@ stonecutter {
         // The MC versions this project supports. Ported nodes build; the rest are the
         // migration queue -- `./gradlew build` only touches the active one, so a half-ported
         // tree still builds the version you are working on. `chiseledBuild` needs them all.
-        forge("1.20.1")
+        // Forge is NOT registered in this build. ForgeGradle 6 applies on Gradle 9.5.1 -- its
+        // version check is skippable and dependencies do resolve -- but it registers its task
+        // GROUPS and no tasks inside them, so nothing ever produces the mapped Minecraft
+        // artifact and compileClasspath cannot resolve. That is what "Gradle 9 is not supported"
+        // actually means for this plugin. Forge therefore moves to its own Gradle 8.14.6 build,
+        // which is the split decided earlier; build.forge.gradle.kts and versions/1.20.1-forge/
+        // are written and are what that build will use.
         neoforge("1.20.4")
         neoforge("1.20.6")
         neoforge("1.21.1")
