@@ -561,7 +561,7 @@ public final class RoadConfig {
                         "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
                         "unknown entries are ignored. Empty by default.")
                 // Water is what the list exists for, so it is what the config UI offers to add.
-                .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
+                .defineListAllowEmpty("avoid_road_classes", List.<String>of(),
                         element -> element instanceof String);
 
         PREFER_MAJOR_ROADS = builder.comment(
@@ -626,7 +626,7 @@ public final class RoadConfig {
                         "Track Marker for Maps -- is deliberately not included: it is a marker rather",
                         "than a surface and could draw lines where no track runs.")
                 .defineListAllowEmpty("create_track_block_ids", List.of("create:track"),
-                        () -> "create:track", element -> element instanceof String);
+                        element -> element instanceof String);
 
         CREATE_STATION_BLOCK_IDS = builder.comment(
                         "Block ids whose positions become destinations, listed in the picker under their",
@@ -635,7 +635,7 @@ public final class RoadConfig {
                         "server-side railway data, and the block entity that reaches the client carries",
                         "no name, so there is nothing here to read it from.")
                 .defineListAllowEmpty("create_station_block_ids", List.of("create:track_station"),
-                        () -> "create:track_station", element -> element instanceof String);
+                        element -> element instanceof String);
 
         CREATE_TRACK_SCAN_RADIUS = builder.comment(
                         "How far from the player, in blocks, chunks are read for tracks. A square rather",
