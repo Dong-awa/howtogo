@@ -304,3 +304,19 @@ one is generated rather than published. Naming the :userdev classifier explicitl
 `minecraft(...)` dependency makes no difference -- the cache still ends up with the same single
 generated inject_src.jar. So the artifact is there and ForgeGradle is not fetching it, which
 points at the download rather than at the coordinate.
+
+Also ruled out: the download. The userdev jar IS in the cache, fully fetched:
+
+    maven_downloader/net/minecraftforge/forge/1.20.1-47.4.28/
+        forge-1.20.1-47.4.28-userdev.jar        2970 KB
+        forge-1.20.1-47.4.28-universal.jar      2458 KB
+        forge-1.20.1-47.4.28-sources.jar        1585 KB
+
+So neither the coordinate nor the network is the problem. The chain stops between the userdev
+jar and the mapped one: minecraft_user_repo has the mapped POM (9 KB, generated) and no mapped
+jar beside it, which means the step that turns userdev into a mapped Minecraft artifact runs far
+enough to write the POM and not far enough to produce the jar.
+
+That is ForgeGradle's MCP/merge chain -- createMcpToSrg, createSrgToMcp and the mergetool -- and
+it is where to look next, with --info or --stacktrace on the mapping task rather than on
+compileJava.
