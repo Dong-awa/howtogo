@@ -679,3 +679,22 @@ was from a reliable parse.
 So the state is what the error said in the first place: ForgeGradle runs, registers its tasks, and
 cannot produce the mapped Minecraft artifact because resolving it yields the zero-byte placeholders.
 That is the thing to look at, and it is where this was before the two detours.
+
+### The Forge build had no source at all
+
+compileJava on the forge nodes was reporting NO-SOURCE. The cause: forge-build/src, the junction to
+../src that the whole arrangement depends on, did not exist. So nothing was compiled, the classes
+directory was empty, and every earlier "BUILD SUCCESSFUL" on these nodes was a build of nothing.
+
+That also explains the zero-byte mapped artifacts and the 261-byte jar without needing any theory
+about ForgeGradle: with no source there was nothing to transform, and reobfJar wrote an empty
+archive because its input was empty.
+
+After recreating the junction -- cmd /c mklink /J forge-build/src src, since New-Item -ItemType
+Junction is not what a cmd link is -- the build actually runs: ForgeGradle expands the MCP zip and
+compiles. It now fails with eight errors, all of them inside its own generated
+mcp/client/Start.java complaining that net.minecraft.client.main does not exist, which is a
+ForgeGradle setup problem and a much better place to be than "no source".
+
+The junction is in .gitignore as forge-build/src, which is right -- it is machine-local -- but that
+means it does not survive a fresh clone and has to be recreated. Worth a line in the build notes.
