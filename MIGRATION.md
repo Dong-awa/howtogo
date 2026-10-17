@@ -487,3 +487,13 @@ NeoForge side.
 Worth noting before trying again: this is the same class of problem as the AT was, and the AT's
 answer was "it is picked up by convention, move it". The difference is that the fabric.mod.json key
 and the resource copy are both supposed to be the only two routes, and both are now closed.
+
+Fourth route closed, and it was the most likely one: the SOURCE fabric.mod.json. Removing the
+accessWidener key from src/fabric/resources/fabric.mod.json and re-registering 26.1-fabric changes
+nothing. So Loom is not reading it from there either, and the key it objects to is not coming from
+the source, the built resource, accessWidenerPath, or the from(awTemplate) copy.
+
+That leaves the widener being found by convention somewhere in the srcDir set, which is exactly how
+the NeoForge access transformer behaved -- and the fix there was to move the file out of the
+directory that gets scanned. The templates already live in src/fabric/aw/ rather than in resources
+for that reason, so the thing to look for is something else under src/fabric/resources.
