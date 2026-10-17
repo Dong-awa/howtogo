@@ -664,3 +664,18 @@ has no input.
 
 That is worth knowing before spending more rounds on the mapped artifact: there is no ForgeGradle
 pipeline running at all on this build, so nothing is going to produce it.
+
+And the correction was itself wrong. ForgeGradle does register tasks here. The --all output has
+task groups named "ForgeGradle prepare runs tasks", "ForgeGradle runs tasks" and "Jarjar tasks",
+and the tasks downloadMCMeta, downloadMcpConfig, extractSrg, reobfJar, reobfJarJar and
+artifactTransforms are all present.
+
+The two wrong readings in a row came from the same place: a grep pattern of
+"^[A-Za-z][A-Za-z0-9]* ?-" which requires a space-dash-description after the task name. Gradle omits
+the description for tasks that have none, so every ForgeGradle task -- which is most of them -- was
+filtered out. Twice. The first reading said they were present, the second said absent, and neither
+was from a reliable parse.
+
+So the state is what the error said in the first place: ForgeGradle runs, registers its tasks, and
+cannot produce the mapped Minecraft artifact because resolving it yields the zero-byte placeholders.
+That is the thing to look at, and it is where this was before the two detours.
