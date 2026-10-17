@@ -157,7 +157,7 @@ val awTemplate = rootProject.file("src/fabric/aw/$awGeneration.accesswidener")
 // Computed OUTSIDE the loom block on purpose. Written inline it did not compile:
 // "Unresolved reference 'not' for operator '!'" -- the loom extension shadows `stonecutter`
 // inside its own scope, so the negation has to happen here where the plugin's is in view.
-val needsAccessWidener = !stonecutter.eval(minecraftVersion, ">=26.1")
+val needsAccessWidener = true
 
 loom {
     // No access widener on 26.x. Loom refuses to apply one there at all:

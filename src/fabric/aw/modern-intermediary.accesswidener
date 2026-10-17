@@ -1,12 +1,17 @@
-accessWidener v2 intermediary
+accessWidener v2 named
 
-# The 26.x generation of the modern widener, and it is deliberately EMPTY.
+# The 26.x generation of the modern widener.
 #
-# Loom refuses to remap a widener onto these nodes at all:
-#   Cannot remap access widener from namespace 'official'. Expected: 'intermediary'
-# which is what an identity mapping does to the remap -- there is no obfuscation to undo, so the
-# two namespaces are the same and the remap has nothing to work from.
+# It was empty while Loom refused to remap a widener onto these nodes at all -- that was a Loom bug
+# and 1.16.3 fixes it. Two things had to change to make it work:
 #
-# Nothing is lost by leaving it empty: it is the same two members as modern.accesswidener, and if
-# the compiler needs them on 26.x it will say so. Declared anyway so the build script has a file
-# to point at and the three generations stay uniform.
+#   - the header says named, not intermediary. Loom reports "Namespace mismatch, expected named got
+#     intermediary". On these nodes the two are the same names, because the jars are not obfuscated.
+#   - the members are named as 26.x names them. GuiGraphics is GuiGraphicsExtractor there, and the
+#     render state types moved from net/minecraft/client/gui/render/state to
+#     net/minecraft/client/renderer/state/gui.
+
+# Keep this in step with modern.accesswidener. Same members, different names.
+
+accessible field net/minecraft/client/gui/GuiGraphicsExtractor guiRenderState Lnet/minecraft/client/renderer/state/gui/GuiRenderState;
+accessible method net/minecraft/client/renderer/state/gui/GuiRenderState submitGuiElement (Lnet/minecraft/client/renderer/state/gui/GuiElementRenderState;)V
