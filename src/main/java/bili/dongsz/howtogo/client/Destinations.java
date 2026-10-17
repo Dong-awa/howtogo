@@ -12,7 +12,7 @@ import java.util.List;
  * Aggregates every registered {@link DestinationSource}.
  *
  * <h2>Where the sources come from</h2>
- * The four this mod ships and every source an addon has contributed, as one ordered list owned by
+ * The five this mod ships and every source an addon has contributed, as one ordered list owned by
  * {@link DestinationSources}. This class used to hold the list itself, which meant "add a source"
  * meant "edit this file", and meant the picker, the map and the HUD could only ever draw what was
  * compiled in. It is now a view over the registry, and every one of those callers sees the same
@@ -91,3 +91,4 @@ public final class Destinations {
                 String.valueOf(x), String.valueOf(z)).getString();
     }
 }
+

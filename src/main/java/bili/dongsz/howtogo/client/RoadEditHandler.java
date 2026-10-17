@@ -37,6 +37,8 @@ import org.lwjgl.glfw.GLFW;
  *
  * <h2>Controls</h2>
  * <ul>
+ *   <li><b>K</b> - open the mod's main screen. It is a key for the world rather than for the map, so it
+ *       is read from the client tick and does nothing while a screen (the map included) is open</li>
  *   <li><b>R</b> - toggle road editing (also rebindable under Controls)</li>
  *   <li><b>Left click</b> - place a point, extending the road being drawn</li>
  *   <li><b>Alt + left click</b> - place a point exactly where the cursor is, snapping disabled</li>
@@ -83,12 +85,58 @@ public final class RoadEditHandler {
             GLFW.GLFW_KEY_L,
             KEY_CATEGORY);
 
+    /**
+     * Opens the mod's main screen in the world.
+     *
+     * <p>A registered mapping so it appears in Controls and can be rebound, and consumed from the
+     * client tick rather than from a screen event because it is a key for the world: it opens only
+     * with no screen up, and pressing it with the world map open does nothing (the map owns its own
+     * keys, and this is not one of the editor's).
+     */
+    public static final KeyMapping MAIN_MENU = new KeyMapping(
+            "key.howtogo.main_menu",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_K,
+            KEY_CATEGORY);
+
     private RoadEditHandler() {
     }
 
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(TOGGLE_EDIT);
         event.register(LINES);
+        event.register(MAIN_MENU);
+    }
+
+    /**
+     * Consumes the main screen's key.
+     *
+     * <p>Called from the client tick, which is where a {@link KeyMapping} is allowed to be read: with
+     * no screen open the key press is recorded by the game's own handler and nothing else ever looks
+     * at it. The guard means the screen only opens over the world -- not over the map, not over chat,
+     * and not on the title screen.
+     */
+    public static void tickMainMenuKey() {
+        Minecraft minecraft = Minecraft.getInstance();
+        while (MAIN_MENU.consumeClick()) {
+            if (minecraft.screen == null && minecraft.level != null && minecraft.player != null) {
+                minecraft.setScreen(new MainScreen());
+            }
+        }
+    }
+
+    /**
+     * Watches for the world map being closed, so the editing mode it owns does not outlive it.
+     *
+     * <p>The map's own screen event fires whenever it is replaced by anything, its editor's panels
+     * included, so the session decides on the next tick from what the screen is now; see
+     * {@link RoadEditSession#tick()}.
+     */
+    public static void onScreenOpening(ScreenEvent.Opening event) {
+        // getScreen() is the screen about to open; the one being replaced is getCurrentScreen().
+        if (RoadEditSession.isActive() && isMapScreen(event.getCurrentScreen())) {
+            RoadEditSession.noteMapScreenClosing();
+        }
     }
 
     // ------------------------------------------------------------------ mouse

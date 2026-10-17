@@ -10,10 +10,12 @@ import bili.dongsz.howtogo.client.AutoSelfTest;
 import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.MapFilterOverlay;
+import bili.dongsz.howtogo.client.MtrOverlayToggles;
 import bili.dongsz.howtogo.client.RoadEditHandler;
 import bili.dongsz.howtogo.client.RoadEditSession;
 import bili.dongsz.howtogo.client.RoadLayer;
 import bili.dongsz.howtogo.client.RoadStore;
+import bili.dongsz.howtogo.client.RoadWeaverLayer;
 import bili.dongsz.howtogo.client.TransitLineStore;
 import bili.dongsz.howtogo.item.ModItems;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
@@ -76,12 +78,22 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
+        // RoadWeaver's roads: read from its client map snapshot, or from its own road store while the
+        // player hosts the world. After the stores above so a layer rebuilt this tick sees the same
+        // world they did. See RoadWeaverLayer.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadWeaverLayer.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
         // Addon layers: one version comparison per registered source per tick, and a re-read only when
         // that number has moved. After the stores above so that a layer rebuilt this tick sees the same
         // world they did. See AddonRoadStore.
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> AddonRoadStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
+        // The main screen's key, read from the tick because it is a key for the world rather than for
+        // a screen; see RoadEditHandler.tickMainMenuKey.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditHandler.tickMainMenuKey());
+        // MTR Map Overlay resets its two map toggles every session (it only ever sets them at
+        // runtime), so their last state is remembered here and put back once the world is open.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrOverlayToggles.tick());
         // The browser map's server, when the config asks for it to start itself: it waits for a world
         // to be loaded, because a page opened onto a 503 is worse than a socket opened a moment later.
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> WebMapService.tick());
@@ -109,6 +121,7 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onMouseButtonReleased);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyPressed);
         NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenKeyReleased);
+        NeoForge.EVENT_BUS.addListener(RoadEditHandler::onScreenOpening);
         // The map's switches: a screen overlay rather than part of the map, so that nothing the map
         // draws can end up over them. See MapFilterOverlay.
         NeoForge.EVENT_BUS.addListener(MapFilterOverlay::onScreenRender);
@@ -125,6 +138,10 @@ public final class HowToGo {
         modEventBus.addListener((net.neoforged.fml.event.config.ModConfigEvent.Reloading event) -> {
             Navigation.reloadConfiguredMode();
             RoutePreferenceStore.load();
+            // The class RoadWeaver's roads are converted to is baked into the layer, so a change to
+            // that key has to make the layer read itself again. Every other RoadWeaver key is read
+            // where it is used and needs nothing here.
+            RoadWeaverLayer.invalidate();
         });
         // Client setup runs after the config files have been read, so this is the first point at
         // which the configured travel mode is genuinely available -- and the only point at which

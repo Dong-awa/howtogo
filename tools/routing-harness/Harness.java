@@ -69,6 +69,9 @@ public final class Harness {
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
         failures += imported[1];
+        int[] roadWeaver = bili.dongsz.howtogo.client.RoadWeaverCheck.run();
+        checks += roadWeaver[0];
+        failures += roadWeaver[1];
         int[] rideRoads = bili.dongsz.howtogo.route.RideRoadsCheck.run();
         checks += rideRoads[0];
         failures += rideRoads[1];
@@ -117,6 +120,9 @@ public final class Harness {
         int[] worldFiles = bili.dongsz.howtogo.client.WorldFilesCheck.run();
         checks += worldFiles[0];
         failures += worldFiles[1];
+        int[] archives = bili.dongsz.howtogo.worlddata.WorldArchiveCheck.run();
+        checks += archives[0];
+        failures += archives[1];
         int[] drawOrder = DrawOrderCheck.run();
         checks += drawOrder[0];
         failures += drawOrder[1];
@@ -1202,6 +1208,22 @@ public final class Harness {
         Route up = RoadRouter.findRoute(stacked, 0, 0, 200, 0, "up on the bridge", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
         expect("the same two ends with one of them a storey up are two roads", !up.isPresent());
+
+        // A walker is not a vehicle: it can leave the network and cross the ground between two ends,
+        // so the storey does not take the join away. Asking connection rather than planning is what
+        // makes this a test of the join itself: a walk to a distant point could always be answered
+        // with a straight line across the field, so a planned route would say nothing about whether
+        // the two roads were read as one place.
+        RoadRouter.Connection walkJoin = RoadRouter.connection(
+                RoadRouter.workspaceFor(stacked), 0, 0, 200, 0, TravelMode.WALK,
+                RoutePreferences.DEFAULTS);
+        expect("but a walker treats the same two ends as one place whatever storey they are on",
+                walkJoin == RoadRouter.Connection.CONNECTED);
+        RoadRouter.Connection driveJoin = RoadRouter.connection(
+                RoadRouter.workspaceFor(stacked), 0, 0, 200, 0, TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("while a car still sees the storey as a bridge rather than a junction",
+                driveJoin == RoadRouter.Connection.SEPARATE);
 
         // Sharing a node: the storey cannot take a junction away.
         RoadNetwork jogged = new RoadNetwork();

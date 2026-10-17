@@ -61,16 +61,58 @@ public final class WorldFiles {
      *               never move the file out of the world's directory
      */
     public static Path of(String suffix) {
+        return directory().resolve(fileStem(dimensionName()) + safeSuffix(suffix) + ".json");
+    }
+
+    /**
+     * The data directory of the level now loaded: {@code config/howtogo/<world>}, with its record.
+     *
+     * <p>What {@link #of} resolves one file against, and what the import and export need as a whole:
+     * exporting a world is packing this directory, and importing into one is replacing it. Asking for
+     * it also claims it for this world and writes the record, exactly as asking for a file in it does
+     * -- so a world whose map has never been saved still has a directory to export, even if it holds
+     * nothing yet.
+     */
+    static Path directory() {
+        Path root = configRoot();
+        return root.resolve(worldDirectory(root, worldKey(Minecraft.getInstance())));
+    }
+
+    /** {@code config/howtogo}, where every world's data and the transfer folders live. */
+    static Path configRoot() {
+        return FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID);
+    }
+
+    /** The dimension of the level now loaded, or "unknown" before one is. */
+    private static String dimensionName() {
         Minecraft mc = Minecraft.getInstance();
         Object level = mc.level;
-
-        String dimension = "unknown";
         if (level instanceof ClientLevel clientLevel) {
-            dimension = clientLevel.dimension().location().toString();
+            return clientLevel.dimension().location().toString();
         }
-        Path root = FMLPaths.CONFIGDIR.get().resolve(HowToGo.MODID);
-        return root.resolve(worldDirectory(root, worldKey(mc)))
-                .resolve(sanitize(dimension) + safeSuffix(suffix) + ".json");
+        return "unknown";
+    }
+
+    /**
+     * The file-name stem for a dimension: the plain rule, deliberately with no pinyin in it.
+     *
+     * <h2>Why the dimension does not get the world directory's naming</h2>
+     * A dimension id is a resource location ({@code minecraft:overworld}), not a player-facing name:
+     * there is nothing in it to transliterate, and what pinyin does to the colon is not harmless --
+     * ICU turns it into a colon and a space, so the file becomes {@code minecraft__overworld.json}
+     * while every existing world has {@code minecraft_overworld.json}. Silently looking at a
+     * different file is exactly the "my roads are gone" failure this mod cannot afford, so the two
+     * names are produced by two rules with two jobs: the directory is a name a player reads, and this
+     * is a key the mod uses to find its own file again.
+     *
+     * <p>Package-private so the harness can pin the dimension file names, which are a data
+     * compatibility contract rather than an implementation detail: {@link #of} itself needs a game.
+     */
+    static String fileStem(String dimension) {
+        if (dimension == null || dimension.isBlank()) {
+            return "unknown";
+        }
+        return dimension.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     /**

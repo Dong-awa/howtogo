@@ -39,11 +39,17 @@ final class Pinyin {
      * The text with its Han characters replaced by pinyin syllables, or the text unchanged when it
      * has none or when ICU is unavailable.
      *
-     * <p>Everything that is not a Han character passes through as it was, so an ASCII world name -- or
-     * the {@code sp_} prefix in front of a Chinese one -- is untouched.
+     * <p>Text that is entirely ASCII is returned before the transliterator is asked. ICU does not only
+     * transliterate Han characters -- it rewrites punctuation too, turning {@code :} into
+     * {@code ": "} -- so a server address or a dimension id would come back with a doubled separator.
+     * Those are not names to transliterate, and a name that was already usable must come back
+     * byte-identical or every path built from it changes for no reason.
      */
     static String latin(String text) {
         if (text == null || text.isEmpty() || HAN_LATIN == null) {
+            return text;
+        }
+        if (text.chars().allMatch(character -> character < 0x80)) {
             return text;
         }
         try {

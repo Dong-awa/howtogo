@@ -65,6 +65,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_SNAP_ANGLE = 0xFFB06BFF;
     /** Snapped onto a rail: the place colour, since a rail the editor can only land on is a landmark. */
     private static final int COLOR_SNAP_RAIL = HudDraw.COLOR_PLACE;
+    /** Snapped onto RoadWeaver's roads or structures: a colour of their own, distinct from a rail. */
+    private static final int COLOR_SNAP_ROADWEAVER = 0xFF9CF06A;
     private static final int COLOR_SNAP_FREE = 0x80FFFFFF;
     private static final int COLOR_RUBBER_BAND = 0xCCFF4DE0;
 
@@ -731,6 +733,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 case SEGMENT -> COLOR_SNAP_SEGMENT;
                 case ANGLE -> COLOR_SNAP_ANGLE;
                 case RAIL -> COLOR_SNAP_RAIL;
+                case ROADWEAVER -> COLOR_SNAP_ROADWEAVER;
                 case FREE -> COLOR_SNAP_FREE;
             };
             double sx = localX(snap.x(), anchorX, fracX, p10);
@@ -1159,6 +1162,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         addRoadInk(ink, RailTrackStore.segments(), scale, projection, places, reachBlocks, margin,
                 viewRight, viewBottom);
         addRoadInk(ink, AddonRoadStore.segments(), scale, projection, places, reachBlocks, margin,
+                viewRight, viewBottom);
+        addRoadInk(ink, RoadWeaverLayer.segments(), scale, projection, places, reachBlocks, margin,
                 viewRight, viewBottom);
         return ink;
     }
@@ -2272,7 +2277,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             swatchLine = leftLines.size();
             String headline = Component.translatable(
                     segmentSelected ? "hud.howtogo.selected" : "hud.howtogo.drawing",
-                    roadClass.name()).getString();
+                    Navigation.roadClassLabel(roadClass)).getString();
             if (segmentSelected) {
                 // The one-way state of the road the player has selected, spelled out: the arrows on the
                 // map say which way it runs, and this says what pressing the key again will do to it.

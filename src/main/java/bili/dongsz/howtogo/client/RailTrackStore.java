@@ -705,10 +705,11 @@ public final class RailTrackStore {
      * through -- and neither is ever saved with the player's roads.
      *
      * <h2>What is merged</h2>
-     * Two layers, and both are readings of the world rather than drawings of the player's: this class's
-     * Create rails, and {@link MtrTransit}'s rails read out of MTR. They are merged in one place
-     * because this is the one place that answers "what does a plan run on", and an answer assembled
-     * from two places is an answer that can be half-updated.
+     * Three layers, and all are readings of the world rather than drawings of the player's: this
+     * class's Create rails, {@link MtrTransit}'s rails read out of MTR, and the roads
+     * {@link RoadWeaverLayer} read out of RoadWeaver. They are merged in one place because this is the
+     * one place that answers "what does a plan run on", and an answer assembled from several places is
+     * an answer that can be half-updated.
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences) {
         return forRouting(mode, preferences, true);
@@ -733,7 +734,12 @@ public final class RailTrackStore {
         boolean movesOnRails = mode != null && mode.allows(RoadClass.RAIL);
         RoadNetwork mtr = withMtrMarks && movesOnMtrMarks(mode) ? MtrTransit.railLayer()
                 : new RoadNetwork();
-        if ((!active() || !movesOnRails) && mtr.segmentCount() == 0) {
+        // The roads RoadWeaver generated, when the config lets a trip use them. Null rather than an
+        // empty network so the common case costs no allocation; the layer itself decides which modes
+        // can move on it, the same rule the rails above follow.
+        RoadNetwork roadWeaver = RoadWeaverLayer.routingNetwork(mode);
+        if ((!active() || !movesOnRails) && mtr.segmentCount() == 0
+                && (roadWeaver == null || roadWeaver.segmentCount() == 0)) {
             return handDrawn;
         }
         RoadNetwork merged = handDrawn.deepCopy();
@@ -752,6 +758,14 @@ public final class RailTrackStore {
         }
         for (RoadSegment segment : mtr.segmentsSnapshot()) {
             merged.putSegment(segment.copy());
+        }
+        if (roadWeaver != null) {
+            for (RoadNode node : roadWeaver.nodesSnapshot()) {
+                merged.putNode(node.copy());
+            }
+            for (RoadSegment segment : roadWeaver.segmentsSnapshot()) {
+                merged.putSegment(segment.copy());
+            }
         }
         return merged;
     }

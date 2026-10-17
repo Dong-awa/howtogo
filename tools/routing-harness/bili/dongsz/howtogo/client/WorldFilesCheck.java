@@ -35,6 +35,7 @@ public final class WorldFilesCheck {
             ownedMove(root.resolve("owned"));
             collision(root.resolve("collision"));
             longName(root.resolve("long"));
+            dimensionFileNames();
         } catch (IOException failed) {
             expect("the temporary world directories could be used (" + failed + ")", false);
         } finally {
@@ -46,9 +47,41 @@ public final class WorldFilesCheck {
         return new int[]{checks, failures};
     }
 
+    /**
+     * A dimension's file name is a compatibility contract, and it is deliberately not pinyin.
+     *
+     * <h2>Why this is checked here</h2>
+     * Every existing world's roads are in a file named after its dimension with the colon replaced by
+     * one underscore ({@code minecraft_overworld.json}). Pinyin was introduced for the world
+     * <em>directory</em>, but it was applied to the dimension too for a while -- and ICU also rewrites
+     * punctuation, so the file name became {@code minecraft__overworld.json}, the mod looked at a
+     * file that did not exist, and a player's roads appeared to be gone while they sat on disk under
+     * the old name. The world directory wants a name a human can read; the dimension file wants the
+     * key the mod can find again. This pins the second one, and the ASCII shortcut that keeps the
+     * transliterator away from a server address.
+     */
+    private static void dimensionFileNames() {
+        expect("a dimension file keeps the plain name it always had",
+                "minecraft_overworld".equals(WorldFiles.fileStem("minecraft:overworld")));
+        expect("the nether and the end too",
+                "minecraft_the_nether".equals(WorldFiles.fileStem("minecraft:the_nether"))
+                        && "minecraft_the_end".equals(WorldFiles.fileStem("minecraft:the_end")));
+        expect("a modded dimension is namespace and path with one underscore",
+                "mymod_deep_dark".equals(WorldFiles.fileStem("mymod:deep_dark")));
+        expect("a missing dimension is still unknown",
+                "unknown".equals(WorldFiles.fileStem(null))
+                        && "unknown".equals(WorldFiles.fileStem("   ")));
+        expect("a hostile dimension cannot leave the world's directory",
+                !WorldFiles.fileStem("../../evil").contains("/")
+                        && !WorldFiles.fileStem("..\\..\\evil").contains("\\"));
+        expect("ASCII text is never handed to the pinyin transliterator",
+                "minecraft:overworld".equals(Pinyin.latin("minecraft:overworld")));
+        expect("so a server address's colon survives as it always did",
+                "play.example.net:25565".equals(Pinyin.latin("play.example.net:25565")));
+    }
+
     /** An ASCII world keeps exactly the directory name it always had. */
-    private static void asciiNames(Path root) throws IOException {
-        String name = WorldFiles.worldDirectory(root, "sp_My World");
+    private static void asciiNames(Path root) throws IOException {        String name = WorldFiles.worldDirectory(root, "sp_My World");
         expect("an ASCII world's directory name is unchanged", "sp_My_World".equals(name));
         expect("and its directory and world record exist",
                 Files.isRegularFile(root.resolve(name).resolve(".world"))

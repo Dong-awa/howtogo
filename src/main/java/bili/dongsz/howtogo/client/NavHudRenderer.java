@@ -246,6 +246,30 @@ public final class NavHudRenderer {
             }
         }
 
+        // The roads read out of RoadWeaver, drawn with the same two passes and the same reach: they
+        // are drawn on the world map and planned over, so the mini-map has to show them too. The
+        // layer supplies only the segments whose bounding boxes reach this window -- a whole
+        // region's worth of them is otherwise walked per frame for a map ninety blocks across.
+        RoadWeaverLayer.forEachSegmentInBox(playerX - reach, playerZ - reach,
+                playerX + reach, playerZ + reach, segment -> {
+                    for (int i = 1; i < segment.vertexCount(); i++) {
+                        double ax = segment.x(i - 1);
+                        double az = segment.z(i - 1);
+                        double bx = segment.x(i);
+                        double bz = segment.z(i);
+                        if (outsideReach(ax, az, bx, bz, playerX, playerZ, reach)) {
+                            continue;
+                        }
+                        int color = RoadConfig.roadColor(segment.roadClass());
+                        emitClipped(last, vc,
+                                screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
+                                screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
+                                screenX(bx - playerX, bz - playerZ, cos, sin, scale, centerX),
+                                screenY(bx - playerX, bz - playerZ, cos, sin, scale, centerY),
+                                ROAD_THICKNESS * 0.5, color, 0x9A, minX, minY, maxX, maxY);
+                    }
+                });
+
         Route route = Navigation.route();
         if (route.isPresent()) {
             List<double[]> points = route.points();

@@ -74,6 +74,16 @@ public final class TransitLineStore {
         }
     }
 
+    /** Re-reads the current dimension's lines from disk, after something replaced the file. */
+    public static void reload() {
+        ensureBound();
+        if (boundPath == null) {
+            return;
+        }
+        lines = TransitLineStorage.load(boundPath);
+        dirty = false;
+    }
+
     /** Rebinds to the current level's dimension, flushing and reloading when it changes. */
     private static void ensureBound() {
         Object level = Minecraft.getInstance().level;

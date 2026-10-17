@@ -154,6 +154,11 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
     private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_ROADS;
+    private static final ModConfigSpec.ConfigValue<String> ROADWEAVER_ROAD_CLASS;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_FULL_MAP;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_STRUCTURES;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_ROUTING;
     /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
     private static final ModConfigSpec.BooleanValue DEBUG_LOG;
     private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
@@ -425,6 +430,80 @@ public final class RoadConfig {
                         "line and overrides this one.")
                 .translation("howtogo.configuration.mtr_auto_route_marks")
                 .define("mtr_auto_route_marks", true);
+
+        ROADWEAVER_ROADS = builder.comment(
+                        "Whether the roads RoadWeaver (阡陌交通) generates are read out and offered as",
+                        "roads of this mod, and the structures they join offered as destinations.",
+                        "RoadWeaver has no API for this and no dependency exists in either direction:",
+                        "its map data and its road store are read reflectively, so with RoadWeaver",
+                        "absent or changed there is simply nothing read, and nothing else changes.",
+                        "They are read-only -- never saved with your roads and never editable -- and",
+                        "turning this off empties the layer on the next client tick.",
+                        "RoadWeaver stops a road short of the structure it serves, so the end of each",
+                        "completed connection is joined to its structure with a straight line; those",
+                        "connectors belong to this layer and go away with it.",
+                        "Read from RoadWeaver's own road store while you host the world (single",
+                        "player or LAN), so all of it is known without opening its map. On somebody",
+                        "else's server only what RoadWeaver has sent is read, which is why its road",
+                        "map (H) has to have been opened once in the session for the layer to be",
+                        "complete; RoadWeaver's own patches keep it current after that.")
+                .translation("howtogo.configuration.roadweaver_roads")
+                .define("roadweaver_roads", true);
+
+        ROADWEAVER_ROAD_CLASS = builder.comment(
+                        "What class the roads read out of RoadWeaver are drawn and planned as.",
+                        "\"auto\" (the default) is the footpath: every road RoadWeaver builds is a",
+                        "path it laid through the world -- dirt, gravel, planks, biome materials --",
+                        "and its width is how many blocks it paved, not a statement that a wide one",
+                        "is a road for vehicles.",
+                        "A class id -- \"highway\", \"road\", \"path\", \"rail\", \"water\" or \"ice\" --",
+                        "forces that class for every one of its roads instead, which is how a player",
+                        "who wants to drive on them makes them roads.",
+                        "The class also decides which travel modes may use those roads and what pace",
+                        "they are given, so a forced \"path\" is planned on foot and a forced",
+                        "\"highway\" is driven as well as walked.")
+                .translation("howtogo.configuration.roadweaver_road_class")
+                .define("roadweaver_road_class", "auto");
+
+        ROADWEAVER_FULL_MAP = builder.comment(
+                        "Whether RoadWeaver's whole road store is read while you host the world,",
+                        "rather than only the part of it its map has sent.",
+                        "On: single player and worlds opened to LAN read the road network RoadWeaver",
+                        "is keeping in this process directly, so every road and every structure is",
+                        "known at once and RoadWeaver's map never has to be opened. The reading is",
+                        "taken on the integrated server's thread and converted off it; nothing is",
+                        "ever written to RoadWeaver's data.",
+                        "Off, or connected to somebody else's server: what RoadWeaver has sent to the",
+                        "client's map is used instead, which is the part around the last view opened",
+                        "plus the patches it broadcasts afterwards.")
+                .translation("howtogo.configuration.roadweaver_full_map")
+                .define("roadweaver_full_map", true);
+
+        ROADWEAVER_STRUCTURES = builder.comment(
+                        "Whether the structures RoadWeaver joined with roads are offered as",
+                        "destinations, under their own source in the destination picker.",
+                        "A structure is a place a player asks to be taken to, which is what makes a",
+                        "road network read out of RoadWeaver useful at all: the roads can be planned",
+                        "over either way, but this is what lets one of the places they lead to be",
+                        "chosen. Its name is its structure id, translated when a name exists; a",
+                        "structure RoadWeaver could not identify is named by its coordinates.")
+                .translation("howtogo.configuration.roadweaver_structures")
+                .define("roadweaver_structures", true);
+
+        ROADWEAVER_ROUTING = builder.comment(
+                        "Whether trips may be planned over the roads read out of RoadWeaver.",
+                        "On, the roads take part in walking and driving the same way hand-drawn roads",
+                        "do: a trip may start, end or change onto them, and the roads drawn under a",
+                        "route are the roads it was planned along. They are joined to each other only",
+                        "where RoadWeaver joined them, and to your own roads only where they meet --",
+                        "a crossing that shares no point is a bridge, not a crossroads. The structures",
+                        "they lead to are reachable by the straight connectors added where RoadWeaver",
+                        "trimmed a road short of the structure.",
+                        "Off, they are still drawn -- the layer is a map of the world either way --",
+                        "but no trip is planned over them, and its destinations are reached by the",
+                        "same rules as before this integration existed.")
+                .translation("howtogo.configuration.roadweaver_routing")
+                .define("roadweaver_routing", true);
 
         DEBUG_LOG = builder.comment(
                         "Whether this mod's own diagnostics are written to the log.",
@@ -807,6 +886,60 @@ public final class RoadConfig {
     public static boolean mtrAutoRouteMarks() {
         try {
             return MTR_AUTO_ROUTE_MARKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    // ------------------------------------------------------- RoadWeaver's generated roads
+
+    /** Whether RoadWeaver's roads are read, on before the config loads. */
+    public static boolean roadWeaverRoads() {
+        try {
+            return ROADWEAVER_ROADS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * The class configured for RoadWeaver's roads, or {@code "auto"} before the config has been read.
+     *
+     * <p>The text rather than the parsed class, so the caller can tell "not configured" from a typo the
+     * parser could not name: both are answered by choosing a class per road, which is what {@code auto}
+     * asks for anyway.
+     */
+    public static String roadWeaverRoadClass() {
+        try {
+            String configured = ROADWEAVER_ROAD_CLASS.get();
+            return configured == null ? "auto" : configured;
+        } catch (IllegalStateException notLoadedYet) {
+            return "auto";
+        }
+    }
+
+    /** Whether RoadWeaver's whole road store is read while the player hosts the world. */
+    public static boolean roadWeaverFullMap() {
+        try {
+            return ROADWEAVER_FULL_MAP.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether RoadWeaver's structures are offered as destinations, on before the config loads. */
+    public static boolean roadWeaverStructures() {
+        try {
+            return ROADWEAVER_STRUCTURES.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether trips may be planned over RoadWeaver's roads, on before the config loads. */
+    public static boolean roadWeaverRouting() {
+        try {
+            return ROADWEAVER_ROUTING.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
         }

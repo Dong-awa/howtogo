@@ -56,7 +56,7 @@ public interface DestinationSource {
     /**
      * Where this source sits in the picker's list.
      *
-     * <p>Lower first. The mod's own four sources use 0 to 30, which is the order they have always been
+     * <p>Lower first. The mod's own five sources use 0 to 40, which is the order they have always been
      * listed in, so an addon that leaves this alone appears after all of them; an addon that wants to
      * sit among the station sources gives itself a number in that range.
      */
@@ -90,3 +90,4 @@ public interface DestinationSource {
         return "";
     }
 }
+

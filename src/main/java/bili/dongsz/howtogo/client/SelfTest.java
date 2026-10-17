@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -19,6 +20,7 @@ import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.webmap.RoadMapSnapshot;
 import bili.dongsz.howtogo.webmap.WebMapServer;
+import bili.dongsz.howtogo.worlddata.WorldArchive;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.client.Minecraft;
@@ -34,7 +36,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -119,6 +123,7 @@ public final class SelfTest {
         results.add(checkSimulatedRide());
         results.add(checkRoutes(network));
         results.add(checkStorage(network, lines));
+        results.add(checkArchive());
         results.add(checkWebMap(network));
         return results;
     }
@@ -129,6 +134,8 @@ public final class SelfTest {
         String detail = "nodes=" + network.nodeCount() + " segments=" + network.segmentCount()
                 + " places=" + places + " stops=" + stops.size() + " lines=" + lines.size()
                 + " rail=" + RailTrackStore.segments().size() + " mtr=" + MtrTransit.lines().size()
+                + " roadweaver=" + RoadWeaverLayer.segments().size() + "/"
+                + RoadWeaverLayer.structures().size()
                 + " mode=" + Navigation.mode().id() + " boardOnly="
                 + RoutePreferenceStore.transitBoardOnly() + " debug=" + RoadConfig.debugLog();
         boolean ok = network.segmentCount() == 0 || network.nodeCount() > 0;
@@ -289,7 +296,13 @@ public final class SelfTest {
             Navigation.setMode(TravelMode.TRANSIT);
             Navigation.setTarget(here);
             Route route = Navigation.route();
-            if (!route.isPresent()) {
+            if (!route.isPresent() || Navigation.fallbackHint() != null) {
+                // A route planned on foot is not a public transport journey: the destination has no
+                // line that reaches it, which is the ordinary state of a world with no transit network.
+                // Reported rather than failed for the same reason "no route" is -- there is nothing
+                // here for this mod to have got wrong. The fallback is checked as well as the route's
+                // presence because a destination with no line still gets a walking route, and taking
+                // that for a ride made this check demand boarding prompts from a walk.
                 return new Result("command.howtogo.selftest.check.ride", true,
                         "no public transport journey to '" + here.name() + "' from here");
             }
@@ -329,26 +342,39 @@ public final class SelfTest {
 
     /**
      * The destination the simulated ride is aimed at: the one being navigated, or else the farthest
-     * place there is from where the player stands.
+     * station from where the player stands.
      *
-     * <p>Farthest rather than first, because that is the one most likely to need a public transport
-     * journey at all: a place across the street is walked to and would test nothing about lines.
+     * <p>A station and not any destination, because a line calls at stations and nothing else, so a
+     * destination that is not one can never be the end of a ride. Farthest rather than first, because
+     * that is the one most likely to need a public transport journey at all: a station across the
+     * street is walked to and would test nothing about lines.
      */
     private static Destination transitDestination(Destination previous) {
         if (previous != null) {
             return previous;
         }
+        // Only stops: a line calls at stations, so a destination that is not one can never be the end
+        // of a ride. Picking the farthest destination of every source meant a world whose farthest
+        // place was a village or a waypoint could never test the ride at all -- and, once RoadWeaver's
+        // structures joined the list, reported the walking route to that village as a ride with no
+        // stops in it.
         List<Destination> all = Destinations.all();
-        if (all.isEmpty()) {
+        List<Destination> stops = new ArrayList<>();
+        for (Destination destination : all) {
+            if (destination.kind() == PlaceKind.STATION) {
+                stops.add(destination);
+            }
+        }
+        if (stops.isEmpty()) {
             return null;
         }
         LocalPlayer player = Minecraft.getInstance().player;
         if (player == null) {
-            return all.get(all.size() - 1);
+            return stops.get(stops.size() - 1);
         }
-        Destination farthest = all.get(0);
+        Destination farthest = stops.get(0);
         double bestSq = -1;
-        for (Destination destination : all) {
+        for (Destination destination : stops) {
             double dx = destination.x() - player.getX();
             double dz = destination.z() - player.getZ();
             double sq = dx * dx + dz * dz;
@@ -479,6 +505,97 @@ public final class SelfTest {
                     HowToGo.LOGGER.debug("[HowToGo] selftest could not remove {}", file);
                 }
             }
+        }
+    }
+
+    /**
+     * Whether this world's map really survives being packed into an archive and unpacked again.
+     *
+     * <h2>What this adds to the storage check above</h2>
+     * That one round-trips the network through a file this class wrote; this one goes through the
+     * feature a player uses to move a map to another machine: the whole data directory is packed as a
+     * zip, read back through the same reader an import uses, and unpacked into a temporary directory.
+     * What can go wrong only here is the glue -- which directory this world's data is actually in, what
+     * the manifest says the world is, and whether an import rewrites the directory's {@code .world}
+     * record to the importing world rather than carrying the sender's.
+     *
+     * <p>The temporary target stands in for "somebody else's world", and the record it ends up with is
+     * checked against that name rather than against this world's. Nothing is written to the player's
+     * own directory and nothing is imported over it: the archive is a copy, the target is a temporary
+     * directory, and both are removed before this returns.
+     */
+    private static Result checkArchive() {
+        Path archive = null;
+        Path unpacked = null;
+        try {
+            String world = WorldFiles.currentWorldKey();
+            Path data = WorldFiles.directory();
+            archive = Files.createTempFile("howtogo-selftest-map", ".zip");
+            Files.delete(archive);
+            WorldArchive.Packed packed = WorldArchive.export(data, archive, world, Instant.now());
+            WorldArchive.Contents contents = WorldArchive.inspect(archive);
+
+            String probeWorld = "sp_selftest_probe";
+            unpacked = Files.createTempDirectory("howtogo-selftest-unpacked");
+            WorldArchive.Contents read = WorldArchive.importFrom(archive, unpacked, probeWorld);
+
+            String marker = Files.readString(unpacked.resolve(WorldArchive.WORLD_MARKER),
+                    StandardCharsets.UTF_8).trim();
+            boolean markerOk = probeWorld.equals(marker);
+            boolean filesOk = read.files() == packed.files && read.files() == contents.files();
+            boolean manifestOk = contents.manifest != null && world.equals(contents.manifest.world);
+
+            // The road network of the dimension being played, byte for byte. Other files are covered
+            // by the file count; this is the one whose loss would be the player's map.
+            Path current = WorldFiles.of("");
+            boolean roadsOk = true;
+            if (Files.isRegularFile(current)) {
+                Path copy = unpacked.resolve(current.getFileName().toString());
+                roadsOk = Files.isRegularFile(copy)
+                        && Arrays.equals(Files.readAllBytes(current), Files.readAllBytes(copy));
+            }
+
+            StringBuilder detail = new StringBuilder()
+                    .append("files=").append(packed.files)
+                    .append(" bytes=").append(packed.bytes)
+                    .append(" marker=").append(markerOk ? "rewritten" : marker)
+                    .append(" manifest=").append(manifestOk ? "this world"
+                            : contents.manifest == null ? "none" : contents.manifest.world)
+                    .append(" roads=").append(roadsOk ? "same" : "changed");
+            if (read.leftover != null) {
+                detail.append(" leftover=").append(read.leftover.getFileName());
+            }
+            if (!filesOk) {
+                detail.append(" | some files did not come back");
+            }
+            return new Result("command.howtogo.selftest.check.archive",
+                    markerOk && filesOk && manifestOk && roadsOk, detail.toString());
+        } catch (IOException | RuntimeException failed) {
+            return new Result("command.howtogo.selftest.check.archive", false,
+                    "the map archive round trip threw " + failed);
+        } finally {
+            if (archive != null) {
+                try {
+                    Files.deleteIfExists(archive);
+                } catch (IOException ignored) {
+                    HowToGo.LOGGER.debug("[HowToGo] selftest could not remove {}", archive);
+                }
+            }
+            deleteTree(unpacked);
+        }
+    }
+
+    /** Removes a temporary directory tree, without following links out of it. Never throws. */
+    private static void deleteTree(Path root) {
+        if (root == null) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            for (Path path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException ignored) {
+            HowToGo.LOGGER.debug("[HowToGo] selftest could not remove {}", root);
         }
     }
 

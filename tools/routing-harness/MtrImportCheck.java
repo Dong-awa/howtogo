@@ -1146,6 +1146,17 @@ public final class MtrImportCheck {
     private static void checkOverlayIds() {
         System.out.println("   the ids the overlay carries");
 
+        // The overlay's two world-map toggles are remembered by this mod, because the overlay only
+        // sets them at runtime and never writes them back. Its shape is checked here when its jar is
+        // on the classpath; without one there is nothing to check and the memory stays inert.
+        if (MtrOverlayToggles.classesPresent()) {
+            expect("the overlay's two map toggles are the shapes the memory reads",
+                    MtrOverlayToggles.shapeReadable());
+        } else {
+            System.out.println("   no MTR Map Overlay jar on the classpath: the map toggles' "
+                    + "handshake is skipped");
+        }
+
         // Reading another mod's internals reflectively is only defensible if a session without that mod
         // is untouched by it, so that comes first here as it does for MTR: nothing bound, nothing read,
         // and no exception on the way out.

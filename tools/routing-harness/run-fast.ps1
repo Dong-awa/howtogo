@@ -8,6 +8,7 @@
 # Usage:  .\tools\routing-harness\run-fast.ps1
 #         .\tools\routing-harness\run-fast.ps1 -Refresh      # re-read the classpath from Gradle first
 #         .\tools\routing-harness\run-fast.ps1 -MtrJar <path>  # check another MTR build's handshake
+#         .\tools\routing-harness\run-fast.ps1 -RoadWeaverJar <path>  # the same for RoadWeaver
 # Exit:   the harness's own status, so a failing check fails the script.
 
 param(
@@ -17,6 +18,9 @@ param(
     # a time on the classpath, one run each, and the check reads that jar's own shapes.
     [string]$MtrJar,
     [string]$MtrMapJar,
+    # A RoadWeaver build to check the same thing for: which of its map-data and road-store classes this
+    # reader still knows is a property of the release, so it is measured one jar at a time.
+    [string]$RoadWeaverJar,
     # Writes the browser map's fixture payload to this path. The page's own tests are then run against
     # a payload this server really produced -- node tools\webmap-test\run.js <path> -- rather than
     # against one written to match it, which is what catches the two sides drifting apart.
@@ -103,6 +107,10 @@ $overlay = if ($MtrMapJar) { (Resolve-Path $MtrMapJar).Path } else {
     (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName }) -join ';'
 }
+$roadWeaver = if ($RoadWeaverJar) { (Resolve-Path $RoadWeaverJar).Path } else {
+    (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'roadweaver-*.jar' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName }) -join ';'
+}
 if ($mtr) {
     Write-Host "an MTR jar is present: the reflection handshake will be checked against $(Split-Path $mtr -Leaf)"
 } else {
@@ -113,9 +121,15 @@ if ($overlay) {
 } else {
     Write-Host 'no MTR Map Overlay jar in run/mods: its handshake check will be skipped'
 }
+if ($roadWeaver) {
+    Write-Host "a RoadWeaver jar is present: its reflection handshake will be checked against $(Split-Path $roadWeaver -Leaf)"
+} else {
+    Write-Host 'no RoadWeaver jar in run/mods (and none given with -RoadWeaverJar): the handshake check will be skipped'
+}
 $harnessPath = $compilePath
 if ($mtr) { $harnessPath = "$harnessPath;$mtr" }
 if ($overlay) { $harnessPath = "$harnessPath;$overlay" }
+if ($roadWeaver) { $harnessPath = "$harnessPath;$roadWeaver" }
 
 Write-Host 'compiling the harness...'
 Remove-Item $harnessClasses -Recurse -Force -ErrorAction SilentlyContinue

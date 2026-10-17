@@ -134,6 +134,17 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             buffer.add(RoadElement.of(segment));
         }
 
+        // The roads read out of RoadWeaver, drawn with the roads for the same reason Create's tracks
+        // and an addon's layers are: they are roads of classes this mod already knows how to draw, and
+        // a renderer of their own would have to be told the storeys all over again to sort against
+        // them. Read once per pass; the list is replaced whole when the layer is re-read.
+        for (RoadSegment segment : RoadWeaverLayer.segments()) {
+            if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
+                continue;
+            }
+            buffer.add(RoadElement.of(segment));
+        }
+
         // MTR's marks, as their own pass and before everything that is drawn over them.
         //
         // This is where the one thing that made the map slow used to be: the marks are the track each
