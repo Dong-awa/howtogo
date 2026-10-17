@@ -18,12 +18,22 @@ authors = "DongSZ"
 # is closed deliberately: an open-ended range claims compatibility with every later NeoForge, none of
 # which this has been run against, and a wrong upper bound is worse than a missing feature -- it lets
 # a player load the mod on a version it was never tested on and then report the breakage as a bug.
+# The access transformer below widens five RenderStateShard constants that NeoForge's 1.20.6 jar
+# keeps protected. Declared here rather than per node because it is a no-op where they are already
+# public.
+[[accessTransformers]]
+file = "META-INF/accesstransformer.cfg"
+
 [[dependencies.howtogo]]
 modId = "neoforge"
 type = "required"
 versionRange = "${neoforge_range}"
 ordering = "NONE"
 side = "BOTH"
+
+# The access transformer below widens five RenderStateShard constants that NeoForge's 1.20.6 jar
+# keeps protected. Declared here rather than per node because it is a no-op where they are already
+# public.
 
 [[dependencies.howtogo]]
 modId = "minecraft"
@@ -37,12 +47,20 @@ side = "BOTH"
 # which made a dedicated server refuse to start -- "Mod howtogo requires xaerolib 1.1.0 or above.
 # Currently, xaerolib is not installed" -- even though nothing of this mod would ever run there. A
 # client-side dependency has to say CLIENT, or it is a demand that no server can satisfy.
+# The access transformer below widens five RenderStateShard constants that NeoForge's 1.20.6 jar
+# keeps protected. Declared here rather than per node because it is a no-op where they are already
+# public.
+
 [[dependencies.howtogo]]
 modId = "xaeroworldmap"
 type = "required"
 versionRange = "[1.40.0,)"
 ordering = "AFTER"
 side = "CLIENT"
+
+# The access transformer below widens five RenderStateShard constants that NeoForge's 1.20.6 jar
+# keeps protected. Declared here rather than per node because it is a no-op where they are already
+# public.
 
 [[dependencies.howtogo]]
 modId = "xaerolib"

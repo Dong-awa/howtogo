@@ -86,6 +86,10 @@ base.archivesName = "${rootProject.property("archives_name") as String}-neoforge
 java.toolchain.languageVersion = JavaLanguageVersion.of(requiredJava.majorVersion)
 
 neoForge {
+    // HudDraw.QUADS is built from RenderStateShard's constants, and five of them are protected
+    // in NeoForge's 1.20.6 jar while being public in vanilla's. The access transformer widens
+    // exactly those five, and is a no-op on 1.21.x where they are already public.
+    accessTransformers.from(rootProject.file("src/main/resources/META-INF/accesstransformer.cfg"))
     version = neoForgeVersion
 
     // NeoFormRuntime downloads its own tool jars from maven.neoforged.net, which is unreachable
@@ -253,4 +257,12 @@ if (substitutions.isNotEmpty()) {
             }
         }
     }
+}
+
+// Gradle 9 fails the build on this rather than warning: createMinecraftArtifacts reads
+// stonecutterGenerate's output -- it compiles the node's generated sources -- without declaring
+// the dependency, so the two could run in either order. Declaring it is the fix the message asks
+// for, and it is true: the artifacts are built from the generated tree.
+tasks.matching { it.name == "createMinecraftArtifacts" }.configureEach {
+    dependsOn(tasks.matching { it.name == "stonecutterGenerate" })
 }
