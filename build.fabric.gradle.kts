@@ -127,8 +127,8 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
     // "XaerosWorldMap_<ver>_Fabric_<mc>.jar" before that. Both are accepted rather than renaming the
     // download, because a local file whose name is not the one upstream publishes is a trap for
     // whoever has to replace it.
-    include("xaeroworldmap-fabric-$minecraftVersion-*.jar",
-            "XaerosWorldMap_*_Fabric_$minecraftVersion.jar") })
+    include("xaeroworldmap-fabric-$minecraftArtifactVersion-*.jar",
+            "XaerosWorldMap_*_Fabric_$minecraftArtifactVersion.jar") })
 }
 
 // The access widener is chosen per version generation, because an entry naming a member that does
