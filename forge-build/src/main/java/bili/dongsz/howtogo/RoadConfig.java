@@ -1,0 +1,626 @@
+package bili.dongsz.howtogo;
+
+import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.route.RoutePreference;
+import bili.dongsz.howtogo.route.RoutePreferences;
+import bili.dongsz.howtogo.route.TravelMode;
+import net.neoforged.neoforge.common.ModConfigSpec;
+
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Client configuration.
+ *
+ * <p>Written to {@code config/howtogo-client.toml} and reloadable through the usual mod config
+ * UI. Everything here is a tuning value that depends on taste or on how wide roads are drawn, so
+ * nothing is hard-coded in the algorithms.
+ */
+public final class RoadConfig {
+
+    public static final ModConfigSpec SPEC;
+
+    private static final Map<RoadClass, ModConfigSpec.DoubleValue> ON_ROAD_TOLERANCE =
+            new EnumMap<>(RoadClass.class);
+
+    private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
+    private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
+    private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
+    private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
+    private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
+    private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
+    private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
+    private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
+    private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
+    private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
+    private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
+    private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
+    private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
+    private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
+    private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
+    private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
+    private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
+    /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
+    private static final ModConfigSpec.BooleanValue DEBUG_LOG;
+    private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
+    private static final ModConfigSpec.IntValue WEBMAP_PORT;
+
+    static {
+        ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
+
+        builder.comment(
+                        "How far from the drawn line still counts as being on the road, in blocks.",
+                        "A route is only re-planned once the player is further out than the tolerance",
+                        "of the road they are meant to be on. Wide roads deserve a wider tolerance",
+                        "than footpaths, which is why this is per class rather than a single number.")
+                .push("on_road_tolerance_blocks");
+        for (RoadClass roadClass : RoadClass.values()) {
+            ON_ROAD_TOLERANCE.put(roadClass, builder.defineInRange(
+                    roadClass.name().toLowerCase(Locale.ROOT),
+                    defaultTolerance(roadClass), 1.0, 128.0));
+        }
+        builder.pop();
+
+        STATION_SNAP_BLOCKS = builder.comment(
+                        "How close to a stop of the journey still counts as being at that stop, in",
+                        "blocks. A station is a place and not a point: the platform a player waits on can",
+                        "be a good many blocks from the track's centreline, and an interchange is several",
+                        "such stops standing together. Inside this radius of any stop the journey calls",
+                        "at, the player is treated as being at the station rather than off the route,",
+                        "which is what keeps a platform, a car park and a connecting footbridge from",
+                        "reading as a wrong turn. It is also the radius the station announcements are",
+                        "measured against.")
+                .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
+
+        DEFAULT_TRAVEL_MODE = builder.comment(
+                        "Travel mode navigation starts in, and the one the estimates are made for.",
+                        "Valid ids: \"walk\", \"drive\" and \"transit\".")
+                .define("default_travel_mode", TravelMode.WALK.id());
+
+        ROUTE_PREFERENCE = builder.comment(
+                        "What a best route means.",
+                        "\"fastest_time\" weighs every road by the pace the mode makes on it;",
+                        "\"shortest_distance\" ignores pace and follows the shortest line of roads.",
+                        "Valid ids: \"fastest_time\" and \"shortest_distance\".")
+                .define("route_preference", RoutePreference.FASTEST_TIME.id());
+
+        AVOID_ROAD_CLASSES = builder.comment(
+                        "Road classes to keep out of the route entirely, for player and vehicle alike.",
+                        "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
+                        "unknown entries are ignored. Empty by default.")
+                // Water is what the list exists for, so it is what the config UI offers to add.
+                .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
+                        element -> element instanceof String);
+
+        PREFER_MAJOR_ROADS = builder.comment(
+                        "Whether footpaths are discouraged rather than banned: they cost 1.6 times as",
+                        "much and so are taken only when they are the only way through or genuinely",
+                        "much shorter. Banning them outright would make trips unroutable for no",
+                        "reason the player could see on the map.")
+                .define("prefer_major_roads", false);
+
+        FALL_BACK_TO_WALKING_WHEN_SLOWER = builder.comment(
+                        "Whether a trip whose chosen mode comes out slower than walking, or finds no",
+                        "route at all, is planned on foot instead, with the readout saying so.",
+                        "A public transport journey that exists is never replaced this way: the walk",
+                        "is offered as an alternative, not as a substitution.")
+                .define("fall_back_to_walking_when_slower", true);
+
+        TRANSIT_WAIT_SECONDS = builder.comment(
+                        "Seconds spent waiting for a service, charged once at every boarding -- the",
+                        "first one included -- and again at every change of lines.",
+                        "A line here has no timetable to read, so this is the average wait rather than",
+                        "a departure time: a service that comes every two minutes is sixty. It is part",
+                        "of the estimate as well as of the search, because a journey chosen for saving",
+                        "forty seconds of walking and losing two minutes of waiting is not a journey",
+                        "anyone would take. Zero is a valid answer for a network where the vehicles are",
+                        "always there.")
+                .defineInRange("transit_wait_seconds", 60.0, 0.0, 3600.0);
+
+        TRANSIT_BOARD_ONLY = builder.comment(
+                        "Whether a public transport journey is guided by boarding and alighting only:",
+                        "the readout and the voice name the station to get on at and the one to get off",
+                        "at, and never call a turn. On by default, because a passenger on a line is being",
+                        "carried: the only decisions left to them are which stop to get off at and, at a",
+                        "change, which line to board, while the turns of the walk to the stop and away",
+                        "from it are the walk's own and are still called. The destination picker carries",
+                        "the same switch, for players who never open this file.")
+                .define("transit_board_only", true);
+
+        VOICE_ANNOUNCEMENTS = builder.comment(
+                        "Whether navigation events -- the trip being started, the turn ahead, the turn",
+                        "now, arrival and going off route -- are spoken aloud. Off by default: speech",
+                        "talks over whatever the client is already playing, and a phrase read out at",
+                        "every junction is a taste not everyone shares. This is the only switch: the",
+                        "client's own narrator setting is deliberately not consulted, so turning it on",
+                        "is enough to hear something. The destination picker carries the same switch,",
+                        "for players who never open this file.")
+                .define("voice_announcements", false);
+
+        CREATE_TRAIN_TRACKS = builder.comment(
+                        "Whether Create's train tracks are read out of the loaded chunks and offered as",
+                        "rail, and Create's train stations offered as destinations. No dependency is",
+                        "needed in either direction: the blocks are recognised by their registry name,",
+                        "so with Create absent the layer is simply empty and nothing else changes.",
+                        "Read-only either way -- never saved with the roads, never editable -- and",
+                        "turning this off empties the layer on the next client tick.")
+                .define("create_train_tracks", true);
+
+        CREATE_TRACK_BLOCK_IDS = builder.comment(
+                        "Block ids to read as track. Matched against the block's registry name, so only",
+                        "blocks that exist in this world can match anything, and an id for a mod that is",
+                        "not installed costs nothing.",
+                        "\"create:track\" is Create's Train Track. \"create:fake_track\" -- its invisible",
+                        "Track Marker for Maps -- is deliberately not included: it is a marker rather",
+                        "than a surface and could draw lines where no track runs.")
+                .defineListAllowEmpty("create_track_block_ids", List.of("create:track"),
+                        () -> "create:track", element -> element instanceof String);
+
+        CREATE_STATION_BLOCK_IDS = builder.comment(
+                        "Block ids whose positions become destinations, listed in the picker under their",
+                        "own source. \"create:track_station\" is Create's Train Station.",
+                        "They are named from their position: Create keeps a station's name on its",
+                        "server-side railway data, and the block entity that reaches the client carries",
+                        "no name, so there is nothing here to read it from.")
+                .defineListAllowEmpty("create_station_block_ids", List.of("create:track_station"),
+                        () -> "create:track_station", element -> element instanceof String);
+
+        CREATE_TRACK_SCAN_RADIUS = builder.comment(
+                        "How far from the player, in blocks, chunks are read for tracks. A square rather",
+                        "than a disc, because chunks are square. The cost of one pass grows with the",
+                        "square of this, so a large radius makes a pass over the map take longer rather",
+                        "than making any single moment heavier -- the work done at once is capped by",
+                        "create_track_chunks_per_second.")
+                .defineInRange("create_track_scan_radius", 192, 16, 512);
+
+        CREATE_TRACK_CHUNKS_PER_SECOND = builder.comment(
+                        "How many chunks one second of the track scan may read, in a single batch once a",
+                        "second. All of this feature's cost is here: a chunk holding no track costs one",
+                        "palette test per section, and only a section whose palette does hold one is",
+                        "walked block by block. At the default radius a batch of 20 sweeps the whole",
+                        "square in about half a minute, nearest chunks first, and the chunk underfoot is",
+                        "read every second whatever this says. Raise it to sweep sooner; lower it if a",
+                        "batch ever shows up as a stutter.",
+                        "The old key name was create_track_chunks_per_tick, which was a per-tick figure;",
+                        "the name changed because the cadence did, so the old entry in an existing file",
+                        "is no longer read.")
+                .defineInRange("create_track_chunks_per_second", 20, 1, 512);
+
+        MTR_TRANSIT = builder.comment(
+                        "Whether MTR's stations and lines are read out and offered as this mod's own.",
+                        "Read reflectively and only on the client, so with MTR absent nothing here does",
+                        "anything at all and no dependency is needed in either direction.",
+                        "MTR keeps its world on its own server and sends a client only what is near it,",
+                        "so a reading on its own is the part of the network around the player, refreshed",
+                        "as they move. That window is folded into what the earlier ones taught, and",
+                        "mtr_full_map asks the whole network for the rest -- see below. Lines are read by",
+                        "type: a train or cable car becomes a rail line and a boat becomes a water line,",
+                        "and anything else -- an aeroplane, or a type a later MTR adds -- is left alone",
+                        "rather than guessed at.")
+                .define("mtr_transit", true);
+
+        MTR_FULL_MAP = builder.comment(
+                        "Whether MTR's whole railway is read, rather than only the part of it the client",
+                        "has been sent. MTR's server sends a client the stations and lines within a",
+                        "couple of hundred blocks of it, which is why a network read a window at a time",
+                        "is missing every station the player has not walked to yet.",
+                        "On: while the player hosts the world -- single player, or a world opened to LAN",
+                        "-- the railway MTR is simulating is read directly out of the process the game is",
+                        "already running, so every station and every line is known at once, for every",
+                        "player in that world.",
+                        "Off, or connected to somebody else's server: nothing changes, and the mod offers",
+                        "what it has been sent, kept and added to as the player travels.",
+                        "Nothing is ever written to MTR's data either way: this is a read of a live",
+                        "simulation, taken on MTR's own thread, and the railway stays MTR's.")
+                .define("mtr_full_map", true);
+
+        MTR_MAP_OVERLAY = builder.comment(
+                        "Whether the whole railway MTR Map Overlay has fetched from the server is read",
+                        "and offered as this mod's own. That mod (id \"mtrmap\") asks the server for a",
+                        "snapshot of every line, station and rail of MTR's network and keeps it on the",
+                        "client, so with it installed -- and with it installed on the server too, which",
+                        "is what the snapshot needs -- the whole railway is known here whatever the",
+                        "player is connected to. mtr_full_map can only reach the copy of the network",
+                        "this process happens to be simulating, which is nothing at all on somebody",
+                        "else's server; this is the answer for that case, and the two are independent.",
+                        "It is also the only reading that says which rails each line runs along, so it",
+                        "is the only one that draws a line along its railway rather than between its",
+                        "stations -- and a line drawn from it is drawn that way across the whole",
+                        "network, not only where the player has been.",
+                        "Read reflectively, so with the mod absent nothing here does anything at all and",
+                        "no dependency is needed in either direction; a server that does not have it",
+                        "leaves the client's own copy of the mod with nothing but the radius-limited",
+                        "data MTR already sends, which this ignores rather than reads twice.")
+                .define("mtr_map_overlay", true);
+
+        MTR_STATION_MERGE_BLOCKS = builder.comment(
+                        "How far apart two of MTR's stations may be and still be one station here,",
+                        "in blocks. MTR makes a separate station of every area the player draws, so a",
+                        "station built a platform at a time arrives as several stations with the same",
+                        "name -- and a destination picker listing the same station four times, with a",
+                        "line calling at whichever of them it happens to stop in, is no use to anyone.",
+                        "Two MTR stations whose names match, ignoring case and surrounding spaces, and",
+                        "whose boarding points are within this distance, are therefore offered as one",
+                        "place: one entry in the picker, one marker on the map, one stop for a line to",
+                        "call at, placed between their platforms.",
+                        "Stations with no name of their own are never merged, because every nameless",
+                        "station would then be one place. Zero turns the rule off and offers MTR's",
+                        "stations exactly as MTR has them.")
+                .defineInRange("mtr_station_merge_blocks", 256, 0, 4096);
+
+        MTR_AUTO_ROUTE_MARKS = builder.comment(
+                        "Whether a line read out of MTR brings its own track with it, as a line of this",
+                        "mod's roads.",
+                        "On: the stretch of MTR's rails the line runs along is marked as read-only rail",
+                        "or water roads, so a ride along that line is planned along the track MTR",
+                        "actually laid. They are never saved with your roads and never editable, and a",
+                        "line's marks are of the line's own type -- a boat line's are its waterway.",
+                        "Off: no track is added, and a line's stops are matched to the roads you drew",
+                        "near them by the ordinary rule -- the one this mod used before it knew anything",
+                        "about MTR. That is the right answer for a line that runs on roads or water you",
+                        "have already drawn, and the wrong one for a line whose track is its own.",
+                        "This is the default for a line nobody has answered for: the line editor has a",
+                        "switch beside each line read out of MTR, and an answer given there is kept per",
+                        "line and overrides this one.")
+                .define("mtr_auto_route_marks", true);
+
+        DEBUG_LOG = builder.comment(
+                        "Whether this mod's own diagnostics are written to the log.",
+                        "They are measurements of how the mod is working rather than reports about the",
+                        "player: the rail layer's one line a second, the map's drawing cost, what an MTR",
+                        "reading turned into, the arithmetic of a planned route, and the geometry of any",
+                        "line drawn as a straight step. Every one of them is worth having while something",
+                        "is being investigated, and none of them is worth a file that grows all session,",
+                        "so they are off by default. Warnings and errors are not affected: a problem is",
+                        "always reported.")
+                .define("debug_log", false);
+
+        WEBMAP_AUTO_START = builder.comment(
+                        "Whether the browser map's local server is started as soon as a world is",
+                        "loaded, rather than waiting for the /howtogo webmap command.",
+                        "It listens on the two loopback addresses only -- 127.0.0.1 and ::1 -- and",
+                        "there is deliberately no key that widens that to the network, so this is not",
+                        "a switch about exposure, only about whether the port is open before the player",
+                        "asks for it. Off by default: a mod that opens a listening socket without being",
+                        "asked is a mod that shows up in a firewall list nobody asked for.")
+                .define("webmap_auto_start", false);
+
+        WEBMAP_PORT = builder.comment(
+                        "The port the browser map is served on: http://127.0.0.1:<port>/",
+                        "If it is taken, the nine ports above it are tried in turn and the address",
+                        "actually bound is the one written into the chat message, so a bookmark can be",
+                        "kept correct after a fallback. Set it to something memorable rather than to",
+                        "something free: the port is a thing a player types.")
+                .defineInRange("webmap_port", 7573, 1024, 65535);
+
+        SPEC = builder.build();
+    }
+
+    private RoadConfig() {
+    }
+
+    /**
+     * Default tolerance before any configuration, per class.
+     *
+     * <h2>Why these are bigger than a road is wide</h2>
+     * A tolerance is not the width of the road, it is how far off the drawn line still counts as being
+     * on it -- and the drawn line is one polyline through the middle of a road the player built, not the
+     * road itself. Getting this too tight is the expensive mistake: a driver on the far carriageway of a
+     * divided highway, a walker on the pavement beside the street, a boat that has drifted off the
+     * centreline of a canal are all still travelling the road they were sent along, and being told they
+     * have left the route every few hundred blocks is a navigation that fights the player. Too wide is
+     * the cheaper mistake: the reading is a little vague about which road is underfoot, and the next
+     * re-plan sorts it out.
+     *
+     * <p>Water is the widest of all, deliberately: a boat is not tied to a line at all, and a canal is
+     * wider than any street. Footpaths stay the tightest because a footpath <em>is</em> narrow, and a
+     * walker who is eight blocks off it has genuinely left it.
+     */
+    private static double defaultTolerance(RoadClass roadClass) {
+        return switch (roadClass) {
+            case HIGHWAY -> 24.0;
+            case ROAD -> 16.0;
+            case PATH -> 8.0;
+            case RAIL -> 16.0;
+            case WATER -> 32.0;
+            case ICE -> 12.0;
+        };
+    }
+
+    /** Tolerance for the given class, falling back to a sane value before configs have loaded. */
+    public static double onRoadTolerance(RoadClass roadClass) {
+        ModConfigSpec.DoubleValue value = ON_ROAD_TOLERANCE.get(roadClass);
+        if (value == null) {
+            return defaultTolerance(roadClass);
+        }
+        try {
+            return value.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return defaultTolerance(roadClass);
+        }
+    }
+
+    /**
+     * Configured starting travel mode, or null while the config has not been read yet.
+     *
+     * <p>Null rather than the default so the caller can tell "the file has not been read" apart
+     * from "the file says walk", and read it once the value genuinely exists instead of pinning
+     * the default for the rest of the session.
+     */
+    public static TravelMode defaultTravelMode() {
+        try {
+            return TravelMode.byId(DEFAULT_TRAVEL_MODE.get());
+        } catch (IllegalStateException notLoadedYet) {
+            return null;
+        }
+    }
+
+    /** Configured metric, falling back to the default before the config has been read. */
+    public static RoutePreference routePreference() {
+        try {
+            return RoutePreference.byId(ROUTE_PREFERENCE.get());
+        } catch (IllegalStateException notLoadedYet) {
+            return RoutePreference.FASTEST_TIME;
+        }
+    }
+
+    /**
+     * Classes the player has asked to avoid, as an empty set before the config has been read.
+     *
+     * <p>Ids that name no class are dropped here rather than rejected by the config validator, so
+     * an out-of-date or misspelled entry costs the player that one entry and nothing else.
+     */
+    public static Set<RoadClass> avoidedRoadClasses() {
+        List<? extends String> ids;
+        try {
+            ids = AVOID_ROAD_CLASSES.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return Set.of();
+        }
+        if (ids == null || ids.isEmpty()) {
+            return Set.of();
+        }
+        EnumSet<RoadClass> avoided = EnumSet.noneOf(RoadClass.class);
+        for (String id : ids) {
+            RoadClass roadClass = RoadClass.byId(id);
+            if (roadClass != null) {
+                avoided.add(roadClass);
+            }
+        }
+        return avoided;
+    }
+
+    /** Whether minor roads are penalised rather than left unmentioned, off before the config loads. */
+    public static boolean preferMajorRoads() {
+        try {
+            return PREFER_MAJOR_ROADS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+
+    /** Whether a slower-than-walking trip is replanned on foot, on before the config loads. */
+    public static boolean fallBackToWalkingWhenSlower() {
+        try {
+            return FALL_BACK_TO_WALKING_WHEN_SLOWER.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * Seconds of waiting one boarding of a service costs, or the declared default before the config
+     * has been read.
+     */
+    public static double transitWaitSeconds() {
+        try {
+            return TRANSIT_WAIT_SECONDS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 60.0;
+        }
+    }
+
+    /**
+     * Whether navigation events are spoken aloud, off before the config loads.
+     *
+     * <p>Only the declared default: the picker's switch writes its choice to the preference store,
+     * which re-seeds from here whenever there is no saved choice to read.
+     */
+    public static boolean voiceAnnouncements() {
+        try {
+            return VOICE_ANNOUNCEMENTS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether a transit journey is guided by boarding and alighting only, on before the config loads.
+     *
+     * <p>Only the declared default, like the voice switch beside it: the picker's own switch keeps the
+     * player's answer in the preference store, which falls back to this whenever there is none. The
+     * value answered before the config has been read is the declared one, so nothing can act on the
+     * opposite of what the file says in the window before it is loaded.
+     */
+    public static boolean transitBoardOnly() {
+        try {
+            return TRANSIT_BOARD_ONLY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * Whether this mod's own diagnostics are written to the log, off before the config loads.
+     *
+     * <p>Read by {@code HowToGo.diagnostic}, which is the one gate every diagnostic line goes through,
+     * so there is exactly one answer to "was that line meant to be printed" and it is this one.
+     */
+    public static boolean debugLog() {
+        try {
+            return DEBUG_LOG.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+
+    /**
+     * How close to a stop of the journey counts as being at that stop, in blocks.
+     *
+     * <p>Read by the navigation when it decides whether the player has left the route: inside this
+     * radius of any stop the journey calls at -- a platform, a second platform at the same interchange,
+     * the forecourt -- the player is at the station and not off the route. See the class's own note on
+     * why a station is a place rather than a point.
+     */
+    public static double stationSnapBlocks() {
+        try {
+            return STATION_SNAP_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 32.0;
+        }
+    }
+
+    /**
+     * The routing policy in force, read in one go.
+     *
+     * <p>One read rather than three at each use, so a single plan cannot be costed half by the old
+     * policy and half by the new one after the config has been reloaded mid-session.
+     */
+    public static RoutePreferences routePreferences() {
+        return new RoutePreferences(routePreference(), avoidedRoadClasses(), preferMajorRoads());
+    }
+
+    // ------------------------------------------------- Create's train tracks
+
+    /** Whether the track layer is on, on before the config loads since that is the declared default. */
+    public static boolean createTrainTracks() {
+        try {
+            return CREATE_TRAIN_TRACKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Block ids to read as track, empty only when the config says so. */
+    public static List<? extends String> createTrackBlockIds() {
+        return configuredList(CREATE_TRACK_BLOCK_IDS, "create:track");
+    }
+
+    /** Block ids whose positions become destinations. */
+    public static List<? extends String> createStationBlockIds() {
+        return configuredList(CREATE_STATION_BLOCK_IDS, "create:track_station");
+    }
+
+    /** Scan radius around the player in blocks, or the declared default before the config loads. */
+    public static int createTrackScanRadius() {
+        try {
+            return CREATE_TRACK_SCAN_RADIUS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 192;
+        }
+    }
+
+    /** Chunks one second of the scan may read, or the declared default before the config loads. */
+    public static int createTrackChunksPerSecond() {
+        try {
+            return CREATE_TRACK_CHUNKS_PER_SECOND.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 20;
+        }
+    }
+
+    private static List<? extends String> configuredList(
+            ModConfigSpec.ConfigValue<List<? extends String>> value, String fallback) {
+        try {
+            List<? extends String> loaded = value.get();
+            return loaded == null ? List.of() : loaded;
+        } catch (IllegalStateException notLoadedYet) {
+            return List.of(fallback);
+        }
+    }
+
+    // ------------------------------------------------------------------- MTR
+
+    /** Whether MTR's stations and lines are read out, on before the config loads. */
+    public static boolean mtrTransit() {
+        try {
+            return MTR_TRANSIT.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether MTR's whole railway is read rather than only the window around the player. */
+    public static boolean mtrFullMap() {
+        try {
+            return MTR_FULL_MAP.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether the whole railway MTR Map Overlay fetched is read, on before the config loads. */
+    public static boolean mtrMapOverlay() {
+        try {
+            return MTR_MAP_OVERLAY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * How far apart two of MTR's stations may be and still be one place here, in blocks.
+     *
+     * <p>The declared default stands in wherever the config has not been read, including in the
+     * regression harness, which has no config file at all -- so a reading of MTR's own shapes is
+     * converted the same way there as it is in a running game.
+     */
+    public static int mtrStationMergeBlocks() {
+        try {
+            return MTR_STATION_MERGE_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 256;
+        }
+    }
+
+    /** Whether a line read out of MTR brings its own rails with it, on before the config loads. */
+    public static boolean mtrAutoRouteMarks() {
+        try {
+            return MTR_AUTO_ROUTE_MARKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    // ------------------------------------------------------------ browser map
+
+    /**
+     * The port the browser map asks for, or the declared default before the config has been read.
+     *
+     * <p>A default rather than a null: unlike the travel mode there is no answer that is wrong here,
+     * and the port is needed the instant a player types the command, which can be before the config
+     * file has ever been read.
+     */
+    public static int webMapPort() {
+        try {
+            return WEBMAP_PORT.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 7573;
+        }
+    }
+
+    /** Whether the browser map's server starts with the first world loaded, off before the config loads. */
+    public static boolean webMapAutoStart() {
+        try {
+            return WEBMAP_AUTO_START.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return false;
+        }
+    }
+}

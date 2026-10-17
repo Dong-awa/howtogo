@@ -1,0 +1,63 @@
+Running Stonecutter 0.9.8
+> Task :26.2-neoforge:createMinecraftArtifacts UP-TO-DATE
+> Task :26.2-neoforge:stonecutterPrepare UP-TO-DATE
+> Task :26.2-neoforge:stonecutterGenerate UP-TO-DATE
+
+> Task :26.2-neoforge:compileJava FAILED
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\MapFilterOverlay.java:46: 错误: 找不到符号
+        GuiGraphicsExtractor graphics = event.getGuiGraphicsExtractor();
+                                             ^
+  符号:   方法 getGuiGraphicsExtractor()
+  位置: 类型为Post的变量 event
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\NavHudRenderer.java:110: 错误: 找不到符号
+        draw(event.getGuiGraphicsExtractor(), mc);
+                  ^
+  符号:   方法 getGuiGraphicsExtractor()
+  位置: 类型为Post的变量 event
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadElementRenderer.java:271: 错误: 找不到符号
+        graphics.text(font, name, -font.width(name) / 2, 0, colour, true);
+                ^
+  符号:   方法 text(Font,String,int,int,int,boolean)
+  位置: 类型为MapElementGraphics的变量 graphics
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadElementRenderer.java:832: 错误: 找不到符号
+        graphics.text(font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
+                ^
+  符号:   方法 text(Font,String,int,int,int,boolean)
+  位置: 类型为MapElementGraphics的变量 graphics
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadElementRenderer.java:1627: 错误: 找不到符号
+            graphics.text(font, label.name(),
+                    ^
+  符号:   方法 text(Font,String,int,int,int,boolean)
+  位置: 类型为MapElementGraphics的变量 graphics
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadElementRenderer.java:1916: 错误: 找不到符号
+            graphics.text(font, line, HUD_LEFT_INSET + leftIndent, y, HUD_FG, true);
+                    ^
+  符号:   方法 text(Font,String,int,int,int,boolean)
+  位置: 类型为MapElementGraphics的变量 graphics
+E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\RoadElementRenderer.java:1921: 错误: 找不到符号
+            graphics.text(font, line, hintTextLeft, y, HUD_FG, true);
+                    ^
+  符号:   方法 text(Font,String,int,int,int,boolean)
+  位置: 类型为MapElementGraphics的变量 graphics
+7 个错误
+
+[Incubating] Problems report is available at: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':26.2-neoforge:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').
+> Compilation failed; see the compiler output below.
+  E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\versions\26.2-neoforge\build\generated\stonecutter\main\java\bili\dongsz\howtogo\client\MapFilterOverlay.java:46: 错误: 找不到符号
+          GuiGraphicsExtractor graphics = event.getGuiGraphicsExtractor();
+                                               ^
+    符号:   方法 getGuiGraphicsExtractor()
+    位置: 类型为Post的变量 event
+  7 个错误
+
+* Try:
+> Check your code and dependencies to fix the compilation error(s)
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+BUILD FAILED in 1s
+4 actionable tasks: 1 executed, 3 up-to-date

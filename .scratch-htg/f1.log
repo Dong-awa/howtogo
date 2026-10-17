@@ -1,0 +1,31 @@
+Running Stonecutter 0.9.8
+
+> Configure project :
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:56:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:58:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:59:13: 'fun reverse(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:66:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:67:13: 'fun reverse(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:76:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:77:13: 'fun reverse(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:87:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:88:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:89:13: 'fun reverse(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:96:13: 'fun replace(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+w: file:///E:/Projects/Minecraft/Mods/howtogo/.worktrees/main-sc/stonecutter.gradle.kts:98:13: 'fun reverse(from: String, to: String): Unit' is deprecated. Use the combined function `replace(pA, vA, pB, vB)`.
+
+FAILURE: Build failed with an exception.
+
+* Where:
+Build file 'E:\Projects\Minecraft\Mods\howtogo\.worktrees\main-sc\stonecutter.gradle.kts' line: 58
+
+* What went wrong:
+The value for property 'fromPattern' cannot be changed any further.
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 995ms
