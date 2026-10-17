@@ -795,3 +795,22 @@ quads, a loop of fills is equivalent; if it emits gradients, it is not.
 
 That is the question to answer before writing any of it, and it is the same kind of question as the
 rest of this port: what does the existing code actually do, rather than what does the API offer.
+
+### Why 26.x NeoForge builds and 26.x Fabric does not
+
+NeoForge's 26.1 GuiGraphicsExtractor carries:
+
+    submitGuiElementRenderState(net.minecraft.client.renderer.state.gui.GuiElementRenderState)
+    submitPictureInPictureRenderState(...)
+
+Vanilla's does not -- its fills take one colour per rectangle and there is no submit at all. So the
+one line in HudSubmit works unchanged on the NeoForge nodes, which is why they build, and has no
+counterpart on the Fabric ones.
+
+Note also that the state type moved package: net.minecraft.client.renderer.state.gui.GuiElementRenderState
+on 26.x, against net.minecraft.client.gui.render.state.GuiElementRenderState on 1.21.x.
+
+So the Fabric 26.x path is genuinely a different route to the same result, not a rename: NeoForge
+keeps the deferred model and vanilla does not, and the Fabric side has to draw through fills.
+Whether a loop of fills is equivalent still depends on whether the batch emits per-vertex colour,
+which is the next thing to check.
