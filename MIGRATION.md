@@ -430,3 +430,26 @@ The shape that works is a helper in its own file with top-level conditions, taki
 the same arguments and forwarding to whichever arity that version has. The three call sites then
 read the same on every node. It does mean restructuring the fluent chains slightly, since the
 calls are currently chained off builder.comment(...).
+
+### 1.20.4 NeoForge: ClientTickEvent does not exist, and what replaces it
+
+NeoForge 20.4.253 has no net.neoforged.neoforge.client.event.ClientTickEvent at all. Its tick
+event is:
+
+    net.neoforged.neoforge.event.TickEvent$ClientTickEvent    with a TickEvent$Phase field
+
+so the 1.21 shape -- a ClientTickEvent.Post subclass, one event per phase -- is not there. A
+listener written as (ClientTickEvent.Post event) -> work becomes (TickEvent.ClientTickEvent event)
+-> { if (event.phase != TickEvent.Phase.END) return; work; }.
+
+That is 19 errors across three files: RoadLayer (the import and its one listener), HowToGoServer
+(one) and HowToGo (the import and twelve listeners).
+
+The shape of the fix is the awkward part, and it is the same wall as RoadConfig: HowToGo is fenced
+whole by loader, fabric on one side and neoforge on the other, so a version condition inside the
+neoforge arm would nest. Twelve listeners cannot be moved to a call site.
+
+What that leaves is either a helper in its own file with two top-level conditions, which means the
+twelve listener registrations written out twice, or a replacement rule -- but the phase guard is a
+statement, not a spelling, so a replacement rule cannot express it. The helper is the way, and the
+question is whether twelve duplicated lines are worth one node.
