@@ -37,3 +37,9 @@ local-first.gradle
 
 # Scratch from API reconnaissance, not part of the tree.
 .recon-tmp/
+
+# Working scratch: per-node source snapshots taken while porting, and the tool's own notes.
+# Neither is part of the tree, and both were committed to main once by a `git add -A` that did
+# not have these lines to stop it.
+.scratch-htg/
+.workbuddy-ai/
