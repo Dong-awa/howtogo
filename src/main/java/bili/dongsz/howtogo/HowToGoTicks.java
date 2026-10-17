@@ -1,4 +1,4 @@
-//? if neoforge && >=1.21 {
+//? if neoforge && >=1.20.5 {
 package bili.dongsz.howtogo;
 
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -6,7 +6,7 @@ import net.neoforged.neoforge.common.NeoForge;
 
 // Registers a client-tick job, in whichever shape the NeoForge version offers.
 //
-// From 1.21 the event is ClientTickEvent.Post -- one subclass per phase -- so a job is a listener
+// From 1.20.5 the event is ClientTickEvent.Post -- one subclass per phase -- so a job is a listener
 // and nothing else. Before that there is a single TickEvent.ClientTickEvent carrying a Phase, fired
 // twice per tick, so the job has to be guarded rather than the event chosen.
 //
@@ -27,7 +27,7 @@ final class HowToGoTicks {
     }
 }
 //?}
-//? if neoforge && <1.21 {
+//? if neoforge && <1.20.5 {
 /*package bili.dongsz.howtogo;
 
 import net.neoforged.neoforge.common.NeoForge;
