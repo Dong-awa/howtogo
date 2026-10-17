@@ -7,6 +7,12 @@
  * position is dropped rather than drawn over its neighbour: a road name you cannot
  * read is worse than no road name, and the caller can count what it lost.
  *
+ * The font is a property of the label rather than of the pass: a road's name is capped
+ * by the width of the road it names, so one item may ask for a smaller font than the
+ * next. A candidate the caller has marked `blocked` -- a place name whose position
+ * would lie over a painted road -- is tried only after the unblocked ones, and is still
+ * used if nothing else fits.
+ *
  * The function is pure and DOM-free -- measurement arrives as a callback, because only
  * a real 2D context knows how wide a string is -- so the Node harness can assert the
  * invariants directly: no two placed boxes overlap, every placed box is inside the
@@ -135,8 +141,9 @@
   /** An approximation used only when the caller has no canvas to measure with. */
   function estimateMeasure(fontPx) {
     const size = num(fontPx, DEFAULT_FONT_PX);
-    return function (text) {
-      return String(text).length * size * 0.6;
+    return function (text, itemFontPx) {
+      const used = num(itemFontPx, size);
+      return String(text).length * used * 0.6;
     };
   }
 
@@ -146,12 +153,15 @@
     for (const c of list) {
       if (!c || typeof c !== 'object') continue;
       if (!isFinite(c.x) || !isFinite(c.y)) continue;
-      out.push({x: c.x, y: c.y, angle: num(c.angle, 0)});
+      // A candidate the caller has already refused -- for a place name, a position that
+      // lies over a road -- is kept but tried last. It is still better than losing the
+      // label entirely, which is what dropping it here would do.
+      out.push({x: c.x, y: c.y, angle: num(c.angle, 0), blocked: c.blocked === true});
     }
     if (out.length) return out;
     // Tolerant of an item handed over with just its anchor: one candidate, tried once.
     if (item && isFinite(item.x) && isFinite(item.y)) {
-      return [{x: item.x, y: item.y, angle: num(item.angle, 0)}];
+      return [{x: item.x, y: item.y, angle: num(item.angle, 0), blocked: false}];
     }
     return out;
   }
@@ -184,7 +194,6 @@
     const fontPx = num(opts.fontPx, DEFAULT_FONT_PX);
     const padding = Math.max(0, num(opts.padding, DEFAULT_PADDING));
     const measure = typeof opts.measure === 'function' ? opts.measure : estimateMeasure(fontPx);
-    const lineH = textHeight(fontPx, opts.lineHeight);
 
     const list = Array.isArray(items) ? items.slice() : [];
     list.sort(compareItems);
@@ -199,12 +208,23 @@
         dropped.push(Object.assign({}, item, {reason: 'no-text'}));
         continue;
       }
-      const w = Math.max(0, num(measure(text), 0)) + padding * 2;
+      // The font is a property of the label, not of the pass: a road name's size is
+      // capped by the width of the road it sits on, so a long-name label on a highway
+      // and a short one on a footpath are not the same size on the same map.
+      const itemFontPx = Math.max(0, num(item.fontPx, fontPx));
+      const lineH = textHeight(itemFontPx, opts.lineHeight);
+      const w = Math.max(0, num(measure(text, itemFontPx), 0)) + padding * 2;
       const h = lineH + padding * 2;
-      let hit = null;
       const candidates = candidatesOf(item);
-      for (let i = 0; i < candidates.length && !hit; i++) {
-        const c = candidates[i];
+      // Unblocked candidates first, then the ones the caller marked as lying over a
+      // road: a name across a road is readable, a name lost to a road is not. Every
+      // candidate is still tried at most once and every loop is over a finite list, so
+      // the no-hang rule is unchanged.
+      const order = candidates.filter((c) => !c.blocked)
+        .concat(candidates.filter((c) => c.blocked));
+      let hit = null;
+      for (let i = 0; i < order.length && !hit; i++) {
+        const c = order[i];
         const angle = upright(c.angle);
         const size = rotatedSize(w, h, angle);
         const box = {x: c.x - size.w / 2, y: c.y - size.h / 2, w: size.w, h: size.h};
@@ -212,15 +232,23 @@
         let clash = false;
         for (let j = 0; j < taken.length && !clash; j++) clash = overlaps(box, taken[j]);
         if (clash) continue;
-        hit = {box, angle, anchor: {x: c.x, y: c.y}, candidateIndex: i};
+        hit = {
+          box,
+          angle,
+          anchor: {x: c.x, y: c.y},
+          candidateIndex: i,
+          blocked: c.blocked === true,
+        };
       }
       if (hit) {
         taken.push(hit.box);
         placed.push(Object.assign({}, item, {
+          fontPx: itemFontPx,
           box: hit.box,
           angle: hit.angle,
           anchor: hit.anchor,
           candidateIndex: hit.candidateIndex,
+          blocked: hit.blocked,
         }));
       } else {
         // Nothing fitted: record the loss instead of drawing over a neighbour.

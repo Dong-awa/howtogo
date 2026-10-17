@@ -750,6 +750,93 @@ section('labels: greedy placement', () => {
 });
 
 // ---------------------------------------------------------------------------------
+// A label is not just text: its size is capped by the road it names, a long road gets
+// several names, and a place's name waits for its kind's zoom. These are the rules the
+// game map and this map now share, checked here against the payload and the view rather
+// than against whatever the fixture happens to contain.
+// ---------------------------------------------------------------------------------
+section('labels: road width, long roads and place kinds', () => {
+  const roadModel = model.normalize({
+    version: 1,
+    generatedAt: 1,
+    world: 't',
+    dimension: 't:t',
+    empty: false,
+    bounds: {minX: 0, minZ: 0, maxX: 1000, maxZ: 100},
+    classes: model.DEFAULT_CLASSES,
+    nodes: [
+      {id: 1, x: 0, y: 64, z: 0, type: 'ENDPOINT'},
+      {id: 2, x: 1000, y: 64, z: 0, type: 'ENDPOINT'},
+      {id: 3, x: 0, y: 64, z: 10, type: 'ENDPOINT'},
+      {id: 4, x: 1000, y: 64, z: 10, type: 'ENDPOINT'},
+    ],
+    segments: [
+      {id: 1, roadClass: 'HIGHWAY', y: 64, layer: 0, from: 1, to: 2, direction: 'TWO_WAY',
+        name: '长高速', points: [[0, 0], [1000, 0]]},
+      {id: 2, roadClass: 'PATH', y: 64, layer: 0, from: 3, to: 4, direction: 'TWO_WAY',
+        name: '长小路', points: [[0, 10], [1000, 10]]},
+    ],
+    stats: {nodes: 4, segments: 2, lengthBlocks: 2000, layers: [0]},
+  });
+  const view = geom.makeView({centerX: 500, centerZ: 5, scale: 1.2, width: 1200, height: 300});
+  const highway = roadModel.segments.find((s) => s.roadClass === 'HIGHWAY');
+  const path = roadModel.segments.find((s) => s.roadClass === 'PATH');
+  const options = {px: 1, labelFontPx: render.BASE_LABEL_FONT_PX};
+  const highwayFont = render.roadLabelFontPx(highway, view, options);
+  const pathFont = render.roadLabelFontPx(path, view, options);
+  const highwayCap = render.roadStrokePx(highway.klass.width, view.scale, 1) / 1.25;
+  const pathCap = render.roadStrokePx(path.klass.width, view.scale, 1) / 1.25;
+  ok('a road name is never taller than the road it names',
+    highwayFont <= highwayCap + 1e-9 && pathFont <= pathCap + 1e-9,
+    JSON.stringify({highwayFont, highwayCap, pathFont, pathCap}));
+  ok('and a narrower road gets a smaller name than a wider one at the same zoom',
+    pathFont < highwayFont, JSON.stringify({pathFont, highwayFont}));
+
+  const items = render.buildLabelItems(roadModel, view, {});
+  const longNames = items.filter((item) => item.kind === 'road' && item.text === '长高速');
+  ok('a road long enough to cross the screen gets more than one name',
+    longNames.length > 1, longNames.length + ' names');
+  ok('and those names sit at different points along it',
+    longNames.length > 1 && new Set(longNames.map((i) => Math.round(i.x))).size > 1,
+    JSON.stringify(longNames.map((i) => Math.round(i.x))));
+
+  const zoomedOut = geom.makeView({centerX: 500, centerZ: 5, scale: 0.4, width: 800, height: 300});
+  const outItems = render.buildLabelItems(roadModel, zoomedOut, {});
+  ok('a map zoomed out too far names no road, because none is wide enough to hold the word',
+    outItems.filter((item) => item.kind === 'road').length === 0,
+    outItems.length + ' items');
+
+  ok('place names wait for their own kind\'s zoom',
+    render.placeLabelVisible({placeKind: 'SHOP'}, 0.8) === false &&
+    render.placeLabelVisible({placeKind: 'SHOP'}, 1.0) === true &&
+    render.placeLabelVisible({placeKind: 'STATION'}, 0.7) === true &&
+    render.placeLabelVisible({placeKind: 'PLACE'}, 0.55) === true &&
+    render.placeLabelVisible({placeKind: 'RESOURCE'}, 0.4) === true,
+    JSON.stringify(render.PLACE_LABEL_MIN_SCALE));
+
+  // The placer itself now works per item: a font on one label does not resize the next,
+  // and a candidate the caller marked as lying over a road is tried after the clear ones.
+  const itemMeasure = (text, fontPx) => String(text).length * (isFinite(fontPx) ? fontPx : 12) * 0.6;
+  const fonted = labels.placeLabels([
+    {id: 1, kind: 'road', text: 'AAA', x: 100, y: 100, fontPx: 12,
+      candidates: [{x: 100, y: 100, angle: 0}]},
+    {id: 2, kind: 'road', text: 'AAA', x: 100, y: 220, fontPx: 24,
+      candidates: [{x: 100, y: 220, angle: 0}]},
+  ], {width: 400, height: 400, fontPx: 12, measure: itemMeasure});
+  ok('each label is placed in its own font rather than the pass\'s',
+    fonted.placed.length === 2 && fonted.placed[1].box.h > fonted.placed[0].box.h * 1.5,
+    JSON.stringify(fonted.placed.map((p) => p.box && p.box.h)));
+  const routed = labels.placeLabels([
+    {id: 3, kind: 'place', text: '路口', x: 300, y: 200,
+      candidates: [{x: 100, y: 100, angle: 0, blocked: true}, {x: 300, y: 200, angle: 0}]},
+  ], {width: 400, height: 400, fontPx: 12, measure: itemMeasure});
+  ok('a candidate over a road is tried only after the clear ones',
+    routed.placed.length === 1 && routed.placed[0].anchor.x === 300 &&
+    routed.placed[0].blocked === false,
+    JSON.stringify(routed.placed.map((p) => ({anchor: p.anchor, blocked: p.blocked}))));
+});
+
+// ---------------------------------------------------------------------------------
 // 4. render
 // ---------------------------------------------------------------------------------
 section('render: the occlusion order', () => {
