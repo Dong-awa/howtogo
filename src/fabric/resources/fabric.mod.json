@@ -11,7 +11,7 @@
   "license": "MIT",
   "icon": "assets/howtogo/textures/item/navigator.png",
   "environment": "*",
-  ${access_widener_entry}
+  "accessWidener": "howtogo.accesswidener",
   "mixins": [
     "howtogo.mixins.json"
   ],

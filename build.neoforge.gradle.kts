@@ -156,13 +156,6 @@ repositories {
     }
     deadRepos.forEach { repositories.remove(it) }
 
-    // NeoForge's Maven, reached through its CDN. maven.neoforged.net is unreachable from here, but
-    // neoforged.forgecdn.net/releases serves the same tree -- verified against the NeoForm metadata
-    // and against neoform-1.20.4-20240627.114801.zip directly. This is what the 1.20.x nodes needed:
-    // the workspace mirror carries NeoForm for 1.21.x and 26.x only, and bmclapi has no neoform
-    // group at all, so without this the 1.20.x nodes cannot build their Minecraft artifacts.
-    maven("https://neoforged.forgecdn.net/releases/") { name = "NeoForgeCDN" }
-
     // The workspace-local mirror carries the NeoForm toolchain (neoform-runtime, neoform,
     // mergetool, AutoRenamingTool, ...) and the minecraft-dependencies metadata, some of which
     // ship no POM-only fallback: module metadata is all this repo stores for them.
@@ -182,6 +175,18 @@ repositories {
         content { includeGroup("maven.modrinth") }
     }
     flatDir { dirs(rootProject.file("libs")) }
+
+    // LAST on purpose. Every node that already builds resolves its NeoForm toolchain from the
+    // mirror above, and putting this CDN first changed what 26.3 resolved -- it stopped on
+    // "Node action for recompile failed" with a HolderSet patch error, having built before the
+    // CDN existed. At the end it only serves what nothing else has, which is the 1.20.x NeoForm.
+    // NeoForge's Maven, reached through its CDN. maven.neoforged.net is unreachable from here, but
+    // neoforged.forgecdn.net/releases serves the same tree -- verified against the NeoForm metadata
+    // and against neoform-1.20.4-20240627.114801.zip directly. This is what the 1.20.x nodes needed:
+    // the workspace mirror carries NeoForm for 1.21.x and 26.x only, and bmclapi has no neoform
+    // group at all, so without this the 1.20.x nodes cannot build their Minecraft artifacts.
+    maven("https://neoforged.forgecdn.net/releases/") { name = "NeoForgeCDN" }
+
 }
 
 dependencies {
