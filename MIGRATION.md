@@ -735,3 +735,26 @@ because setup throws first.
 Gradle 8.12 is present and complete locally; 8.7 and 8.8 are only partial downloads (.part files).
 Trying 8.12 was abandoned after eight minutes -- a different Gradle means a new daemon and a full
 re-resolution of everything, and it was not worth holding the session open for.
+
+### The 26.x HUD pattern, from the Fabric docs
+
+docs.fabricmc.net/develop/rendering/hud gives the whole shape, and it is simpler than the jar
+signatures suggested:
+
+    HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, id, MyMod::extract);
+
+    private static void extract(GuiGraphicsExtractor graphics, DeltaTracker delta) {
+        graphics.fill(0, 0, 10, 10, colour);
+    }
+
+So a HudElement is just (GuiGraphicsExtractor, DeltaTracker) -> void, the extractor carries the same
+fill/blit surface the old GuiGraphics did, and the only real decision is WHERE to attach -- the API
+offers attachElementBefore and attachElementAfter against a VanillaHudElements constant, plus
+addFirst and addLast.
+
+That means the port is smaller than the 13-file count implied: the type changes from GuiGraphics to
+GuiGraphicsExtractor and the registration changes from HudRenderCallback.EVENT.register to a
+HudElementRegistry call with a position. The drawing code inside should carry over.
+
+Note also that HudElementRegistry takes a net.minecraft.resources.Identifier -- 26.x's name for
+ResourceLocation -- so the id has to be built the new way.
