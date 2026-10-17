@@ -830,3 +830,21 @@ Which means the Fabric 26.x HUD needs a real geometry submission path, and vanil
 one -- that is exactly the gap NeoForge's submitGuiElementRenderState fills. Whether vanilla 26.x has
 some other route, or whether this mod's Fabric 26.x HUD has to give up the custom geometry, is the
 next question and it is a documentation question, not an experiment.
+
+### 26.3 Fabric: the last four errors, and what is known about them
+
+RoadEditHandler lines 332 and 334, in the fabric && >=1.21.9 arm:
+
+    ScreenKeyboardEvents.allowKeyPress(screen).register((open, event) ->
+            !(isMapOpen(open) && handleKey(open, event.key(), event.scancode(), InputConstants.PRESS)));
+
+The compiler names the whole line and not the member, so it is not yet established whether event.key()
+or event.scancode() is the one that moved, or whether the event type changed shape entirely.
+
+fabric-screen-api-v1 in 26.3 is 5.2.4, and its ScreenKeyboardEvents carries AfterKeyPress,
+BeforeKeyRelease, AllowCharType and AfterCharType as nested types. There is no AllowKeyPress nested
+class in that jar, so allowKeyPress must return Event<some shared type> -- most likely a KeyEvent
+record that these several nested callbacks all use.
+
+Next step is to javap that shared type and read its accessors, rather than to guess at which of the
+two calls is wrong.
