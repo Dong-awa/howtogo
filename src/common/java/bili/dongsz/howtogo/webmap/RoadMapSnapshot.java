@@ -25,8 +25,9 @@ import java.util.TreeSet;
  * the JSON is built from the flattened form.
  *
  * <p>Everything the page needs and nothing it does not: no ids that mean nothing outside the mod, no
- * fields the map does not draw, and the class colours taken from {@link RoadClass} rather than
- * written down a second time in JavaScript, so a recoloured road class changes on both maps at once.
+ * fields the map does not draw, and the class colours taken from {@link RoadClass} -- or from the
+ * configured colours handed in beside the network -- rather than written down a second time in
+ * JavaScript, so a recoloured road class changes on both maps at once.
  *
  * <h2>The documented payload</h2>
  * The JSON this writes is the contract the front end is written against, and it is checked on both
@@ -74,10 +75,20 @@ public final class RoadMapSnapshot {
     private final int[] layers;
     private final double lengthBlocks;
     private final boolean empty;
+    /**
+     * The colour the page is to draw each class in, or nothing for the class's own default.
+     *
+     * <p>Handed in rather than read here: the colour a player chose lives in the client config, and
+     * this class is the portable half of the web map -- it knows about roads and JSON and nothing
+     * about Minecraft or the loader. The caller reads the config on the game thread and passes the
+     * answer, so the flattening is still a pure function of what it is given and the HTTP thread
+     * never asks a config question of its own.
+     */
+    private final Map<RoadClass, Integer> classColours;
 
     private RoadMapSnapshot(String world, String dimension, Bounds bounds, List<Node> nodes,
                             List<Segment> segments, int[] layers, double lengthBlocks,
-                            boolean empty) {
+                            boolean empty, Map<RoadClass, Integer> classColours) {
         this.world = world;
         this.dimension = dimension;
         this.bounds = bounds;
@@ -86,6 +97,7 @@ public final class RoadMapSnapshot {
         this.layers = layers.clone();
         this.lengthBlocks = lengthBlocks;
         this.empty = empty;
+        this.classColours = Map.copyOf(classColours);
     }
 
     /**
@@ -98,7 +110,24 @@ public final class RoadMapSnapshot {
      * @param dimension the dimension id, e.g. {@code minecraft:overworld}
      */
     public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network) {
+        return of(world, dimension, network, Map.of());
+    }
+
+    /**
+     * Flattens a network, with the colours the page should draw each class in.
+     *
+     * <p>Must be called on the thread that owns the network: this walks it. The result carries no
+     * reference to it.
+     *
+     * @param world        the world the data belongs to, for the page's own title; may be blank
+     * @param dimension    the dimension id, e.g. {@code minecraft:overworld}
+     * @param classColours the ARGB colour to draw each class in; a class left out keeps its own
+     *                     default, so an empty map is the ordinary reading
+     */
+    public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
+                                     Map<RoadClass, Integer> classColours) {
         Objects.requireNonNull(network, "network");
+        Map<RoadClass, Integer> colours = classColours == null ? Map.of() : classColours;
 
         List<Node> nodes = new ArrayList<>(network.nodeCount());
         int minX = Integer.MAX_VALUE;
@@ -150,14 +179,21 @@ public final class RoadMapSnapshot {
         }
         return new RoadMapSnapshot(world == null ? "" : world,
                 dimension == null || dimension.isBlank() ? "unknown" : dimension,
-                bounds, nodes, segments, layerArray, length, nothing);
+                bounds, nodes, segments, layerArray, length, nothing, colours);
     }
 
     /** An empty map for the given dimension: what a world with no roads drawn yet looks like. */
     public static RoadMapSnapshot none(String world, String dimension) {
+        return none(world, dimension, Map.of());
+    }
+
+    /** The same, with the colours the legend is to be drawn in. */
+    public static RoadMapSnapshot none(String world, String dimension,
+                                       Map<RoadClass, Integer> classColours) {
         return new RoadMapSnapshot(world == null ? "" : world,
                 dimension == null || dimension.isBlank() ? "unknown" : dimension,
-                new Bounds(0, 0, 0, 0), List.of(), List.of(), new int[0], 0.0, true);
+                new Bounds(0, 0, 0, 0), List.of(), List.of(), new int[0], 0.0, true,
+                classColours == null ? Map.of() : classColours);
     }
 
     public String world() {
@@ -232,7 +268,8 @@ public final class RoadMapSnapshot {
         for (RoadClass roadClass : RoadClass.values()) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("id", roadClass.name());
-            entry.put("color", hex(roadClass.color()));
+            Integer configured = classColours.get(roadClass);
+            entry.put("color", hex(configured == null ? roadClass.color() : configured));
             entry.put("width", roadClass.width());
             classes.add(entry);
         }

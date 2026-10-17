@@ -3,14 +3,45 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.148'
 }
 
-version = project.mod_version
-group = project.maven_group
-base.archivesName = project.archives_name
+// Version numbers are read from this project's own gradle.properties, by file.
+//
+// Two separate problems are solved by reading the file rather than a project property:
+//
+//  * `project.mod_version` is a dot-access on Gradle's dynamic property bag, so an IDE reading this
+//    script as text has no symbol to resolve it against and flags all three as unresolved. A key in
+//    gradle.properties is not a field of the project.
+//  * A property of that name can also arrive from somewhere that is not this file -- the
+//    gradle.properties of a directory the IDE happened to open above this one, or a -P on a command
+//    line -- and then the build succeeds with somebody else's number on it. That is not hypothetical:
+//    a jar named howtogo-1.0.0.jar came out of a build of this project, and 1.0.0 is the mod_version of
+//    a different project sitting next door. Reading the file this repository ships makes the answer
+//    local, explicit and the same no matter who starts the build.
+//
+// A missing key is a failure that names it, rather than a null that surfaces later as the literal
+// string "null" in the jar's name and in its mods.toml.
+def localProperties = new Properties()
+file('gradle.properties').withInputStream { localProperties.load(it) }
+def property = { String name ->
+    def value = localProperties.getProperty(name)
+    if (value == null || value.isBlank()) {
+        throw new GradleException("gradle.properties is missing '" + name + "'")
+    }
+    value
+}
+
+version = property('mod_version')
+group = property('maven_group')
+base.archivesName = property('archives_name')
+
+// Said out loud on every invocation, so a build whose output does not match this line is visibly
+// wrong in the IDE's own build output rather than only in the jar's name.
+logger.lifecycle("HowToGo {} | group {} | NeoForge {} | Minecraft {}",
+        version, group, property('neoforge_version'), property('minecraft_version'))
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 neoForge {
-    version = project.neoforge_version
+    version = property('neoforge_version')
 
     runs {
         client {
@@ -75,10 +106,21 @@ dependencies {
 }
 
 tasks.named('processResources', ProcessResources).configure {
+    // expand() reads the template and writes the result in the platform default charset. On a JDK
+    // older than 18 that is the system code page rather than UTF-8, so a build started by a tool that
+    // pins its own JVM turned the mod's Chinese display name into mojibake inside the jar -- the file
+    // was right and the build was the thing that misread it. Stated here so the copy in the jar is
+    // byte-identical to the one in the repository whoever runs the build.
+    filteringCharset = 'UTF-8'
+
     var replaceProperties = [
-            minecraft_version: project.minecraft_version,
-            neoforge_version : project.neoforge_version,
-            mod_version      : project.mod_version,
+            minecraft_version: property('minecraft_version'),
+            neoforge_version : property('neoforge_version'),
+            mod_version      : property('mod_version'),
+            // The dependency ranges as well, so that a version bump is gradle.properties and nothing
+            // else. See docs/bumping-versions.md.
+            neoforge_range   : property('neoforge_range'),
+            minecraft_range  : property('minecraft_range'),
     ]
     inputs.properties replaceProperties
     // The licence goes into the jar as well as the repository. MIT requires the notice to travel

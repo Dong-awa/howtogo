@@ -16,17 +16,20 @@ authors = "DongSZ"
 # with every later NeoForge -- 21.2 and beyond -- none of which this has ever been run against.
 # A wrong upper bound is worse than a missing feature: it lets a player load the mod on a version it
 # was never tested on and then report the breakage as a bug.
+#
+# The two ranges below and the version above are expanded from gradle.properties at build time; bumping
+# a version means editing that file, not this one. See docs/bumping-versions.md.
 [[dependencies.howtogo]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1.0,21.2)"
+versionRange = "${neoforge_range}"
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.howtogo]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.21.2)"
+versionRange = "${minecraft_range}"
 ordering = "NONE"
 side = "BOTH"
 

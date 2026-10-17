@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.DestinationSources;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -978,7 +979,7 @@ public final class DestinationScreen extends Screen {
                         || Math.max(az, bz) < mapCenterZ - reach) {
                     continue;
                 }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
+                int color = RoadConfig.roadColor(segment.roadClass());
                 HudDraw.emitClipped(last, vc,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,
@@ -1001,7 +1002,7 @@ public final class DestinationScreen extends Screen {
                         || Math.max(az, bz) < mapCenterZ - reach) {
                     continue;
                 }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
+                int color = RoadConfig.roadColor(segment.roadClass());
                 HudDraw.emitClipped(last, vc,
                         centerX + (ax - mapCenterX) * scale, centerY + (az - mapCenterZ) * scale,
                         centerX + (bx - mapCenterX) * scale, centerY + (bz - mapCenterZ) * scale,

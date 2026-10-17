@@ -2,6 +2,7 @@ package bili.dongsz.howtogo;
 
 import bili.dongsz.howtogo.api.ApiBootstrap;
 import bili.dongsz.howtogo.api.ClientScheduler;
+import bili.dongsz.howtogo.client.AddonRoadStore;
 import bili.dongsz.howtogo.client.Narration;
 import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
@@ -25,6 +26,8 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.gui.ConfigurationScreen;
+import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
@@ -74,6 +77,10 @@ public final class HowToGo {
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
+        // Addon layers: one version comparison per registered source per tick, and a re-read only when
+        // that number has moved. After the stores above so that a layer rebuilt this tick sees the same
+        // world they did. See AddonRoadStore.
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> AddonRoadStore.tick());
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
         // The browser map's server, when the config asks for it to start itself: it waits for a world
         // to be loaded, because a page opened onto a 503 is worse than a socket opened a moment later.
@@ -128,6 +135,13 @@ public final class HowToGo {
         });
         ModItems.register(modEventBus);
         modContainer.registerConfig(ModConfig.Type.CLIENT, RoadConfig.SPEC);
+        // The config screen: the button beside this mod in the mods list. NeoForge's own editor
+        // reads the very SPEC the file is written from -- the same sections, defaults, comments and
+        // ranges -- so nothing here is a second copy of the settings that could drift from the file,
+        // and a value saved in the screen is a value the next reload of the file sees. Without this
+        // no screen is offered at all, which is why the two colour sections would otherwise only be
+        // editable by hand in the TOML.
+        modContainer.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
 
         LOGGER.info("[HowToGo] constructed");
     }

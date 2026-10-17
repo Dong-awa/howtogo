@@ -519,7 +519,7 @@ public final class SelfTest {
                     ? "unknown"
                     : Minecraft.getInstance().level.dimension().location().toString();
             RoadMapSnapshot snapshot = RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension,
-                    network);
+                    network, RoadConfig.roadColors());
 
             server = WebMapServer.start(() -> snapshot, freePort());
             try (HttpClient client = HttpClient.newBuilder()

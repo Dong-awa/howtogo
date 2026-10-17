@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import net.minecraft.client.Minecraft;
@@ -69,7 +70,7 @@ final class MapFilterPanel {
         for (RoadClass roadClass : roadList()) {
             roads.add(Component.translatable("screen.howtogo.road_class."
                     + roadClass.name().toLowerCase(Locale.ROOT)).getString());
-            roadColours.add(roadClass.color());
+            roadColours.add(RoadConfig.roadColor(roadClass));
         }
         List<String> places = new ArrayList<>();
         List<Integer> placeColours = new ArrayList<>();

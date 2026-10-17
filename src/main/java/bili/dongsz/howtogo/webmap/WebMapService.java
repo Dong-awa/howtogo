@@ -146,7 +146,10 @@ public final class WebMapService {
         }
         RoadNetwork network = RoadStore.get();
         String dimension = minecraft.level.dimension().location().toString();
-        return RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension, network);
+        // Read here, on the game's thread, rather than left to the flattening: the browser map is
+        // served from another thread, and a config value is not something to be asking from there.
+        return RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension, network,
+                RoadConfig.roadColors());
     }
 
     private static void installShutdownHook() {

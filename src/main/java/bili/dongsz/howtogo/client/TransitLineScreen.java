@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -533,7 +534,7 @@ public final class TransitLineScreen extends Screen {
         // what turning it on actually adds. Both are one glyph wide, so the row's text does not shift.
         String glyph = line.kind() == RoadClass.WATER ? "\u6C34" : "\u8F68";
         graphics.drawString(this.font, glyph, x + 1, y + 2,
-                0xFF000000 | (line.kind().color() & 0xFFFFFF), false);
+                RoadConfig.roadColor(line.kind()), false);
     }
 
     private void drawStops(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {

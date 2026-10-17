@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import net.minecraft.client.Minecraft;
 import xaero.map.element.render.ElementReader;
 import xaero.map.element.render.ElementRenderLocation;
@@ -100,7 +101,7 @@ public final class RoadElementReader extends ElementReader<RoadElement, RoadRend
 
     @Override
     public int getRightClickTitleBackgroundColor(RoadElement element) {
-        return element.segment().roadClass().color();
+        return RoadConfig.roadColor(element.segment().roadClass());
     }
 
     @Override

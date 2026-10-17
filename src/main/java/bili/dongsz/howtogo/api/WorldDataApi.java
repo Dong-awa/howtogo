@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.api;
 
+import bili.dongsz.howtogo.client.AddonRoadStore;
 import bili.dongsz.howtogo.client.CreateStationSource;
 import bili.dongsz.howtogo.client.Destinations;
 import bili.dongsz.howtogo.client.MtrStationSource;
@@ -123,6 +124,28 @@ public final class WorldDataApi {
                     station.x(), station.y(), station.z(), MtrStationSource.ID));
         }
         return result;
+    }
+
+    /**
+     * The revision of the addon layers: bumped whenever one of them is re-read.
+     *
+     * <p>For a caller that keeps something derived from those layers and wants to know whether it is
+     * still current -- the same contract as {@link #roadRevision()}, and it moves for the same reason:
+     * a source said its data had changed and the layer was stated again. A world change moves it too,
+     * because a layer belongs to one dimension.
+     */
+    public static int addonRevision() {
+        return AddonRoadStore.revision();
+    }
+
+    /**
+     * The ids of the addon layers registered with this mod, in registration order.
+     *
+     * <p>An id here is a layer some mod states, not a promise that it has anything to say in the
+     * dimension the player is in: a source that draws nothing in the Nether is still registered.
+     */
+    public static List<String> addonLayerIds() {
+        return RoadDataSources.ids();
     }
 
     /**

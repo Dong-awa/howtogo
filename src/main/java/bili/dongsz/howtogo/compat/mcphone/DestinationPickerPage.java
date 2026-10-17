@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.compat.mcphone;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.client.Destinations;import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.RailLayers;
@@ -684,7 +685,7 @@ public final class DestinationPickerPage implements IPhonePage {
             return;
         }
 
-        int colour = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
+        int colour = RoadConfig.roadColor(segment.roadClass());
         for (int i = 1; i < segment.vertexCount(); i++) {
             HudDraw.emitClipped(last, quads,
                     toScreenX(segment.x(i - 1)), toScreenZ(segment.z(i - 1)),

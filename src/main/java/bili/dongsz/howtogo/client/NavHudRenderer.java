@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -212,7 +213,7 @@ public final class NavHudRenderer {
                 if (outsideReach(ax, az, bx, bz, playerX, playerZ, reach)) {
                     continue;
                 }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
+                int color = RoadConfig.roadColor(segment.roadClass());
                 emitClipped(last, vc,
                         screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
                         screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
@@ -235,7 +236,7 @@ public final class NavHudRenderer {
                 if (outsideReach(ax, az, bx, bz, playerX, playerZ, reach)) {
                     continue;
                 }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
+                int color = RoadConfig.roadColor(segment.roadClass());
                 emitClipped(last, vc,
                         screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
                         screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),

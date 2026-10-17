@@ -119,6 +119,21 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             RailTrackStore.noteElementOffered();
         }
 
+        // Addon layers, drawn with the roads rather than behind a renderer of their own, for the reason
+        // the rails above are: they are roads of a class this mod already knows how to draw, in the
+        // colours that class already has, and a second renderer would have to be told the storeys all
+        // over again to sort against them. Offered after the player's own roads so that the final
+        // storey sort can put an addon's bridge above the road it crosses.
+        //
+        // The list is read once and replaced whole when a layer is re-read, so the reference held here
+        // cannot be rewritten underneath the loop.
+        for (RoadSegment segment : AddonRoadStore.segments()) {
+            if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
+                continue;
+            }
+            buffer.add(RoadElement.of(segment));
+        }
+
         // MTR's marks, as their own pass and before everything that is drawn over them.
         //
         // This is where the one thing that made the map slow used to be: the marks are the track each

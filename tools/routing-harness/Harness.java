@@ -111,6 +111,9 @@ public final class Harness {
         int[] webMap = bili.dongsz.howtogo.webmap.WebMapCheck.run();
         checks += webMap[0];
         failures += webMap[1];
+        int[] colours = ColorCheck.run();
+        checks += colours[0];
+        failures += colours[1];
         int[] drawOrder = DrawOrderCheck.run();
         checks += drawOrder[0];
         failures += drawOrder[1];
