@@ -346,3 +346,29 @@ resolves during a dependency resolution does not survive on a newer Gradle than 
 Next: whether net.minecraft:joined:<v>:srg can be produced ahead of time (so the resolution never
 reaches back into project services), or whether Gradle 8.14.6 is still too new and the Forge build
 needs the Gradle 8.1 the plugin declares as its floor.
+
+### 1.20.x NeoForge: what is actually left
+
+Both nodes are past their toolchain and onto their API, which is the first time that has been
+true. 1.20.4 has 27 errors and 1.20.6 has 9.
+
+1.20.6 has two, and they are unrelated:
+
+  HudDraw.java (5)   RenderStateShard.POSITION_COLOR_SHADER, TRANSLUCENT_TRANSPARENCY,
+                     NO_DEPTH_TEST, NO_CULL and COLOR_WRITE are protected there.
+  RoadConfig (3)     defineListAllowEmpty(String, List<String>, Supplier, Predicate) has no
+                     matching overload in NeoForge 20.6's config API.
+
+The HudDraw one is worth stating precisely because it is asymmetric across loaders: the same five
+references compile on 1.20.6 FABRIC and on 1.21.1 NeoForge, and fail only on 1.20.6 NEOFORGE. The
+fabric access widener is not the reason -- it widens only RenderType$CompositeState -- so the
+difference is in the jars: vanilla 1.20.6 has those fields public and NeoForge 20.6's patched jar
+does not.
+
+That makes it an access transformer question, and the repository has none yet: there is no
+src/main/resources/META-INF/accesstransformer.cfg and neoforge.mods.toml declares no
+accessTransformers block. Adding both is the next step, with the AT kept to the five fields so it
+stays a no-op on the 1.21.x nodes where they are already public.
+
+1.20.4's 27 are a different family: ClientTickEvent does not exist in NeoForge 20.4 at all, so
+the tick wiring in HowToGo and RoadLayer has to be written against whatever that version uses
