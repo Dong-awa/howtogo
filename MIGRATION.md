@@ -605,3 +605,21 @@ the first time this node has needed one.
 The build-level lesson is the same one this session keeps relearning: the type was one jar entry
 away the whole time. Checking whether GuiGraphics exists in the 26.1 jar should have been the first
 thing done on reaching these errors, not the fourth.
+
+### The size of the 26.x HUD port, measured
+
+Thirteen files reference GuiGraphics, about 110 occurrences: DestinationScreen 20, DestinationPicker
+Page 18, NavHudRenderer 17, RoadElementRenderer 13, TransitLineScreen 13, HudDraw 12, HudSubmit 6,
+RoadNameScreen 6, HudBatchNewer 4, MapFilterOverlay 4, HudBatchLegacy 3, MapFilterPanel 2,
+MapLabels 2.
+
+GuiGraphicsExtractor does have fill, fillGradient and blit -- several overloads each, taking
+RenderPipeline and TextureSetup -- so a plain rename is tempting. It was tried as a replacement rule
+and did not work: the generated sources came out as GuiGraphicsExtractorExtractor even with a
+negative lookahead on the pattern and with build/generated deleted first. The source tree was
+verified clean of the new name and the active node was 1.21.1, so the rule was applied more than
+once by something not yet identified.
+
+That is recorded rather than chased, because the rename would not have been the answer anyway: the
+render model changed from immediate submission to extraction, so the call sites have to be
+rethought, not respelled. The rule was reverted and 26.1-fabric is back to its eight errors.
