@@ -558,3 +558,27 @@ open. The classes are not missing from the classpath; they were renamed or remov
 So this is a port, not a build problem -- the second of the two candidates, and the one that costs
 source changes. A copy of the guide is in docs/fabric-api-26.1-porting.md because it is the
 authority for every remaining 26.x Fabric question and re-fetching it costs a round each time.
+
+### 26.1 Fabric: the four remaining causes, read out of the jars
+
+The guide does not name all of these, so the remapped jars did. Three of the four are replacements
+with different shapes rather than renames:
+
+  HudRenderCallback.EVENT.register(...)
+    -> HudElementRegistry.addLast(Identifier, HudElement)
+       also addFirst, attachElementBefore/After, removeElement, replaceElement
+
+  ItemGroupEvents (net.fabricmc.fabric.api.itemgroup.v1)
+    -> CreativeModeTabEvents (net.fabricmc.fabric.api.creativetab.v1)
+       MODIFY_OUTPUT_ALL, or modifyOutputEvent(ResourceKey<CreativeModeTab>)
+
+  ScreenEvents.afterRender(Screen)
+    -> ScreenEvents.afterExtract(Screen); afterRender no longer exists. The surrounding family is
+       beforeExtract, afterBackground, afterExtract, beforeTick, afterTick, remove
+
+  graphics.guiRenderState.submitGuiElement(state)
+    -> the access-widener call, and 26.x has no widener. This one needs a different route to the
+       same effect rather than a different name.
+
+Note also that HudElementRegistry takes a net.minecraft.resources.Identifier, which is the 26.x name
+for what earlier versions call ResourceLocation -- the same rename family the build already handles
