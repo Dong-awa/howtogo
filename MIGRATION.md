@@ -264,3 +264,35 @@ This means the two-build split the tree was going to need may not be necessary a
 refusal was the only thing keeping Forge on Gradle 8. It has NOT been proven past that point --
 nothing has resolved a Forge userdev artifact yet -- so the split stays the fallback until a real
 Forge node builds.
+
+### Forge: where the mapped artifact stops, and what it is not
+
+Both builds stop in the same place, which is what makes it a different problem than the Gradle
+version it first looked like:
+
+    Could not find net.minecraftforge:forge:1.20.1-47.4.28_mapped_official_1.20.1
+    Searched in .../forge_gradle/bundeled_repo/...
+
+On Gradle 8.14.6 ForgeGradle is plainly working -- `reobfJar`, `reobfJarJar`, `createMcpToSrg`,
+`createSrgToMcp`, `downloadMcpConfig`, `extractSrg` and `extractNatives` are all registered, and
+`downloadMcpConfig` and `extractSrg` run green. So the Gradle 9 finding from the round before was
+incomplete: the plugin not registering tasks on Gradle 9 was real, but it was not the whole story.
+
+The caches say where it actually stops:
+
+    minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.4.28/
+        forge-1.20.1-47.4.28-inject_src.jar      604 bytes      <- only this
+
+    minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.4.28_mapped_official_1.20.1/
+        ..._mapped_official_1.20.1.pom          9013 bytes
+        ..._mapped_official_1.20.1.pom.input     184 bytes
+        ..._mapped_official_1.20.1.pom.sha1       40 bytes      <- no jar
+
+So the userdev artifact itself is incomplete: only `inject_src.jar` was fetched, with no userdev
+jar and no pom beside it. The mapped POM was generated from it -- which is why the directory exists
+at all -- but with no userdev jar to map there is nothing to put in the jar.
+
+The next question is therefore why the userdev fetch is partial, not anything about Gradle versions.
+The likely candidate is the same network problem that shaped the rest of this tree: the Forge
+artifact resolution goes to maven.minecraftforge.net, which is reachable for metadata but may not
+be serving every classifier this needs.
