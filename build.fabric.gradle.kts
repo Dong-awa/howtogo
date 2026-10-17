@@ -52,6 +52,21 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(requiredJava.majorVersio
 
 repositories {
     mavenCentral()
+    // Corrected copies of artifacts whose UPSTREAM publication is broken, consulted before the
+    // repository that publishes them. Restricted by content to the one module it fixes, so it
+    // cannot shadow anything else, and Gradle falls through to the next repository for any version
+    // this one does not carry -- which is why the nodes whose intermediary is published correctly
+    // are unaffected.
+    //
+    // What it fixes: from 26.1 on, Fabric's intermediary POM declares version 0.0.0, and Gradle
+    // refuses it -- "inconsistent module metadata found. Descriptor: net.fabricmc:intermediary:
+    // 0.0.0, bad version: expected='26.1.2' found='0.0.0'". The JAR is fine; it is 572 bytes of
+    // empty mapping set, which is exactly right because those Minecraft jars are not obfuscated.
+    maven {
+        name = "correctedArtifacts"
+        url = uri(providers.gradleProperty("htgLocalMaven").getOrElse("${rootProject}/.recon/maven-local"))
+        content { includeModule("net.fabricmc", "intermediary") }
+    }
     maven("https://maven.fabricmc.net/") { name = "Fabric" }
     // Xaero's own developer Maven. The shipped jar works too and is what libs/ holds.
     maven("https://chocolateminecraft.com/maven") { name = "ChocolateMinecraft" }
@@ -127,12 +142,29 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
 // The two do not overlap, so two files cover the range. The chosen one is renamed to
 // howtogo.accesswidener, which is the name fabric.mod.json asks for; the templates themselves are
 // excluded from the jar.
-val awGeneration = if (stonecutter.eval(minecraftVersion, ">=1.21.6")) "modern" else "legacy"
+// Three generations, not two: the 26.x nodes need the same members as modern but declared in the
+// intermediary namespace, because their jars are unobfuscated and Loom will not remap a "named"
+// widener onto an identity mapping.
+val awGeneration = when {
+    stonecutter.eval(minecraftVersion, ">=26.1") -> "modern-intermediary"
+    stonecutter.eval(minecraftVersion, ">=1.21.6") -> "modern"
+    else -> "legacy"
+}
 // The templates live outside the resources directory on purpose. Inside it, an exclude meant to keep
 // them out of the jar also matches the copy this adds back, because the exclude is tested against the
 // source name before the rename -- which silently removed the access widener from the jar entirely.
 val awTemplate = rootProject.file("src/fabric/aw/$awGeneration.accesswidener")
 loom {
+    // The access widener cannot be applied on 26.x at all. Loom refuses before it reads the
+    // file -- "Cannot remap access widener from namespace official, expected intermediary" --
+    // which is what an identity mapping does to the remap: there is no obfuscation to undo, so
+    // the two namespaces are the same and the remap has nothing to work from. An empty widener
+    // fails identically. If a member turns out to need widening there, the answer is a Mixin.
+    //
+    // Left unconditional for now: the conditional form of this line did not compile in the
+    // Kotlin DSL script ("Unresolved reference 'not' for operator '!'" inside loom {}), and
+    // the node is not registered while that is unresolved, so the plain form is correct for
+    // every node that does build.
     accessWidenerPath = awTemplate
 }
 

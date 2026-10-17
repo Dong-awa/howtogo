@@ -1,0 +1,12 @@
+accessWidener v2 intermediary
+
+# The 26.x generation of the modern widener, and it is deliberately EMPTY.
+#
+# Loom refuses to remap a widener onto these nodes at all:
+#   Cannot remap access widener from namespace 'official'. Expected: 'intermediary'
+# which is what an identity mapping does to the remap -- there is no obfuscation to undo, so the
+# two namespaces are the same and the remap has nothing to work from.
+#
+# Nothing is lost by leaving it empty: it is the same two members as modern.accesswidener, and if
+# the compiler needs them on 26.x it will say so. Declared anyway so the build script has a file
+# to point at and the three generations stay uniform.
