@@ -111,6 +111,7 @@ stonecutter {
         fabric("1.21.6")
         fabric("1.21.8")
         fabric("1.21.11")
+        fabric("26.1")
         //
         // The Minecraft jar from 26.1 on is not obfuscated -- 10208 of its 10682 classes are
         // already under net/minecraft/ -- and Mojang publishes no client_mappings for it, which is
