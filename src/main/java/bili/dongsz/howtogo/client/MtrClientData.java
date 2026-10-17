@@ -163,13 +163,6 @@ public final class MtrClientData {
     private static Snapshot latest = Snapshot.EMPTY;
     /** How many elements this session could not read, so that a wrong shape cannot stay quiet. */
     private static int unreadable;
-    
-    // Object pools for collection reuse in merge() to reduce GC pressure
-    private static final Map<Long, Station> stationPool = new LinkedHashMap<>();
-    private static final Map<Long, Platform> platformPool = new LinkedHashMap<>();
-    private static final Map<Long, Line> linePool = new LinkedHashMap<>();
-    private static final Map<String, Track> railPool = new LinkedHashMap<>();
-    private static final List<Track> unnamedRailPool = new ArrayList<>();
 
     private MtrClientData() {
     }
@@ -414,17 +407,15 @@ public final class MtrClientData {
         if (noWhole && noOverlay) {
             return window;
         }
-        // Reuse pooled collections to reduce GC pressure during frequent merges
-        stationPool.clear();
-        platformPool.clear();
-        linePool.clear();
-        railPool.clear();
-        unnamedRailPool.clear();
-        Map<Long, Station> stations = stationPool;
-        Map<Long, Platform> platforms = platformPool;
-        Map<Long, Line> lines = linePool;
-        Map<String, Track> rails = railPool;
-        List<Track> unnamedRails = unnamedRailPool;
+        // Per-call collections rather than shared ones, because this runs once a second at most --
+        // tick() only reaches it every REREAD_TICKS -- and a merge that reused its scratch maps from a
+        // static field would be a race against anything else that asked for one, for the sake of a few
+        // thousand short-lived entries a second that the young generation collects for nothing.
+        Map<Long, Station> stations = new LinkedHashMap<>();
+        Map<Long, Platform> platforms = new LinkedHashMap<>();
+        Map<Long, Line> lines = new LinkedHashMap<>();
+        Map<String, Track> rails = new LinkedHashMap<>();
+        List<Track> unnamedRails = new ArrayList<>();
         for (Snapshot source : List.of(window, whole, overlay)) {
             for (Station station : source.stations()) {
                 stations.put(station.id(), station);

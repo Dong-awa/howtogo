@@ -300,9 +300,16 @@ public final class Navigation {
     private static String currentDimension() {
         net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
+            // Drop the cache on the way out. It holds the level strongly, and a ClientLevel that has
+            // been unloaded must not be kept alive by a navigation overlay that is doing nothing: the
+            // next world builds its own, so there is nothing here worth carrying across.
+            lastCheckedLevel = null;
+            lastCheckedDimension = null;
             return null;
         }
-        // Cache to avoid repeated string allocation and dimension key extraction
+        // A ClientLevel's dimension never changes, so the answer is a property of the identity of the
+        // level: the same reference answers the same string, and one string allocation serves every
+        // tick of a trip instead of one per tick.
         if (level == lastCheckedLevel) {
             return lastCheckedDimension;
         }

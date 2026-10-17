@@ -413,46 +413,29 @@ public final class RoadChains {
      * has: the player's roads and the two rail layers. A per-plan copy of a network is not asked for
      * here and would only cost a rebuild.
      *
-     * <h2>LRU replacement strategy</h2>
-     * Cache hits move the entry to the front (slot 0), shifting others down. This preserves frequently
-     * accessed groupings and improves hit rate when multiple networks are active (e.g., road network +
-     * line preview). Cache misses evict the LRU entry (last slot) and place the new entry at front.
+     * <h2>Why the rotation and not an LRU</h2>
+     * The callers are the long-lived networks a session has -- the player's roads and the two rail
+     * layers -- so a slot is lost to eviction only when a fourth network is asked about at all, and a
+     * hit never needs to be moved to keep it. That makes the rotation close enough to an LRU here, and
+     * it keeps the hit path to four reference comparisons: lifting an entry to the front on every hit
+     * would cost three array copies on the one path this class exists to make cheap.
      *
      * <h2>Threads</h2>
      * The render thread, where every caller draws. Not synchronized on purpose: taking a lock on a
      * per-frame path to guard a value recomputed once per edit is the wrong trade.
      */
     public static Grouping cachedGrouping(RoadNetwork network) {
-        // Check cache for a hit
         for (int i = 0; i < CACHE_SLOTS; i++) {
             if (cachedNetworks[i] == network && cachedRevisions[i] == network.revision()) {
-                // LRU: move hit to front if not already there
-                if (i > 0) {
-                    RoadNetwork hitNetwork = cachedNetworks[i];
-                    int hitRevision = cachedRevisions[i];
-                    Grouping hitGrouping = cachedGroupings[i];
-                    // Shift entries 0..i-1 down by one
-                    System.arraycopy(cachedNetworks, 0, cachedNetworks, 1, i);
-                    System.arraycopy(cachedRevisions, 0, cachedRevisions, 1, i);
-                    System.arraycopy(cachedGroupings, 0, cachedGroupings, 1, i);
-                    // Place hit at front
-                    cachedNetworks[0] = hitNetwork;
-                    cachedRevisions[0] = hitRevision;
-                    cachedGroupings[0] = hitGrouping;
-                }
-                return cachedGroupings[0];
+                return cachedGroupings[i];
             }
         }
-        // Cache miss: build new grouping
         Grouping built = group(network);
-        // Evict LRU (last slot) and shift all down
-        System.arraycopy(cachedNetworks, 0, cachedNetworks, 1, CACHE_SLOTS - 1);
-        System.arraycopy(cachedRevisions, 0, cachedRevisions, 1, CACHE_SLOTS - 1);
-        System.arraycopy(cachedGroupings, 0, cachedGroupings, 1, CACHE_SLOTS - 1);
-        // Place new entry at front
-        cachedNetworks[0] = network;
-        cachedRevisions[0] = network.revision();
-        cachedGroupings[0] = built;
+        int slot = nextSlot;
+        nextSlot = (nextSlot + 1) % CACHE_SLOTS;
+        cachedNetworks[slot] = network;
+        cachedRevisions[slot] = network.revision();
+        cachedGroupings[slot] = built;
         return built;
     }
 }

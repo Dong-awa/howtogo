@@ -142,32 +142,22 @@ public final class RoadSpatialIndex {
         // on a real cell rather than being clamped into the outermost one.
         double originX = minX - CELL;
         double originZ = minZ - CELL;
-        
-        // Calculate the required dimensions as long to prevent overflow during the product check.
-        // Each dimension is capped at the square root of MAX_CELLS to ensure their product cannot
-        // exceed MAX_CELLS, even before converting to int.
-        long cellsX = (long) Math.floor((maxX - originX) / CELL) + 2;
-        long cellsZ = (long) Math.floor((maxZ - originZ) / CELL) + 2;
-        
-        // Cap individual dimensions to prevent overflow and ensure the product stays within bounds.
-        // The square root cap ensures that dimX * dimZ <= MAX_CELLS in all cases.
-        long maxDim = (long) Math.sqrt(MAX_CELLS);
-        cellsX = Math.min(cellsX, maxDim);
-        cellsZ = Math.min(cellsZ, maxDim);
-        
-        // One bucket for a network too spread out to index properly; see MAX_CELLS.
-        boolean flat = cellsX * cellsZ > MAX_CELLS;
-        int dimX;
-        int dimZ;
-        if (flat) {
-            dimX = 1;
-            dimZ = 1;
-        } else {
-            // Safe to cast now: both dimensions are <= sqrt(MAX_CELLS), their product <= MAX_CELLS,
-            // and MAX_CELLS (4M) is well within int range.
-            dimX = (int) cellsX;
-            dimZ = (int) cellsZ;
-        }
+        // Measured in long, because the very span this guards against -- one whose cell count does not
+        // fit an int -- is the one that has to be compared rather than wrapped. The padding is added
+        // after the floor and in long, so a coordinate of planetary scale saturates on the cast instead
+        // of wrapping to a negative count that would read as a small grid.
+        long cellsX = (long) Math.floor((maxX - originX) / CELL) + 2L;
+        long cellsZ = (long) Math.floor((maxZ - originZ) / CELL) + 2L;
+        // One bucket for a network too spread out to file; see MAX_CELLS. Each dimension is tested on
+        // its own before the product, so that two saturated spans cannot overflow the long they are
+        // about to be multiplied in; past that gate neither can exceed MAX_CELLS and the product fits
+        // in a long with room to spare.
+        boolean flat = cellsX > MAX_CELLS || cellsZ > MAX_CELLS || cellsX * cellsZ > MAX_CELLS;
+        // Only cast once the product is known to be small: it is then at most MAX_CELLS, which is well
+        // inside int range, and neither dimension has been clamped to a value the index would then have
+        // to disagree with the coordinates about.
+        int dimX = flat ? 1 : (int) cellsX;
+        int dimZ = flat ? 1 : (int) cellsZ;
 
         List<RoadNode>[] nodeCells = newCells(dimX, dimZ);
         List<Edge>[] edgeCells = newCells(dimX, dimZ);
