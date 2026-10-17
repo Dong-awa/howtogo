@@ -1189,12 +1189,18 @@ public final class RailTrackStore {
 
             RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
                     (int) Math.round(nodeY[edge.from()]), vertices);
+            List<double[]> display = new ArrayList<>(vertices);
             for (int v = 0; v < vertices; v++) {
                 segment.addVertex(round(polyline[v * 2]), round(polyline[v * 2 + 1]));
+                display.add(new double[]{polyline[v * 2], polyline[v * 2 + 1]});
             }
             segment.setFromNode(fromId);
             segment.setToNode(toId);
-            segment.setCurve(RoadCurve.of(segment));
+            // The connection's own samples, not the block-rounded vertices: Create rasterises its
+            // beziers in world coordinates, and rounding them first is what put a half-block wobble on
+            // every curved track. The ends are already the two nodes' own positions, so two edges that
+            // meet at a node hand the display curve the same point.
+            segment.setCurve(RoadCurve.precise(display));
             build.network.putSegment(segment);
         }
 
@@ -1492,17 +1498,22 @@ public final class RailTrackStore {
         RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
                 (int) Math.round(graph.nodeY()[startNode]), vertices);
         segment.addVertex(round(graph.nodeX()[startNode]), round(graph.nodeZ()[startNode]));
+        List<double[]> display = new ArrayList<>(vertices);
+        display.add(new double[]{graph.nodeX()[startNode], graph.nodeZ()[startNode]});
         for (int i = 0; i < length; i++) {
             int edge = edgePath[i];
             int first = graph.vertexStart()[edge];
             int count = graph.vertexCount()[edge];
             for (int v = 1; v < count; v++) {
                 segment.addVertex(round(graph.vertexX()[first + v]), round(graph.vertexZ()[first + v]));
+                display.add(new double[]{graph.vertexX()[first + v], graph.vertexZ()[first + v]});
             }
         }
         segment.setFromNode(fromId);
         segment.setToNode(toId);
-        segment.setCurve(RoadCurve.of(segment));
+        // Create's own sampling, for the same reason as the graph source above: this scan exists for
+        // the case where the graph cannot be read, not to lose the precision the graph would have kept.
+        segment.setCurve(RoadCurve.precise(display));
         build.network.putSegment(segment);
     }
 

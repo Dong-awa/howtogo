@@ -988,13 +988,11 @@ public final class DestinationScreen extends Screen {
 
         // The roads read out of RoadWeaver, drawn with the roads: a route to one of its villages is
         // planned partly over them, and a preview that omitted them would show a line across ground
-        // it cannot explain. Boxed by the view rectangle -- the layer can hold a whole region's worth.
-        RoadWeaverLayer.forEachSegmentInBox(mapCenterX - reach, mapCenterZ - reach,
-                mapCenterX + reach, mapCenterZ + reach, segment -> {
-                    int color = RoadConfig.roadColor(segment.roadClass());
-                    HudDraw.emitPath(last, vc, segment, m00, 0, m02, 0, m11, m12,
-                            0.7, color, 0x9A, minX, minY, maxX, maxY);
-                });
+        // it cannot explain. Drawn chain by chain so a long road is one continuous stroke, and boxed
+        // by the view rectangle -- the layer can hold a whole region's worth.
+        HudDraw.emitNetworkInBox(last, vc, RoadWeaverLayer.network(), m00, 0, m02, 0, m11, m12,
+                0.7, 0x9A, minX, minY, maxX, maxY,
+                mapCenterX - reach, mapCenterZ - reach, mapCenterX + reach, mapCenterZ + reach);
 
         Route route = Navigation.route();
         if (route.isPresent()) {

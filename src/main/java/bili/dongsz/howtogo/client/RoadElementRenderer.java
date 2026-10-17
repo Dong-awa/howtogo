@@ -5,6 +5,7 @@ import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
@@ -78,13 +79,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int DISC_SEGMENTS = 10;
 
     /**
-     * How much a polyline has to bend at a vertex before the joint needs a round cap, in degrees.
+     * How far a mitred joint may reach past the stroke's own half-width, as a multiple of it.
      *
-     * <p>Low enough that any corner a player draws gets one -- the shallowest bend that reads as a
-     * corner is far above this -- and high enough that the per-block wobble of a sampled curve does
-     * not: those vertices are a fraction of a degree apart and their strokes overlap completely.
+     * <p>The miter offset at a bend is {@code halfWidth / cos(turn/2)}, which grows without bound as
+     * the turn approaches a reversal. A limit is the difference between a full miter and a spike
+     * several road-widths long, and past it the joint falls back to a round one (see
+     * {@link #strokeSegment}).
      */
-    private static final double JOINT_MIN_DEGREES = 20.0;
+    private static final double MITER_LIMIT = 4.0;
 
     private static final double TWO_PI = Math.PI * 2.0;
 
@@ -596,6 +598,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
 
+        // What is drawn: the segment's smoothed display line when it has one, its block vertices
+        // otherwise. A machine-read railway is stored one block at a time, and that staircase is the
+        // right thing to route on and the wrong thing to look at -- drawn step by step it is a
+        // per-block wobble, and the round joint at every one of those steps turned into a bead. The
+        // curve is the same road without the block grid in it.
+        int pointCount = displayPointCount(segment);
+
         // A hand-drawn road is selected by id in the editor's network; a rail is selected by shape
         // key in the rail layer, which has no stable ids at all. Both answer the same question here,
         // which is why the two lookups sit in one expression rather than behind a flag.
@@ -603,53 +612,30 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 || RailNameStore.isSelected(segment);
         if (selected) {
             // Translucent halo underneath, so the selected road reads clearly without hiding the
-            // class colour that is painted over it.
-            double haloHalf = halfWidth + 2.5 * posePerPixel;
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                emitStroke(last, vc,
-                        localX(segment.x(i - 1), anchorX, fracX, p10),
-                        localY(segment.z(i - 1), anchorZ, fracY, p10),
-                        localX(segment.x(i), anchorX, fracX, p10),
-                        localY(segment.z(i), anchorZ, fracY, p10),
-                        haloHalf,
-                        (COLOR_SELECTED >> 16) & 0xFF, (COLOR_SELECTED >> 8) & 0xFF,
-                        COLOR_SELECTED & 0xFF, 0x70);
-            }
+            // class colour that is painted over it. The same continuous stroke as the road itself, so
+            // the halo follows the same mitred bends and rounded ends.
+            strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
+                    halfWidth + 2.5 * posePerPixel,
+                    (COLOR_SELECTED >> 16) & 0xFF, (COLOR_SELECTED >> 8) & 0xFF,
+                    COLOR_SELECTED & 0xFF, 0x70);
         }
 
-        for (int i = 1; i < segment.vertexCount(); i++) {
-            double x1 = localX(segment.x(i - 1), anchorX, fracX, p10);
-            double y1 = localY(segment.z(i - 1), anchorZ, fracY, p10);
-            double x2 = localX(segment.x(i), anchorX, fracX, p10);
-            double y2 = localY(segment.z(i), anchorZ, fracY, p10);
-            emitStroke(last, vc, x1, y1, x2, y2, halfWidth, r, g, b, a);
-        }
+        // One continuous stroke rather than a quad per edge. The per-edge version left a wedge-shaped
+        // notch on the outside of every vertex -- a sampled curve bends a few degrees at each of its
+        // samples, so the whole curve was a line of tiny notches -- and the round caps that patched
+        // them were only drawn at corners sharp enough to pass a threshold, which is precisely the
+        // gentle bends a smoothed line is made of. Mitring the shared vertices closes every bend
+        // inside the segment; the outward semicircular caps at the two ends close the joint to the
+        // segment next to it.
+        strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10, halfWidth,
+                r, g, b, a);
 
-        // Round joins (and round caps at the ends). Without these, consecutive segments leave a
-        // wedge-shaped gap on the outside of every corner and the road looks broken.
-        //
-        // Only where a joint is actually needed: the two ends of the polyline, and the vertices where
-        // it genuinely bends. A disc at *every* vertex was ten quads for a joint the two strokes
-        // already meet at, and an automatically read railway has a vertex every block or two -- so most
-        // of the geometry the map emitted was circles nobody could see, drawn along straight runs at
-        // eleven times the vertex cost of the road itself. The threshold is well below any bend a
-        // player draws and well above the wobble of a sampled curve, so the corners that do leave a
-        // notch all still get one.
-        for (int i = 0; i < segment.vertexCount(); i++) {
-            if (i > 0 && i < segment.vertexCount() - 1 && !bendsAt(segment, i)) {
-                continue;
-            }
-            emitDisc(last, vc,
-                    localX(segment.x(i), anchorX, fracX, p10),
-                    localY(segment.z(i), anchorZ, fracY, p10),
-                    halfWidth, r, g, b, a);
-        }
-
-        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after the
-        // road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they would
-        // be a second pass that could disagree with it about the road's colour, width or visibility.
+        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after
+        // the road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they
+        // would be a second pass that could disagree with it about the road's colour, width or visibility.
         if (segment.direction().isOneWay() && Math.abs(info.scale) >= ONEWAY_ARROW_MIN_SCALE) {
-            emitOneWayArrows(last, vc, segment, anchorX, anchorZ, fracX, fracY, p10, posePerPixel);
+            emitOneWayArrows(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
+                    posePerPixel);
         }
 
         // Rail diagnostic: one of the auto-detected layer's segments was actually stroked, past the
@@ -1035,20 +1021,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (segment == null || segment.vertexCount() < 2) {
                 continue;
             }
-            int count = segment.vertexCount();
+            // The drawn shape, so a name sits on the line the road is actually painted as rather
+            // than on the block staircase it was read from.
+            int count = displayPointCount(segment);
             boolean reverse = false;
             if (!points.isEmpty()) {
                 double[] last = points.get(points.size() - 1);
-                double toStart = Math.hypot(last[0] - projection.screenX(segment.x(0)),
-                        last[1] - projection.screenZ(segment.z(0)));
-                double toEnd = Math.hypot(last[0] - projection.screenX(segment.x(count - 1)),
-                        last[1] - projection.screenZ(segment.z(count - 1)));
+                double toStart = Math.hypot(last[0] - projection.screenX(displayX(segment, 0)),
+                        last[1] - projection.screenZ(displayZ(segment, 0)));
+                double toEnd = Math.hypot(last[0] - projection.screenX(displayX(segment, count - 1)),
+                        last[1] - projection.screenZ(displayZ(segment, count - 1)));
                 reverse = toEnd < toStart;
             }
             for (int step = 0; step < count; step++) {
                 int i = reverse ? count - 1 - step : step;
-                double x = projection.screenX(segment.x(i));
-                double y = projection.screenZ(segment.z(i));
+                double x = projection.screenX(displayX(segment, i));
+                double y = projection.screenZ(displayZ(segment, i));
                 if (!points.isEmpty()) {
                     double[] last = points.get(points.size() - 1);
                     if (Math.hypot(x - last[0], y - last[1]) < 0.5) {
@@ -1183,9 +1171,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             double halfWidth = strokeHalfWidthPx(segment.roadClass(), scale);
             double previousX = 0;
             double previousY = 0;
-            for (int i = 0; i < segment.vertexCount(); i++) {
-                double x = projection.screenX(segment.x(i));
-                double y = projection.screenZ(segment.z(i));
+            int count = displayPointCount(segment);
+            for (int i = 0; i < count; i++) {
+                double x = projection.screenX(displayX(segment, i));
+                double y = projection.screenZ(displayZ(segment, i));
                 if (i > 0
                         && Math.max(previousX, x) >= -margin - 8
                         && Math.min(previousX, x) <= viewRight + 8
@@ -2528,9 +2517,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * pan and zoom with the road they belong to.
      */
     private static void emitOneWayArrows(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
-                                         double anchorX, double anchorZ, double fracX, double fracY,
-                                         double p10, double posePerPixel) {
-        int count = segment.vertexCount();
+                                         int count, double anchorX, double anchorZ, double fracX,
+                                         double fracY, double p10, double posePerPixel) {
         if (count < 2) {
             return;
         }
@@ -2549,10 +2537,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         for (int step = 1; step < count && drawn < ONEWAY_ARROW_LIMIT; step++) {
             int a = backward ? count - step : step - 1;
             int b = backward ? count - step - 1 : step;
-            double x1 = localX(segment.x(a), anchorX, fracX, p10);
-            double y1 = localY(segment.z(a), anchorZ, fracY, p10);
-            double x2 = localX(segment.x(b), anchorX, fracX, p10);
-            double y2 = localY(segment.z(b), anchorZ, fracY, p10);
+            double x1 = localX(displayX(segment, a), anchorX, fracX, p10);
+            double y1 = localY(displayZ(segment, a), anchorZ, fracY, p10);
+            double x2 = localX(displayX(segment, b), anchorX, fracX, p10);
+            double y2 = localY(displayZ(segment, b), anchorZ, fracY, p10);
             double length = Math.hypot(x2 - x1, y2 - y1);
             if (length < 1.0E-6) {
                 continue;
@@ -2593,23 +2581,256 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Whether the polyline bends at this vertex by enough to leave a visible notch.
+     * The number of points the map draws for this segment.
      *
-     * <p>The angle between the vertex's two spans, with a straight-through vertex -- the common case on
-     * any sampled line -- answering no. A vertex whose neighbours are on top of it answers yes, because
-     * there the two strokes meet at no angle at all and the cap is the only thing closing the joint.
+     * <p>The smoothed display curve when it has one, otherwise the block vertices. Kept together with
+     * {@link #displayX} / {@link #displayZ} so a caller cannot take the count from one source and the
+     * positions from the other.
      */
-    private static boolean bendsAt(RoadSegment segment, int index) {
-        double inX = segment.x(index) - segment.x(index - 1);
-        double inZ = segment.z(index) - segment.z(index - 1);
-        double outX = segment.x(index + 1) - segment.x(index);
-        double outZ = segment.z(index + 1) - segment.z(index);
-        if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
-            return true;
+    private static int displayPointCount(RoadSegment segment) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.size() : segment.vertexCount();
+    }
+
+    /** The world X of one drawn point: the curve's when there is one, the block vertex otherwise. */
+    private static double displayX(RoadSegment segment, int index) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.x(index) : segment.x(index);
+    }
+
+    /** The world Z of one drawn point. See {@link #displayX}. */
+    private static double displayZ(RoadSegment segment, int index) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.z(index) : segment.z(index);
+    }
+
+    // ------------------------------------------------------------------ stroke
+    //
+    // Scratch for one segment's screen-space polyline and its per-vertex offset. Render thread only,
+    // like every other buffer in this renderer: one road is stroked at a time, and the same map is
+    // redrawn every frame, so allocating two arrays per road would be garbage the frame does not
+    // need. Grown rather than rebuilt when a longer curve comes along.
+    private static double[] PATH_X = new double[128];
+    private static double[] PATH_Y = new double[128];
+    private static double[] OFFSET_X = new double[128];
+    private static double[] OFFSET_Y = new double[128];
+    private static boolean[] ROUND_JOINT = new boolean[128];
+
+    private static void ensureStrokeCapacity(int count) {
+        if (count <= PATH_X.length) {
+            return;
         }
-        double cross = inX * outZ - inZ * outX;
-        double dot = inX * outX + inZ * outZ;
-        return Math.abs(Math.toDegrees(Math.atan2(cross, dot))) >= JOINT_MIN_DEGREES;
+        int capacity = Math.max(count, PATH_X.length * 2);
+        PATH_X = new double[capacity];
+        PATH_Y = new double[capacity];
+        OFFSET_X = new double[capacity];
+        OFFSET_Y = new double[capacity];
+        ROUND_JOINT = new boolean[capacity];
+    }
+
+    /**
+     * Stokes one segment as a single continuous line: shared mitres at every vertex, and outward
+     * semicircular caps at its two ends.
+     *
+     * <h2>Why not a quad per edge</h2>
+     * A quad per edge leaves a wedge of background on the outside of every vertex, because the two
+     * quads only touch at the centreline point. Round caps used to patch the sharp ones, but a
+     * smoothed curve bends a few degrees at each of its samples -- below any cap threshold and
+     * exactly the vertices a curve is made of -- so the outside of every bend was a row of tiny
+     * notches. Here the two edges either side of a vertex share one offset (the miter), so the quads
+     * meet along a common edge and no gap exists at all; the round caps survive only as the fallback
+     * for a joint too sharp to miter.
+     *
+     * <h2>Why the ends are half discs</h2>
+     * Each segment is its own map element here, so the joint to the segment beside it is two butt
+     * ends. A semicircular cap pointing away from the stroke adds only the ground beyond the end, and
+     * two of them at a joint leave the road looking continuous (a straight join reads as the stroke
+     * itself) while still filling the wedge on the outside of a bend. A full disc would instead lie
+     * half on top of its own stroke, which is visible as a darker bead whenever a player configures a
+     * translucent road colour.
+     */
+    private static void strokeSegment(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
+                                      int pointCount, double anchorX, double anchorZ,
+                                      double fracX, double fracY, double p10, double halfWidth,
+                                      int r, int g, int b, int a) {
+        if (pointCount < 2 || !(halfWidth > 0)) {
+            return;
+        }
+        ensureStrokeCapacity(pointCount);
+        for (int i = 0; i < pointCount; i++) {
+            PATH_X[i] = localX(displayX(segment, i), anchorX, fracX, p10);
+            PATH_Y[i] = localY(displayZ(segment, i), anchorZ, fracY, p10);
+        }
+
+        // One offset per vertex: half the perpendicular of its adjacent edge at an end, the miter of
+        // both edges in between. ROUND_JOINT marks the ones the miter gave up on.
+        offsetAt(0, pointCount, halfWidth);
+        offsetAt(pointCount - 1, pointCount, halfWidth);
+        for (int i = 1; i < pointCount - 1; i++) {
+            offsetAt(i, pointCount, halfWidth);
+        }
+
+        for (int i = 0; i < pointCount - 1; i++) {
+            double x1 = PATH_X[i];
+            double y1 = PATH_Y[i];
+            double x2 = PATH_X[i + 1];
+            double y2 = PATH_Y[i + 1];
+            if (Math.hypot(x2 - x1, y2 - y1) < 1.0E-9) {
+                continue;
+            }
+            vertex(pose, vc, x1 + OFFSET_X[i], y1 + OFFSET_Y[i], r, g, b, a);
+            vertex(pose, vc, x2 + OFFSET_X[i + 1], y2 + OFFSET_Y[i + 1], r, g, b, a);
+            vertex(pose, vc, x2 - OFFSET_X[i + 1], y2 - OFFSET_Y[i + 1], r, g, b, a);
+            vertex(pose, vc, x1 - OFFSET_X[i], y1 - OFFSET_Y[i], r, g, b, a);
+        }
+
+        // A joint past the miter limit is closed with a disc, the one place a round join is still
+        // painted: it is a handful of segments on a whole network, not a per-sample patch.
+        for (int i = 1; i < pointCount - 1; i++) {
+            if (ROUND_JOINT[i]) {
+                emitDisc(pose, vc, PATH_X[i], PATH_Y[i], halfWidth, r, g, b, a);
+            }
+        }
+
+        // Both ends capped outward, if there is a direction to cap along.
+        int firstEdge = firstEdge(pointCount, true);
+        if (firstEdge >= 0) {
+            capOutward(pose, vc, PATH_X[0], PATH_Y[0],
+                    PATH_X[0] - PATH_X[firstEdge], PATH_Y[0] - PATH_Y[firstEdge],
+                    halfWidth, r, g, b, a);
+        }
+        int lastEdge = firstEdge(pointCount, false);
+        if (lastEdge >= 0) {
+            capOutward(pose, vc, PATH_X[pointCount - 1], PATH_Y[pointCount - 1],
+                    PATH_X[pointCount - 1] - PATH_X[lastEdge],
+                    PATH_Y[pointCount - 1] - PATH_Y[lastEdge], halfWidth, r, g, b, a);
+        }
+    }
+
+    /**
+     * The offset at one vertex of the scratch path.
+     *
+     * @param vertex the vertex whose offset is wanted
+     */
+    private static void offsetAt(int vertex, int count, double halfWidth) {
+        double previousX;
+        double previousY;
+        double nextX;
+        double nextY;
+        if (vertex == 0 || vertex == count - 1) {
+            int other = vertex == 0 ? 1 : count - 2;
+            previousX = PATH_X[vertex] - PATH_X[other];
+            previousY = PATH_Y[vertex] - PATH_Y[other];
+            nextX = -previousX;
+            nextY = -previousY;
+        } else {
+            previousX = PATH_X[vertex] - PATH_X[vertex - 1];
+            previousY = PATH_Y[vertex] - PATH_Y[vertex - 1];
+            nextX = PATH_X[vertex + 1] - PATH_X[vertex];
+            nextY = PATH_Y[vertex + 1] - PATH_Y[vertex];
+        }
+        double previousLength = Math.hypot(previousX, previousY);
+        double nextLength = Math.hypot(nextX, nextY);
+        if (previousLength < 1.0E-9 && nextLength < 1.0E-9) {
+            OFFSET_X[vertex] = 0;
+            OFFSET_Y[vertex] = 0;
+            ROUND_JOINT[vertex] = false;
+            return;
+        }
+        if (previousLength < 1.0E-9) {
+            previousX = nextX;
+            previousY = nextY;
+            previousLength = nextLength;
+        }
+        if (nextLength < 1.0E-9) {
+            nextX = previousX;
+            nextY = previousY;
+            nextLength = previousLength;
+        }
+        double normalPreviousX = -previousY / previousLength;
+        double normalPreviousY = previousX / previousLength;
+        double normalNextX = -nextY / nextLength;
+        double normalNextY = nextX / nextLength;
+        if (vertex == 0 || vertex == count - 1) {
+            OFFSET_X[vertex] = normalNextX * halfWidth;
+            OFFSET_Y[vertex] = normalNextY * halfWidth;
+            ROUND_JOINT[vertex] = false;
+            return;
+        }
+        double sumX = normalPreviousX + normalNextX;
+        double sumY = normalPreviousY + normalNextY;
+        double sumLength = Math.hypot(sumX, sumY);
+        if (sumLength < 1.0E-6) {
+            // The line doubles straight back on itself: no bisector, so a round join is the only
+            // sensible stroke there.
+            OFFSET_X[vertex] = normalNextX * halfWidth;
+            OFFSET_Y[vertex] = normalNextY * halfWidth;
+            ROUND_JOINT[vertex] = true;
+            return;
+        }
+        double miterX = sumX / sumLength;
+        double miterY = sumY / sumLength;
+        double denominator = miterX * normalNextX + miterY * normalNextY;
+        if (denominator < 1.0 / MITER_LIMIT) {
+            OFFSET_X[vertex] = normalNextX * halfWidth;
+            OFFSET_Y[vertex] = normalNextY * halfWidth;
+            ROUND_JOINT[vertex] = true;
+            return;
+        }
+        double length = Math.min(halfWidth / denominator, halfWidth * MITER_LIMIT);
+        OFFSET_X[vertex] = miterX * length;
+        OFFSET_Y[vertex] = miterY * length;
+        ROUND_JOINT[vertex] = false;
+    }
+
+    /** The first (or last) point that is not on top of the one it is measured from. */
+    private static int firstEdge(int count, boolean fromStart) {
+        if (fromStart) {
+            for (int i = 1; i < count; i++) {
+                if (Math.hypot(PATH_X[i] - PATH_X[0], PATH_Y[i] - PATH_Y[0]) > 1.0E-9) {
+                    return i;
+                }
+            }
+        } else {
+            for (int i = count - 2; i >= 0; i--) {
+                if (Math.hypot(PATH_X[count - 1] - PATH_X[i],
+                        PATH_Y[count - 1] - PATH_Y[i]) > 1.0E-9) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * A semicircular cap at one end of a stroke, pointing outward along (dx, dy).
+     *
+     * <p>Half a disc rather than a whole one: the cap only owns the ground past the end, so it never
+     * doubles up on the stroke it belongs to, and the round join at a joint is the union of the two
+     * caps rather than a full circle sitting on each end.
+     */
+    private static void capOutward(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+                                   double dx, double dy, double halfWidth,
+                                   int r, int g, int b, int a) {
+        double length = Math.hypot(dx, dy);
+        if (length < 1.0E-9) {
+            return;
+        }
+        double outwardX = dx / length;
+        double outwardY = dy / length;
+        double base = Math.atan2(outwardY, outwardX);
+        for (int i = 0; i < DISC_SEGMENTS; i++) {
+            double a0 = base - Math.PI / 2.0 + i * Math.PI / DISC_SEGMENTS;
+            double a1 = base - Math.PI / 2.0 + (i + 1) * Math.PI / DISC_SEGMENTS;
+            double x0 = x + Math.cos(a0) * halfWidth;
+            double y0 = y + Math.sin(a0) * halfWidth;
+            double x1 = x + Math.cos(a1) * halfWidth;
+            double y1 = y + Math.sin(a1) * halfWidth;
+            vertex(pose, vc, x, y, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
+            vertex(pose, vc, x1, y1, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
+        }
     }
 
     /**

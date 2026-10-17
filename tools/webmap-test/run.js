@@ -475,6 +475,57 @@ section('model: normalising the payload', () => {
     close(degenerate.segments[2].lengthBlocks, 0, 1e-9) &&
     close(degenerate.stats.computed.lengthBlocks, 0, 1e-9));
 
+  /*
+   * The payload can carry a smoothed display curve beside the block vertices. It is what the game's
+   * own map draws for a road it recognised out of another mod; the page used to paint the block
+   * staircase, which is why a machine-read road was smooth in the game and jagged in the browser.
+   */
+  const curvedModel = model.normalize({
+    classes: [{id: 'PATH', color: '#C8A24A', width: 3}],
+    bounds: {minX: 0, minZ: 0, maxX: 10, maxZ: 10},
+    segments: [{
+      id: 1, roadClass: 'PATH', source: 'roadweaver',
+      points: [[0, 0], [10, 0], [10, 10]],
+      curve: [[0, 0], [5, 5], [10, 10]],
+    }],
+  });
+  const curvedSeg = curvedModel.segments[0];
+  ok('a display curve becomes the paint geometry and the block vertices stay the measured geometry',
+    curvedSeg.hasCurve === true && curvedSeg.drawPoints === curvedSeg.curve &&
+    curvedSeg.points.length === 3 && close(curvedSeg.lengthBlocks, 20, 1e-9),
+    JSON.stringify({drawPoints: curvedSeg.drawPoints.length, points: curvedSeg.points.length}));
+  const plainModel = model.normalize({
+    segments: [{id: 2, roadClass: 'PATH', points: [[0, 0], [4, 0]]}],
+  });
+  ok('a road the player drew is painted from its block vertices, since it has no curve',
+    plainModel.segments[0].hasCurve === false &&
+    plainModel.segments[0].drawPoints === plainModel.segments[0].points);
+  ok('a curve keeps its sub-block coordinates rather than being snapped to the grid',
+    curvedSeg.drawPoints[1].x === 5 && curvedSeg.drawPoints[1].z === 5);
+
+  const curvedView = geom.fitView(curvedModel.bounds, 400, 300, {padding: 20});
+  const curvedScreen = render.segmentScreenPoints(curvedSeg, curvedView);
+  const expectedMid = geom.worldToScreen(curvedView, 5, 5);
+  const expectedCorner = geom.worldToScreen(curvedView, 10, 0);
+  ok('the screen path follows the curve through the bend, not the block corner',
+    curvedScreen.length === 3 &&
+    close(curvedScreen[1].x, expectedMid.x, 1e-6) && close(curvedScreen[1].y, expectedMid.y, 1e-6) &&
+    !(close(curvedScreen[1].x, expectedCorner.x, 1e-6) &&
+      close(curvedScreen[1].y, expectedCorner.y, 1e-6)),
+    JSON.stringify(curvedScreen));
+  const curvedCtx = recordingContext();
+  render.drawMap(curvedCtx, curvedModel, curvedView, {});
+  const curvedStrokes = paths(curvedCtx.calls).filter((op) => op.kind === 'stroke' &&
+    op.strokeStyle === curvedSeg.klass.color);
+  ok('and the map strokes that curve rather than the staircase',
+    curvedStrokes.length === 1 && curvedStrokes[0].points.length === 3,
+    JSON.stringify(curvedStrokes.map((op) => op.points.length)));
+
+  ok('a recognised layer says where it came from, and the player\'s own road says nothing',
+    curvedSeg.source === 'ROADWEAVER' && model.sourceLabel(curvedSeg.source) === '阡陌交通' &&
+    plainModel.segments[0].source === null && plainModel.segments[0].sourceLabel === model.OWN_SOURCE_LABEL &&
+    model.sourceLabel('SOMETHING') === 'SOMETHING');
+
   const clamped = model.normalize({
     segments: [
       {id: 1, roadClass: 'ROAD', layer: 99, points: [[0, 0], [1, 0]]},

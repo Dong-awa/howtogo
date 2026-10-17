@@ -225,21 +225,13 @@ public final class NavHudRenderer {
                 ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
 
         // The roads read out of RoadWeaver, drawn with the same two passes and the same reach: they
-        // are drawn on the world map and planned over, so the mini-map has to show them too. The
-        // layer supplies only the segments whose bounding boxes reach this window -- a whole
-        // region's worth of them is otherwise walked per frame for a map ninety blocks across.
-        final double fm00 = m00;
-        final double fm01 = m01;
-        final double fm02 = m02;
-        final double fm10 = m10;
-        final double fm11 = m11;
-        final double fm12 = m12;
-        RoadWeaverLayer.forEachSegmentInBox(playerX - reach, playerZ - reach,
-                playerX + reach, playerZ + reach, segment -> {
-                    int color = RoadConfig.roadColor(segment.roadClass());
-                    emitPath(last, vc, segment, fm00, fm01, fm02, fm10, fm11, fm12,
-                            ROAD_THICKNESS * 0.5, color, 0x9A, minX, minY, maxX, maxY);
-                });
+        // are drawn on the world map and planned over, so the mini-map has to show them too. They are
+        // drawn chain by chain -- whole roads rather than one piece at a time -- so a long road is one
+        // continuous stroke. The layer holds a whole region's worth of roads, so chains outside this
+        // window are skipped before anything is projected.
+        emitNetworkInBox(last, vc, RoadWeaverLayer.network(), m00, m01, m02, m10, m11, m12,
+                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY,
+                playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
         Route route = Navigation.route();
         if (route.isPresent()) {
@@ -267,7 +259,17 @@ public final class NavHudRenderer {
             }
             List<double[]> done = new ArrayList<>();
             List<double[]> ahead = new ArrayList<>();
-            if (splitAt <= 0) {
+            if (splitAt < 0) {
+                // Past the end of the route (or a route whose segments are all zero length): what is
+                // left to draw is whatever has not been walked, which is nothing once the player has
+                // travelled. Drawing everything in the "ahead" colour was the one place the grey and
+                // the cyan could disagree with where the player actually was.
+                if (travelled > 0) {
+                    done.addAll(points);
+                } else {
+                    ahead.addAll(points);
+                }
+            } else if (splitAt <= 0) {
                 ahead.addAll(points);
             } else {
                 done.addAll(points.subList(0, splitAt));

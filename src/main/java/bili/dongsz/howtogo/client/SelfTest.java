@@ -19,7 +19,9 @@ import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.webmap.RoadMapSnapshot;
+import bili.dongsz.howtogo.webmap.RoadMapUnavailableException;
 import bili.dongsz.howtogo.webmap.WebMapServer;
+import bili.dongsz.howtogo.webmap.WebMapService;
 import bili.dongsz.howtogo.worlddata.WorldArchive;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -635,10 +637,26 @@ public final class SelfTest {
             String dimension = Minecraft.getInstance().level == null
                     ? "unknown"
                     : Minecraft.getInstance().level.dimension().location().toString();
-            RoadMapSnapshot snapshot = RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension,
-                    network, RoadConfig.roadColors());
+            // The real reader, so the check sees exactly what a browser tab would: the player's roads
+            // and the read-only layers the world map draws. The fallback exists only for a client
+            // thread with no world, where the API itself would answer 503 and there is nothing to
+            // compare -- the page and asset half of this check still has to run.
+            RoadMapSnapshot snapshot;
+            try {
+                snapshot = WebMapService.liveSnapshot();
+            } catch (RoadMapUnavailableException noWorld) {
+                snapshot = RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension,
+                        network, RoadConfig.roadColors());
+            }
+            final RoadMapSnapshot reading = snapshot;
+            int autoSegments = 0;
+            for (RoadMapSnapshot.Segment segment : reading.segments()) {
+                if (segment.source() != null) {
+                    autoSegments++;
+                }
+            }
 
-            server = WebMapServer.start(() -> snapshot, freePort());
+            server = WebMapServer.start(() -> reading, freePort());
             try (HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(10)).build()) {
                 Reply page = fetch(client, server.url());
@@ -651,15 +669,18 @@ public final class SelfTest {
                 boolean libraryOk = library.status == 200 && library.body.length() > 100_000;
                 JsonObject payload = roads.status == 200
                         ? JsonParser.parseString(roads.body).getAsJsonObject() : null;
+                boolean sourcesPresent = autoSegments == 0 || hasSourceField(payload);
                 boolean apiOk = payload != null
                         && payload.get("version").getAsInt() == RoadMapSnapshot.FORMAT_VERSION
-                        && payload.getAsJsonArray("segments").size() == network.segmentCount();
+                        && payload.getAsJsonArray("segments").size() == reading.segmentCount()
+                        && sourcesPresent;
 
                 String detail = "port=" + server.port() + " page=" + page.body.length() + "B"
                         + " app.js=" + script.body.length() + "B"
                         + " html2canvas=" + library.body.length() + "B"
                         + " api=" + roads.status + "/" + (payload == null ? "-"
-                                : payload.getAsJsonArray("segments").size() + " segments");
+                                : payload.getAsJsonArray("segments").size() + " segments")
+                        + " auto=" + autoSegments;
                 if (!pageOk) {
                     detail += " | the page did not come back as the map";
                 }
@@ -682,6 +703,25 @@ public final class SelfTest {
                 server.stop();
             }
         }
+    }
+
+    /**
+     * Whether the payload marks any segment as coming from a read-only layer.
+     *
+     * <p>The sources are what the browser uses to say a road is 阡陌交通's or MTR's rather than the
+     * player's, so a payload with the auto-recognised segments in it but no sources would draw them
+     * as the player's own roads.
+     */
+    private static boolean hasSourceField(JsonObject payload) {
+        if (payload == null || !payload.has("segments")) {
+            return false;
+        }
+        for (var element : payload.getAsJsonArray("segments")) {
+            if (element.isJsonObject() && element.getAsJsonObject().has("source")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** One HTTP reply, as the check above reads it. */

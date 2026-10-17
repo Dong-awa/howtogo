@@ -578,6 +578,97 @@ public final class HudDraw {
         }
     }
 
+    /**
+     * The same, for a network that holds a whole region's worth of roads but a view that only shows
+     * a window: chains whose world bounding box misses the window are skipped before anything is
+     * projected.
+     *
+     * <p>This is what lets a layer read out of another mod be drawn as whole roads instead of one
+     * piece at a time. The per-piece version had to be used only where the cost allowed, and it is
+     * what made a long road look like a chain of separately painted pieces whenever the stroke was
+     * translucent: each piece ended in a rounded end of its own, and those ends overlapped.
+     *
+     * @param worldMinX left edge of the window, in blocks
+     * @param worldMinZ top edge of the window, in blocks
+     * @param worldMaxX right edge of the window, in blocks
+     * @param worldMaxZ bottom edge of the window, in blocks
+     */
+    public static void emitNetworkInBox(PoseStack.Pose pose, VertexConsumer vc, RoadNetwork network,
+                                        double m00, double m01, double m02,
+                                        double m10, double m11, double m12,
+                                        double halfWidth, int alpha,
+                                        double minX, double minY, double maxX, double maxY,
+                                        double worldMinX, double worldMinZ,
+                                        double worldMaxX, double worldMaxZ) {
+        emitNetworkInBox(pose, vc, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, worldMinX, worldMinZ, worldMaxX, worldMaxZ, null);
+    }
+
+    /** The boxed version with each road's half-width taken from its class. */
+    public static void emitNetworkInBox(PoseStack.Pose pose, VertexConsumer vc, RoadNetwork network,
+                                        double m00, double m01, double m02,
+                                        double m10, double m11, double m12,
+                                        double halfWidth, int alpha,
+                                        double minX, double minY, double maxX, double maxY,
+                                        double worldMinX, double worldMinZ,
+                                        double worldMaxX, double worldMaxZ,
+                                        java.util.function.ToDoubleFunction<
+                                                bili.dongsz.howtogo.road.RoadClass> widthOf) {
+        if (network == null || network.segmentCount() == 0) {
+            return;
+        }
+        bili.dongsz.howtogo.road.RoadChains.Grouping grouping =
+                bili.dongsz.howtogo.road.RoadChains.cachedGrouping(network);
+        java.util.Set<Integer> drawn = new java.util.HashSet<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            int key = grouping.keyOf(segment);
+            if (!drawn.add(key)) {
+                continue;
+            }
+            int[] chain = grouping.chainOf(segment);
+            if (!chainInBox(network, chain, worldMinX, worldMinZ, worldMaxX, worldMaxZ)) {
+                continue;
+            }
+            double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
+            emitChain(pose, vc, network, chain, m00, m01, m02, m10, m11, m12, width,
+                    bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
+                    minX, minY, maxX, maxY);
+        }
+    }
+
+    /**
+     * Whether any segment of a chain comes within the world rectangle.
+     *
+     * <p>Tested per segment's own bounding box, so a road that crosses the window from outside to
+     * outside still counts -- an "is one of its points inside" test would throw away exactly the
+     * long roads that matter most. A box test is allowed to keep a chain that only grazes the window;
+     * the stroke pass clips the edges anyway.
+     */
+    private static boolean chainInBox(RoadNetwork network, int[] chain,
+                                      double worldMinX, double worldMinZ,
+                                      double worldMaxX, double worldMaxZ) {
+        for (int id : chain) {
+            RoadSegment segment = network.segment(id);
+            if (segment == null || segment.vertexCount() == 0) {
+                continue;
+            }
+            double minX = Double.MAX_VALUE;
+            double minZ = Double.MAX_VALUE;
+            double maxX = -Double.MAX_VALUE;
+            double maxZ = -Double.MAX_VALUE;
+            for (int i = 0; i < segment.vertexCount(); i++) {
+                minX = Math.min(minX, segment.x(i));
+                maxX = Math.max(maxX, segment.x(i));
+                minZ = Math.min(minZ, segment.z(i));
+                maxZ = Math.max(maxZ, segment.z(i));
+            }
+            if (maxX >= worldMinX && minX <= worldMaxX && maxZ >= worldMinZ && minZ <= worldMaxZ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The stroke pass over {@link #PATH_X} / {@link #PATH_Y}: one mitered quad per visible edge. */
     private static void emitProjectedPath(PoseStack.Pose pose, VertexConsumer vc, int count,
                                           double halfWidth, int argb, int alpha,
@@ -615,6 +706,66 @@ public final class HudDraw {
                     endX + end[0], endY + end[1],
                     endX - end[0], endY - end[1],
                     startX - start[0], startY - start[1], argb, alpha);
+        }
+        // Outward semicircular caps on both ends of the stroke. Within one stroke the miters above
+        // close every bend; what they cannot close is the place where two strokes meet -- a chain is
+        // cut at a junction, and a road read out of another mod is stroked one piece at a time. Two
+        // strokes that meet at an angle leave a wedge of background on the outside of the joint, and
+        // the two caps together fill it, exactly as a round line cap does in any 2D canvas.
+        //
+        // They are *half* discs, pointing away from the stroke, and that is the whole point: a full
+        // disc at an end lies half on top of the stroke that it belongs to, and these roads are drawn
+        // translucent (alpha in the 0x9A..0xD0 range), so the overlap came out a shade darker than
+        // the road around it -- a line of beads whenever the geometry was stroked piece by piece. A
+        // cap that only adds the part beyond the end owns every pixel it paints exactly once, and the
+        // two of them at a joint still cover the wedge because each fills its own side of it.
+        capOutward(pose, vc, PATH_X[0], PATH_Y[0],
+                PATH_X[0] - PATH_X[1], PATH_Y[0] - PATH_Y[1], halfWidth, argb, alpha,
+                minX, minY, maxX, maxY);
+        capOutward(pose, vc, PATH_X[count - 1], PATH_Y[count - 1],
+                PATH_X[count - 1] - PATH_X[count - 2], PATH_Y[count - 1] - PATH_Y[count - 2],
+                halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    /**
+     * A semicircular cap at one end of a stroke, pointing in the outward direction (dx, dy).
+     *
+     * <p>Semicircle rather than full disc: a full one would be painted over the last half-width of
+     * the stroke it caps, and with a translucent road that reads as a darker bead at every end where
+     * a piece was stroked. The cap only covers the ground past the end, so every pixel is blended
+     * once.
+     */
+    private static void capOutward(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
+                                   double dx, double dy, double halfWidth, int argb, int alpha,
+                                   double minX, double minY, double maxX, double maxY) {
+        double length = Math.hypot(dx, dy);
+        if (length < 1.0E-9 || !(halfWidth > 0)) {
+            return;
+        }
+        if (x + halfWidth < minX || x - halfWidth > maxX
+                || y + halfWidth < minY || y - halfWidth > maxY) {
+            return;
+        }
+        double outwardX = dx / length;
+        double outwardY = dy / length;
+        double base = Math.atan2(outwardY, outwardX);
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+        final int segments = 6;
+        for (int i = 0; i < segments; i++) {
+            double a0 = base - Math.PI / 2.0 + i * Math.PI / segments;
+            double a1 = base - Math.PI / 2.0 + (i + 1) * Math.PI / segments;
+            double x0 = x + Math.cos(a0) * halfWidth;
+            double y0 = y + Math.sin(a0) * halfWidth;
+            double x1 = x + Math.cos(a1) * halfWidth;
+            double y1 = y + Math.sin(a1) * halfWidth;
+            // QUADS mode: a triangle is a quad with its last corner repeated.
+            vertex(pose, vc, x, y, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
+            vertex(pose, vc, x1, y1, r, g, b, a);
+            vertex(pose, vc, x0, y0, r, g, b, a);
         }
     }
 

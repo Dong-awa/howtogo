@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.webmap;
 
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -8,6 +9,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +40,7 @@ import java.util.TreeSet;
 public final class RoadMapSnapshot {
 
     /** Bumped when a field's meaning changes; the page reads it to refuse a payload it cannot use. */
-    public static final int FORMAT_VERSION = 1;
+    public static final int FORMAT_VERSION = 2;
 
     /** One graph vertex, flattened. */
     public record Node(int id, int x, int y, int z, String type, String placeKind, String name) {
@@ -50,9 +52,34 @@ public final class RoadMapSnapshot {
      * <p>{@code points} is the segment's vertices interleaved as x, z, x, z -- the network's own
      * layout -- because the JSON writer turns it into the nested {@code [[x,z],...]} form the page
      * wants and nothing else ever reads it.
+     *
+     * <p>{@code curve} is the smoothed display line in the same interleaved layout, or null when the
+     * road has none. It is what the page draws; {@code points} stays what it hovers, labels and
+     * measures, on the same argument as in the game: display geometry never decides anything.
+     *
+     * <p>{@code source} names the read-only layer a segment was read out of ({@code ROADWEAVER},
+     * {@code CREATE}, {@code MTR}, {@code ADDON}), or null for a road the player drew. The browser
+     * map is a view of the same map the game draws, and the game draws those layers too -- a
+     * browser map that showed only the hand-drawn roads was missing the roads the world is actually
+     * made of.
      */
     public record Segment(int id, String roadClass, int y, int layer, int from, int to,
-                          String direction, String name, int[] points) {
+                          String direction, String name, int[] points, double[] curve, String source) {
+    }
+
+    /**
+     * One read-only layer to fold into the map: its source id, and the segments it holds.
+     *
+     * <p>Handed in by the caller for the same reason the colours are: the layers live in the client's
+     * own stores, and this class is the portable half of the web map. The segments are only read, and
+     * are copied into the snapshot, so the caller keeps ownership of the live network.
+     */
+    public record ReadOnlyLayer(String source, Collection<RoadSegment> segments) {
+
+        public ReadOnlyLayer {
+            Objects.requireNonNull(source, "source");
+            segments = segments == null ? List.of() : segments;
+        }
     }
 
     /** The horizontal extent of everything that will be drawn. */
@@ -126,8 +153,30 @@ public final class RoadMapSnapshot {
      */
     public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
                                      Map<RoadClass, Integer> classColours) {
+        return of(world, dimension, network, classColours, List.of());
+    }
+
+    /**
+     * Flattens a network together with the read-only layers the game's world map draws over it.
+     *
+     * <p>The auto-recognised roads are the map: a world whose only roads were made by another mod is
+     * mostly those layers, and a browser map that read the player's own network alone showed an empty
+     * map for it. They are folded into the same {@code segments} list because on the map they are the
+     * same thing -- lines of a road class, drawn in that class's colour -- with a {@code source} field
+     * to say where each came from. Nothing on the page can edit them, which is exactly their status in
+     * the game as well.
+     *
+     * <p>Must be called on the thread that owns the networks: this walks them. The result carries no
+     * reference to any of them.
+     *
+     * @param readOnlyLayers layers to fold in, in draw order (first under, last on top); may be empty
+     */
+    public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
+                                     Map<RoadClass, Integer> classColours,
+                                     List<ReadOnlyLayer> readOnlyLayers) {
         Objects.requireNonNull(network, "network");
         Map<RoadClass, Integer> colours = classColours == null ? Map.of() : classColours;
+        List<ReadOnlyLayer> extraLayers = readOnlyLayers == null ? List.of() : readOnlyLayers;
 
         List<Node> nodes = new ArrayList<>(network.nodeCount());
         int minX = Integer.MAX_VALUE;
@@ -151,21 +200,50 @@ public final class RoadMapSnapshot {
         TreeSet<Integer> layers = new TreeSet<>();
         double length = 0.0;
         for (RoadSegment segment : network.segments()) {
-            int count = segment.vertexCount();
-            int[] points = new int[count * 2];
-            for (int i = 0; i < count; i++) {
-                points[i * 2] = segment.x(i);
-                points[i * 2 + 1] = segment.z(i);
-                minX = Math.min(minX, segment.x(i));
-                maxX = Math.max(maxX, segment.x(i));
-                minZ = Math.min(minZ, segment.z(i));
-                maxZ = Math.max(maxZ, segment.z(i));
-            }
-            segments.add(new Segment(segment.id(), segment.roadClass().name(), segment.y(),
-                    segment.layer(), segment.fromNode(), segment.toNode(),
-                    segment.direction().name(), segment.name(), points));
+            Segment flattened = flatten(segment, segment.id(), segment.fromNode(), segment.toNode(),
+                    null);
+            segments.add(flattened);
+            int[] points = flattened.points();
+            minX = Math.min(minX, extentMin(points, 0, minX));
+            maxX = Math.max(maxX, extentMax(points, 0, maxX));
+            minZ = Math.min(minZ, extentMin(points, 1, minZ));
+            maxZ = Math.max(maxZ, extentMax(points, 1, maxZ));
             layers.add(segment.layer());
             length += segment.length();
+        }
+
+        // Read-only layers last, so the page's paint order matches the world map's: the player's own
+        // roads under, the layers read from other mods over them. Their ids are made negative: they
+        // are not the editor network's segments, and a browser tab must never mistake one for a road
+        // it could ask about by the same number.
+        int nextReadOnlyId = -1;
+        for (ReadOnlyLayer layer : extraLayers) {
+            if (layer == null || layer.segments() == null) {
+                continue;
+            }
+            for (RoadSegment segment : layer.segments()) {
+                if (segment == null || segment.vertexCount() < 2) {
+                    continue;
+                }
+                Segment flattened = flatten(segment, nextReadOnlyId--, -1, -1, layer.source());
+                segments.add(flattened);
+                int[] points = flattened.points();
+                minX = Math.min(minX, extentMin(points, 0, minX));
+                maxX = Math.max(maxX, extentMax(points, 0, maxX));
+                minZ = Math.min(minZ, extentMin(points, 1, minZ));
+                maxZ = Math.max(maxZ, extentMax(points, 1, maxZ));
+                double[] curve = flattened.curve();
+                if (curve != null) {
+                    for (int i = 0; i + 1 < curve.length; i += 2) {
+                        minX = Math.min(minX, (int) Math.floor(curve[i]));
+                        maxX = Math.max(maxX, (int) Math.ceil(curve[i]));
+                        minZ = Math.min(minZ, (int) Math.floor(curve[i + 1]));
+                        maxZ = Math.max(maxZ, (int) Math.ceil(curve[i + 1]));
+                    }
+                }
+                layers.add(segment.layer());
+                length += segment.length();
+            }
         }
 
         boolean nothing = nodes.isEmpty() && segments.isEmpty();
@@ -180,6 +258,46 @@ public final class RoadMapSnapshot {
         return new RoadMapSnapshot(world == null ? "" : world,
                 dimension == null || dimension.isBlank() ? "unknown" : dimension,
                 bounds, nodes, segments, layerArray, length, nothing, colours);
+    }
+
+    /** One segment as the page receives it, with its display curve when it has one. */
+    private static Segment flatten(RoadSegment segment, int id, int from, int to, String source) {
+        int count = segment.vertexCount();
+        int[] points = new int[count * 2];
+        for (int i = 0; i < count; i++) {
+            points[i * 2] = segment.x(i);
+            points[i * 2 + 1] = segment.z(i);
+        }
+        RoadCurve curve = segment.curve();
+        double[] flattenedCurve = null;
+        if (curve != null && curve.size() >= 2) {
+            flattenedCurve = new double[curve.size() * 2];
+            for (int i = 0; i < curve.size(); i++) {
+                flattenedCurve[i * 2] = curve.x(i);
+                flattenedCurve[i * 2 + 1] = curve.z(i);
+            }
+        }
+        return new Segment(id, segment.roadClass().name(), segment.y(), segment.layer(),
+                from, to, segment.direction().name(), segment.name(), points, flattenedCurve,
+                source);
+    }
+
+    /** The smallest x (or z) in an interleaved point array, or the current bound when empty. */
+    private static int extentMin(int[] points, int offset, int fallback) {
+        int best = fallback;
+        for (int i = offset; i < points.length; i += 2) {
+            best = Math.min(best, points[i]);
+        }
+        return best;
+    }
+
+    /** The largest x (or z). See {@link #extentMin}. */
+    private static int extentMax(int[] points, int offset, int fallback) {
+        int best = fallback;
+        for (int i = offset; i < points.length; i += 2) {
+            best = Math.max(best, points[i]);
+        }
+        return best;
     }
 
     /** An empty map for the given dimension: what a world with no roads drawn yet looks like. */
@@ -306,12 +424,23 @@ public final class RoadMapSnapshot {
             if (segment.name() != null && !segment.name().isBlank()) {
                 entry.put("name", segment.name());
             }
+            if (segment.source() != null) {
+                entry.put("source", segment.source());
+            }
             int[] flat = segment.points();
             List<int[]> points = new ArrayList<>(flat.length / 2);
             for (int i = 0; i + 1 < flat.length; i += 2) {
                 points.add(new int[]{flat[i], flat[i + 1]});
             }
             entry.put("points", points);
+            double[] curve = segment.curve();
+            if (curve != null && curve.length >= 4) {
+                List<double[]> display = new ArrayList<>(curve.length / 2);
+                for (int i = 0; i + 1 < curve.length; i += 2) {
+                    display.add(new double[]{curve[i], curve[i + 1]});
+                }
+                entry.put("curve", display);
+            }
             segmentList.add(entry);
         }
         root.put("segments", segmentList);

@@ -45,13 +45,15 @@ public final class SmoothPathCheck {
 
     /** The curve's own promises: endpoints pinned, close to the line, and smoother than it. */
     private static void curves() {
-        // A diagonal staircase, which is what a line sampled on a block grid looks like at a bend.
+        // A 45-degree block staircase: every vertex turns 90 degrees, and yet the line it stands for is
+        // straight. This is the shape that used to come out as a ripple -- the simplifier kept every
+        // step and the corner rounding then turned each one into an S.
         List<double[]> staircase = new ArrayList<>();
         for (int i = 0; i < 6; i++) {
             staircase.add(new double[]{i, i});
             staircase.add(new double[]{i + 1, i});
         }
-        RoadCurve curve = RoadCurve.smooth(staircase, 0.45, 2);
+        RoadCurve curve = RoadCurve.smooth(staircase, RoadCurve.GRID_TOLERANCE);
         expect("a staircase can be smoothed", curve != null);
         if (curve == null) {
             return;
@@ -61,11 +63,11 @@ public final class SmoothPathCheck {
                         && close(curve.x(curve.size() - 1), staircase.get(staircase.size() - 1)[0])
                         && close(curve.z(curve.size() - 1),
                         staircase.get(staircase.size() - 1)[1]));
-        double originalTurning = turning(staircase);
+        expect("a block staircase is recognised as the straight diagonal it is, not drawn step by step",
+                curve.size() == 2);
         double smoothedTurning = turning(curvePoints(curve));
-        expect("and its turns are gentler than the staircase's (" + round(originalTurning) + "° vs "
-                        + round(smoothedTurning) + "°)",
-                smoothedTurning < originalTurning * 0.9);
+        expect("so it carries no turning at all (" + round(smoothedTurning) + " degrees)",
+                smoothedTurning < 1.0);
 
         // Every block vertex of the original must stay near the drawn line: a smoother road may cut
         // a corner, but not leave the road it belongs to.
@@ -73,8 +75,76 @@ public final class SmoothPathCheck {
         for (double[] point : staircase) {
             worst = Math.max(worst, distanceToCurve(point, curve));
         }
-        expect("while staying within a block of every vertex of the road (" + round(worst) + ")",
-                worst <= 1.0);
+        expect("while staying within the staircase's own half-diagonal of every vertex (" + round(worst)
+                + ")", worst <= 0.75);
+
+        // A real right-angled corner, sampled every block. The rounding is a fixed radius now, so the
+        // curve must not swing blocks wide of the corner the way a quarter of a long edge did.
+        List<double[]> corner = new ArrayList<>();
+        for (int x = 0; x <= 40; x++) {
+            corner.add(new double[]{x, 0});
+        }
+        for (int z = 1; z <= 40; z++) {
+            corner.add(new double[]{40, z});
+        }
+        RoadCurve bend = RoadCurve.smooth(corner, RoadCurve.GRID_TOLERANCE);
+        expect("a right-angled corner is still a corner", bend != null && bend.size() > 2);
+        if (bend != null) {
+            double cornerDistance = distanceToCurve(new double[]{40, 0}, bend);
+            expect("and its rounding is a radius, not a fraction of the road (" + round(cornerDistance)
+                    + " blocks from the corner)", cornerDistance < 1.33);
+            double worstCorner = 0;
+            for (double[] point : corner) {
+                worstCorner = Math.max(worstCorner, distanceToCurve(point, bend));
+            }
+            expect("while every block of the road stays under the drawn line (" + round(worstCorner)
+                    + ")", worstCorner <= 1.0);
+        }
+
+        // A switchback: at a turn this sharp a 1.25-block fillet would cut over a block off the
+        // elbow, i.e. more than a third of the road's width. It is left sharp, so the drawn line runs
+        // through the corner itself and the stroke's round join covers the notch.
+        List<double[]> switchback = new ArrayList<>();
+        for (int x = 0; x <= 20; x++) {
+            switchback.add(new double[]{x, 0});
+        }
+        double turnRadians = Math.toRadians(140);
+        for (int step = 1; step <= 14; step++) {
+            switchback.add(new double[]{20 + Math.cos(turnRadians) * step,
+                    Math.sin(turnRadians) * step});
+        }
+        RoadCurve elbow = RoadCurve.smooth(switchback, RoadCurve.GRID_TOLERANCE);
+        if (elbow != null) {
+            double elbowDistance = distanceToCurve(new double[]{20, 0}, elbow);
+            expect("a switchback is left sharp rather than rounded into a shortcut ("
+                    + round(elbowDistance) + " blocks off the corner)", elbowDistance < 0.15);
+        } else {
+            expect("a switchback has a curve", false);
+        }
+
+        // Geometry that is already in world coordinates must keep its precision: rounding to blocks
+        // first is what put a half-block wobble on every diagonal of a machine-read track.
+        List<double[]> precise = new ArrayList<>();
+        for (int i = 0; i <= 40; i++) {
+            double angle = (i / 40.0) * Math.PI / 2;
+            precise.add(new double[]{20.0 * Math.sin(angle), 20.0 * (1.0 - Math.cos(angle))});
+        }
+        RoadCurve fine = RoadCurve.precise(precise);
+        expect("a precise curve can be smoothed", fine != null && fine.size() >= 2);
+        if (fine != null) {
+            double off = 0;
+            for (double[] point : precise) {
+                off = Math.max(off, distanceToCurve(point, fine));
+            }
+            expect("and follows the curve it was given (" + round(off) + " blocks off)",
+                    off <= RoadCurve.PRECISE_TOLERANCE + 0.01);
+            double offGrid = 0;
+            for (int i = 0; i < fine.size(); i++) {
+                offGrid = Math.max(offGrid, Math.abs(fine.x(i) - Math.rint(fine.x(i))));
+                offGrid = Math.max(offGrid, Math.abs(fine.z(i) - Math.rint(fine.z(i))));
+            }
+            expect("and is not snapped to whole blocks (" + round(offGrid) + " off the grid)", offGrid > 0.01);
+        }
 
         RoadSegment straight = RoadSegment.of(1, RoadClass.ROAD, 64, 0, 0, 100, 0);
         RoadCurve pinned = RoadCurve.of(straight);

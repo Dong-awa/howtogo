@@ -220,11 +220,26 @@
     return Math.max(MIN_ROAD_PX * px, w);
   }
 
+  /**
+   * The points a segment is painted from.
+   *
+   * The server sends the block vertices and, for a line it recognised out of another mod, a smoothed
+   * display curve. The curve is what the in-game map draws; drawing the block vertices here instead
+   * is what made a machine-read road a per-block staircase in the browser while it was smooth in the
+   * game. Measurement and the hover readout stay on the block points, in model.js.
+   */
+  function drawPointsOf(segment) {
+    if (!segment) return [];
+    if (Array.isArray(segment.drawPoints) && segment.drawPoints.length >= 2) return segment.drawPoints;
+    return Array.isArray(segment.points) ? segment.points : [];
+  }
+
   function segmentScreenPoints(segment, view) {
     const G = deps();
     const out = [];
-    if (!segment || !Array.isArray(segment.points)) return out;
-    for (const p of segment.points) {
+    const points = drawPointsOf(segment);
+    if (!points.length) return out;
+    for (const p of points) {
       const s = G.worldToScreen(view, p.x, p.z);
       out.push({x: s.x, y: s.y});
     }
@@ -237,7 +252,7 @@
     let minZ = Infinity;
     let maxX = -Infinity;
     let maxZ = -Infinity;
-    for (const p of segment.points) {
+    for (const p of drawPointsOf(segment)) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z;

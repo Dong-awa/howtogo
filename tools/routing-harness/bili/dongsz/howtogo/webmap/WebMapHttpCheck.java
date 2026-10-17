@@ -168,7 +168,7 @@ public final class WebMapHttpCheck {
         JsonObject payload = JsonParser.parseString(roads.body).getAsJsonObject();
         expect("which parses and carries the fixture's roads",
                 payload.get("version").getAsInt() == RoadMapSnapshot.FORMAT_VERSION
-                        && payload.getAsJsonArray("segments").size() == 4);
+                        && payload.getAsJsonArray("segments").size() == 5);
         expect("the payload is generated per request rather than frozen at startup",
                 payload.get("generatedAt").getAsLong() >= before
                         && payload.get("generatedAt").getAsLong() <= after);
@@ -196,7 +196,7 @@ public final class WebMapHttpCheck {
         expect("two fetches in a row both work, which is what a refresh button does",
                 roadsAgain.status == 200
                         && JsonParser.parseString(roadsAgain.body).getAsJsonObject()
-                                .getAsJsonArray("segments").size() == 4);
+                                .getAsJsonArray("segments").size() == 5);
 
         expect("no caching anywhere, so a restart cannot leave a stale script next to a live payload",
                 roads.noStore && roads.nosniff);

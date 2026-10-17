@@ -398,8 +398,13 @@ public final class MainScreen extends Screen {
 
         HudDraw.emitNetwork(pose, vc, RoadStore.get(), pathM00(), 0, pathM02(), 0, pathM11(),
                 pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY, MainScreen::roadHalfWidth);
-        RoadWeaverLayer.forEachSegmentInBox(worldLeft, worldTop, worldRight, worldBottom,
-                segment -> drawRoad(pose, vc, segment, minX, minY, maxX, maxY));
+        // Whole roads rather than one piece at a time: a machine-read road stroked piece by piece is
+        // a chain of separately rounded ends, which at a large scale reads as darker beads along a
+        // translucent line. The layer is a whole region's worth of roads, so only the chains inside
+        // the window are projected.
+        HudDraw.emitNetworkInBox(pose, vc, RoadWeaverLayer.network(), pathM00(), 0, pathM02(), 0,
+                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                worldLeft, worldTop, worldRight, worldBottom, MainScreen::roadHalfWidth);
         HudDraw.emitNetwork(pose, vc, RailTrackStore.network(), pathM00(), 0, pathM02(), 0,
                 pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
                 MainScreen::roadHalfWidth);
@@ -407,7 +412,8 @@ public final class MainScreen extends Screen {
                 pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
                 MainScreen::roadHalfWidth);
         // Addon layers are roads of classes this mod knows, drawn by the world map in the same pass;
-        // the viewer shows what the world map shows, so they are here too.
+        // the viewer shows what the world map shows, so they are here too. An addon states straight
+        // lines between its own points, so there is no segment joint inside one to join up.
         for (RoadSegment segment : AddonRoadStore.segments()) {
             drawRoad(pose, vc, segment, minX, minY, maxX, maxY);
         }

@@ -1176,12 +1176,10 @@ public final class MtrTransit {
                 continue;
             }
             int count = track.vertexCount();
-            int[] xs = new int[count];
-            int[] zs = new int[count];
-            for (int i = 0; i < count; i++) {
-                xs[i] = (int) Math.round(track.xs()[i]);
-                zs[i] = (int) Math.round(track.zs()[i]);
-            }
+            double[] xs = new double[count];
+            double[] zs = new double[count];
+            System.arraycopy(track.xs(), 0, xs, 0, count);
+            System.arraycopy(track.zs(), 0, zs, 0, count);
             pieces.add(new TrackPiece(xs, zs, track.y(), kind));
         }
         if (pieces.isEmpty()) {
@@ -1195,10 +1193,10 @@ public final class MtrTransit {
         Map<Long, List<End>> index = new HashMap<>();
         for (int piece = 0; piece < pieces.size(); piece++) {
             TrackPiece entry = pieces.get(piece);
-            index.computeIfAbsent(cellKey(entry.xs()[0], entry.zs()[0]), k -> new ArrayList<>())
+            index.computeIfAbsent(cellKey(entry.x(0), entry.z(0)), k -> new ArrayList<>())
                     .add(new End(piece, true));
-            int last = entry.xs().length - 1;
-            index.computeIfAbsent(cellKey(entry.xs()[last], entry.zs()[last]), k -> new ArrayList<>())
+            int last = entry.count() - 1;
+            index.computeIfAbsent(cellKey(entry.x(last), entry.z(last)), k -> new ArrayList<>())
                     .add(new End(piece, false));
         }
 
@@ -1213,7 +1211,7 @@ public final class MtrTransit {
             used[seed] = true;
             RoadClass kind = first.kind();
             int y = first.y();
-            List<int[]> run = new ArrayList<>();
+            Run run = new Run();
             appendPiece(run, first, false);
 
             // Forward from the run's far end, then backward from its near end: a rail handed back in
@@ -1222,7 +1220,7 @@ public final class MtrTransit {
             boolean grown = true;
             while (grown) {
                 grown = false;
-                int[] last = run.get(run.size() - 1);
+                int[] last = run.lastVertex();
                 End next = uniqueContinuation(pieces, used, index, last[0], last[1], y, kind, seed);
                 if (next != null) {
                     TrackPiece piece = pieces.get(next.piece());
@@ -1232,7 +1230,7 @@ public final class MtrTransit {
                 }
             }
             while (true) {
-                int[] start = run.get(0);
+                int[] start = run.firstVertex();
                 End previous = uniqueContinuation(pieces, used, index, start[0], start[1], y, kind,
                         seed);
                 if (previous == null) {
@@ -1240,35 +1238,40 @@ public final class MtrTransit {
                 }
                 TrackPiece piece = pieces.get(previous.piece());
                 used[previous.piece()] = true;
-                List<int[]> prepended = new ArrayList<>();
+                Run prepended = new Run();
                 appendPiece(prepended, piece, previous.atStart());
                 // The piece is laid down so that its connecting end is its last point; the run
                 // already starts at that same point, so the shared joint is written once.
-                if (!prepended.isEmpty()) {
-                    int[] lastPrepended = prepended.get(prepended.size() - 1);
-                    int[] runStart = run.get(0);
-                    if (lastPrepended[0] == runStart[0] && lastPrepended[1] == runStart[1]) {
-                        prepended.remove(prepended.size() - 1);
-                    }
-                    run.addAll(0, prepended);
+                if (!prepended.vertices.isEmpty()
+                        && prepended.lastVertex()[0] == start[0]
+                        && prepended.lastVertex()[1] == start[1]) {
+                    prepended.dropLast();
                 }
+                run.prepend(prepended);
             }
 
-            int[] startSpace = run.get(0);
-            int[] endSpace = run.get(run.size() - 1);
+            int[] startSpace = run.firstVertex();
+            int[] endSpace = run.lastVertex();
             RoadNode from = nodeAt(layer, made, nextId, startSpace[0], y, startSpace[1]);
             RoadNode to = nodeAt(layer, made, nextId, endSpace[0], y, endSpace[1]);
             if (from.id() == to.id()) {
                 // A rail that ends where it started carries nothing a route can use.
                 continue;
             }
-            RoadSegment segment = new RoadSegment(nextId[0]++, kind, y, run.size());
-            for (int[] point : run) {
+            RoadSegment segment = new RoadSegment(nextId[0]++, kind, y, run.vertices.size());
+            for (int[] point : run.vertices) {
                 segment.addVertex(point[0], point[1]);
             }
             segment.setFromNode(from.id());
             segment.setToNode(to.id());
-            segment.setCurve(RoadCurve.of(segment));
+            // MTR hands its rails over as world-coordinate samples of its own curves, not as blocks.
+            // The display line keeps those samples (rounded to blocks it had a half-block wobble on
+            // every diagonal) and pins its ends on the node positions, so two runs meeting at a
+            // junction meet on the same point.
+            List<double[]> display = run.display;
+            display.set(0, new double[]{from.x(), from.z()});
+            display.set(display.size() - 1, new double[]{to.x(), to.z()});
+            segment.setCurve(RoadCurve.precise(display));
             layer.putSegment(segment);
         }
         return layer;
@@ -1284,8 +1287,27 @@ public final class MtrTransit {
         return buildRailLayer(reading);
     }
 
-    /** One rail piece as the layer builds it: block vertices, height and the class its mode means. */
-    private record TrackPiece(int[] xs, int[] zs, int y, RoadClass kind) {
+    /**
+     * One rail piece as the layer builds it: MTR's own world-coordinate samples, the height, and the
+     * class its mode means.
+     *
+     * <p>The samples are kept as doubles because they are a curve. {@link #x(int)} and {@link #z(int)}
+     * are the block positions the joint index is built on -- two rails meet where their blocks meet --
+     * but they are only ever used to decide what joins, never as the shape that is drawn.
+     */
+    private record TrackPiece(double[] xs, double[] zs, int y, RoadClass kind) {
+
+        int count() {
+            return xs.length;
+        }
+
+        int x(int index) {
+            return (int) Math.round(xs[index]);
+        }
+
+        int z(int index) {
+            return (int) Math.round(zs[index]);
+        }
     }
 
     /** One end of one rail piece, and whether that end is the piece's first vertex. */
@@ -1329,8 +1351,8 @@ public final class MtrTransit {
                     if (entry.kind() != kind || Math.abs(entry.y() - y) > 2) {
                         continue;
                     }
-                    int endX = end.atStart() ? entry.xs()[0] : entry.xs()[entry.xs().length - 1];
-                    int endZ = end.atStart() ? entry.zs()[0] : entry.zs()[entry.zs().length - 1];
+                    int endX = end.atStart() ? entry.x(0) : entry.x(entry.count() - 1);
+                    int endZ = end.atStart() ? entry.z(0) : entry.z(entry.count() - 1);
                     if (Math.abs(endX - x) <= JOINT_BLOCKS && Math.abs(endZ - z) <= JOINT_BLOCKS) {
                         near.add(end);
                     }
@@ -1355,20 +1377,75 @@ public final class MtrTransit {
         return unused;
     }
 
+    /**
+     * One stitched run of rails: the block vertices the network routes on, and the world-coordinate
+     * samples the display curve is made from.
+     *
+     * <p>Two lists rather than one because the two readers want different things. The network stores
+     * blocks -- a node is a block position -- while MTR's own geometry is a curve in world coordinates,
+     * and rounding it before smoothing is what put a wobble on it. Keeping them side by side means the
+     * curve never has to be derived from the rounded form, and the joints between pieces are dropped
+     * from both at once, so the two cannot disagree about where the run is.
+     */
+    private static final class Run {
+        private final List<int[]> vertices = new ArrayList<>();
+        private final List<double[]> display = new ArrayList<>();
+
+        int[] firstVertex() {
+            return vertices.get(0);
+        }
+
+        int[] lastVertex() {
+            return vertices.get(vertices.size() - 1);
+        }
+
+        int vertexCount() {
+            return vertices.size();
+        }
+
+        void add(int x, int z, double displayX, double displayZ) {
+            vertices.add(new int[]{x, z});
+            display.add(new double[]{displayX, displayZ});
+        }
+
+        boolean endsAt(int x, int z) {
+            if (vertices.isEmpty()) {
+                return false;
+            }
+            int[] last = lastVertex();
+            return last[0] == x && last[1] == z;
+        }
+
+        /** Drops the last point of both lists, for a joint the other piece is about to write. */
+        void dropLast() {
+            if (!vertices.isEmpty()) {
+                vertices.remove(vertices.size() - 1);
+            }
+            if (!display.isEmpty()) {
+                display.remove(display.size() - 1);
+            }
+        }
+
+        void prepend(Run other) {
+            vertices.addAll(0, other.vertices);
+            display.addAll(0, other.display);
+        }
+    }
+
     /** Appends a piece to a run, reversed or not, dropping a repeated joint vertex. */
-    private static void appendPiece(List<int[]> run, TrackPiece piece, boolean reverse) {
-        int count = piece.xs().length;
+    private static void appendPiece(Run run, TrackPiece piece, boolean reverse) {
+        int count = piece.count();
         for (int i = 0; i < count; i++) {
             int index = reverse ? count - 1 - i : i;
-            int x = piece.xs()[index];
-            int z = piece.zs()[index];
-            if (!run.isEmpty()) {
-                int[] last = run.get(run.size() - 1);
-                if (last[0] == x && last[1] == z) {
-                    continue;
-                }
+            int x = piece.x(index);
+            int z = piece.z(index);
+            if (run.endsAt(x, z)) {
+                // The joint is already written by the piece next to this one; writing its rounded
+                // position again would leave a zero-length step, and its display position is the same
+                // joint, so the display list must not take a second point there either.
+                continue;
             }
-            run.add(new int[]{x, z});
+            run.add(x, z, piece.xs()[index], piece.zs()[index]);
         }
     }
 

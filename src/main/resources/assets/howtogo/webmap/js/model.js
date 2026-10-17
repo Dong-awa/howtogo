@@ -64,6 +64,21 @@
   const DIRECTIONS = ['TWO_WAY', 'FORWARD', 'BACKWARD'];
   const DIRECTION_LABELS = {TWO_WAY: '双向', FORWARD: '单向 →', BACKWARD: '单向 ←'};
 
+  /*
+   * Where a segment came from. The map draws the player's own roads and, over them, the layers
+   * other mods generated or that were read out of the world -- RoadWeaver's roads, Create's and
+   * MTR's tracks, an addon's data. They are all roads with a class here, which is why they are drawn
+   * by the same code; the source is what the readout says so a line that cannot be edited in the game
+   * is not mistaken for one that can.
+   */
+  const SOURCE_LABELS = {
+    ROADWEAVER: '阡陌交通',
+    CREATE: '机械动力',
+    MTR: 'MTR',
+    ADDON: '附属模组',
+  };
+  const OWN_SOURCE_LABEL = '自绘';
+
   function num(value, fallback) {
     return typeof value === 'number' && isFinite(value) ? value : fallback;
   }
@@ -166,12 +181,19 @@
   }
 
   /**
-   * One segment, with the two things the contract permits that would otherwise break
-   * every consumer: fewer than two points, and a name that may be absent or null.
+   * One segment, with the things the contract permits that would otherwise break every consumer:
+   * fewer than two points, a name that may be absent or null, and display geometry that may be
+   * finer than the block vertices.
    *
    * `points` is normalised to {x, z} objects but a degenerate segment keeps whatever
    * points it had -- the hover readout can still say "there is a road end here", it
    * just cannot be drawn as a line.
+   *
+   * `drawPoints` is what the map draws: the smoothed `curve` when the server sent one, the block
+   * vertices otherwise. A line read out of another mod is stored one block at a time, and drawn as
+   * that it is a staircase; the curve is the same road without the grid in it. Keeping both is the
+   * same split the game makes: measurement and the hover stay on the block geometry, paint uses the
+   * smoothed line, and a curve can never make two roads meet that the data says do not.
    */
   function normalizeSegment(raw, index) {
     const s = raw && typeof raw === 'object' ? raw : {};
@@ -184,15 +206,27 @@
         points.push({x: num(p.x, 0), z: num(p.z, 0)});
       }
     }
+    const rawCurve = Array.isArray(s.curve) ? s.curve : [];
+    const curve = [];
+    for (const p of rawCurve) {
+      if (Array.isArray(p)) {
+        if (p.length >= 2) curve.push({x: num(p[0], 0), z: num(p[1], 0)});
+      } else if (p && typeof p === 'object') {
+        curve.push({x: num(p.x, 0), z: num(p.z, 0)});
+      }
+    }
     const id = num(s.id, index + 1);
     const name = cleanName(s.name);
     const direction = upperIn(s.direction, DIRECTIONS, 'TWO_WAY');
+    const source = typeof s.source === 'string' && s.source.trim() !== ''
+      ? s.source.trim().toUpperCase() : null;
     let length = 0;
     for (let i = 1; i < points.length; i++) {
       const dx = points[i].x - points[i - 1].x;
       const dz = points[i].z - points[i - 1].z;
       length += Math.sqrt(dx * dx + dz * dz);
     }
+    const drawPoints = curve.length >= 2 ? curve : points;
     return {
       id,
       roadClass: typeof s.roadClass === 'string' ? s.roadClass : '',
@@ -205,9 +239,15 @@
       name,
       hasName: name !== null,
       points,
+      // The paint geometry. Never empty unless the segment is degenerate: it falls back to points.
+      curve,
+      hasCurve: curve.length >= 2,
+      drawPoints,
+      source,
+      sourceLabel: source === null ? OWN_SOURCE_LABEL : (SOURCE_LABELS[source] || source),
       // Two points are the minimum a line can be drawn from; anything less is kept
       // for the readout but skipped by the renderer.
-      drawable: points.length >= 2,
+      drawable: drawPoints.length >= 2,
       lengthBlocks: length,
     };
   }
@@ -228,7 +268,10 @@
       if (z > maxZ) maxZ = z;
     };
     for (const n of nodes) visit(n.x, n.z);
-    for (const s of segments) for (const p of s.points) visit(p.x, p.z);
+    for (const s of segments) {
+      for (const p of s.points) visit(p.x, p.z);
+      for (const p of s.curve) visit(p.x, p.z);
+    }
     return any ? {minX, minZ, maxX, maxZ} : null;
   }
 
@@ -307,12 +350,18 @@
     const classCounts = {};
     const layerCounts = {};
     const segmentsByLayer = {};
+    const sourceCounts = {};
+    let readOnlySegments = 0;
     let totalLength = 0;
     for (const seg of segments) {
       classCounts[seg.roadClass] = (classCounts[seg.roadClass] || 0) + 1;
       layerCounts[seg.layer] = (layerCounts[seg.layer] || 0) + 1;
       if (!segmentsByLayer[seg.layer]) segmentsByLayer[seg.layer] = [];
       segmentsByLayer[seg.layer].push(seg);
+      if (seg.source) {
+        sourceCounts[seg.source] = (sourceCounts[seg.source] || 0) + 1;
+        readOnlySegments++;
+      }
       if (seg.drawable) totalLength += seg.lengthBlocks;
     }
     const layers = Object.keys(layerCounts).map(Number).sort((a, b) => a - b);
@@ -344,6 +393,8 @@
       layerCounts,
       layers,
       segmentsByLayer,
+      sourceCounts,
+      readOnlySegments,
       nodes,
       nodeById,
       segments,
@@ -386,6 +437,13 @@
 
   function directionLabel(direction) {
     return DIRECTION_LABELS[direction] || DIRECTION_LABELS.TWO_WAY;
+  }
+
+  /** Where a segment came from, as the readout names it: 自绘, 阡陌交通, 机械动力, MTR… */
+  function sourceLabel(source) {
+    if (typeof source !== 'string' || source.trim() === '') return OWN_SOURCE_LABEL;
+    const key = source.trim().toUpperCase();
+    return SOURCE_LABELS[key] || key;
   }
 
   /** Storeys are named the way the map panel talks about them, height included. */
@@ -454,6 +512,8 @@
     PLACE_KIND_COLORS,
     PLACE_COLOR_FALLBACK,
     DIRECTIONS,
+    SOURCE_LABELS,
+    OWN_SOURCE_LABEL,
     normalize,
     classOf,
     classRank,
@@ -462,6 +522,7 @@
     nodeTypeLabel,
     placeKindLabel,
     directionLabel,
+    sourceLabel,
     layerLabel,
     formatLength,
     formatThousands,
