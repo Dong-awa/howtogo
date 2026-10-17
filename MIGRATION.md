@@ -638,3 +638,16 @@ So the Forge gap is now one layer down from where it was: not "which version num
 settled, but "ForgeGradle cannot produce its reobf input here". That is the same shape as the
 NeoForm runtime download problem and may have the same answer -- find what it wants and put it
 where it looks -- but the reobf input is generated, not published, so there may be nothing to fetch.
+
+ForgeGradle does register tasks here -- 68 of them, including downloadMCMeta, downloadMcpConfig,
+extractSrg and reobfJar -- so the plugin is not inert the way it was under Gradle 9. What is missing
+is the mapped Minecraft artifact itself: the cache holds forge-1.20.1-47.4.28_mapped_official_1.20.1
+as zero-byte placeholder POMs and .input/.sha1 files, so a resolution was attempted and produced
+nothing.
+
+The 1.20.6 jar being 261 bytes is the same symptom from the other end: reobf produced an empty
+archive because it had no input to reobf.
+
+There is no genPatchedMinecraft or equivalent in the task list, which is the thread to pull next:
+either a task that should produce the mapped artifact is not registered, or it is named something
+unexpected. That is worth one more round before treating Forge as blocked.
