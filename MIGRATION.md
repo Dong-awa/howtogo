@@ -508,3 +508,18 @@ Every node that builds prints eval=false and needsAW=true, which is the expected
 That rules out the condition and leaves Loom finding the widener from something other than all five
 routes now closed. Worth noting for whoever picks this up: the debug line is three lines in
 build.fabric.gradle.kts and it should have been the first thing done, not the fifth.
+
+And a sixth route closed, which is the one that should have been tried first: accessWidenerPath
+removed from the loom block entirely, not just made conditional. The error is identical.
+
+So Loom is not reading the widener from accessWidenerPath at all, and the five earlier attempts were
+all variations on a route that was never in use. What is left is that Loom derives it from the mod
+metadata it parses at configuration time -- and that parse happens against the SOURCE resources,
+which was tested in round 60 by removing the key from src/fabric/resources/fabric.mod.json and
+changed nothing. Either that test did not take effect for a caching reason, or the source of the
+widener is somewhere neither of us has looked.
+
+The honest summary of six rounds on this node: five of them were spent on routes that a single
+unconditional removal would have eliminated in one. The order was wrong -- the cheapest experiment
+that falsifies the most assumptions should come first, and "turn the whole thing off and see" was
+available from the start.
