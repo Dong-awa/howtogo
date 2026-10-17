@@ -758,3 +758,20 @@ HudElementRegistry call with a position. The drawing code inside should carry ov
 
 Note also that HudElementRegistry takes a net.minecraft.resources.Identifier -- 26.x's name for
 ResourceLocation -- so the id has to be built the new way.
+
+### What actually changes in HudSubmit and HudBatchNewer
+
+GuiGraphicsExtractor has no submit method of any kind and no guiRenderState field. Its own fields
+are minecraft, pose, scissorStack, sprites and guiSprites -- nothing that holds pending elements.
+
+So the 26.x model does not need HudSubmit at all. On 1.21.6 through 1.21.11 the batch code
+accumulates GuiElementRenderState objects and hands them to GuiGraphics, which is why the Fabric arm
+reaches through the private guiRenderState field with an access widener. On 26.x the extractor
+writes as it is told and there is nothing to hand over.
+
+That means the port is: HudBatchNewer calls graphics.fill(...) and friends directly on 26.x instead
+of building states and submitting them, and HudSubmit has no 26.x arm. The drawing arguments carry
+over; the batching layer does not.
+
+This is the one place in the 26.x port where a design change is needed rather than a rename, and it
+is confined to the batch layer. The thirteen files and 110 occurrences are still mostly type names.
