@@ -33,7 +33,6 @@
 
 | 节点 | 卡在哪 |
 |---|---|
-| 26.1 / 26.2 / 26.3 Fabric | **Mojang 没有为 26.x 发布 mappings。** `client_mappings` 和 `server_mappings` 两个键在版本 JSON 里都不存在，Loom 的 `officialMojangMappings()` 没有东西可抓。Yarn 是错的名字空间——这个代码库通篇写的是 `net.minecraft.*`。NeoForge 不受影响，因为 ModDevGradle 从 NeoForge 的 artifact 里取名字。 |
 | 26.3 NeoForge | **NeoForge 的补丁在 recompile 时打不上**（`HolderSet` 那行），是上游 beta 的问题。 |
 | 1.20.1 / 1.20.4 / 1.20.6 Forge | **ForgeGradle 的依赖解析在这里活不下来。** 见 `MIGRATION.md`：四个假设（坐标、网络、下载、Gradle 版本）逐一排除后，`--info` 给出的是 `MinecraftUserRepo: Failed to get Minecraft Vanilla Base` 加 `Caused by: java.lang.IllegalStateException: project services has been closed`。 |
 
