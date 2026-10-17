@@ -320,3 +320,29 @@ enough to write the POM and not far enough to produce the jar.
 That is ForgeGradle's MCP/merge chain -- createMcpToSrg, createSrgToMcp and the mergetool -- and
 it is where to look next, with --info or --stacktrace on the mapping task rather than on
 compileJava.
+
+### The actual cause, from --info on compileJava
+
+The MCP tasks are all green -- downloadMcpConfig, extractSrg, createMcpToSrg, createSrgToMcp all
+run -- so the failure is in MinecraftUserRepo during dependency resolution, and --info names it:
+
+    MinecraftUserRepo: Failed to get Minecraft Vanilla Base. Should not be possible.
+        net.minecraft:joined:1.20.1-20230612.114412:srg
+    at net.minecraftforge.gradle.userdev.MinecraftUserRepo.findBinpatched(MinecraftUserRepo.java:767)
+    at net.minecraftforge.gradle.userdev.MinecraftUserRepo.findRaw(MinecraftUserRepo.java:628)
+    at net.minecraftforge.gradle.userdev.MinecraftUserRepo.findFile(MinecraftUserRepo.java:462)
+    Caused by: java.lang.IllegalStateException: project services has been closed.
+
+So the mapped artifact cannot be produced because the VANILLA BASE it would be mapped onto is not
+resolvable -- net.minecraft:joined at the srg namespace -- and the resolution fails with project
+services already closed, which is a lifecycle problem rather than a missing file.
+
+"project services has been closed" is the actionable line. ForgeGradle resolves this during
+dependency resolution, and a resolution that reaches back into project services after the project
+has been closed fails exactly this way. That is a Gradle-lifecycle incompatibility, and it explains
+why the Gradle 9 story was half right: the plugin applies and its own tasks run, but the part that
+resolves during a dependency resolution does not survive on a newer Gradle than it was written for.
+
+Next: whether net.minecraft:joined:<v>:srg can be produced ahead of time (so the resolution never
+reaches back into project services), or whether Gradle 8.14.6 is still too new and the Forge build
+needs the Gradle 8.1 the plugin declares as its floor.
