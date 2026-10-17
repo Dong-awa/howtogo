@@ -41,3 +41,9 @@ local-first.gradle
 # Agent scratch, not part of the tree.
 .scratch-htg/
 .workbuddy-ai/
+
+# The Forge build is a second Gradle root. Its src/ is a junction to ../src, and its versions/
+# and build outputs are generated.
+forge-build/src
+forge-build/versions
+forge-build/.gradle
