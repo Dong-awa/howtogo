@@ -406,3 +406,27 @@ does not help, which rules out inference and points at arity or parameter types.
 Not yet read out of the jar -- javap could not find ModConfigSpec$Builder in any cached NeoForge
 jar, which is the next thing to fix before guessing again. The 1.20.6 NeoForge jar should be under
 versions/1.20.6-neoforge/build or the neoform artifact cache.
+
+### defineListAllowEmpty: read out of the jar, and the answer is arity
+
+NeoForge 20.6.144's ModConfigSpec$Builder -- net.neoforged.neoforge.common, not fml.config --
+declares exactly four defineListAllowEmpty overloads:
+
+    (String,                List<? extends T>,          Predicate<Object>)
+    (String,                Supplier<List<? extends T>>, Predicate<Object>)
+    (List<String>,          List<? extends T>,          Predicate<Object>)
+    (List<String>,          Supplier<List<? extends T>>, Predicate<Object>)
+
+Three arguments, all of them. The fourth -- the Supplier<String> that offers a new element to add --
+does not exist in this version at all, which is why the call has no matching overload and why
+typing the predicate explicitly changed nothing. 1.20.4 and 1.21.1 both have the four-argument
+form; 20.6 is the version that dropped it.
+
+The fix is to pass three arguments on that node, but it cannot be a condition at the call site:
+RoadConfig is fenced whole by loader -- fabric on lines 15-465, neoforge on 466-1093 -- and all
+three calls are inside the neoforge arm, so a version condition there would nest.
+
+The shape that works is a helper in its own file with top-level conditions, taking the Builder and
+the same arguments and forwarding to whichever arity that version has. The three call sites then
+read the same on every node. It does mean restructuring the fluent chains slightly, since the
+calls are currently chained off builder.comment(...).
