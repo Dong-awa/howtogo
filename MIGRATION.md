@@ -391,3 +391,18 @@ watching 26.3 fail identically without it. The AT is not involved.
 The practical consequence: any change to the NeoForge build script invalidates that cache and 26.3
 stops building until the upstream patch problem is dealt with. Worth knowing before reading it as
 a regression from whatever was just edited.
+
+### 1.20.6 NeoForge: defineListAllowEmpty changed shape
+
+Three calls in RoadConfig fail on 1.20.6 and nowhere else:
+
+    .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
+            element -> element instanceof String)
+
+The same three compile on 1.20.4 NeoForge and on 1.21.1, so NeoForge 20.6 changed the method's
+shape rather than the arguments being wrong. Typing the predicate explicitly as (Object element)
+does not help, which rules out inference and points at arity or parameter types.
+
+Not yet read out of the jar -- javap could not find ModConfigSpec$Builder in any cached NeoForge
+jar, which is the next thing to fix before guessing again. The 1.20.6 NeoForge jar should be under
+versions/1.20.6-neoforge/build or the neoform artifact cache.
