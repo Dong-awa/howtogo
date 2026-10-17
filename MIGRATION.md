@@ -714,3 +714,24 @@ the MCP config, and fails to produce the injected and mapped Minecraft artifacts
 that turn the userdev artifact into something compilable. Our own source contributes zero errors,
 which means the loader plumbing in build.forge.gradle.kts is probably right and the problem is
 purely in that pipeline.
+
+### The actual ForgeGradle failure, which was hiding under the empty artifacts
+
+Resolving compileClasspath for a forge node prints the real error, and it has nothing to do with
+the mapped artifact being empty:
+
+    ObjectInstantiationException: Could not create an instance of type
+      org.gradle.jvm.toolchain.internal.DefaultToolchainSpec
+      at net.minecraftforge.gradle.mcp.function.ExecuteFunction.execute(ExecuteFunction.java:119)
+
+ForgeGradle 6.0.54 was built against an older Gradle toolchain API, and Gradle 8.14.6 has moved it.
+The MCP runtime calls javaToolchains.launcherFor while executing its steps -- downloadManifest,
+downloadJson, downloadClient, downloadServer, extractServer all run, then this -- so the pipeline
+dies before producing anything, which is why inject_src.jar is 1KB and no mapped jar exists.
+
+That also explains why the task list has no genPatchedMinecraft: those tasks never get registered
+because setup throws first.
+
+Gradle 8.12 is present and complete locally; 8.7 and 8.8 are only partial downloads (.part files).
+Trying 8.12 was abandoned after eight minutes -- a different Gradle means a new daemon and a full
+re-resolution of everything, and it was not worth holding the session open for.
