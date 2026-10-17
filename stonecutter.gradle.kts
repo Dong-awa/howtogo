@@ -50,6 +50,35 @@ stonecutter parameters {
     // Add rules here as each newer node is ported, not in advance: a rule declared before the
     // version that needs it exists is a rule nothing tests.
     replacements {
+        // Fabric API renamed a family of classes in 26.1. These are spellings, so they are rules
+        // rather than conditions -- and each rule block takes exactly one replace, which is why
+        // there is a block per rename instead of one block with several.
+        //
+        // Authority: docs/fabric-api-26.1-porting.md, the 26.1 porting guide.
+        regex(eval(current.version, ">=26.1")) {
+            replace("net.fabricmc.fabric.api.client.keybinding.v1", "net.fabricmc.fabric.api.client.keymapping.v1")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("KeyBindingHelper.registerKeyBinding", "KeyMappingHelper.registerKeyMapping")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("KeyBindingHelper", "KeyMappingHelper")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("net.fabricmc.fabric.api.itemgroup.v1", "net.fabricmc.fabric.api.creativetab.v1")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("net.fabricmc.fabric.api.client.command.v2.ClientCommandManager", "net.fabricmc.fabric.api.client.command.v2.ClientCommands")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=26.1")) {
+            replace("ClientCommandManager.", "ClientCommands.")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // @Mod gained its dist attribute at 1.20.5, which is what made "this mod is client-only" a
         // declaration rather than a convention. Below that the annotation takes the id alone.
         //
