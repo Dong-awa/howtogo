@@ -582,3 +582,26 @@ with different shapes rather than renames:
 
 Note also that HudElementRegistry takes a net.minecraft.resources.Identifier, which is the 26.x name
 for what earlier versions call ResourceLocation -- the same rename family the build already handles
+
+### 26.1: GuiGraphics is gone, and that is the shape of the last three errors
+
+The 26.1.2 Minecraft jar has no net/minecraft/client/gui/GuiGraphics.class. What it has is
+GuiGraphicsExtractor, with HoveredTextEffects, RenderingTextCollector and ScissorStack as nested
+classes. So this is not a field that became inaccessible -- the type the HUD code is written
+against does not exist on that version.
+
+That reframes all three remaining errors at once:
+
+  HudRenderCallback.EVENT.register   HudElementRegistry.addLast(Identifier, HudElement), and
+                                     HudElement's method is extractRenderState(
+                                     GuiGraphicsExtractor, DeltaTracker)
+  ScreenEvents.afterRender           afterExtract, whose callback also takes the extractor
+  guiRenderState.submitGuiElement    a GuiGraphics member, on a type that is not there
+
+So the 26.x HUD path is not a port of the 1.21.6 one with different names; it is a different
+render model -- extraction rather than immediate submission. That is a real piece of work and it is
+the first time this node has needed one.
+
+The build-level lesson is the same one this session keeps relearning: the type was one jar entry
+away the whole time. Checking whether GuiGraphics exists in the 26.1 jar should have been the first
+thing done on reaching these errors, not the fourth.
