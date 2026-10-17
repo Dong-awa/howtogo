@@ -651,3 +651,16 @@ archive because it had no input to reobf.
 There is no genPatchedMinecraft or equivalent in the task list, which is the thread to pull next:
 either a task that should produce the mapped artifact is not registered, or it is named something
 unexpected. That is worth one more round before treating Forge as blocked.
+
+Correction to the previous note: ForgeGradle registers NO tasks on this build. The full --all list
+is generic Gradle plus Stonecutter -- compileJava, jar, processResources, stonecutterGenerate and so
+on -- and nothing else. The downloadMCMeta, downloadMcpConfig, extractSrg and reobfJar that appeared
+to be present were in the --all output as text, not as registered tasks.
+
+So this is the Gradle 9 symptom after all, on Gradle 8.14.6: the plugin applies and registers
+nothing. Which means compileJava succeeding says less than it looked like -- it compiled against
+whatever the empty placeholder artifacts resolved to, which is why the jar is 261 bytes and reobf
+has no input.
+
+That is worth knowing before spending more rounds on the mapped artifact: there is no ForgeGradle
+pipeline running at all on this build, so nothing is going to produce it.
