@@ -7,7 +7,6 @@ import bili.dongsz.howtogo.HowToGo;
 import net.neoforged.fml.ModList;
 //?}
 //? if neoforge {
-import net.neoforged.neoforge.client.event.ClientTickEvent;
 //?}
 import xaero.map.WorldMap;
 import xaero.map.element.MapElementRenderHandler;
@@ -33,7 +32,7 @@ public final class RoadLayer {
     //? if fabric {
     /*public static void onClientTick() {
     *///?} else {
-    public static void onClientTick(ClientTickEvent.Post event) {
+    public static void onClientTick() {
     //?}
         if (attempted) {
             return;

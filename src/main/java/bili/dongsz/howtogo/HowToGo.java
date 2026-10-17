@@ -29,7 +29,6 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.common.NeoForge;
 //?}
 import org.slf4j.Logger;
@@ -160,35 +159,35 @@ public final class HowToGo {
     public HowToGo(IEventBus modEventBus, ModContainer modContainer) {
         // Registration into Xaero's render pipeline has to wait until Xaero has built its
         // handler, so we poll from the client tick instead of doing it here.
-        NeoForge.EVENT_BUS.addListener(RoadLayer::onClientTick);
+        HowToGoTicks.onClientTick(RoadLayer::onClientTick);
         // The addon API's two tick jobs, and in this order: the deferred queue is drained before the
         // registration event is posted, so work queued by a registration handler waits for the next
         // tick and ClientScheduler's promise -- "the tick after the one that queued it" -- holds for
         // addons exactly as it does for this mod's own commands. See ApiBootstrap and ClientScheduler.
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> ClientScheduler.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> ApiBootstrap.fireOnce());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadStore.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> TransitLineStore.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RailTrackStore.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> MtrClientData.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> RoadEditSession.tick());
+        HowToGoTicks.onClientTick(ClientScheduler::tick);
+        HowToGoTicks.onClientTick(ApiBootstrap::fireOnce);
+        HowToGoTicks.onClientTick(RoadStore::tick);
+        HowToGoTicks.onClientTick(TransitLineStore::tick);
+        HowToGoTicks.onClientTick(RailTrackStore::tick);
+        HowToGoTicks.onClientTick(MtrClientData::tick);
+        HowToGoTicks.onClientTick(RoadEditSession::tick);
         // The browser map's server, when the config asks for it to start itself: it waits for a world
         // to be loaded, because a page opened onto a 503 is worse than a socket opened a moment later.
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> WebMapService.tick());
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Navigation.tick());
+        HowToGoTicks.onClientTick(WebMapService::tick);
+        HowToGoTicks.onClientTick(Navigation::tick);
         // The commands' own deferral: a screen cannot be opened from inside the command that asked for
         // it, so the work is run on the tick after.
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> HowToGoCommand.tick());
+        HowToGoTicks.onClientTick(HowToGoCommand::tick);
         // Client commands: opening the terminal, ending the trip and switching travel mode are all
         // client state, so they run here with no server involved and no permission needed.
         NeoForge.EVENT_BUS.addListener(HowToGoCommand::onRegisterClientCommands);
         // Ticked rather than drawn: the readout is recomputed per frame, so deciding what to say
         // there would repeat the same instruction continuously, and the HUD does not run at all
         // while a screen is open. The speaking itself is on the narration thread; this only feeds it.
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> Narration.tick());
+        HowToGoTicks.onClientTick(Narration::tick);
         // The in-game self-test, when a launcher has asked for one: see AutoSelfTest and
         // tools/user-test/run-user-test.ps1. Silent unless the property is set.
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> AutoSelfTest.tick());
+        HowToGoTicks.onClientTick(AutoSelfTest::tick);
         NeoForge.EVENT_BUS.addListener(NavHudRenderer::onRenderGui);
 
         // Editing keys arrive as screen events and editing clicks as low-level input events, and the two
