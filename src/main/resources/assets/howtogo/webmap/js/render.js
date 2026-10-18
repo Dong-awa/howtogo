@@ -83,24 +83,6 @@
   const ARROW_HALF_WIDTH_PX = 3.4;
 
   /*
-   * A road shorter than this does not get a name even if it has one. Expressed in
-   * blocks rather than pixels on purpose: every threshold that decides a label
-   * candidate is either world-space or viewport-relative, never an absolute pixel
-   * count, so the 2x export reaches exactly the same decisions as the screen (see the
-   * note on scale invariance above drawLabels).
-   */
-  const MIN_LABEL_ROAD_BLOCKS = 12;
-
-  /*
-   * Candidate order for a road label: positions along the road first, then either side
-   * of it. The primary anchor is the middle of the road; the rest of the list walks
-   * outwards from there, so a name that cannot sit on its road steps along the road
-   * and then off it rather than jumping somewhere unrelated. 0.5, 0.4, 0.6, 0.3, 0.7
-   * keeps the outward walk symmetric, which stops labels from all crowding one end.
-   */
-  const LABEL_TS = [0.5, 0.4, 0.6, 0.3, 0.7];
-
-  /*
    * Candidate order for a place label: below the marker first (a name under a pin is
    * what every map does), then above, right, left, then the four diagonals, and each
    * direction at two increasing distances so a name whose first slot is taken can step
@@ -111,6 +93,40 @@
     [0, 1], [0, -1], [1, 0], [-1, 0],
     [1, 1], [-1, 1], [1, -1], [-1, -1],
   ];
+
+  /*
+   * A long road gets more than one name: one per this many pixels of visible length, up
+   * to a ceiling. A screen distance rather than a block distance, because it is the
+   * screen the names are read from -- zoomed out, a fixed block spacing would put the
+   * names on top of each other; zoomed in, it would leave the far half of a visible road
+   * nameless. Both are multiplied by the render's pixel ratio, so the export names the
+   * same places the screen did.
+   */
+  const LABEL_SPACING_PX = 190;
+  const MAX_LABELS_PER_ROAD = 8;
+
+  /*
+   * The smallest font at which a road's name is still worth drawing, in CSS pixels. A
+   * road's name may not be taller than the road itself, so a road too thin for a legible
+   * word gets no name until the player zooms in far enough for it to be wide enough --
+   * which is what makes names appear class by class, the highway first and the footpath
+   * last. A road too short to hold the name at all is dropped by the group length check
+   * in {@link buildRoadLabelItems}, in pixels like this one.
+   */
+  const MIN_ROAD_LABEL_FONT_PX = 6;
+
+  /*
+   * The zoom at which each kind of place's *name* appears, in CSS pixels per block.
+   * Markers come earlier and are a separate question: a dot says "something is here" when
+   * the map is far out, while a name has to be readable. A shop, the commonest and least
+   * important, waits longest; a resource point is named first.
+   */
+  const PLACE_LABEL_MIN_SCALE = {
+    SHOP: 1.0,
+    STATION: 0.7,
+    PLACE: 0.55,
+    RESOURCE: 0.4,
+  };
 
   const GRID_STEPS = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
   const GRID_MIN_PX = 48;
@@ -204,11 +220,26 @@
     return Math.max(MIN_ROAD_PX * px, w);
   }
 
+  /**
+   * The points a segment is painted from.
+   *
+   * The server sends the block vertices and, for a line it recognised out of another mod, a smoothed
+   * display curve. The curve is what the in-game map draws; drawing the block vertices here instead
+   * is what made a machine-read road a per-block staircase in the browser while it was smooth in the
+   * game. Measurement and the hover readout stay on the block points, in model.js.
+   */
+  function drawPointsOf(segment) {
+    if (!segment) return [];
+    if (Array.isArray(segment.drawPoints) && segment.drawPoints.length >= 2) return segment.drawPoints;
+    return Array.isArray(segment.points) ? segment.points : [];
+  }
+
   function segmentScreenPoints(segment, view) {
     const G = deps();
     const out = [];
-    if (!segment || !Array.isArray(segment.points)) return out;
-    for (const p of segment.points) {
+    const points = drawPointsOf(segment);
+    if (!points.length) return out;
+    for (const p of points) {
       const s = G.worldToScreen(view, p.x, p.z);
       out.push({x: s.x, y: s.y});
     }
@@ -221,7 +252,7 @@
     let minZ = Infinity;
     let maxX = -Infinity;
     let maxZ = -Infinity;
-    for (const p of segment.points) {
+    for (const p of drawPointsOf(segment)) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z;
@@ -507,32 +538,44 @@
   }
 
   /**
-   * Road label candidates, in the order they should be tried.
+   * How large one road's name may be drawn, in pixels.
    *
-   * The road's own direction is used as the text angle, straightened into (-90, 90] so
-   * a name on a northbound road reads left-to-right like every other name. The two
-   * non-zero offsets move the text perpendicular to the road, which is the "step off
-   * the road rather than along it" half of the candidate list.
+   * <p>The name lies on the road, so its height is capped by the width the road is painted
+   * at this zoom: a word taller than the street it names reads as a word standing beside the
+   * street. A road too thin to hold a legible word gets no name at all -- the map is zoomed
+   * out too far for names of that class to be read, and the player sees it when they zoom in.
+   *
+   * <p>Both quantities here are measured in the render's own pixels (the road width already
+   * carries `opts.px`), so the threshold means the same thing on screen and in the 2x export.
    */
-  function roadCandidates(segment, view, fontPx) {
-    const G = deps();
+  function roadLabelFontPx(segment, view, opts) {
     const L = deps();
-    const out = [];
+    const stroke = roadStrokePx(segment.klass.width, view.scale, opts.px);
+    const cap = stroke / L.textHeight(1);
+    return Math.min(opts.labelFontPx, cap);
+  }
+
+  /**
+   * Candidates for one label sitting at a point on a line: on the line, then either side.
+   *
+   * <p>The side offsets move the text perpendicular to the road, which is how a name that
+   * cannot sit on its road steps off it instead of jumping somewhere unrelated. They are
+   * multiples of the text height, so the export doubles them along with the font.
+   */
+  function roadLabelCandidates(x, y, angle, fontPx) {
+    const L = deps();
     const textH = L.textHeight(fontPx);
-    for (const t of LABEL_TS) {
-      const p = G.pointAlong(segment.points, t);
-      const s = G.worldToScreen(view, p.x, p.z);
-      const angle = G.uprightAngle(p.angle);
-      const rad = angle * Math.PI / 180;
-      const nx = -Math.sin(rad);
-      const ny = Math.cos(rad);
-      for (const offset of [0, textH, -textH]) {
-        out.push({x: s.x + nx * offset, y: s.y + ny * offset, angle});
-      }
+    const rad = angle * Math.PI / 180;
+    const nx = -Math.sin(rad);
+    const ny = Math.cos(rad);
+    const out = [];
+    for (const offset of [0, textH, -textH]) {
+      out.push({x: x + nx * offset, y: y + ny * offset, angle});
     }
     return out;
   }
 
+  /** Where a place's name may sit: below first, then round the marker, at two distances. */
   function placeCandidates(node, view, fontPx) {
     const G = deps();
     const L = deps();
@@ -559,66 +602,287 @@
   }
 
   /**
+   * Whether a place's name is drawn at this zoom.
+   *
+   * <p>Markers and names are two questions: a marker is a dot that says "something is
+   * here" and is worth drawing while the map is far out, while a name has to be readable.
+   * The thresholds are in CSS pixels per block (the view's scale divided by the render's
+   * pixel ratio), so the 2x export names exactly the places the screen named.
+   */
+  function placeLabelVisible(node, pixelsPerBlock) {
+    const kind = node && node.placeKind;
+    const from = Object.prototype.hasOwnProperty.call(PLACE_LABEL_MIN_SCALE, kind)
+      ? PLACE_LABEL_MIN_SCALE[kind] : PLACE_LABEL_MIN_SCALE.PLACE;
+    return pixelsPerBlock >= from;
+  }
+
+  /** The on-screen length of a run of screen points. */
+  function screenPolylineLength(points) {
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const dx = points[i].x - points[i - 1].x;
+      const dy = points[i].y - points[i - 1].y;
+      total += Math.sqrt(dx * dx + dy * dy);
+    }
+    return total;
+  }
+
+  /**
+   * A point a given distance along a run of screen points, with the direction there.
+   *
+   * <p>Screen space, unlike the world-space walk in geom: what is being measured here is
+   * the part of the road the player can see, and a name is placed on that part rather
+   * than on the kilometres of the road that are off the edge of the map.
+   */
+  function screenPointAt(points, distance) {
+    if (!points || points.length < 2) return null;
+    let travelled = 0;
+    for (let i = 1; i < points.length; i++) {
+      const dx = points[i].x - points[i - 1].x;
+      const dy = points[i].y - points[i - 1].y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      if (length < 1.0e-9) continue;
+      if (distance <= travelled + length || i === points.length - 1) {
+        const along = Math.max(0, Math.min(1, (distance - travelled) / length));
+        return {
+          x: points[i - 1].x + dx * along,
+          y: points[i - 1].y + dy * along,
+          angle: Math.atan2(dy, dx) * 180 / Math.PI,
+        };
+      }
+      travelled += length;
+    }
+    return null;
+  }
+
+  /**
+   * The stretches of a segment that touch the viewport, as runs of screen points.
+   *
+   * <p>A road may cross the screen, leave it and come back. Naming it by distance along
+   * its whole length would put names on the ground nobody can see; naming each visible
+   * stretch separately puts them where they can be read.
+   */
+  function screenRuns(segment, view) {
+    const points = segmentScreenPoints(segment, view);
+    const runs = [];
+    let current = null;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      const visible = Math.max(a.x, b.x) >= 0 && Math.min(a.x, b.x) <= view.width
+        && Math.max(a.y, b.y) >= 0 && Math.min(a.y, b.y) <= view.height;
+      if (visible) {
+        if (!current) current = [a];
+        current.push(b);
+      } else if (current) {
+        runs.push(current);
+        current = null;
+      }
+    }
+    if (current) runs.push(current);
+    const out = [];
+    for (const run of runs) {
+      const length = screenPolylineLength(run);
+      if (length > 0) out.push({points: run, length});
+    }
+    return out;
+  }
+
+  /**
+   * Names for the roads: one per stretch of roughly LABEL_SPACING_PX, not one per road.
+   *
+   * <p>A road long enough to cross the screen is a road whose name is useful at more than
+   * its middle, so a group of same-named same-class segments is named at as many places
+   * along its visible length as the spacing calls for. Only the stretches on screen count
+   * -- the off-screen middle of a road is not a place to spend a name on -- and the
+   * candidates are then offered to the label placer, which drops the ones that would
+   * overlap something, so two names still never sit on top of each other. A name's size is
+   * its road's own (see {@link roadLabelFontPx}).
+   */
+  function buildRoadLabelItems(model, view, opts, visible, measure) {
+    const G = deps();
+    const M = deps();
+    const groups = new Map();
+    for (const seg of model.segments) {
+      if (!seg.drawable || !seg.hasName) continue;
+      if (hiddenSegment(seg, opts)) continue;
+      const sb = segmentBounds(seg);
+      if (!sb || !boundsHit(sb, visible.minX, visible.minZ, visible.maxX, visible.maxZ)) continue;
+      const runs = screenRuns(seg, view);
+      if (!runs.length) continue;
+      const key = seg.name + '\u0000' + seg.roadClass;
+      let group = groups.get(key);
+      if (!group) {
+        group = {name: seg.name, representative: seg, runs: [], total: 0};
+        groups.set(key, group);
+      }
+      for (const run of runs) {
+        group.runs.push({points: run.points, length: run.length, start: group.total});
+        group.total += run.length;
+      }
+    }
+
+    const items = [];
+    for (const group of groups.values()) {
+      const fontPx = roadLabelFontPx(group.representative, view, opts);
+      if (!(fontPx >= MIN_ROAD_LABEL_FONT_PX * opts.px)) continue;
+      const textWidth = measure(group.name, fontPx);
+      if (group.total < textWidth + opts.labelPaddingPx * 2) continue;
+      const spacing = Math.max(LABEL_SPACING_PX * opts.px, textWidth + 48 * opts.px);
+      const count = Math.max(1, Math.min(MAX_LABELS_PER_ROAD,
+        Math.floor(group.total / spacing)));
+      for (let i = 0; i < count; i++) {
+        const target = group.total * (i + 0.5) / count;
+        let run = null;
+        for (const candidate of group.runs) {
+          if (target <= candidate.start + candidate.length) {
+            run = candidate;
+            break;
+          }
+        }
+        if (!run) run = group.runs[group.runs.length - 1];
+        if (!run) continue;
+        const onLine = screenPointAt(run.points, target - run.start);
+        if (!onLine) continue;
+        const angle = G.uprightAngle(onLine.angle);
+        const candidates = roadLabelCandidates(onLine.x, onLine.y, angle, fontPx);
+        if (!candidates.length) continue;
+        items.push({
+          id: 'road:' + group.representative.id + ':' + i,
+          kind: 'road',
+          text: group.name,
+          fontPx,
+          x: candidates[0].x,
+          y: candidates[0].y,
+          angle: candidates[0].angle,
+          priority: 1 + M.classRank(group.representative.roadClass),
+          candidates,
+        });
+      }
+    }
+    return items;
+  }
+
+  /**
+   * The painted roads as screen-space bars, so a place's name can be kept off them.
+   *
+   * <p>One box per polyline edge, widened by the road's own half-width and the label
+   * padding -- the same estimate the label boxes use. Built only when a place name is
+   * actually being placed; a road further from every visible place than the place's
+   * name can step cannot affect it, so the boxes are culled against the visible world
+   * rectangle first.
+   */
+  function buildRoadInk(model, view, opts, visible) {
+    const G = deps();
+    const bars = [];
+    for (const seg of model.segments) {
+      if (!seg.drawable || hiddenSegment(seg, opts)) continue;
+      const sb = segmentBounds(seg);
+      if (!sb || !boundsHit(sb, visible.minX, visible.minZ, visible.maxX, visible.maxZ)) continue;
+      const points = segmentScreenPoints(seg, view);
+      if (points.length < 2) continue;
+      const pad = roadStrokePx(seg.klass.width, view.scale, opts.px) / 2
+        + opts.labelPaddingPx;
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1];
+        const b = points[i];
+        bars.push({
+          minX: Math.min(a.x, b.x) - pad,
+          maxX: Math.max(a.x, b.x) + pad,
+          minY: Math.min(a.y, b.y) - pad,
+          maxY: Math.max(a.y, b.y) + pad,
+        });
+      }
+    }
+    return {
+      overlaps(box) {
+        for (const bar of bars) {
+          if (box.x < bar.maxX && bar.minX < box.x + box.w
+            && box.y < bar.maxY && bar.minY < box.y + box.h) {
+            return true;
+          }
+        }
+        return false;
+      },
+    };
+  }
+
+  /** Marks the candidates of every place label that would lie over a painted road. */
+  function markRoadBlocked(items, ink, opts, measure) {
+    const L = deps();
+    if (!ink) return;
+    for (const item of items) {
+      if (item.kind !== 'place') continue;
+      const pad = opts.labelPaddingPx;
+      const w = measure(item.text, item.fontPx) + pad * 2;
+      const h = L.textHeight(item.fontPx) + pad * 2;
+      for (const candidate of item.candidates) {
+        const box = {x: candidate.x - w / 2, y: candidate.y - h / 2, w, h};
+        if (ink.overlaps(box)) candidate.blocked = true;
+      }
+    }
+  }
+
+  /**
    * The label candidates, in priority order, for one view.
    *
-   * One label per road name: the server names every piece of a chain with the same
-   * name, so without this a street drawn as twelve segments would print its name
-   * twelve times. The longest piece carries the name, because that is where there is
-   * room to read it. This is also the filter the harness leans on -- every test here is
-   * world-space or viewport-relative, so it behaves identically at 2x.
+   * <p>Places come first: a marker with a name is what you navigate by, while a road can
+   * be identified by its colour and its place in the network. Within roads, class order
+   * first (a highway's name is worth more than a footpath's), and the placer breaks every
+   * remaining tie deterministically. One road group gets as many labels as its on-screen
+   * length calls for -- see {@link buildRoadLabelItems} -- so a road crossing the screen
+   * is named more than once, and a road that leaves and re-enters the view names each
+   * visible stretch rather than spending a name on the off-screen middle.
    */
   function buildLabelItems(model, view, options) {
     const G = deps();
     const M = deps();
     const opts = normalizeOptions(options);
+    const source = options || {};
+    const pixelsPerBlock = Math.abs(opts.px) > 0
+      ? Math.abs(G.num(view.scale, 1)) / opts.px : 0;
+    const measure = typeof source.measure === 'function' ? source.measure
+      : (text, fontPx) => String(text).length * G.num(fontPx, opts.labelFontPx) * 0.6;
     const items = [];
     if (!model || !Array.isArray(model.segments)) return items;
     const visible = G.visibleBounds(view);
 
     if (opts.showRoadNames) {
-      const best = new Map();
-      for (const seg of model.segments) {
-        if (!seg.drawable || !seg.hasName) continue;
-        if (hiddenSegment(seg, opts)) continue;
-        if (seg.lengthBlocks < MIN_LABEL_ROAD_BLOCKS) continue;
-        const sb = segmentBounds(seg);
-        if (!sb || !boundsHit(sb, visible.minX, visible.minZ, visible.maxX, visible.maxZ)) continue;
-        const key = seg.name;
-        const held = best.get(key);
-        if (!held || seg.lengthBlocks > held.lengthBlocks) best.set(key, seg);
-      }
-      for (const seg of best.values()) {
-        const candidates = roadCandidates(seg, view, opts.labelFontPx);
-        if (!candidates.length) continue;
-        items.push({
-          id: 'seg:' + seg.id,
-          kind: 'road',
-          text: seg.name,
-          x: candidates[0].x,
-          y: candidates[0].y,
-          angle: candidates[0].angle,
-          priority: 1 + M.classRank(seg.roadClass),
-          candidates,
-        });
+      for (const item of buildRoadLabelItems(model, view, opts, visible, measure)) {
+        items.push(item);
       }
     }
 
     if (opts.showPlaces) {
       const nodes = Array.isArray(model.nodes) ? model.nodes : [];
+      const placeFontPx = opts.labelFontPx;
+      const placeItems = [];
       for (const node of nodes) {
         if (node.type !== 'POI' || !node.hasName) continue;
-        const candidates = placeCandidates(node, view, opts.labelFontPx);
+        if (!placeLabelVisible(node, pixelsPerBlock)) continue;
+        const candidates = placeCandidates(node, view, placeFontPx);
         if (!candidates.length) continue;
-        items.push({
+        placeItems.push({
           id: 'node:' + node.id,
           kind: 'place',
           text: node.name,
+          fontPx: placeFontPx,
           x: candidates[0].x,
           y: candidates[0].y,
           angle: 0,
           priority: 0,
           candidates,
         });
+      }
+      if (placeItems.length) {
+        // A place name is a point label, and the roads under it are the one thing it can
+        // still be mistaken for. The painted roads are read once into boxes and the
+        // candidates over one are marked: the placer tries the clear sides first and only
+        // falls back to a road-covered side if no clear side is free.
+        markRoadBlocked(placeItems, buildRoadInk(model, view, opts, visible), opts, measure);
+        for (const item of placeItems) {
+          items.push(item);
+        }
       }
     }
     return items;
@@ -637,26 +901,36 @@
    */
   function drawLabels(ctx, model, view, opts) {
     const L = deps();
-    const font = fontString(opts.labelFontPx, true);
-    ctx.font = font;
-    const items = buildLabelItems(model, view, opts);
+    const baseFont = opts.labelFontPx;
+    // Measurement is asked with the font the label will be drawn in: a road's name is
+    // capped by the width of its road, so not every label on the map is the same size any
+    // more, and measuring them all at the base font would place boxes that are not the
+    // boxes painted.
+    const measure = (text, fontPx) => {
+      ctx.font = fontString(num(fontPx, baseFont), true);
+      return ctx.measureText(text).width;
+    };
+    const items = buildLabelItems(model, view, Object.assign({}, opts, {measure}));
     const placement = L.placeLabels(items, {
       width: view.width,
       height: view.height,
-      fontPx: opts.labelFontPx,
+      fontPx: baseFont,
       padding: opts.labelPaddingPx,
-      measure: (text) => ctx.measureText(text).width,
+      measure,
     });
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     for (const label of placement.placed) {
+      const fontPx = num(label.fontPx, baseFont);
       ctx.save();
       ctx.translate(label.anchor.x, label.anchor.y);
       if (label.angle) ctx.rotate(label.angle * Math.PI / 180);
-      ctx.font = font;
+      ctx.font = fontString(fontPx, true);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.lineWidth = opts.labelHaloPx;
+      // The halo is a fraction of the text, so a small road name keeps a small halo
+      // rather than being swallowed by the base label's outline.
+      ctx.lineWidth = opts.labelHaloPx * (fontPx / baseFont);
       ctx.strokeStyle = opts.background;
       ctx.strokeText(label.text, 0, 0);
       ctx.fillStyle = label.kind === 'place' ? LABEL_PLACE_COLOR : LABEL_ROAD_COLOR;
@@ -741,17 +1015,21 @@
     MIN_ROAD_PX,
     MARKER_COLOR,
     POI_RADIUS_PX,
-    MIN_LABEL_ROAD_BLOCKS,
+    LABEL_SPACING_PX,
+    MAX_LABELS_PER_ROAD,
+    MIN_ROAD_LABEL_FONT_PX,
+    PLACE_LABEL_MIN_SCALE,
     ARROW_SPACING_PX,
     ARROW_MIN_PATH_PX,
     ARROW_TIP_PX,
     ARROW_BACK_PX,
     ARROW_HALF_WIDTH_PX,
-    LABEL_TS,
     PLACE_DIRECTIONS,
     GRID_STEPS,
     drawMap,
     buildLabelItems,
+    roadLabelFontPx,
+    placeLabelVisible,
     roadStrokePx,
     segmentScreenPoints,
     segmentBounds,

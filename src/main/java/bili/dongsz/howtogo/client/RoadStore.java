@@ -68,6 +68,24 @@ public final class RoadStore {
     }
 
     /**
+     * Re-reads the current dimension's network from disk, after something replaced the file.
+     *
+     * <p>Called when a map archive is imported over this world's data. The in-memory network is the
+     * old file's, and the next autosave would write it back over the imported one -- so it is
+     * replaced here rather than left for the usual rebind, which only happens on a level change.
+     * Anything derived from the old network through {@link #get()} notices the new object on its own:
+     * they ask the store again, which is why the store is not handing out a network to be kept.
+     */
+    public static void reload() {
+        ensureBound();
+        if (boundPath == null) {
+            return;
+        }
+        network = RoadStorage.load(boundPath);
+        dirty = false;
+    }
+
+    /**
      * Rebinds to the current level's dimension, flushing and reloading when it changes.
      */
     private static void ensureBound() {
@@ -101,6 +119,11 @@ public final class RoadStore {
 
         boundLevel = level;
         boundPath = WorldFiles.of("");
+        // Which file this world's roads are being read from, said once per bind: "the map is empty"
+        // and "the map is somewhere else" look the same on screen, and this is the line that tells
+        // them apart when a player reports that their roads are gone.
+        HowToGo.LOGGER.info("[HowToGo] world data: {} | {}/{}", WorldFiles.currentWorldKey(),
+                boundPath.getParent().getFileName(), boundPath.getFileName());
         network = RoadStorage.load(boundPath);
         dirty = false;
 

@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -705,10 +706,11 @@ public final class RailTrackStore {
      * through -- and neither is ever saved with the player's roads.
      *
      * <h2>What is merged</h2>
-     * Two layers, and both are readings of the world rather than drawings of the player's: this class's
-     * Create rails, and {@link MtrTransit}'s rails read out of MTR. They are merged in one place
-     * because this is the one place that answers "what does a plan run on", and an answer assembled
-     * from two places is an answer that can be half-updated.
+     * Three layers, and all are readings of the world rather than drawings of the player's: this
+     * class's Create rails, {@link MtrTransit}'s rails read out of MTR, and the roads
+     * {@link RoadWeaverLayer} read out of RoadWeaver. They are merged in one place because this is the
+     * one place that answers "what does a plan run on", and an answer assembled from several places is
+     * an answer that can be half-updated.
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences) {
         return forRouting(mode, preferences, true);
@@ -733,7 +735,12 @@ public final class RailTrackStore {
         boolean movesOnRails = mode != null && mode.allows(RoadClass.RAIL);
         RoadNetwork mtr = withMtrMarks && movesOnMtrMarks(mode) ? MtrTransit.railLayer()
                 : new RoadNetwork();
-        if ((!active() || !movesOnRails) && mtr.segmentCount() == 0) {
+        // The roads RoadWeaver generated, when the config lets a trip use them. Null rather than an
+        // empty network so the common case costs no allocation; the layer itself decides which modes
+        // can move on it, the same rule the rails above follow.
+        RoadNetwork roadWeaver = RoadWeaverLayer.routingNetwork(mode);
+        if ((!active() || !movesOnRails) && mtr.segmentCount() == 0
+                && (roadWeaver == null || roadWeaver.segmentCount() == 0)) {
             return handDrawn;
         }
         RoadNetwork merged = handDrawn.deepCopy();
@@ -752,6 +759,14 @@ public final class RailTrackStore {
         }
         for (RoadSegment segment : mtr.segmentsSnapshot()) {
             merged.putSegment(segment.copy());
+        }
+        if (roadWeaver != null) {
+            for (RoadNode node : roadWeaver.nodesSnapshot()) {
+                merged.putNode(node.copy());
+            }
+            for (RoadSegment segment : roadWeaver.segmentsSnapshot()) {
+                merged.putSegment(segment.copy());
+            }
         }
         return merged;
     }
@@ -1181,11 +1196,18 @@ public final class RailTrackStore {
 
             RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
                     (int) Math.round(nodeY[edge.from()]), vertices);
+            List<double[]> display = new ArrayList<>(vertices);
             for (int v = 0; v < vertices; v++) {
                 segment.addVertex(round(polyline[v * 2]), round(polyline[v * 2 + 1]));
+                display.add(new double[]{polyline[v * 2], polyline[v * 2 + 1]});
             }
             segment.setFromNode(fromId);
             segment.setToNode(toId);
+            // The connection's own samples, not the block-rounded vertices: Create rasterises its
+            // beziers in world coordinates, and rounding them first is what put a half-block wobble on
+            // every curved track. The ends are already the two nodes' own positions, so two edges that
+            // meet at a node hand the display curve the same point.
+            segment.setCurve(RoadCurve.precise(display));
             build.network.putSegment(segment);
         }
 
@@ -1483,16 +1505,22 @@ public final class RailTrackStore {
         RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
                 (int) Math.round(graph.nodeY()[startNode]), vertices);
         segment.addVertex(round(graph.nodeX()[startNode]), round(graph.nodeZ()[startNode]));
+        List<double[]> display = new ArrayList<>(vertices);
+        display.add(new double[]{graph.nodeX()[startNode], graph.nodeZ()[startNode]});
         for (int i = 0; i < length; i++) {
             int edge = edgePath[i];
             int first = graph.vertexStart()[edge];
             int count = graph.vertexCount()[edge];
             for (int v = 1; v < count; v++) {
                 segment.addVertex(round(graph.vertexX()[first + v]), round(graph.vertexZ()[first + v]));
+                display.add(new double[]{graph.vertexX()[first + v], graph.vertexZ()[first + v]});
             }
         }
         segment.setFromNode(fromId);
         segment.setToNode(toId);
+        // Create's own sampling, for the same reason as the graph source above: this scan exists for
+        // the case where the graph cannot be read, not to lose the precision the graph would have kept.
+        segment.setCurve(RoadCurve.precise(display));
         build.network.putSegment(segment);
     }
 

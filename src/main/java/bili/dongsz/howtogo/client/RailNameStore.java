@@ -309,6 +309,19 @@ public final class RailNameStore {
     // ------------------------------------------------------------ persistence
 
     /**
+     * Re-reads the current dimension's rail names from disk, after something replaced the file.
+     *
+     * <p>The names are applied to a rail layer when it is built, and the layer is rebuilt on Create's
+     * own schedule; clearing the labels here means the old names stop being drawn immediately rather
+     * than lingering until the next rebuild, which is the honest picture of a file that changed.
+     */
+    public static void reload() {
+        ensureBound();
+        labels = Map.of();
+        names = boundPath == null ? new HashMap<>() : load(boundPath);
+    }
+
+    /**
      * Rebinds to the level now loaded, reading that level's names.
      *
      * <p>The selection is dropped on any rebind: it names a shape in a layer that no longer exists.

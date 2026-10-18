@@ -50,6 +50,21 @@ public final class RoadEditSession {
     /** Work deferred out of an input handler to the next client tick. */
     private static Runnable pendingAction;
 
+    /** Set when the world map screen begins closing; read on the next tick. */
+    private static boolean mapScreenClosing;
+
+    /**
+     * The height of the point a RoadWeaver snap resolved to, and whether it is known.
+     *
+     * <p>A snapped point has to be placed at the height the layer's own geometry is at, not at the
+     * player's feet: the router decides whether two nearby nodes are one place partly by height, so a
+     * point placed at a different height than the RoadWeaver road it is meant to join would be refused
+     * as a join. The layer's heights are real when its whole store is read and flat (zero) from its
+     * map snapshot -- either way, matching it is what makes the connection work.
+     */
+    private static int snappedHeight;
+    private static boolean snappedHeightKnown;
+
     private RoadEditSession() {
     }
 
@@ -127,6 +142,8 @@ public final class RoadEditSession {
         // Before the editor is touched: turning editing off while the right button is held has to let the
         // map's own button go, or the map would keep panning after the mouse was moved with nothing
         // pressed -- the screen believes a button is down until it is told otherwise.
+        mapScreenClosing = false;
+        snappedHeightKnown = false;
         endMapPan();
         lastSnap = RoadSnapper.Result.free(0, 0);
         mouseValid = false;
@@ -258,6 +275,7 @@ public final class RoadEditSession {
     public static void updateMouse(double rawWorldX, double rawWorldZ, boolean freePlacement) {
         setMouse(rawWorldX, rawWorldZ);
         freePlacementActive = freePlacement;
+        snappedHeightKnown = false;
         if (freePlacement) {
             lastSnap = RoadSnapper.Result.free(rawWorldX, rawWorldZ);
             return;
@@ -265,16 +283,93 @@ public final class RoadEditSession {
         RoadSnapper.Result snap = RoadSnapper.snap(RoadStore.get(), rawWorldX, rawWorldZ,
                 editor().chainNodeId());
         if (snap.kind() == RoadSnapper.Kind.FREE) {
-            // Nothing hand-drawn is close enough. Create's tracks are the other geometry on the map,
-            // and a road is very often meant to start or end on one, so they are offered to the snap
-            // as well -- but only as a position: a rail cannot be split or joined, because it is a
-            // reading of the world rather than something the editor owns.
+            // Nothing hand-drawn is close enough. The other geometry on the map is offered to the
+            // snap next, as positions only: none of it may be split or joined, because it belongs to
+            // another mod. RoadWeaver's structures come first -- they are the points a player drawing
+            // a road towards a village is aiming at -- then its roads, then a rail.
+            RoadSnapper.Result structure = roadWeaverStructureSnap(rawWorldX, rawWorldZ);
+            if (structure != null) {
+                snap = structure;
+            }
+        }
+        if (snap.kind() == RoadSnapper.Kind.FREE) {
+            RoadSnapper.Result road = roadWeaverRoadSnap(rawWorldX, rawWorldZ);
+            if (road != null) {
+                snap = road;
+            }
+        }
+        if (snap.kind() == RoadSnapper.Kind.FREE) {
+            // Create's tracks are the other geometry on the map, and a road is very often meant to
+            // start or end on one, so they are offered to the snap as well -- but only as a position:
+            // a rail cannot be split or joined, because it is a reading of the world rather than
+            // something the editor owns.
             RoadSnapper.Result rail = railPositionSnap(rawWorldX, rawWorldZ);
             if (rail != null) {
                 snap = rail;
             }
         }
         lastSnap = snap;
+    }
+
+    /**
+     * The nearest structure RoadWeaver connected, as a position-only snap, or null.
+     *
+     * <p>Only the structures within the cursor's own catch radius are asked about: the layer can
+     * hold a whole region's worth, and walking all of them per frame while the map is merely showing
+     * them would be work nobody asked for.
+     */
+    private static RoadSnapper.Result roadWeaverStructureSnap(double worldX, double worldZ) {
+        double reach = RoadSnapper.worldRadius(RoadSnapper.NODE_SNAP_PX);
+        if (reach <= 0 || RoadWeaverLayer.structures().isEmpty()) {
+            return null;
+        }
+        java.util.List<double[]> points = new java.util.ArrayList<>();
+        for (RoadWeaverLayer.Structure structure : RoadWeaverLayer.structures()) {
+            if (Math.abs(structure.x() - worldX) > reach || Math.abs(structure.z() - worldZ) > reach) {
+                continue;
+            }
+            points.add(new double[]{structure.x(), structure.z()});
+        }
+        RoadSnapper.Result snapped = RoadSnapper.snapToPoints(points, worldX, worldZ,
+                RoadSnapper.NODE_SNAP_PX, RoadSnapper.Kind.ROADWEAVER);
+        if (snapped != null) {
+            for (RoadWeaverLayer.Structure structure : RoadWeaverLayer.structures()) {
+                if (structure.x() == (int) Math.round(snapped.x())
+                        && structure.z() == (int) Math.round(snapped.z())) {
+                    snappedHeight = structure.y();
+                    snappedHeightKnown = true;
+                    break;
+                }
+            }
+        }
+        return snapped;
+    }
+
+    /**
+     * The nearest point on one of RoadWeaver's roads, as a position-only snap, or null.
+     *
+     * <p>Uses the layer's own network and index, so a node and a point along a road are found by the
+     * same rules as a hand-drawn one; only the result kind differs, because the caller may place at
+     * that point but may not edit it.
+     */
+    private static RoadSnapper.Result roadWeaverRoadSnap(double worldX, double worldZ) {
+        if (RoadWeaverLayer.segments().isEmpty()) {
+            return null;
+        }
+        RoadNetwork layer = RoadWeaverLayer.network();
+        RoadSnapper.Result hit = RoadSnapper.snap(layer, worldX, worldZ, RoadSegment.NO_NODE);
+        if (hit.kind() != RoadSnapper.Kind.NODE && hit.kind() != RoadSnapper.Kind.SEGMENT) {
+            return null;
+        }
+        RoadNode node = hit.kind() == RoadSnapper.Kind.NODE ? layer.node(hit.nodeId()) : null;
+        RoadSegment segment = node != null ? null : layer.segment(hit.segmentId());
+        int height = node != null ? node.y() : segment != null ? segment.y()
+                : (int) Math.round(Minecraft.getInstance().player == null ? 64
+                : Minecraft.getInstance().player.getY());
+        snappedHeight = height;
+        snappedHeightKnown = true;
+        return new RoadSnapper.Result(hit.x(), hit.z(), RoadSnapper.Kind.ROADWEAVER,
+                RoadSegment.NO_NODE, RoadSegment.NO_SEGMENT, -1);
     }
 
     /**
@@ -641,6 +736,67 @@ public final class RoadEditSession {
             pendingAction = null;
             action.run();
         }
+        if (!active) {
+            mapScreenClosing = false;
+            return;
+        }
+        // Editing is a mode of the world map, so it cannot outlive the map. Escape, or opening any
+        // screen that is not one of this editor's own panels (a name prompt, the line editor, the map
+        // archive screen), ends it -- and this is checked a tick after the map was replaced, because
+        // the screen event that fires when it happens cannot say what replaced it.
+        Screen screen = Minecraft.getInstance().screen;
+        if (mapScreenClosing) {
+            mapScreenClosing = false;
+            if (!isEditorCompanion(screen)) {
+                endEditing("the world map was closed");
+            }
+            return;
+        }
+        if (screen == null) {
+            endEditing("the world map was closed");
+            return;
+        }
+        if (!isEditorCompanion(screen) && !RoadEditHandler.isMapScreen(screen)) {
+            // A non-map screen replaced the map without the map itself being closed first (the chat
+            // screen, another mod's screen, Xaero's own settings). The map is not what is being looked
+            // at, so the editing mode it owns goes with it. A map screen that has merely not redrawn
+            // yet is not this case: returning from one of this editor's panels lands here before the
+            // map's next frame, and ending the session then would make naming a road cancel editing.
+            endEditing("another screen replaced the world map");
+        }
+    }
+
+    /**
+     * The screens this editor opens over the map, on which editing legitimately stays on: closing one
+     * of them returns to the map it came from.
+     */
+    static boolean isEditorCompanion(Screen screen) {
+        return screen instanceof RoadNameScreen
+                || screen instanceof TransitLineScreen
+                || screen instanceof MapDataScreen
+                || screen instanceof MapImportScreen
+                || screen instanceof MainScreen;
+    }
+
+    /**
+     * Notes that the world map screen is being closed.
+     *
+     * <p>The screen event is the only place that knows which screen is going away, and it fires for
+     * the map being replaced by anything -- including this editor's own panels, which must not end
+     * the session. So it only records the fact, and the tick above decides from what the screen is
+     * now.
+     */
+    static void noteMapScreenClosing() {
+        mapScreenClosing = true;
+    }
+
+    /** Ends editing, saying why, so a mode that turned itself off is in the log rather than a mystery. */
+    private static void endEditing(String because) {
+        if (!active) {
+            return;
+        }
+        setActive(false);
+        HowToGo.LOGGER.info("[HowToGo] road editing disabled: {}", because);
     }
 
     // ---------------------------------------------------------- navigation
@@ -677,7 +833,11 @@ public final class RoadEditSession {
         }
         RoadEditor ed = editor();
         RoadSnapper.Result snap = lastSnap;
-        int y = groundHeight();
+        // A point snapped onto RoadWeaver's geometry is placed at that geometry's height, not at the
+        // player's feet: see snappedHeight. Everything else is placed at the player's height, which
+        // is what a click on open ground has always meant.
+        int y = snap.kind() == RoadSnapper.Kind.ROADWEAVER && snappedHeightKnown
+                ? snappedHeight : groundHeight();
 
         if (snap.kind() == RoadSnapper.Kind.SEGMENT && snap.segmentId() != RoadSegment.NO_SEGMENT) {
             // Dropping onto an existing road splits it and joins there.

@@ -93,6 +93,8 @@ $mtr = (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -Error
     ForEach-Object { $_.FullName }) -join ';'
 $overlay = (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
     ForEach-Object { $_.FullName }) -join ';'
+$roadWeaver = (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'roadweaver-*.jar' -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.FullName }) -join ';'
 if ($mtr) {
     Write-Host 'an MTR jar is present: the reflection handshake will be checked'
 } else {
@@ -103,9 +105,15 @@ if ($overlay) {
 } else {
     Write-Host 'no MTR Map Overlay jar in run/mods: its handshake check will be skipped'
 }
+if ($roadWeaver) {
+    Write-Host 'a RoadWeaver jar is present: its reflection handshake will be checked'
+} else {
+    Write-Host 'no RoadWeaver jar in run/mods: its handshake check will be skipped'
+}
 $harnessPath = $compilePath
 if ($mtr) { $harnessPath = "$harnessPath;$mtr" }
 if ($overlay) { $harnessPath = "$harnessPath;$overlay" }
+if ($roadWeaver) { $harnessPath = "$harnessPath;$roadWeaver" }
 
 Write-Host 'compiling the harness...'
 # The freshly compiled classes come before the ones gradle built, so what runs is the working tree

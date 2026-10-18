@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -1168,35 +1169,284 @@ public final class MtrTransit {
         if (reading.tracks().isEmpty()) {
             return layer;
         }
-        List<RoadNode> made = new ArrayList<>();
-        int[] nextId = {ID_BASE};
+        List<TrackPiece> pieces = new ArrayList<>();
         for (MtrClientData.Track track : reading.tracks()) {
             RoadClass kind = MtrClientData.roadClassFor(track.mode());
             if (kind == null || track.vertexCount() < 2) {
                 continue;
             }
             int count = track.vertexCount();
-            int[] xs = new int[count];
-            int[] zs = new int[count];
-            for (int i = 0; i < count; i++) {
-                xs[i] = (int) Math.round(track.xs()[i]);
-                zs[i] = (int) Math.round(track.zs()[i]);
+            double[] xs = new double[count];
+            double[] zs = new double[count];
+            System.arraycopy(track.xs(), 0, xs, 0, count);
+            System.arraycopy(track.zs(), 0, zs, 0, count);
+            pieces.add(new TrackPiece(xs, zs, track.y(), kind));
+        }
+        if (pieces.isEmpty()) {
+            return layer;
+        }
+
+        // One index entry per end of every rail piece, so "what continues from here" is a lookup in
+        // the nine cells around the point rather than a walk of the whole railway. A junction has two
+        // or more entries in one cell, which is exactly what stops a run: the run is one stretch
+        // between junctions, not the whole network on one line.
+        Map<Long, List<End>> index = new HashMap<>();
+        for (int piece = 0; piece < pieces.size(); piece++) {
+            TrackPiece entry = pieces.get(piece);
+            index.computeIfAbsent(cellKey(entry.x(0), entry.z(0)), k -> new ArrayList<>())
+                    .add(new End(piece, true));
+            int last = entry.count() - 1;
+            index.computeIfAbsent(cellKey(entry.x(last), entry.z(last)), k -> new ArrayList<>())
+                    .add(new End(piece, false));
+        }
+
+        boolean[] used = new boolean[pieces.size()];
+        List<RoadNode> made = new ArrayList<>();
+        int[] nextId = {ID_BASE};
+        for (int seed = 0; seed < pieces.size(); seed++) {
+            if (used[seed]) {
+                continue;
             }
-            RoadNode from = nodeAt(layer, made, nextId, xs[0], track.y(), zs[0]);
-            RoadNode to = nodeAt(layer, made, nextId, xs[count - 1], track.y(), zs[count - 1]);
+            TrackPiece first = pieces.get(seed);
+            used[seed] = true;
+            RoadClass kind = first.kind();
+            int y = first.y();
+            Run run = new Run();
+            appendPiece(run, first, false);
+
+            // Forward from the run's far end, then backward from its near end: a rail handed back in
+            // the middle of a line is stitched both ways rather than sitting as a stub until its
+            // neighbours happen to arrive first.
+            boolean grown = true;
+            while (grown) {
+                grown = false;
+                int[] last = run.lastVertex();
+                End next = uniqueContinuation(pieces, used, index, last[0], last[1], y, kind, seed);
+                if (next != null) {
+                    TrackPiece piece = pieces.get(next.piece());
+                    used[next.piece()] = true;
+                    appendPiece(run, piece, !next.atStart());
+                    grown = true;
+                }
+            }
+            while (true) {
+                int[] start = run.firstVertex();
+                End previous = uniqueContinuation(pieces, used, index, start[0], start[1], y, kind,
+                        seed);
+                if (previous == null) {
+                    break;
+                }
+                TrackPiece piece = pieces.get(previous.piece());
+                used[previous.piece()] = true;
+                Run prepended = new Run();
+                appendPiece(prepended, piece, previous.atStart());
+                // The piece is laid down so that its connecting end is its last point; the run
+                // already starts at that same point, so the shared joint is written once.
+                if (!prepended.vertices.isEmpty()
+                        && prepended.lastVertex()[0] == start[0]
+                        && prepended.lastVertex()[1] == start[1]) {
+                    prepended.dropLast();
+                }
+                run.prepend(prepended);
+            }
+
+            int[] startSpace = run.firstVertex();
+            int[] endSpace = run.lastVertex();
+            RoadNode from = nodeAt(layer, made, nextId, startSpace[0], y, startSpace[1]);
+            RoadNode to = nodeAt(layer, made, nextId, endSpace[0], y, endSpace[1]);
             if (from.id() == to.id()) {
                 // A rail that ends where it started carries nothing a route can use.
                 continue;
             }
-            RoadSegment segment = new RoadSegment(nextId[0]++, kind, track.y(), count);
-            for (int i = 0; i < count; i++) {
-                segment.addVertex(xs[i], zs[i]);
+            RoadSegment segment = new RoadSegment(nextId[0]++, kind, y, run.vertices.size());
+            for (int[] point : run.vertices) {
+                segment.addVertex(point[0], point[1]);
             }
             segment.setFromNode(from.id());
             segment.setToNode(to.id());
+            // MTR hands its rails over as world-coordinate samples of its own curves, not as blocks.
+            // The display line keeps those samples (rounded to blocks it had a half-block wobble on
+            // every diagonal) and pins its ends on the node positions, so two runs meeting at a
+            // junction meet on the same point.
+            List<double[]> display = run.display;
+            display.set(0, new double[]{from.x(), from.z()});
+            display.set(display.size() - 1, new double[]{to.x(), to.z()});
+            segment.setCurve(RoadCurve.precise(display));
             layer.putSegment(segment);
         }
         return layer;
+    }
+
+    /**
+     * The rail layer for a reading, for the regression harness.
+     *
+     * <p>Package-private rather than public: it is the conversion and nothing else, and only the
+     * harness -- which lives in this package -- asks for it without a game.
+     */
+    static RoadNetwork railLayerForCheck(MtrClientData.Snapshot reading) {
+        return buildRailLayer(reading);
+    }
+
+    /**
+     * One rail piece as the layer builds it: MTR's own world-coordinate samples, the height, and the
+     * class its mode means.
+     *
+     * <p>The samples are kept as doubles because they are a curve. {@link #x(int)} and {@link #z(int)}
+     * are the block positions the joint index is built on -- two rails meet where their blocks meet --
+     * but they are only ever used to decide what joins, never as the shape that is drawn.
+     */
+    private record TrackPiece(double[] xs, double[] zs, int y, RoadClass kind) {
+
+        int count() {
+            return xs.length;
+        }
+
+        int x(int index) {
+            return (int) Math.round(xs[index]);
+        }
+
+        int z(int index) {
+            return (int) Math.round(zs[index]);
+        }
+    }
+
+    /** One end of one rail piece, and whether that end is the piece's first vertex. */
+    private record End(int piece, boolean atStart) {
+    }
+
+    /** How close two rail ends must be to be read as one joint, in blocks. */
+    private static final int JOINT_BLOCKS = 2;
+
+    /** The cell a point is filed under for the joint lookup; see {@link #cellKey}. */
+    private static final int JOINT_CELL = 4;
+
+    private static long cellKey(int x, int z) {
+        return ((long) Math.floorDiv(x, JOINT_CELL) << 32)
+                ^ (Math.floorDiv(z, JOINT_CELL) & 0xFFFFFFFFL);
+    }
+
+    /**
+     * The one unused piece that continues from a point, or null when there is none or more than one.
+     *
+     * <p>More than one is a junction: the run ends there, and the other side of the junction is a
+     * run of its own. That is what turns a network of one-block rail pieces into a handful of long
+     * polylines.
+     */
+    private static End uniqueContinuation(List<TrackPiece> pieces, boolean[] used,
+                                          Map<Long, List<End>> index, int x, int z, int y,
+                                          RoadClass kind, int seed) {
+        List<End> near = new ArrayList<>(2);
+        int cellX = Math.floorDiv(x, JOINT_CELL);
+        int cellZ = Math.floorDiv(z, JOINT_CELL);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                List<End> bucket = index.get(((long) (cellX + dx) << 32)
+                        ^ ((cellZ + dz) & 0xFFFFFFFFL));
+                if (bucket == null) {
+                    continue;
+                }
+                for (End end : bucket) {
+                    int piece = end.piece();
+                    TrackPiece entry = pieces.get(piece);
+                    if (entry.kind() != kind || Math.abs(entry.y() - y) > 2) {
+                        continue;
+                    }
+                    int endX = end.atStart() ? entry.x(0) : entry.x(entry.count() - 1);
+                    int endZ = end.atStart() ? entry.z(0) : entry.z(entry.count() - 1);
+                    if (Math.abs(endX - x) <= JOINT_BLOCKS && Math.abs(endZ - z) <= JOINT_BLOCKS) {
+                        near.add(end);
+                    }
+                }
+            }
+        }
+        // Three or more ends at one point is a junction: the run ends there and the other branches
+        // are runs of their own. Two ends are one piece continuing into another -- unless both are
+        // the piece already in the run, in which case there is nothing to continue.
+        if (near.size() != 2) {
+            return null;
+        }
+        End unused = null;
+        for (End end : near) {
+            if (!used[end.piece()]) {
+                if (unused != null || end.piece() == seed) {
+                    return null;
+                }
+                unused = end;
+            }
+        }
+        return unused;
+    }
+
+    /**
+     * One stitched run of rails: the block vertices the network routes on, and the world-coordinate
+     * samples the display curve is made from.
+     *
+     * <p>Two lists rather than one because the two readers want different things. The network stores
+     * blocks -- a node is a block position -- while MTR's own geometry is a curve in world coordinates,
+     * and rounding it before smoothing is what put a wobble on it. Keeping them side by side means the
+     * curve never has to be derived from the rounded form, and the joints between pieces are dropped
+     * from both at once, so the two cannot disagree about where the run is.
+     */
+    private static final class Run {
+        private final List<int[]> vertices = new ArrayList<>();
+        private final List<double[]> display = new ArrayList<>();
+
+        int[] firstVertex() {
+            return vertices.get(0);
+        }
+
+        int[] lastVertex() {
+            return vertices.get(vertices.size() - 1);
+        }
+
+        int vertexCount() {
+            return vertices.size();
+        }
+
+        void add(int x, int z, double displayX, double displayZ) {
+            vertices.add(new int[]{x, z});
+            display.add(new double[]{displayX, displayZ});
+        }
+
+        boolean endsAt(int x, int z) {
+            if (vertices.isEmpty()) {
+                return false;
+            }
+            int[] last = lastVertex();
+            return last[0] == x && last[1] == z;
+        }
+
+        /** Drops the last point of both lists, for a joint the other piece is about to write. */
+        void dropLast() {
+            if (!vertices.isEmpty()) {
+                vertices.remove(vertices.size() - 1);
+            }
+            if (!display.isEmpty()) {
+                display.remove(display.size() - 1);
+            }
+        }
+
+        void prepend(Run other) {
+            vertices.addAll(0, other.vertices);
+            display.addAll(0, other.display);
+        }
+    }
+
+    /** Appends a piece to a run, reversed or not, dropping a repeated joint vertex. */
+    private static void appendPiece(Run run, TrackPiece piece, boolean reverse) {
+        int count = piece.count();
+        for (int i = 0; i < count; i++) {
+            int index = reverse ? count - 1 - i : i;
+            int x = piece.x(index);
+            int z = piece.z(index);
+            if (run.endsAt(x, z)) {
+                // The joint is already written by the piece next to this one; writing its rounded
+                // position again would leave a zero-length step, and its display position is the same
+                // joint, so the display list must not take a second point there either.
+                continue;
+            }
+            run.add(x, z, piece.xs()[index], piece.zs()[index]);
+        }
     }
 
     /** The node at a position, making one only when nothing already made is there. */

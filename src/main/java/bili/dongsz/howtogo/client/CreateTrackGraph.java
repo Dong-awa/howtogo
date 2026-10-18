@@ -71,9 +71,9 @@ public final class CreateTrackGraph {
     /** How far a sampled end may sit from the node it should be, before the edge is counted as odd. */
     private static final double ENDS_MATCH_BLOCKS = 4.0;
 
-    private static boolean resolved;
-    private static boolean available;
-    private static boolean warned;
+    private static volatile boolean resolved;
+    private static volatile boolean available;
+    private static volatile boolean warned;
 
     private static Field railwaysField;
     private static Field trackNetworksField;
@@ -436,12 +436,40 @@ public final class CreateTrackGraph {
      * <p>Guarded because this is read on a client tick, and a failure is permanent: a missing class
      * does not appear later. Every lookup is public API of Create, so no privileged access is asked
      * for -- which also means this cannot break a Create that keeps its API but changes its innards.
+     *
+     * <p>Uses double-checked locking with volatile to avoid synchronized overhead on every call after
+     * the first successful resolution.
      */
-    private static synchronized void resolve() {
+    private static void resolve() {
+        // Fast path: resolved already, and no lock is taken at all. This is the path every tick after
+        // the first takes, which is the whole reason the lock is not on the method itself.
         if (resolved) {
             return;
         }
-        resolved = true;
+        // Slow path: the first call, or two threads arriving together. The flag is volatile, so the
+        // second check inside the lock sees a binding another thread has already completed.
+        synchronized (CreateTrackGraph.class) {
+            if (resolved) {
+                return;
+            }
+            bind();
+        }
+    }
+
+    /**
+     * The lookups themselves, run once from inside {@link #resolve}'s lock.
+     *
+     * <p>{@link #resolved} is published <b>last</b>, in a {@code finally}, and that order is what makes
+     * the lock-free fast path in {@link #resolve} safe rather than merely fast. It is volatile, so a
+     * thread that reads it as set is guaranteed to see every class, field and method assigned above it;
+     * setting it first, as this did before the lock was narrowed, would let a second thread skip the
+     * lock and go on to use handles that had not been looked up yet.
+     *
+     * <p>Set on every exit, success or failure, and deliberately not on success alone: a class that is
+     * not on the classpath will not appear later, so a failure is permanent too, and retrying it on
+     * every tick would only pay for the same exception again.
+     */
+    private static void bind() {
         try {
             //? if fabric {
         /*if (!FabricLoader.getInstance().isModLoaded(MOD_ID)) {
@@ -483,6 +511,11 @@ public final class CreateTrackGraph {
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;
             warnUnavailable(e);
+        } finally {
+            // Published last, so that every handle above is visible to a thread that reads this as set.
+            // See the note on this method: the order is the correctness of the lock-free path, not a
+            // matter of taste.
+            resolved = true;
         }
     }
 

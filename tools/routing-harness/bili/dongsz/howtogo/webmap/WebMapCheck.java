@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.webmap;
 
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -120,7 +121,19 @@ public final class WebMapCheck {
     }
 
     static RoadMapSnapshot fixtureSnapshot() {
-        return RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork());
+        return RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork(),
+                java.util.Map.of(), fixtureReadOnlyLayers());
+    }
+
+    /**
+     * A read-only layer of the kind the world map draws over the player's roads: an auto-recognised
+     * road with a smoothed display curve, which is exactly the shape the browser map used to drop.
+     */
+    static List<RoadMapSnapshot.ReadOnlyLayer> fixtureReadOnlyLayers() {
+        RoadSegment readOnly = RoadSegment.of(900, RoadClass.PATH, 64, 300, 50, 500, 50);
+        readOnly.setCurve(RoadCurve.from(List.of(
+                new double[]{300, 50}, new double[]{400, 45}, new double[]{500, 50})));
+        return List.of(new RoadMapSnapshot.ReadOnlyLayer("ROADWEAVER", List.of(readOnly)));
     }
 
     /** The payload of the fixture, as the page receives it. */
@@ -188,12 +201,40 @@ public final class WebMapCheck {
                         && points.get(0).getAsJsonArray().get(1).getAsInt() == 0);
         expect("with the bends kept, so a road drawn round a corner is drawn round it",
                 points.get(2).getAsJsonArray().get(1).getAsInt() == 40);
+        expect("a road the player drew has no source and no curve, and is drawn from its vertices",
+                !segment.has("source") && !segment.has("curve"));
+
+        // The read-only layer: an auto-recognised road with its smoothed display line. This is the
+        // half of the map the page used to be missing entirely.
+        JsonObject readOnly = null;
+        for (JsonElement element : root.getAsJsonArray("segments")) {
+            JsonObject candidate = element.getAsJsonObject();
+            if (candidate.has("source")) {
+                readOnly = candidate;
+            }
+        }
+        expect("a read-only layer's segment names its source", readOnly != null
+                && "ROADWEAVER".equals(readOnly.get("source").getAsString()));
+        if (readOnly != null) {
+            expect("it is one of the read-only segments, not one of the player's",
+                    readOnly.get("id").getAsInt() < 0
+                            && readOnly.get("from").getAsInt() == -1
+                            && readOnly.get("to").getAsInt() == -1);
+            JsonArray curve = readOnly.getAsJsonArray("curve");
+            expect("and carries the smoothed line the views draw, as [x, z] pairs",
+                    curve != null && curve.size() == 3
+                            && Math.abs(curve.get(1).getAsJsonArray().get(1).getAsDouble() - 45.0) < 1e-9);
+            expect("whose ends are the segment's own ends, so a curve cannot stop short of its junction",
+                    curve != null
+                            && Math.abs(curve.get(0).getAsJsonArray().get(0).getAsDouble() - 300.0) < 1e-9
+                            && Math.abs(curve.get(2).getAsJsonArray().get(0).getAsDouble() - 500.0) < 1e-9);
+        }
 
         JsonObject stats = root.getAsJsonObject("stats");
         expect("the stats are the documented four",
                 stats.keySet().equals(Set.of("nodes", "segments", "lengthBlocks", "layers")));
-        expect("the counts match the fixture",
-                stats.get("nodes").getAsInt() == 4 && stats.get("segments").getAsInt() == 4);
+        expect("the counts match the fixture, read-only layer included",
+                stats.get("nodes").getAsInt() == 4 && stats.get("segments").getAsInt() == 5);
         expect("the storeys are listed ascending and distinct, the tunnel's included ("
                         + stats.get("layers") + ")",
                 stats.getAsJsonArray("layers").size() == 3
@@ -362,7 +403,7 @@ public final class WebMapCheck {
             askedFrom.set(caller);
             RoadMapSnapshot snapshot = source.snapshot();
             expect("a request is answered with a reading (" + snapshot.segmentCount() + " segments)",
-                    snapshot.segmentCount() == 4 && snapshot.nodeCount() == 4);
+                    snapshot.segmentCount() == 5 && snapshot.nodeCount() == 4);
             expect("the reading was taken on the game's thread (" + readOn.get() + ")",
                     "fake-game-thread".equals(readOn.get()));
             expect("and never on the thread that asked, which is what the hand-off is for",

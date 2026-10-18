@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -64,6 +65,15 @@ public final class WebMapServer implements AutoCloseable {
 
     /** How many consecutive ports to try when the configured one is taken. */
     private static final int PORT_ATTEMPTS = 10;
+
+    /**
+     * How long {@link #stop()} waits for a handler that is already running, in milliseconds.
+     *
+     * <p>One second, and spent on the client's shutdown path: a request whose answer has not arrived by
+     * then is waiting on a game thread that is itself going away, so the honest choice is to drop it and
+     * let the daemon thread follow the JVM down.
+     */
+    private static final long SHUTDOWN_WAIT_MILLIS = 1000L;
 
     private static final String JSON = "application/json; charset=utf-8";
     private static final String HTML = "text/html; charset=utf-8";
@@ -218,7 +228,25 @@ public final class WebMapServer implements AutoCloseable {
                         failed.toString());
             }
         }
-        workers.shutdownNow();
+        // The sockets are closed, so nothing new can arrive; what is left is a handler already running,
+        // and the only thing it can be waiting on is the game's thread. The wait here is deliberately
+        // short rather than generous: this runs on the client's shutdown path, and a mod that makes the
+        // game take longer to close is a worse bug than a request dropped on the floor. The threads are
+        // daemons for the same reason -- a bound of zero is what a shutdown that must not block looks
+        // like, and this is close to it.
+        workers.shutdown();
+        try {
+            if (!workers.awaitTermination(SHUTDOWN_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                List<Runnable> dropped = workers.shutdownNow();
+                if (!dropped.isEmpty()) {
+                    HowToGo.LOGGER.warn("[HowToGo] webmap | {} queued requests dropped on shutdown",
+                            dropped.size());
+                }
+            }
+        } catch (InterruptedException interrupted) {
+            workers.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         HowToGo.LOGGER.info("[HowToGo] webmap | stopped");
     }
 

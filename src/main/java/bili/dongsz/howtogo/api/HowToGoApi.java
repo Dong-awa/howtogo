@@ -16,12 +16,12 @@ import java.util.Objects;
  * The way in.
  *
  * <h2>What this is for</h2>
- * Another mod has three things it may want from this one: to contribute a destination source, to ask
- * what this mod knows about the world, or to store a little data of its own beside the player's roads.
- * Each of those exists somewhere in this mod already, but behind classes that know which Minecraft and
- * which loader they are on and that are free to be reorganised between versions. This is the surface
- * that is not: it says what an addon may depend on, and everything it says is intended to keep
- * working.
+ * Another mod has four things it may want from this one: to contribute a destination source, to ask
+ * what this mod knows about the world, to store a little data of its own beside the player's roads, or
+ * to state a layer of points and lines of its own. Each of those exists somewhere in this mod already,
+ * but behind classes that know which Minecraft and which loader they are on and that are free to be
+ * reorganised between versions. This is the surface that is not: it says what an addon may depend on,
+ * and everything it says is intended to keep working.
  *
  * <h2>Nothing to declare, nothing to check in</h2>
  * There is no registration ceremony and no object to obtain: the methods are static and callable as
@@ -98,6 +98,25 @@ public final class HowToGoApi {
      */
     public static void registerDestinationSource(DestinationSource source) {
         DestinationSources.register(source);
+    }
+
+    /**
+     * Contributes a layer of points and lines, drawn with the player's roads.
+     *
+     * <p>Equivalent to {@link RoadDataSources#register(String, RoadDataSource)}. The layer is the
+     * addon's own: this mod keeps a copy of what the source states, draws it on the world map, and
+     * never writes it into the player's road file, never offers it to the editor and never plans a
+     * route through it.
+     *
+     * <p>The source is read whenever its {@link RoadDataSource#version()} differs from the number read
+     * beside the layer being drawn, which is the whole of the change protocol: bump that number when
+     * the data changes and this mod re-reads on its next tick; leave it alone and nothing happens.
+     *
+     * @param id     names the layer in the log, and is refused if already in use
+     * @param source what states the layer; {@code version()} is asked every client tick
+     */
+    public static void registerRoadDataSource(String id, RoadDataSource source) {
+        RoadDataSources.register(id, source);
     }
 
     /**

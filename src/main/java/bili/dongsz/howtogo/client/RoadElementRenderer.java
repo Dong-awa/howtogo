@@ -1,9 +1,11 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
@@ -75,6 +77,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_SNAP_ANGLE = 0xFFB06BFF;
     /** Snapped onto a rail: the place colour, since a rail the editor can only land on is a landmark. */
     private static final int COLOR_SNAP_RAIL = HudDraw.COLOR_PLACE;
+    /** Snapped onto RoadWeaver's roads or structures: a colour of their own, distinct from a rail. */
+    private static final int COLOR_SNAP_ROADWEAVER = 0xFF9CF06A;
     private static final int COLOR_SNAP_FREE = 0x80FFFFFF;
     private static final int COLOR_RUBBER_BAND = 0xCCFF4DE0;
 
@@ -82,17 +86,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double SELECTED_HANDLE_PX = 4.5;
     private static final double SNAP_RING_PX = 6.0;
 
-    /** Circle resolution for round joins and caps. */
+    /** Circle resolution for the solid discs the route pass paints. */
     private static final int DISC_SEGMENTS = 10;
-
-    /**
-     * How much a polyline has to bend at a vertex before the joint needs a round cap, in degrees.
-     *
-     * <p>Low enough that any corner a player draws gets one -- the shallowest bend that reads as a
-     * corner is far above this -- and high enough that the per-block wobble of a sampled curve does
-     * not: those vertices are a fraction of a degree apart and their strokes overlap completely.
-     */
-    private static final double JOINT_MIN_DEGREES = 20.0;
 
     private static final double TWO_PI = Math.PI * 2.0;
 
@@ -140,15 +135,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double ROUTE_MARKER_PX = 5.0;
 
     /**
-     * Names are only drawn once the map is zoomed in enough for them not to collide.
-     *
-     * <p>Lower than it was, because names now shrink with the map: the reason for the gate was that a
-     * screenful of full-sized words smears into itself when the map is far out, and smaller words smear
-     * far less. The floor on their size is what keeps them readable at the edge of this.
-     */
-    private static final double LABEL_MIN_SCALE = 0.5;
-
-    /**
      * The map scale a name's size is measured from, the size it is drawn at there, and the bounds on how
      * far it may grow or shrink from there.
      *
@@ -182,14 +168,166 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * apart rather than to be a distance of its own. Small, because the marker already has a size.
      */
     private static final double PLACE_NAME_GAP_PX = 6.0;
+
+    // ------------------------------------------------------------- label layout
+
     /**
-     * How far above a line's own centre its name is written, before the name's own size scales it.
+     * The room kept between a label and anything it must not touch, in screen pixels.
      *
-     * <p>Half of the font's nine-pixel line height, so the road runs through the middle of the word
-     * rather than under or beside it. A name that is set clear of its road is a name that has drifted
-     * away from the thing it labels, which is what these read as when the offset was larger.
+     * <p>Every fit test inflates the label's own box by this much, which is what turns "the boxes do
+     * not overlap" into "two names read as two names": two words whose painted boxes merely miss are
+     * still one smear at map sizes.
+     */
+    private static final double LABEL_CLEARANCE_PX = 2.0;
+    /**
+     * The screen distance two names of one long road keep between their centres, in pixels.
+     *
+     * <p>A name is only useful if it can be found along the road, and a road long enough to cross the
+     * screen has several stretches of it worth naming. A screen distance rather than a block one,
+     * because it is the screen the names are read from: zoomed out, a block distance would put two
+     * names on top of each other; zoomed in, it would leave the far half of a visible road nameless.
+     */
+    private static final double LABEL_SPACING_PX = 190.0;
+    /** The most names one road gets, however much of it is on screen. */
+    private static final int MAX_LABELS_PER_ROAD = 8;
+    /**
+     * How far a road or railway name sits off the middle of its line, in the label's own pixels.
+     *
+     * <p>Half the font's line height is not available here -- the name is written through the map's
+     * own label helper, which centres on the line -- so a small fixed rise is what keeps the stroke
+     * from running through the letters.
      */
     private static final int LINE_LABEL_RISE_PX = 4;
+    /**
+     * How far around a place its name may be pushed, in screen pixels, when a road is in the way.
+     *
+     * <p>Used to decide which stretches of road are worth reading into the road grid at all: a road
+     * further than this from every place whose name is being placed cannot affect any of its
+     * candidate positions, and reading it would be work for a question nobody asks.
+     */
+    private static final double PLACE_LABEL_CLEAR_RADIUS_PX = 260.0;
+    /**
+     * The smallest font factor at which a road's name is still worth drawing.
+     *
+     * <p>The name's size is capped by the width of the road it sits on (see
+     * {@link #roadLabelFactor}), so a road too thin to hold a legible word is a road whose name is
+     * left off entirely rather than written over two pixels of it. The player sees the name when they
+     * zoom far enough in for the road to be wide enough to carry it.
+     */
+    private static final float ROAD_LABEL_MIN_FACTOR = 0.5f;
+
+    /**
+     * The size a road's name is drawn at, in font units: its zoom size, capped by the road's width.
+     *
+     * <p>The name belongs to the road and sits on it, so its height must not be taller than the
+     * road's own drawn width -- a word taller than the street it names reads as a word standing
+     * beside the street. Both quantities are screen pixels: the road's width is the stroke width at
+     * this zoom (see {@link #strokeHalfWidthPx}), and the font's height is its line height.
+     */
+    private static float roadLabelFactor(RoadClass roadClass, double scale, Font font) {
+        float zoom = labelScale(scale);
+        double roadWidthPx = 2.0 * strokeHalfWidthPx(roadClass, scale);
+        float widthCap = (float) (roadWidthPx / font.lineHeight);
+        return Math.min(zoom, widthCap);
+    }
+
+    /**
+     * A rectangle two labels may not share, in screen pixels, already inflated by the clearance.
+     *
+     * <p>The box is what is painted rather than what is laid out: a rotated name is measured by the
+     * box its rotation sweeps, which is what makes a diagonal name and a horizontal one comparable.
+     */
+    private record LabelBox(double minX, double minY, double maxX, double maxY) {
+
+        boolean overlaps(LabelBox other) {
+            return minX < other.maxX && other.minX < maxX && minY < other.maxY && other.minY < maxY;
+        }
+    }
+
+    /** The labels already on the map this frame: what a new one has to keep clear of. */
+    private static final class LabelBoard {
+
+        private final List<LabelBox> placed = new ArrayList<>();
+
+        boolean fits(LabelBox box) {
+            for (LabelBox other : placed) {
+                if (box.overlaps(other)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void reserve(LabelBox box) {
+            placed.add(box);
+        }
+    }
+
+    /** A place's name, its marker's screen position, and where the place is in the world. */
+    private record PlaceName(String name, double x, double y, double worldX, double worldZ,
+                             double markerHalf) {
+    }
+
+    /** A point on a line, with the direction of the line there, for a rotated label. */
+    private record LinePoint(double x, double y, float angle) {
+    }
+
+    /**
+     * The roads already drawn, as occupied screen rectangles, so a place's name can stand aside.
+     *
+     * <p>A coarse grid of cells rather than one list of every road edge: a name has to be tested
+     * against the roads near it, and the whole point of the grid is that it asks only about those.
+     * Cells are far larger than a label, so a query is a handful of lookups whatever the network is
+     * doing, and building it is one walk of the visible roads -- which the label pass already makes.
+     */
+    private static final class RoadInk {
+
+        private static final int CELL_PX = 32;
+
+        private final java.util.Map<Long, List<double[]>> cells = new java.util.HashMap<>();
+
+        /** Adds one drawn edge, widened by the road's own half-width and the label clearance. */
+        void addEdge(double x1, double y1, double x2, double y2, double halfWidthPx) {
+            double pad = halfWidthPx + LABEL_CLEARANCE_PX;
+            double minX = Math.min(x1, x2) - pad;
+            double maxX = Math.max(x1, x2) + pad;
+            double minY = Math.min(y1, y2) - pad;
+            double maxY = Math.max(y1, y2) + pad;
+            double[] box = {minX, minY, maxX, maxY};
+            for (int cellX = cell(minX); cellX <= cell(maxX); cellX++) {
+                for (int cellY = cell(minY); cellY <= cell(maxY); cellY++) {
+                    cells.computeIfAbsent(key(cellX, cellY), at -> new ArrayList<>()).add(box);
+                }
+            }
+        }
+
+        /** Whether any drawn road runs through the given label box. */
+        boolean overlaps(LabelBox box) {
+            for (int cellX = cell(box.minX()); cellX <= cell(box.maxX()); cellX++) {
+                for (int cellY = cell(box.minY()); cellY <= cell(box.maxY()); cellY++) {
+                    List<double[]> nearby = cells.get(key(cellX, cellY));
+                    if (nearby == null) {
+                        continue;
+                    }
+                    for (double[] road : nearby) {
+                        if (box.minX() < road[2] && road[0] < box.maxX()
+                                && box.minY() < road[3] && road[1] < box.maxY()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static int cell(double screen) {
+            return (int) Math.floor(screen / CELL_PX);
+        }
+
+        private static long key(int cellX, int cellY) {
+            return ((long) cellX << 32) ^ (cellY & 0xFFFFFFFFL);
+        }
+    }
 
     /**
      * Where a world position lands on screen, through the pose the map is drawing with right now.
@@ -526,14 +664,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return false;
         }
 
-        int argb = segment.roadClass().color();
+        int argb = RoadConfig.roadColor(segment.roadClass());
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
+        // The alpha is the configured one, taken as it stands: a road a player made translucent is
+        // translucent, and one they made invisible is invisible. The default six-digit colours are
+        // opaque and every path that draws a road here hands over an ARGB number, so there is no
+        // "unset" alpha left to guess at.
         int a = (argb >>> 24) & 0xFF;
-        if (a == 0) {
-            a = 0xC0;
-        }
 
         // Stroke width is a screen-space quantity: below the per-class cap it tracks the road's
         // true block width at the current zoom, above it the stroke stops widening. Only the
@@ -543,6 +682,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
 
+        // What is drawn: the segment's smoothed display line when it has one, its block vertices
+        // otherwise. A machine-read railway is stored one block at a time, and that staircase is the
+        // right thing to route on and the wrong thing to look at -- drawn step by step it is a
+        // per-block wobble, and the round joint at every one of those steps turned into a bead. The
+        // curve is the same road without the block grid in it.
+        int pointCount = displayPointCount(segment);
+
         // A hand-drawn road is selected by id in the editor's network; a rail is selected by shape
         // key in the rail layer, which has no stable ids at all. Both answer the same question here,
         // which is why the two lookups sit in one expression rather than behind a flag.
@@ -550,53 +696,29 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 || RailNameStore.isSelected(segment);
         if (selected) {
             // Translucent halo underneath, so the selected road reads clearly without hiding the
-            // class colour that is painted over it.
-            double haloHalf = halfWidth + 2.5 * posePerPixel;
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                emitStroke(last, vc,
-                        localX(segment.x(i - 1), anchorX, fracX, p10),
-                        localY(segment.z(i - 1), anchorZ, fracY, p10),
-                        localX(segment.x(i), anchorX, fracX, p10),
-                        localY(segment.z(i), anchorZ, fracY, p10),
-                        haloHalf,
-                        (COLOR_SELECTED >> 16) & 0xFF, (COLOR_SELECTED >> 8) & 0xFF,
-                        COLOR_SELECTED & 0xFF, 0x70);
-            }
+            // class colour that is painted over it. The same continuous stroke as the road itself, so
+            // the halo follows the same mitred bends and rounded ends.
+            strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
+                    halfWidth + 2.5 * posePerPixel,
+                    (COLOR_SELECTED >> 16) & 0xFF, (COLOR_SELECTED >> 8) & 0xFF,
+                    COLOR_SELECTED & 0xFF, 0x70);
         }
 
-        for (int i = 1; i < segment.vertexCount(); i++) {
-            double x1 = localX(segment.x(i - 1), anchorX, fracX, p10);
-            double y1 = localY(segment.z(i - 1), anchorZ, fracY, p10);
-            double x2 = localX(segment.x(i), anchorX, fracX, p10);
-            double y2 = localY(segment.z(i), anchorZ, fracY, p10);
-            emitStroke(last, vc, x1, y1, x2, y2, halfWidth, r, g, b, a);
-        }
+        // One continuous stroke rather than a quad per edge. The shape itself -- an offset for each
+        // side of the line, a mitre or a round join at each bend, a round cap at each end -- is worked
+        // out by StrokeOutline, which is also what keeps the width honest: a per-edge quad leaves a
+        // notch on the outside of every gentle bend, and a cross-section taken from the wrong side of
+        // an end, which is what the old code did, paints half the last edge and looks like the road
+        // thinning into its junction. See StrokeOutline for both.
+        strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10, halfWidth,
+                r, g, b, a);
 
-        // Round joins (and round caps at the ends). Without these, consecutive segments leave a
-        // wedge-shaped gap on the outside of every corner and the road looks broken.
-        //
-        // Only where a joint is actually needed: the two ends of the polyline, and the vertices where
-        // it genuinely bends. A disc at *every* vertex was ten quads for a joint the two strokes
-        // already meet at, and an automatically read railway has a vertex every block or two -- so most
-        // of the geometry the map emitted was circles nobody could see, drawn along straight runs at
-        // eleven times the vertex cost of the road itself. The threshold is well below any bend a
-        // player draws and well above the wobble of a sampled curve, so the corners that do leave a
-        // notch all still get one.
-        for (int i = 0; i < segment.vertexCount(); i++) {
-            if (i > 0 && i < segment.vertexCount() - 1 && !bendsAt(segment, i)) {
-                continue;
-            }
-            emitDisc(last, vc,
-                    localX(segment.x(i), anchorX, fracX, p10),
-                    localY(segment.z(i), anchorZ, fracY, p10),
-                    halfWidth, r, g, b, a);
-        }
-
-        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after the
-        // road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they would
-        // be a second pass that could disagree with it about the road's colour, width or visibility.
+        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after
+        // the road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they
+        // would be a second pass that could disagree with it about the road's colour, width or visibility.
         if (segment.direction().isOneWay() && Math.abs(info.scale) >= ONEWAY_ARROW_MIN_SCALE) {
-            emitOneWayArrows(last, vc, segment, anchorX, anchorZ, fracX, fracY, p10, posePerPixel);
+            emitOneWayArrows(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
+                    posePerPixel);
         }
 
         // Rail diagnostic: one of the auto-detected layer's segments was actually stroked, past the
@@ -680,6 +802,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 case SEGMENT -> COLOR_SNAP_SEGMENT;
                 case ANGLE -> COLOR_SNAP_ANGLE;
                 case RAIL -> COLOR_SNAP_RAIL;
+                case ROADWEAVER -> COLOR_SNAP_ROADWEAVER;
                 case FREE -> COLOR_SNAP_FREE;
             };
             double sx = localX(snap.x(), anchorX, fracX, p10);
@@ -699,8 +822,19 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Road and place names, drawn in screen space above the map.
      *
-     * <p>Only shown past {@link #LABEL_MIN_SCALE}; at lower zoom the labels would overlap into an
-     * unreadable smear.
+     * <h2>What a name is allowed to cost</h2>
+     * A map with every name on it is a map with no names on it: two words that overlap read as a
+     * smear, and one drawn over the next is worse than the second not being drawn. So every label is
+     * offered a box on the screen, and a label that cannot have its box goes undrawn. The board keeps
+     * the boxes already given out, which is what makes this a single rule for roads, railways and
+     * places rather than one rule per kind of thing.
+     *
+     * <h2>The order the names are offered</h2>
+     * Places first, then railways, then roads. A place's name is about one point and has nowhere else
+     * to go; a road's name can be repeated further along its road, and it is the commonest kind of
+     * name on the map, so it is the one that yields. Two places close enough that their names
+     * overlap therefore show one name until the map is zoomed far enough in for the boxes to part,
+     * which is the reading a map wants -- see {@link MapFilter#showsLabel}.
      */
     //? if >=1.21.6 {
     /*private void renderLabels(MapElementGraphics graphics, PoseStack pose, ElementRenderInfo info,
@@ -720,6 +854,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int margin = 64;
         int viewRight = mapViewRight(graphics) + margin;
         int viewBottom = mapViewBottom(graphics) + margin;
+        double scale = Math.abs(info.scale);
+        float placeFactor = labelScale(info.scale);
 
         pose.pushPose();
         pose.last().pose().identity();
@@ -728,143 +864,457 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // Every place gets its marker first, and at every zoom. The marker is what makes a place
         // findable when the map is zoomed out, which is exactly when the names below are suppressed
         // for being unreadable -- so gating the two together would remove the marker exactly when it
-        // is needed. Shapes before text: see the warning on HudDraw.
-        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges,
-                Math.abs(info.scale), projection);
+        // is needed. Shapes before text: see the warning on HudDraw. The marker's box is reserved on
+        // the board as it is emitted, so a name never covers the place it belongs to.
+        LabelBoard board = new LabelBoard();
+        drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges, scale,
+                projection, board);
 
-        // Names need a zoom at which they can be read at all; at lower zoom they overlap into a
-        // smear. Only the text is gated, never the markers above. Their size follows the zoom: the
-        // font's own size at the reference scale, shrinking or growing with the map either side of it.
-        float labelFactor = labelScale(info.scale);
-        if (Math.abs(info.scale) >= LABEL_MIN_SCALE) {
-            // Which road each segment belongs to, and which piece of it carries the name, read once
-            // for the whole pass: the same reading serves every name below and every frame until the
-            // roads change. Asking for a chain per named road instead -- which is what this pass used
-            // to do -- rebuilt an adjacency index of the whole network per name, per frame.
-            RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
-            for (RoadSegment segment : network.segments()) {
-                String name = segment.name();
-                if (name == null) {
-                    // Only named roads are labelled. Most of a fresh network is unnamed, and a
-                    // placeholder on every one of them buries the names that do exist.
-                    continue;
-                }
-                // A road that is not drawn is not named either, by the same rule that decided it: a name
-                // left behind by the road it belongs to is a word pointing at nothing.
-                if (!MapFilter.shows(segment.roadClass(), info.scale)) {
-                    continue;
-                }
-                // Culled before the name question, not after: a road off screen has no name to read,
-                // and this pass runs on every frame the map draws.
-                double[] mid = segment.midpoint();
-                int x = (int) Math.round(projection.screenX(mid[0]));
-                int y = (int) Math.round(projection.screenZ(mid[1]));
-                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                    continue;
-                }
-                // One label per road. A road with bends is several segments all carrying the same
-                // name, so without this the label would repeat at every corner.
-                if (!grouping.carriesLabel(segment)) {
-                    continue;
-                }
-                // A name longer than the road it belongs to would hang off both its ends and read as
-                // a label for whatever is beside it, so it is dropped rather than written.
-                if (font.width(name) * labelFactor
-                        > chainLengthPx(network, grouping.chainOf(segment), projection)) {
-                    continue;
-                }
-                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_ROAD, projection,
-                        labelFactor);
-            }
-            // Railway names, one per line. Which segment of a chain carries the label was decided
-            // when the layer was rebuilt, so this asks a map instead of walking every chain a frame.
-            for (RoadSegment segment : RailTrackStore.segments()) {
-                String name = RailNameStore.labelAt(segment);
-                if (name == null) {
-                    continue;
-                }
-                RoadNetwork layer = RailTrackStore.network();
-                // The same rule as for a road, over the whole railway. Only the one segment per
-                // railway that carries the label gets this far, so the layer's grouping -- which is
-                // cached per rebuild -- is asked for here rather than by every rail segment: building
-                // it costs the size of the layer, and the layer is every piece of track Create has
-                // within its read radius.
-                if (font.width(name) * labelFactor > chainLengthPx(layer,
-                        RoadChains.cachedGrouping(layer).chainOf(segment), projection)) {
-                    continue;
-                }
-                double[] mid = segment.midpoint();
-                int x = (int) Math.round(projection.screenX(mid[0]));
-                int y = (int) Math.round(projection.screenZ(mid[1]));
-                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                    continue;
-                }
-                drawLineLabel(graphics, pose, font, name, segment, COLOR_LABEL_RAIL, projection,
-                        labelFactor);
-            }
-
-            // Place names, under their markers. A station's name comes from
-            // CreateStationSource.nameOf, the same call the picker lists it under, so the label on
-            // the map and the entry in the list cannot become two names for one station.
-            for (RoadNode node : network.nodes()) {
-                if (node.type() != RoadNode.Type.POI || node.name() == null) {
-                    continue;
-                }
-                if (!MapFilter.shows(node.placeKind(), info.scale)) {
-                    continue;
-                }
-                int x = (int) Math.round(projection.screenX(node.x()));
-                int y = (int) Math.round(projection.screenZ(node.z()));
-                if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                    continue;
-                }
-                drawMapLabel(graphics, font, node.name(), x, y + PLACE_NAME_GAP_PX * labelFactor,
-                        HudDraw.COLOR_PLACE, labelFactor);
-            }
-
-            if (MapFilter.shows(PlaceKind.STATION, info.scale)) {
-                for (RailTrackStore.Station station : RailTrackStore.stations()) {
-                    String name = CreateStationSource.nameOf(station);
-                    int x = (int) Math.round(projection.screenX(station.x()));
-                    int y = (int) Math.round(projection.screenZ(station.z()));
-                    if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
-                        continue;
-                    }
-                    drawMapLabel(graphics, font, name, x, y + PLACE_NAME_GAP_PX * labelFactor,
-                            HudDraw.COLOR_PLACE, labelFactor);
-                }
-            }
+        // A place name stands aside from the roads it is next to, so the roads near the visible
+        // places are read into boxes once. Only built when there is a name to place, which is what
+        // keeps a map zoomed out -- where no place names are drawn -- from paying for it.
+        java.util.List<PlaceName> places = visiblePlaceNames(scale, projection, margin, viewRight,
+                viewBottom);
+        RoadInk ink = places.isEmpty() ? null
+                : buildRoadInk(scale, projection, places, margin, viewRight, viewBottom);
+        for (PlaceName place : places) {
+            drawPlaceName(graphics, pose, font, place, placeFactor, viewRight, viewBottom, board, ink);
         }
+
+        // The railway names, then the road names. A railway is the rarer and more specific thing on
+        // the map, so it gets its space first among the line names.
+        drawLineNames(graphics, pose, font, RailTrackStore.network(), true, scale, projection, margin,
+                viewRight, viewBottom, board);
+        drawLineNames(graphics, pose, font, network, false, scale, projection, margin, viewRight,
+                viewBottom, board);
 
         pose.popPose();
     }
 
     /**
-     * The total on-screen length of a run of segments, in pixels.
+     * The named places whose names this zoom draws, with their markers' positions on screen.
      *
-     * <p>Measured over the whole run rather than one segment, because that is what a name belongs to:
-     * a road with bends is several segments sharing one name, and a name that reaches across two of
-     * its own pieces is exactly right. Measuring a single piece would drop the name of a road drawn
-     * with many short clicks even though there is plenty of road to write it on.
-     *
-     * <p>The run arrives as the grouping's own array rather than as a chain walked here: the lengths
-     * are needed once per name drawn, and a walk costs the size of the whole network.
+     * <p>One list for the places from every source -- the player's own landmarks, Create's stations,
+     * MTR's stations and an addon's -- because they are all drawn as markers from the same list and
+     * labelled by the same rule. The kind on the way in decides the zoom at which the name is drawn;
+     * the marker's own kind and switch decide whether it is drawn at all.
      */
-    private static double chainLengthPx(RoadNetwork network, int[] chain,
-                                     Projection projection) {
-        double total = 0;
-        for (int id : chain) {
-            RoadSegment member = network.segment(id);
-            if (member == null) {
+    private static java.util.List<PlaceName> visiblePlaceNames(double scale, Projection projection,
+                                                               int margin, int viewRight,
+                                                               int viewBottom) {
+        java.util.List<PlaceName> names = new ArrayList<>();
+        double markerHalf = markerHalfPx(HudDraw.PLACE_MARKER_PX, scale);
+        for (Destination place : Destinations.places()) {
+            if (place.name() == null || place.name().isBlank()) {
                 continue;
             }
-            for (int i = 1; i < member.vertexCount(); i++) {
-                total += Math.hypot(
-                        projection.screenX(member.x(i)) - projection.screenX(member.x(i - 1)),
-                        projection.screenZ(member.z(i)) - projection.screenZ(member.z(i - 1)));
+            if (!MapFilter.showsLabel(place.kind(), scale)) {
+                continue;
+            }
+            double x = projection.screenX(place.x());
+            double y = projection.screenZ(place.z());
+            if (onScreen(x, y, margin, viewRight, viewBottom)) {
+                names.add(new PlaceName(place.name(), x, y, place.x(), place.z(), markerHalf));
             }
         }
+        for (RoadNode node : AddonRoadStore.nodes()) {
+            if (node.type() != RoadNode.Type.POI || node.name() == null || node.name().isBlank()) {
+                continue;
+            }
+            if (!MapFilter.showsLabel(node.placeKind(), scale)) {
+                continue;
+            }
+            double x = projection.screenX(node.x());
+            double y = projection.screenZ(node.z());
+            if (onScreen(x, y, margin, viewRight, viewBottom)) {
+                names.add(new PlaceName(node.name(), x, y, node.x(), node.z(), markerHalf));
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Finds a side for a place's name where it touches neither another label nor a road.
+     *
+     * <p>The candidates go round the marker: below first, because that is where a place's name has
+     * always been drawn, then above, then the two sides, then the four corners. The first one whose
+     * box is clear of the board and of the drawn roads is taken. A candidate clear of the board but
+     * not of the roads is remembered: if no side is clear of both, the best of the sides that is at
+     * least clear of the other labels wins, because a name across a road is readable and a name
+     * across another name is not.
+     */
+    private void drawPlaceName(GuiGraphics graphics, PoseStack pose, Font font, PlaceName place,
+                               float factor, int viewRight, int viewBottom, LabelBoard board,
+                               RoadInk ink) {
+        double width = font.width(place.name()) * factor;
+        double height = font.lineHeight * factor;
+        // The gap has to clear the marker as well as the text: the marker's own box is on the board,
+        // and a name touching it would be a name that failed its own place's test.
+        double gap = place.markerHalf() + PLACE_NAME_GAP_PX * factor + LABEL_CLEARANCE_PX * 2.0;
+        double across = gap * 0.7;
+        double[] dx = {0, 0, width / 2.0 + gap, -(width / 2.0 + gap),
+                width / 2.0 + across, -(width / 2.0 + across),
+                width / 2.0 + across, -(width / 2.0 + across)};
+        double[] dy = {height / 2.0 + gap, -(height / 2.0 + gap), 0, 0,
+                height / 2.0 + across, height / 2.0 + across,
+                -(height / 2.0 + across), -(height / 2.0 + across)};
+
+        LabelBox fallback = null;
+        double fallbackX = 0;
+        double fallbackY = 0;
+        for (int i = 0; i < dx.length; i++) {
+            double x = place.x() + dx[i];
+            double y = place.y() + dy[i];
+            LabelBox box = box(x, y, width, height);
+            if (box.minX() < 0 || box.maxX() > viewRight
+                    || box.minY() < 0 || box.maxY() > viewBottom) {
+                continue;
+            }
+            if (!board.fits(box)) {
+                continue;
+            }
+            if (fallback == null) {
+                fallback = box;
+                fallbackX = x;
+                fallbackY = y;
+            }
+            if (ink == null || !ink.overlaps(box)) {
+                board.reserve(box);
+                drawMapLabel(graphics, font, place.name(), x, y, HudDraw.COLOR_PLACE, factor);
+                return;
+            }
+        }
+        if (fallback != null) {
+            board.reserve(fallback);
+            drawMapLabel(graphics, font, place.name(), fallbackX, fallbackY,
+                    HudDraw.COLOR_PLACE, factor);
+        }
+    }
+
+    /**
+     * Draws one road's or railway's name at as many places along it as the screen calls for.
+     *
+     * <h2>Why more than one</h2>
+     * A road crossing the screen is a road whose name is useful at more than its middle: the player
+     * looking at the far half is not helped by a name a screen away. So a long road is named once per
+     * {@link #LABEL_SPACING_PX} of its drawn length, at most {@link #MAX_LABELS_PER_ROAD} times, and
+     * each of those labels still has to win its box on the board.
+     *
+     * <h2>Why its size is capped by the road</h2>
+     * A name lies on the road, so its height is capped by the road's drawn width. A street too thin to
+     * hold a legible word keeps its name off the map until it is zoomed in enough to be wide enough,
+     * which is what makes the names appear class by class: a highway is named first, a footpath last.
+     *
+     * @param rail whether these are railway names, which are drawn in the railway palette
+     */
+    private void drawLineNames(GuiGraphics graphics, PoseStack pose, Font font, RoadNetwork network,
+                               boolean rail, double scale, Projection projection, int margin,
+                               int viewRight, int viewBottom, LabelBoard board) {
+        if (network == null || network.segmentCount() == 0) {
+            return;
+        }
+        // A cheap "could any class be labelled at this zoom" before touching the network: a road's
+        // name is capped by its width, so at a zoomed-out scale no class can carry one and the walk
+        // below would be paid for every frame to find that out.
+        boolean anyClass = false;
+        for (RoadClass roadClass : RoadClass.values()) {
+            if (roadLabelFactor(roadClass, scale, font) >= ROAD_LABEL_MIN_FACTOR) {
+                anyClass = true;
+                break;
+            }
+        }
+        if (!anyClass) {
+            return;
+        }
+        RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        java.util.Set<Integer> roads = new java.util.HashSet<>();
+        for (RoadSegment segment : network.segments()) {
+            String name = segment.name();
+            if (name == null || name.isBlank()) {
+                // Only named roads are labelled. Most of a fresh network is unnamed, and a
+                // placeholder on every one of them buries the names that do exist.
+                continue;
+            }
+            if (!MapFilter.shows(segment.roadClass(), scale)) {
+                continue;
+            }
+            // One walk per road, not one per piece of it: every segment of a chain carries the same
+            // name, and the chain's own geometry is what places the names along the whole road.
+            if (!roads.add(grouping.keyOf(segment))) {
+                continue;
+            }
+            float factor = roadLabelFactor(segment.roadClass(), scale, font);
+            if (factor < ROAD_LABEL_MIN_FACTOR) {
+                // The road is narrower than the smallest name that could sit on it. Its name waits
+                // for the zoom at which it is wide enough, rather than being written over 2 pixels.
+                continue;
+            }
+            java.util.List<double[]> points = chainPoints(network, grouping.chainOf(segment),
+                    projection);
+            double textWidth = font.width(name) * factor;
+            if (points.size() < 2) {
+                continue;
+            }
+            // Names go on the stretches that are actually on the screen, not on the road's whole
+            // length: a road that leaves the screen and comes back has two stretches worth naming,
+            // and the kilometres between them are not places a name should be spent on. A stretch
+            // shorter than the name keeps no name -- it would hang off both its ends and read as a
+            // label for whatever is beside it.
+            for (java.util.List<double[]> run : visibleRuns(points, viewRight, viewBottom)) {
+                double runLength = polylineLength(run);
+                if (runLength < textWidth + LABEL_CLEARANCE_PX * 2.0) {
+                    continue;
+                }
+                double spacing = Math.max(LABEL_SPACING_PX, textWidth + 48.0);
+                int count = Math.max(1, Math.min(MAX_LABELS_PER_ROAD,
+                        (int) Math.floor(runLength / spacing)));
+                for (int i = 0; i < count; i++) {
+                    LinePoint at = pointAt(run, runLength * (i + 0.5) / count);
+                    if (at == null) {
+                        continue;
+                    }
+                    LabelBox box = rotatedBox(at.x(), at.y(), textWidth, font.lineHeight * factor,
+                            at.angle());
+                    if (box.minX() < 0 || box.maxX() > viewRight
+                            || box.minY() < 0 || box.maxY() > viewBottom) {
+                        continue;
+                    }
+                    if (!board.fits(box)) {
+                        continue;
+                    }
+                    board.reserve(box);
+                    drawLineLabel(graphics, pose, font, name, segment,
+                            rail ? COLOR_LABEL_RAIL : COLOR_LABEL_ROAD, projection, factor);
+                }
+            }
+        }
+    }
+
+    /**
+     * One chain's vertices as a single screen-space polyline, in the order a traveller would meet
+     * them.
+     *
+     * <p>A chain is stored as segments in order, but each segment's own vertices may run either way
+     * along it -- the editor stores the piece, not the direction of the road. So each segment is
+     * appended the way round that continues from the previous one, and the shared corner is not
+     * written twice. Without that, a label placed on a chain of two pieces could land on a line that
+     * jumped from one end of the road to the other.
+     */
+    private static java.util.List<double[]> chainPoints(RoadNetwork network, int[] chain,
+                                                       Projection projection) {
+        java.util.List<double[]> points = new ArrayList<>();
+        for (int id : chain) {
+            RoadSegment segment = network.segment(id);
+            if (segment == null || segment.vertexCount() < 2) {
+                continue;
+            }
+            // The drawn shape, so a name sits on the line the road is actually painted as rather
+            // than on the block staircase it was read from.
+            int count = displayPointCount(segment);
+            boolean reverse = false;
+            if (!points.isEmpty()) {
+                double[] last = points.get(points.size() - 1);
+                double toStart = Math.hypot(last[0] - projection.screenX(displayX(segment, 0)),
+                        last[1] - projection.screenZ(displayZ(segment, 0)));
+                double toEnd = Math.hypot(last[0] - projection.screenX(displayX(segment, count - 1)),
+                        last[1] - projection.screenZ(displayZ(segment, count - 1)));
+                reverse = toEnd < toStart;
+            }
+            for (int step = 0; step < count; step++) {
+                int i = reverse ? count - 1 - step : step;
+                double x = projection.screenX(displayX(segment, i));
+                double y = projection.screenZ(displayZ(segment, i));
+                if (!points.isEmpty()) {
+                    double[] last = points.get(points.size() - 1);
+                    if (Math.hypot(x - last[0], y - last[1]) < 0.5) {
+                        continue;
+                    }
+                }
+                points.add(new double[]{x, y});
+            }
+        }
+        return points;
+    }
+
+    /**
+     * The stretches of a polyline that touch the window, each as its own run of points.
+     *
+     * <p>A road may cross the screen, leave it and come back -- a ring road, or any road on a map
+     * panned to its middle. Naming it by distance along its whole length would spend every name off
+     * the screen between those stretches; naming each visible stretch separately puts the names
+     * where they can be read. A point is kept in the current run while the edge leaving it has any
+     * part in the window, which is the cheap test -- the label boxes are culled exactly afterwards.
+     */
+    private static java.util.List<java.util.List<double[]>> visibleRuns(
+            java.util.List<double[]> points, int viewRight, int viewBottom) {
+        java.util.List<java.util.List<double[]>> runs = new ArrayList<>();
+        java.util.List<double[]> current = null;
+        for (int i = 1; i < points.size(); i++) {
+            double[] before = points.get(i - 1);
+            double[] here = points.get(i);
+            boolean visible = Math.max(before[0], here[0]) >= 0
+                    && Math.min(before[0], here[0]) <= viewRight
+                    && Math.max(before[1], here[1]) >= 0
+                    && Math.min(before[1], here[1]) <= viewBottom;
+            if (visible) {
+                if (current == null) {
+                    current = new ArrayList<>();
+                    current.add(before);
+                }
+                current.add(here);
+            } else if (current != null) {
+                runs.add(current);
+                current = null;
+            }
+        }
+        if (current != null) {
+            runs.add(current);
+        }
+        return runs;
+    }
+
+    /**
+     * The on-screen length of a polyline, in pixels.
+     */    private static double polylineLength(java.util.List<double[]> points) {
+        double total = 0;
+        for (int i = 1; i < points.size(); i++) {
+            total += Math.hypot(points.get(i)[0] - points.get(i - 1)[0],
+                    points.get(i)[1] - points.get(i - 1)[1]);
+        }
         return total;
+    }
+
+    /**
+     * The point a given distance along a polyline, with the direction of the line there.
+     *
+     * <p>The direction is the edge the point is on rather than the line's overall direction: a road
+     * with bends is named along the piece the name sits on, or the name would point across the bend
+     * it is on.
+     */
+    private static LinePoint pointAt(java.util.List<double[]> points, double distance) {
+        if (points.size() < 2) {
+            return null;
+        }
+        double travelled = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double dx = points.get(i)[0] - points.get(i - 1)[0];
+            double dy = points.get(i)[1] - points.get(i - 1)[1];
+            double length = Math.hypot(dx, dy);
+            if (length < 1.0E-9) {
+                continue;
+            }
+            if (distance <= travelled + length || i == points.size() - 1) {
+                double along = Math.max(0, Math.min(1, (distance - travelled) / length));
+                return new LinePoint(points.get(i - 1)[0] + dx * along,
+                        points.get(i - 1)[1] + dy * along, HudDraw.labelAngle(dx, dy));
+            }
+            travelled += length;
+        }
+        return null;
+    }
+
+    /**
+     * The roads already drawn, as occupied boxes, for a place name to stand aside from.
+     *
+     * <p>Built once per frame and only when a place name is actually being placed. Every network
+     * that draws roads on this map contributes -- the player's own, Create's rails and an addon's
+     * layers -- because a name over any of them is a name over a road, whichever layer owns it.
+     *
+     * <h2>Why a world-space prefilter</h2>
+     * A place's name only ever moves by a couple of hundred pixels, so a road further than that from
+     * every place being named cannot affect any of its candidate positions. The segments are therefore
+     * first culled in world space, by asking whether their bounding box is near one of those places,
+     * and only the surviving ones are projected. That keeps the cost proportional to the roads around
+     * the visible places rather than to the whole railway Create happens to have read.
+     */
+    private static RoadInk buildRoadInk(double scale, Projection projection,
+                                        java.util.List<PlaceName> places, int margin, int viewRight,
+                                        int viewBottom) {
+        RoadInk ink = new RoadInk();
+        double reachBlocks = PLACE_LABEL_CLEAR_RADIUS_PX / Math.max(scale, 1.0E-3) + 8.0;
+        addRoadInk(ink, RoadStore.get().segments(), scale, projection, places, reachBlocks, margin,
+                viewRight, viewBottom);
+        addRoadInk(ink, RailTrackStore.segments(), scale, projection, places, reachBlocks, margin,
+                viewRight, viewBottom);
+        addRoadInk(ink, AddonRoadStore.segments(), scale, projection, places, reachBlocks, margin,
+                viewRight, viewBottom);
+        addRoadInk(ink, RoadWeaverLayer.segments(), scale, projection, places, reachBlocks, margin,
+                viewRight, viewBottom);
+        return ink;
+    }
+
+    /** Adds one layer's road edges that are close to a visible place name. */
+    private static void addRoadInk(RoadInk ink, Iterable<RoadSegment> segments, double scale,
+                                   Projection projection, java.util.List<PlaceName> places,
+                                   double reachBlocks, int margin, int viewRight, int viewBottom) {
+        for (RoadSegment segment : segments) {
+            if (segment == null || segment.vertexCount() < 2
+                    || !MapFilter.shows(segment.roadClass(), scale)) {
+                continue;
+            }
+            if (!nearAnyPlace(segment, places, reachBlocks)) {
+                continue;
+            }
+            double halfWidth = strokeHalfWidthPx(segment.roadClass(), scale);
+            double previousX = 0;
+            double previousY = 0;
+            int count = displayPointCount(segment);
+            for (int i = 0; i < count; i++) {
+                double x = projection.screenX(displayX(segment, i));
+                double y = projection.screenZ(displayZ(segment, i));
+                if (i > 0
+                        && Math.max(previousX, x) >= -margin - 8
+                        && Math.min(previousX, x) <= viewRight + 8
+                        && Math.max(previousY, y) >= -margin - 8
+                        && Math.min(previousY, y) <= viewBottom + 8) {
+                    ink.addEdge(previousX, previousY, x, y, halfWidth);
+                }
+                previousX = x;
+                previousY = y;
+            }
+        }
+    }
+
+    /** Whether a segment's world-space bounding box comes within {@code reach} of any named place. */
+    private static boolean nearAnyPlace(RoadSegment segment, java.util.List<PlaceName> places,
+                                        double reach) {
+        int minX = Integer.MAX_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+        for (int i = 0; i < segment.vertexCount(); i++) {
+            minX = Math.min(minX, segment.x(i));
+            maxX = Math.max(maxX, segment.x(i));
+            minZ = Math.min(minZ, segment.z(i));
+            maxZ = Math.max(maxZ, segment.z(i));
+        }
+        for (PlaceName place : places) {
+            if (maxX >= place.worldX() - reach && minX <= place.worldX() + reach
+                    && maxZ >= place.worldZ() - reach && minZ <= place.worldZ() + reach) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether a world point's screen position is close enough to the window to matter. */
+    private static boolean onScreen(double x, double y, int margin, int viewRight, int viewBottom) {
+        return x >= -margin && x <= viewRight && y >= -margin && y <= viewBottom;
+    }
+
+    /** An unrotated label's box, centred on a point and inflated by the clearance. */
+    private static LabelBox box(double centreX, double centreY, double width, double height) {
+        double halfWidth = width / 2.0 + LABEL_CLEARANCE_PX;
+        double halfHeight = height / 2.0 + LABEL_CLEARANCE_PX;
+        return new LabelBox(centreX - halfWidth, centreY - halfHeight,
+                centreX + halfWidth, centreY + halfHeight);
+    }
+
+    /** A rotated label's box: what its rotation actually sweeps, inflated by the clearance. */
+    private static LabelBox rotatedBox(double centreX, double centreY, double width, double height,
+                                       float angle) {
+        double[] extents = HudDraw.rotatedExtents(width, height, angle);
+        return box(centreX, centreY, extents[0], extents[1]);
     }
 
     /**
@@ -879,13 +1329,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <h2>How the rotation is applied</h2>
      * The label pass has already flattened the pose to screen space, so the translation is in pixels
      * and the rotation is about the label's own centre -- the text is then drawn at the origin and
-     * the half-width offset puts its middle on the line.
-     *
-     * <h2>The perpendicular offset</h2>
-     * The text is centred on the line rather than pushed clear of it: a name set a few pixels off its
-     * road is a name that has floated away from the road, which is the fault that made these look
-     * placed by hand. Half a line of text is the whole of the offset, so the road runs through the
-     * middle of the word at every size.
+     * the half-width and half-height offsets put its middle on the line.
      */
     //? if >=1.21.6 {
     /*private void drawLineLabel(MapElementGraphics graphics, PoseStack pose, Font font, String name,
@@ -1547,7 +1991,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             stroked += drawRuns(screenPose, vc, shapeAt(index).runsAt(pixelsPerBlock), projection,
                     margin, viewRight, viewBottom, minWorldX, minWorldZ, maxWorldX, maxWorldZ,
-                    strokeHalfWidthPx(kind, scale), kind.color(), culled);
+                    strokeHalfWidthPx(kind, scale), RoadConfig.roadColor(kind), culled);
         }
         pose.popPose();
         MapPassReport.marks(System.nanoTime() - startedAt, stroked, sourcePoints, culled[0]);
@@ -1575,10 +2019,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
+        // As in the road pass: the alpha is the colour's own. Lines and marks are both drawn from
+        // colours that are opaque unless a player has configured otherwise, and a configured
+        // transparency must be the transparency drawn.
         int a = (argb >>> 24) & 0xFF;
-        if (a == 0) {
-            a = 0xC0;
-        }
         int stroked = 0;
         for (PathRuns.Run run : runs) {
             if (!PathRuns.onScreen(run, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
@@ -1714,20 +2158,33 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
     }
 
-    /** A line's colour, from the kind of road it runs on. */
+    /**
+     * A line's colour, from the kind of road it runs on.
+     *
+     * <p>By kind rather than per line: the kinds are what a reader of the map already knows -- a rail
+     * line is the railway, a boat line is the waterway -- and a network where every rail line had its
+     * own colour would say nothing about which of them a given stretch of track belongs to. The
+     * colours themselves are configurable, so a player who wants their rail and water lines told
+     * apart from the road and ice ones can have it without every line becoming its own colour. The
+     * stop markers read the same answer, which is what makes a platform shared by two lines of one
+     * kind show that kind's colour rather than one of the two at random.
+     */
     private static int lineColour(TransitLine line) {
-        return switch (line.kind()) {
-            case RAIL -> 0xFF8AB4FF;
-            case WATER -> 0xFF3FA9F5;
-            case ICE -> 0xFF9FE8FF;
-            default -> 0xFFB8E986;
-        };
+        return RoadConfig.transitLineColor(line.kind());
     }
 
+    /**
+     * A yellow square at every place, and the square's box reserved on the label board.
+     *
+     * <p>The reservation is what keeps a place's own name off its own marker and keeps a road's name
+     * from covering the place it runs past. It is taken for the markers actually emitted, so a place
+     * that the panel or the zoom has taken off the map does not keep a hole in the label layout for a
+     * marker nobody can see.
+     */
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
                                   java.util.List<TransitInterchanges.Interchange> interchanges,
-                                  double scale, Projection projection) {
+                                  double scale, Projection projection, LabelBoard board) {
         double half = markerHalfPx(HudDraw.PLACE_MARKER_PX, scale);
         for (Destination place : Destinations.places()) {
             // The panel's switches and the map's zoom, through the one rule: a shop is shed before a
@@ -1748,6 +2205,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 continue;
             }
             HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, half, HudDraw.COLOR_PLACE);
+
+            board.reserve(box(x, y, half * 2.0, half * 2.0));
+        }
+
+        // An addon's places, by the same rule: the marker is a screen size, and the panel's switches
+        // shed a shop before a station for these exactly as they do for the player's own. Drawn after
+        // the player's places because the player's are the ones a route can be planned to, and a
+        // marker that hides another should be the one with more behind it.
+        for (RoadNode node : AddonRoadStore.nodes()) {
+            if (node.type() != RoadNode.Type.POI || !MapFilter.shows(node.placeKind(), scale)) {
+                continue;
+            }
+            double x = projection.screenX(node.x());
+            double y = projection.screenZ(node.z());
+            if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                continue;
+            }
+            HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, half, HudDraw.COLOR_PLACE);
+            board.reserve(box(x, y, half * 2.0, half * 2.0));
         }
     }
 
@@ -1921,7 +2397,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             swatchLine = leftLines.size();
             String headline = Component.translatable(
                     segmentSelected ? "hud.howtogo.selected" : "hud.howtogo.drawing",
-                    roadClass.name()).getString();
+                    Navigation.roadClassLabel(roadClass)).getString();
             if (segmentSelected) {
                 // The one-way state of the road the player has selected, spelled out: the arrows on the
                 // map say which way it runs, and this says what pressing the key again will do to it.
@@ -1942,7 +2418,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             leftLines.add(headline);
             leftLines.add(editStats());
             hintLines.addAll(controlHints());
-            swatchColor = 0xFF000000 | (roadClass.color() & 0xFFFFFF);
+            swatchColor = RoadConfig.roadColor(roadClass);
         }
 
         if (leftLines.isEmpty() && hintLines.isEmpty()) {
@@ -2172,9 +2648,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * pan and zoom with the road they belong to.
      */
     private static void emitOneWayArrows(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
-                                         double anchorX, double anchorZ, double fracX, double fracY,
-                                         double p10, double posePerPixel) {
-        int count = segment.vertexCount();
+                                         int count, double anchorX, double anchorZ, double fracX,
+                                         double fracY, double p10, double posePerPixel) {
         if (count < 2) {
             return;
         }
@@ -2193,10 +2668,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         for (int step = 1; step < count && drawn < ONEWAY_ARROW_LIMIT; step++) {
             int a = backward ? count - step : step - 1;
             int b = backward ? count - step - 1 : step;
-            double x1 = localX(segment.x(a), anchorX, fracX, p10);
-            double y1 = localY(segment.z(a), anchorZ, fracY, p10);
-            double x2 = localX(segment.x(b), anchorX, fracX, p10);
-            double y2 = localY(segment.z(b), anchorZ, fracY, p10);
+            double x1 = localX(displayX(segment, a), anchorX, fracX, p10);
+            double y1 = localY(displayZ(segment, a), anchorZ, fracY, p10);
+            double x2 = localX(displayX(segment, b), anchorX, fracX, p10);
+            double y2 = localY(displayZ(segment, b), anchorZ, fracY, p10);
             double length = Math.hypot(x2 - x1, y2 - y1);
             if (length < 1.0E-6) {
                 continue;
@@ -2237,23 +2712,83 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Whether the polyline bends at this vertex by enough to leave a visible notch.
+     * The number of points the map draws for this segment.
      *
-     * <p>The angle between the vertex's two spans, with a straight-through vertex -- the common case on
-     * any sampled line -- answering no. A vertex whose neighbours are on top of it answers yes, because
-     * there the two strokes meet at no angle at all and the cap is the only thing closing the joint.
+     * <p>The smoothed display curve when it has one, otherwise the block vertices. Kept together with
+     * {@link #displayX} / {@link #displayZ} so a caller cannot take the count from one source and the
+     * positions from the other.
      */
-    private static boolean bendsAt(RoadSegment segment, int index) {
-        double inX = segment.x(index) - segment.x(index - 1);
-        double inZ = segment.z(index) - segment.z(index - 1);
-        double outX = segment.x(index + 1) - segment.x(index);
-        double outZ = segment.z(index + 1) - segment.z(index);
-        if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
-            return true;
+    private static int displayPointCount(RoadSegment segment) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.size() : segment.vertexCount();
+    }
+
+    /** The world X of one drawn point: the curve's when there is one, the block vertex otherwise. */
+    private static double displayX(RoadSegment segment, int index) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.x(index) : segment.x(index);
+    }
+
+    /** The world Z of one drawn point. See {@link #displayX}. */
+    private static double displayZ(RoadSegment segment, int index) {
+        RoadCurve curve = segment.curve();
+        return curve != null && curve.size() >= 2 ? curve.z(index) : segment.z(index);
+    }
+
+    // ------------------------------------------------------------------ stroke
+    //
+    // Scratch for one segment's screen-space polyline, and the outline built from it. Render thread
+    // only, like every other buffer in this renderer: one road is stroked at a time, and the same map
+    // is redrawn every frame, so allocating arrays per road would be garbage the frame does not need.
+    // Grown rather than rebuilt when a longer curve comes along.
+    private static double[] PATH_X = new double[128];
+    private static double[] PATH_Y = new double[128];
+    /**
+     * The stroke geometry, kept between segments: it owns the arithmetic (offsets, joins, caps) and
+     * the quads for the road being drawn, so the renderer only has to place and colour them.
+     */
+    private static final StrokeOutline STROKE = new StrokeOutline();
+
+    private static void ensureStrokeCapacity(int count) {
+        if (count <= PATH_X.length) {
+            return;
         }
-        double cross = inX * outZ - inZ * outX;
-        double dot = inX * outX + inZ * outZ;
-        return Math.abs(Math.toDegrees(Math.atan2(cross, dot))) >= JOINT_MIN_DEGREES;
+        int capacity = Math.max(count, PATH_X.length * 2);
+        PATH_X = new double[capacity];
+        PATH_Y = new double[capacity];
+    }
+
+    /**
+     * Strokes one segment as a single continuous line of one width.
+     *
+     * <p>The screen-space line is built here, where it belongs to the map's pose; everything about
+     * its shape -- an offset for each side, how the edges meet at a bend, the two caps, a round join
+     * at a bend too sharp to mitre -- is {@link StrokeOutline}'s, and is checked without a game by
+     * the harness. What is left here is placing the quads it returns and colouring them. The same
+     * outline is asked for twice when the segment is selected: once for the halo under the road, once
+     * for the road itself.
+     */
+    private static void strokeSegment(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
+                                      int pointCount, double anchorX, double anchorZ,
+                                      double fracX, double fracY, double p10, double halfWidth,
+                                      int r, int g, int b, int a) {
+        if (pointCount < 2 || !(halfWidth > 0)) {
+            return;
+        }
+        ensureStrokeCapacity(pointCount);
+        for (int i = 0; i < pointCount; i++) {
+            PATH_X[i] = localX(displayX(segment, i), anchorX, fracX, p10);
+            PATH_Y[i] = localY(displayZ(segment, i), anchorZ, fracY, p10);
+        }
+        STROKE.build(PATH_X, PATH_Y, pointCount, halfWidth);
+        double[] quads = STROKE.coordinates();
+        int end = STROKE.quadCount() * StrokeOutline.VALUES_PER_QUAD;
+        for (int at = 0; at < end; at += StrokeOutline.VALUES_PER_QUAD) {
+            vertex(pose, vc, quads[at], quads[at + 1], r, g, b, a);
+            vertex(pose, vc, quads[at + 2], quads[at + 3], r, g, b, a);
+            vertex(pose, vc, quads[at + 4], quads[at + 5], r, g, b, a);
+            vertex(pose, vc, quads[at + 6], quads[at + 7], r, g, b, a);
+        }
     }
 
     /**

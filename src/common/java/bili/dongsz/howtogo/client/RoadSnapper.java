@@ -42,7 +42,18 @@ public final class RoadSnapper {
          * plain segment would send it into the split path, which finds no such segment in the
          * editor's network and silently does nothing -- a click that places no point at all.
          */
-        RAIL
+        RAIL,
+
+        /**
+         * On a road, or at a structure, read out of RoadWeaver: a position only, for the same reason
+         * as {@link #RAIL}.
+         *
+         * <p>A player drawing their own road up to one of RoadWeaver's is a normal thing to want --
+         * it is the only way to join the two networks -- and without this the click landed a few
+         * blocks short or long of it. It is a position rather than an edit because the geometry is
+         * RoadWeaver's: nothing here may split, join or move it.
+         */
+        ROADWEAVER
     }
 
     /**
@@ -134,6 +145,50 @@ public final class RoadSnapper {
         }
 
         return Result.free(worldX, worldZ);
+    }
+
+    /**
+     * The world radius a pixel catch radius corresponds to, at the current zoom.
+     *
+     * <p>For a caller that has to search something that is not a {@link RoadNetwork} -- a layer of
+     * points it can only walk -- before handing the candidate over. Zero when there is no viewport,
+     * which is also when snapping cannot mean anything.
+     */
+    public static double worldRadius(double pixels) {
+        Viewport viewport = Viewport.current();
+        return viewport == null ? 0.0 : Math.max(viewport.radiusX(pixels), viewport.radiusZ(pixels));
+    }
+
+    /**
+     * The nearest of a list of points, as a position-only snap of the given kind.
+     *
+     * <p>Same pixel budget and same elliptical test as a node snap: the catch radius belongs to the
+     * cursor, not to what it is pointing at, so a structure a few pixels away is as easy to land on
+     * as a hand-drawn node.
+     *
+     * @return null when nothing is within the catch radius
+     */
+    public static Result snapToPoints(java.util.List<double[]> points, double worldX, double worldZ,
+                                      double catchPixels, Kind kind) {
+        Viewport viewport = Viewport.current();
+        if (viewport == null || points == null || points.isEmpty()) {
+            return null;
+        }
+        double radiusX = viewport.radiusX(catchPixels);
+        double radiusZ = viewport.radiusZ(catchPixels);
+        double bestPixelSq = catchPixels * catchPixels;
+        double[] best = null;
+        for (double[] point : points) {
+            double sx = (point[0] - worldX) / radiusX;
+            double sz = (point[1] - worldZ) / radiusZ;
+            double pixelSq = sx * sx + sz * sz;
+            if (pixelSq <= bestPixelSq) {
+                bestPixelSq = pixelSq;
+                best = point;
+            }
+        }
+        return best == null ? null
+                : new Result(best[0], best[1], kind, RoadSegment.NO_NODE, RoadSegment.NO_SEGMENT, -1);
     }
 
     /**

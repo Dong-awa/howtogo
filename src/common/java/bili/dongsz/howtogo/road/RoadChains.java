@@ -413,6 +413,13 @@ public final class RoadChains {
      * has: the player's roads and the two rail layers. A per-plan copy of a network is not asked for
      * here and would only cost a rebuild.
      *
+     * <h2>Why the rotation and not an LRU</h2>
+     * The callers are the long-lived networks a session has -- the player's roads and the two rail
+     * layers -- so a slot is lost to eviction only when a fourth network is asked about at all, and a
+     * hit never needs to be moved to keep it. That makes the rotation close enough to an LRU here, and
+     * it keeps the hit path to four reference comparisons: lifting an entry to the front on every hit
+     * would cost three array copies on the one path this class exists to make cheap.
+     *
      * <h2>Threads</h2>
      * The render thread, where every caller draws. Not synchronized on purpose: taking a lock on a
      * per-frame path to guard a value recomputed once per edit is the wrong trade.

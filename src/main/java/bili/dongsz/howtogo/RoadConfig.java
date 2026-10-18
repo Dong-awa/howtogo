@@ -466,10 +466,12 @@ public final class RoadConfig {
 //? if neoforge {
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.route.RoutePreference;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.transit.TransitLine;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 import java.util.EnumMap;
@@ -477,7 +479,10 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.ToIntFunction;
 
 /**
  * Client configuration.
@@ -493,6 +498,109 @@ public final class RoadConfig {
     private static final Map<RoadClass, ModConfigSpec.DoubleValue> ON_ROAD_TOLERANCE =
             new EnumMap<>(RoadClass.class);
 
+    /**
+     * The colour each class of road is drawn in, and the colour each kind of transit line is drawn
+     * in.
+     *
+     * <p>Two sections of the same shape: a colour per class, writeable by hand, shown by the config
+     * screen. They are separate because they answer different questions -- the colour of a railway on
+     * the ground and the colour of a rail <em>line</em> over it are deliberately different, and a
+     * player changing one is not asking for the other.
+     */
+    private static final ColorSection ROAD_COLORS =
+            new ColorSection("road_colors", RoadClass::color);
+    private static final ColorSection LINE_COLORS =
+            new ColorSection("transit_line_colors", RoadConfig::defaultTransitLineColor);
+
+    /**
+     * One section of "a colour per class": its values, and the parsed number cached against the text.
+     *
+     * <h2>Why the parse is cached</h2>
+     * A road colour is read once per segment per frame, tens of thousands of times on a drawn map, so
+     * the text has to be parsed once rather than each time. The config value itself is a field read
+     * rather than a file read, and the raw string is what says whether the parse still holds -- which
+     * also means a change made in the config screen takes effect on the next frame.
+     *
+     * <p>Concurrent because these are not read from one thread: the world map draws on the render
+     * thread while the config screen saves on whichever thread the game saves on, and a browser map
+     * snapshot is asked for on the game thread. A value written twice is the same value, so there is
+     * nothing to lock.
+     */
+    private static final class ColorSection {
+
+        /** The section's name, for the warning a bad entry earns. */
+        private final String name;
+        /** What a class is drawn in when nothing has been configured. */
+        private final ToIntFunction<RoadClass> defaults;
+        private final Map<RoadClass, ModConfigSpec.ConfigValue<String>> values =
+                new EnumMap<>(RoadClass.class);
+        private final Map<RoadClass, ParsedColor> parsed = new ConcurrentHashMap<>();
+        /** The bad text last reported per class, so one broken entry is one warning and not one a frame. */
+        private final Map<RoadClass, String> reported = new ConcurrentHashMap<>();
+
+        ColorSection(String name, ToIntFunction<RoadClass> defaults) {
+            this.name = name;
+            this.defaults = defaults;
+        }
+
+        /** Defines the section's values, in the order the classes are given. */
+        void define(ModConfigSpec.Builder builder, Iterable<RoadClass> classes) {
+            for (RoadClass roadClass : classes) {
+                String key = keyOf(roadClass);
+                values.put(roadClass, builder
+                        .translation("howtogo.configuration." + name + "." + key)
+                        .define(key, ColorHex.formatRgb(defaults.applyAsInt(roadClass))));
+            }
+        }
+
+        /** The configured colour of one class, or its default while there is no usable value. */
+        int get(RoadClass roadClass) {
+            ModConfigSpec.ConfigValue<String> value = values.get(roadClass);
+            int fallback = defaults.applyAsInt(roadClass);
+            if (value == null) {
+                return fallback;
+            }
+            String text;
+            try {
+                text = value.get();
+            } catch (IllegalStateException notLoadedYet) {
+                return fallback;
+            }
+            if (text == null) {
+                // A config value with no entry is not something this format can produce, but this is
+                // read in the middle of a frame and an NPE here would cost the whole map. An empty
+                // string fails to parse and takes the same road as any other non-colour.
+                text = "";
+            }
+            ParsedColor cached = parsed.get(roadClass);
+            if (cached != null && Objects.equals(cached.text(), text)) {
+                return cached.argb();
+            }
+            Integer read = ColorHex.parseOrNull(text);
+            if (read == null) {
+                if (!Objects.equals(reported.put(roadClass, text), text)) {
+                    HowToGo.LOGGER.warn("[HowToGo] {}.{} is not a colour: '{}'; using {}",
+                            name, keyOf(roadClass), text, ColorHex.formatRgb(fallback));
+                }
+                read = fallback;
+            } else {
+                // Fixed since the last visit: a later breakage is worth its own warning rather than
+                // being silenced by the one already given for the old text.
+                reported.remove(roadClass);
+            }
+            parsed.put(roadClass, new ParsedColor(text, read));
+            return read;
+        }
+
+        private static String keyOf(RoadClass roadClass) {
+            return roadClass.name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    /** A written colour and the number it was read as, kept together so the two cannot disagree. */
+    private record ParsedColor(String text, int argb) {
+    }
+
     private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
     private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
@@ -506,12 +614,28 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
     private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
+    /**
+     * How far a walking trip may leave the network, in blocks.
+     *
+     * <p>Walking may step off a road and cross a field, but not for ever: past this the straight hop
+     * is a beeline across the map rather than a step off the path, and the answer becomes "no road
+     * route". It is also the furthest two road ends a walker may cross between, and only on the
+     * surface. A car and a ride have their own rules in {@link bili.dongsz.howtogo.route.TravelMode},
+     * because their numbers are not about taste: a car may only be as far from its road's centre as
+     * the road is wide, and a ride may only be as far from its track as a station platform is from it.
+     */
+    private static final ModConfigSpec.DoubleValue WALK_OFFROAD_BLOCKS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
     private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
     private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
     private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
     private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_ROADS;
+    private static final ModConfigSpec.ConfigValue<String> ROADWEAVER_ROAD_CLASS;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_FULL_MAP;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_STRUCTURES;
+    private static final ModConfigSpec.BooleanValue ROADWEAVER_ROUTING;
     /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
     private static final ModConfigSpec.BooleanValue DEBUG_LOG;
     private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
@@ -521,15 +645,44 @@ public final class RoadConfig {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
 
         builder.comment(
+                        "The colour each class of road is drawn in.",
+                        "Written as \"#RRGGBB\", or as \"#AARRGGBB\" when the road is meant to be",
+                        "translucent, which is the order Java writes an ARGB number in. A value that",
+                        "is not a colour is ignored once and the class keeps its own default.",
+                        "This is the colour of the class everywhere it is drawn: the world map, the",
+                        "navigation panel's map, the destination picker's map, the map's own legend",
+                        "and the browser map. The browser map is served the colours with the roads, so",
+                        "it follows a reload at once; the world map reads this every frame, so a",
+                        "change made in the config screen shows up without a restart.")
+                .translation("howtogo.configuration.road_colors")
+                .push("road_colors");
+        ROAD_COLORS.define(builder, List.of(RoadClass.values()));
+        builder.pop();
+
+        builder.comment(
+                        "The colour each kind of public transport line is drawn in.",
+                        "A line's kind is the road it runs on -- rail, water, ice or road -- and it is",
+                        "the colour of the line itself and of the stop markers it owns on the world",
+                        "map, not the colour of the track underneath it (that is road_colors above).",
+                        "The same format as road_colors: \"#RRGGBB\" or \"#AARRGGBB\", and a value that",
+                        "is not a colour is ignored once in favour of the kind's own.")
+                .translation("howtogo.configuration.transit_line_colors")
+                .push("transit_line_colors");
+        LINE_COLORS.define(builder, TransitLine.kinds());
+        builder.pop();
+
+        builder.comment(
                         "How far from the drawn line still counts as being on the road, in blocks.",
                         "A route is only re-planned once the player is further out than the tolerance",
                         "of the road they are meant to be on. Wide roads deserve a wider tolerance",
                         "than footpaths, which is why this is per class rather than a single number.")
+                .translation("howtogo.configuration.on_road_tolerance_blocks")
                 .push("on_road_tolerance_blocks");
         for (RoadClass roadClass : RoadClass.values()) {
-            ON_ROAD_TOLERANCE.put(roadClass, builder.defineInRange(
-                    roadClass.name().toLowerCase(Locale.ROOT),
-                    defaultTolerance(roadClass), 1.0, 128.0));
+            String key = roadClass.name().toLowerCase(Locale.ROOT);
+            ON_ROAD_TOLERANCE.put(roadClass, builder
+                    .translation("howtogo.configuration.on_road_tolerance_blocks." + key)
+                    .defineInRange(key, defaultTolerance(roadClass), 1.0, 128.0));
         }
         builder.pop();
 
@@ -542,11 +695,27 @@ public final class RoadConfig {
                         "which is what keeps a platform, a car park and a connecting footbridge from",
                         "reading as a wrong turn. It is also the radius the station announcements are",
                         "measured against.")
+                .translation("howtogo.configuration.station_snap_blocks")
                 .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
+
+        WALK_OFFROAD_BLOCKS = builder.comment(
+                        "How far a walking trip may leave the road network, in blocks.",
+                        "Walking can cross open country, but not for ever: past this distance the",
+                        "straight hop is no longer 'stepping off the path' but a beeline across the",
+                        "map, and the answer is that there is no road route from here.",
+                        "It is also the furthest two road ends a walker may cross between: only ends on",
+                        "the surface (storey 0) can be joined this way, because a footpath on a bridge",
+                        "and the one under it are not the same ground.",
+                        "A car and a ride do not use this number. A car may only be as far from its",
+                        "road's centre as the road is wide, and a ride may only be as far from its",
+                        "track as a station platform is from it (station_snap_blocks).")
+                .translation("howtogo.configuration.walk_offroad_blocks")
+                .defineInRange("walk_offroad_blocks", 32.0, 0.0, 4096.0);
 
         DEFAULT_TRAVEL_MODE = builder.comment(
                         "Travel mode navigation starts in, and the one the estimates are made for.",
                         "Valid ids: \"walk\", \"drive\" and \"transit\".")
+                .translation("howtogo.configuration.default_travel_mode")
                 .define("default_travel_mode", TravelMode.WALK.id());
 
         ROUTE_PREFERENCE = builder.comment(
@@ -554,6 +723,7 @@ public final class RoadConfig {
                         "\"fastest_time\" weighs every road by the pace the mode makes on it;",
                         "\"shortest_distance\" ignores pace and follows the shortest line of roads.",
                         "Valid ids: \"fastest_time\" and \"shortest_distance\".")
+                .translation("howtogo.configuration.route_preference")
                 .define("route_preference", RoutePreference.FASTEST_TIME.id());
 
         AVOID_ROAD_CLASSES = builder.comment(
@@ -561,7 +731,8 @@ public final class RoadConfig {
                         "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
                         "unknown entries are ignored. Empty by default.")
                 // Water is what the list exists for, so it is what the config UI offers to add.
-                .defineListAllowEmpty("avoid_road_classes", List.<String>of(),
+                .translation("howtogo.configuration.avoid_road_classes")
+                .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
                         element -> element instanceof String);
 
         PREFER_MAJOR_ROADS = builder.comment(
@@ -569,6 +740,7 @@ public final class RoadConfig {
                         "much and so are taken only when they are the only way through or genuinely",
                         "much shorter. Banning them outright would make trips unroutable for no",
                         "reason the player could see on the map.")
+                .translation("howtogo.configuration.prefer_major_roads")
                 .define("prefer_major_roads", false);
 
         FALL_BACK_TO_WALKING_WHEN_SLOWER = builder.comment(
@@ -576,6 +748,7 @@ public final class RoadConfig {
                         "route at all, is planned on foot instead, with the readout saying so.",
                         "A public transport journey that exists is never replaced this way: the walk",
                         "is offered as an alternative, not as a substitution.")
+                .translation("howtogo.configuration.fall_back_to_walking_when_slower")
                 .define("fall_back_to_walking_when_slower", true);
 
         TRANSIT_WAIT_SECONDS = builder.comment(
@@ -587,6 +760,7 @@ public final class RoadConfig {
                         "forty seconds of walking and losing two minutes of waiting is not a journey",
                         "anyone would take. Zero is a valid answer for a network where the vehicles are",
                         "always there.")
+                .translation("howtogo.configuration.transit_wait_seconds")
                 .defineInRange("transit_wait_seconds", 60.0, 0.0, 3600.0);
 
         TRANSIT_BOARD_ONLY = builder.comment(
@@ -597,6 +771,7 @@ public final class RoadConfig {
                         "change, which line to board, while the turns of the walk to the stop and away",
                         "from it are the walk's own and are still called. The destination picker carries",
                         "the same switch, for players who never open this file.")
+                .translation("howtogo.configuration.transit_board_only")
                 .define("transit_board_only", true);
 
         VOICE_ANNOUNCEMENTS = builder.comment(
@@ -607,6 +782,7 @@ public final class RoadConfig {
                         "client's own narrator setting is deliberately not consulted, so turning it on",
                         "is enough to hear something. The destination picker carries the same switch,",
                         "for players who never open this file.")
+                .translation("howtogo.configuration.voice_announcements")
                 .define("voice_announcements", false);
 
         CREATE_TRAIN_TRACKS = builder.comment(
@@ -616,6 +792,7 @@ public final class RoadConfig {
                         "so with Create absent the layer is simply empty and nothing else changes.",
                         "Read-only either way -- never saved with the roads, never editable -- and",
                         "turning this off empties the layer on the next client tick.")
+                .translation("howtogo.configuration.create_train_tracks")
                 .define("create_train_tracks", true);
 
         CREATE_TRACK_BLOCK_IDS = builder.comment(
@@ -625,6 +802,7 @@ public final class RoadConfig {
                         "\"create:track\" is Create's Train Track. \"create:fake_track\" -- its invisible",
                         "Track Marker for Maps -- is deliberately not included: it is a marker rather",
                         "than a surface and could draw lines where no track runs.")
+                .translation("howtogo.configuration.create_track_block_ids")
                 .defineListAllowEmpty("create_track_block_ids", List.of("create:track"),
                         element -> element instanceof String);
 
@@ -634,6 +812,7 @@ public final class RoadConfig {
                         "They are named from their position: Create keeps a station's name on its",
                         "server-side railway data, and the block entity that reaches the client carries",
                         "no name, so there is nothing here to read it from.")
+                .translation("howtogo.configuration.create_station_block_ids")
                 .defineListAllowEmpty("create_station_block_ids", List.of("create:track_station"),
                         element -> element instanceof String);
 
@@ -643,6 +822,7 @@ public final class RoadConfig {
                         "square of this, so a large radius makes a pass over the map take longer rather",
                         "than making any single moment heavier -- the work done at once is capped by",
                         "create_track_chunks_per_second.")
+                .translation("howtogo.configuration.create_track_scan_radius")
                 .defineInRange("create_track_scan_radius", 192, 16, 512);
 
         CREATE_TRACK_CHUNKS_PER_SECOND = builder.comment(
@@ -656,6 +836,7 @@ public final class RoadConfig {
                         "The old key name was create_track_chunks_per_tick, which was a per-tick figure;",
                         "the name changed because the cadence did, so the old entry in an existing file",
                         "is no longer read.")
+                .translation("howtogo.configuration.create_track_chunks_per_second")
                 .defineInRange("create_track_chunks_per_second", 20, 1, 512);
 
         MTR_TRANSIT = builder.comment(
@@ -669,6 +850,7 @@ public final class RoadConfig {
                         "type: a train or cable car becomes a rail line and a boat becomes a water line,",
                         "and anything else -- an aeroplane, or a type a later MTR adds -- is left alone",
                         "rather than guessed at.")
+                .translation("howtogo.configuration.mtr_transit")
                 .define("mtr_transit", true);
 
         MTR_FULL_MAP = builder.comment(
@@ -684,6 +866,7 @@ public final class RoadConfig {
                         "what it has been sent, kept and added to as the player travels.",
                         "Nothing is ever written to MTR's data either way: this is a read of a live",
                         "simulation, taken on MTR's own thread, and the railway stays MTR's.")
+                .translation("howtogo.configuration.mtr_full_map")
                 .define("mtr_full_map", true);
 
         MTR_MAP_OVERLAY = builder.comment(
@@ -703,6 +886,7 @@ public final class RoadConfig {
                         "no dependency is needed in either direction; a server that does not have it",
                         "leaves the client's own copy of the mod with nothing but the radius-limited",
                         "data MTR already sends, which this ignores rather than reads twice.")
+                .translation("howtogo.configuration.mtr_map_overlay")
                 .define("mtr_map_overlay", true);
 
         MTR_STATION_MERGE_BLOCKS = builder.comment(
@@ -718,6 +902,7 @@ public final class RoadConfig {
                         "Stations with no name of their own are never merged, because every nameless",
                         "station would then be one place. Zero turns the rule off and offers MTR's",
                         "stations exactly as MTR has them.")
+                .translation("howtogo.configuration.mtr_station_merge_blocks")
                 .defineInRange("mtr_station_merge_blocks", 256, 0, 4096);
 
         MTR_AUTO_ROUTE_MARKS = builder.comment(
@@ -734,7 +919,82 @@ public final class RoadConfig {
                         "This is the default for a line nobody has answered for: the line editor has a",
                         "switch beside each line read out of MTR, and an answer given there is kept per",
                         "line and overrides this one.")
+                .translation("howtogo.configuration.mtr_auto_route_marks")
                 .define("mtr_auto_route_marks", true);
+
+        ROADWEAVER_ROADS = builder.comment(
+                        "Whether the roads RoadWeaver (阡陌交通) generates are read out and offered as",
+                        "roads of this mod, and the structures they join offered as destinations.",
+                        "RoadWeaver has no API for this and no dependency exists in either direction:",
+                        "its map data and its road store are read reflectively, so with RoadWeaver",
+                        "absent or changed there is simply nothing read, and nothing else changes.",
+                        "They are read-only -- never saved with your roads and never editable -- and",
+                        "turning this off empties the layer on the next client tick.",
+                        "RoadWeaver stops a road short of the structure it serves, so the end of each",
+                        "completed connection is joined to its structure with a straight line; those",
+                        "connectors belong to this layer and go away with it.",
+                        "Read from RoadWeaver's own road store while you host the world (single",
+                        "player or LAN), so all of it is known without opening its map. On somebody",
+                        "else's server only what RoadWeaver has sent is read, which is why its road",
+                        "map (H) has to have been opened once in the session for the layer to be",
+                        "complete; RoadWeaver's own patches keep it current after that.")
+                .translation("howtogo.configuration.roadweaver_roads")
+                .define("roadweaver_roads", true);
+
+        ROADWEAVER_ROAD_CLASS = builder.comment(
+                        "What class the roads read out of RoadWeaver are drawn and planned as.",
+                        "\"auto\" (the default) is the footpath: every road RoadWeaver builds is a",
+                        "path it laid through the world -- dirt, gravel, planks, biome materials --",
+                        "and its width is how many blocks it paved, not a statement that a wide one",
+                        "is a road for vehicles.",
+                        "A class id -- \"highway\", \"road\", \"path\", \"rail\", \"water\" or \"ice\" --",
+                        "forces that class for every one of its roads instead, which is how a player",
+                        "who wants to drive on them makes them roads.",
+                        "The class also decides which travel modes may use those roads and what pace",
+                        "they are given, so a forced \"path\" is planned on foot and a forced",
+                        "\"highway\" is driven as well as walked.")
+                .translation("howtogo.configuration.roadweaver_road_class")
+                .define("roadweaver_road_class", "auto");
+
+        ROADWEAVER_FULL_MAP = builder.comment(
+                        "Whether RoadWeaver's whole road store is read while you host the world,",
+                        "rather than only the part of it its map has sent.",
+                        "On: single player and worlds opened to LAN read the road network RoadWeaver",
+                        "is keeping in this process directly, so every road and every structure is",
+                        "known at once and RoadWeaver's map never has to be opened. The reading is",
+                        "taken on the integrated server's thread and converted off it; nothing is",
+                        "ever written to RoadWeaver's data.",
+                        "Off, or connected to somebody else's server: what RoadWeaver has sent to the",
+                        "client's map is used instead, which is the part around the last view opened",
+                        "plus the patches it broadcasts afterwards.")
+                .translation("howtogo.configuration.roadweaver_full_map")
+                .define("roadweaver_full_map", true);
+
+        ROADWEAVER_STRUCTURES = builder.comment(
+                        "Whether the structures RoadWeaver joined with roads are offered as",
+                        "destinations, under their own source in the destination picker.",
+                        "A structure is a place a player asks to be taken to, which is what makes a",
+                        "road network read out of RoadWeaver useful at all: the roads can be planned",
+                        "over either way, but this is what lets one of the places they lead to be",
+                        "chosen. Its name is its structure id, translated when a name exists; a",
+                        "structure RoadWeaver could not identify is named by its coordinates.")
+                .translation("howtogo.configuration.roadweaver_structures")
+                .define("roadweaver_structures", true);
+
+        ROADWEAVER_ROUTING = builder.comment(
+                        "Whether trips may be planned over the roads read out of RoadWeaver.",
+                        "On, the roads take part in walking and driving the same way hand-drawn roads",
+                        "do: a trip may start, end or change onto them, and the roads drawn under a",
+                        "route are the roads it was planned along. They are joined to each other only",
+                        "where RoadWeaver joined them, and to your own roads only where they meet --",
+                        "a crossing that shares no point is a bridge, not a crossroads. The structures",
+                        "they lead to are reachable by the straight connectors added where RoadWeaver",
+                        "trimmed a road short of the structure.",
+                        "Off, they are still drawn -- the layer is a map of the world either way --",
+                        "but no trip is planned over them, and its destinations are reached by the",
+                        "same rules as before this integration existed.")
+                .translation("howtogo.configuration.roadweaver_routing")
+                .define("roadweaver_routing", true);
 
         DEBUG_LOG = builder.comment(
                         "Whether this mod's own diagnostics are written to the log.",
@@ -745,6 +1005,7 @@ public final class RoadConfig {
                         "is being investigated, and none of them is worth a file that grows all session,",
                         "so they are off by default. Warnings and errors are not affected: a problem is",
                         "always reported.")
+                .translation("howtogo.configuration.debug_log")
                 .define("debug_log", false);
 
         WEBMAP_AUTO_START = builder.comment(
@@ -755,6 +1016,7 @@ public final class RoadConfig {
                         "a switch about exposure, only about whether the port is open before the player",
                         "asks for it. Off by default: a mod that opens a listening socket without being",
                         "asked is a mod that shows up in a firewall list nobody asked for.")
+                .translation("howtogo.configuration.webmap_auto_start")
                 .define("webmap_auto_start", false);
 
         WEBMAP_PORT = builder.comment(
@@ -763,6 +1025,7 @@ public final class RoadConfig {
                         "actually bound is the one written into the chat message, so a bookmark can be",
                         "kept correct after a fallback. Set it to something memorable rather than to",
                         "something free: the port is a thing a player types.")
+                .translation("howtogo.configuration.webmap_port")
                 .defineInRange("webmap_port", 7573, 1024, 65535);
 
         SPEC = builder.build();
@@ -810,6 +1073,61 @@ public final class RoadConfig {
         } catch (IllegalStateException notLoadedYet) {
             return defaultTolerance(roadClass);
         }
+    }
+
+    /**
+     * The colour a class of road is drawn in, as {@code road_colors.<class>} says.
+     *
+     * <p>The class's own colour stands in when the entry is missing, has not been read yet, or is
+     * not a colour at all -- the last of those reported once per value rather than once per line
+     * drawn, because this is asked for every segment of every frame. See {@link ColorHex} for what
+     * counts as a colour.
+     */
+    public static int roadColor(RoadClass roadClass) {
+        return ROAD_COLORS.get(roadClass);
+    }
+
+    /**
+     * The colour a kind of public transport line is drawn in, as {@code transit_line_colors} says.
+     *
+     * <p>By kind rather than per line: every rail line is the same colour, every water line another,
+     * and a player who wants two rail lines told apart has made a railway map rather than a
+     * transport map. The colour is the line's own and its stop markers'; the track underneath it is
+     * drawn in the road class's colour, so the pair reads as a service over a piece of ground. See
+     * {@link #roadColor} for the same fallback and warning rules.
+     */
+    public static int transitLineColor(RoadClass kind) {
+        return LINE_COLORS.get(kind);
+    }
+
+    /**
+     * The colour a transit line of a kind is drawn in when nothing has been configured.
+     *
+     * <p>Deliberately not the road class's colour. A line is not the road under it -- a rail line
+     * drawn in rail's orange would read as a piece of railway, and the map already draws the railway
+     * underneath it -- so the palette is bluer and quieter than the road the line runs on. It is the
+     * palette this mod used before line colours could be configured, so a player who touches nothing
+     * sees exactly the map they always saw.
+     */
+    private static int defaultTransitLineColor(RoadClass kind) {
+        if (kind == null) {
+            return 0xFFB8E986;
+        }
+        return switch (kind) {
+            case RAIL -> 0xFF8AB4FF;
+            case WATER -> 0xFF3FA9F5;
+            case ICE -> 0xFF9FE8FF;
+            default -> 0xFFB8E986;
+        };
+    }
+
+    /** Every class's drawn colour, read in one go. */
+    public static Map<RoadClass, Integer> roadColors() {
+        Map<RoadClass, Integer> colours = new EnumMap<>(RoadClass.class);
+        for (RoadClass roadClass : RoadClass.values()) {
+            colours.put(roadClass, roadColor(roadClass));
+        }
+        return Map.copyOf(colours);
     }
 
     /**
@@ -952,6 +1270,15 @@ public final class RoadConfig {
         }
     }
 
+    /** How far a walking trip may leave the network, in blocks. */
+    public static double walkOffroadBlocks() {
+        try {
+            return WALK_OFFROAD_BLOCKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 32.0;
+        }
+    }
+
     /**
      * The routing policy in force, read in one go.
      *
@@ -1059,6 +1386,60 @@ public final class RoadConfig {
     public static boolean mtrAutoRouteMarks() {
         try {
             return MTR_AUTO_ROUTE_MARKS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    // ------------------------------------------------------- RoadWeaver's generated roads
+
+    /** Whether RoadWeaver's roads are read, on before the config loads. */
+    public static boolean roadWeaverRoads() {
+        try {
+            return ROADWEAVER_ROADS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * The class configured for RoadWeaver's roads, or {@code "auto"} before the config has been read.
+     *
+     * <p>The text rather than the parsed class, so the caller can tell "not configured" from a typo the
+     * parser could not name: both are answered by choosing a class per road, which is what {@code auto}
+     * asks for anyway.
+     */
+    public static String roadWeaverRoadClass() {
+        try {
+            String configured = ROADWEAVER_ROAD_CLASS.get();
+            return configured == null ? "auto" : configured;
+        } catch (IllegalStateException notLoadedYet) {
+            return "auto";
+        }
+    }
+
+    /** Whether RoadWeaver's whole road store is read while the player hosts the world. */
+    public static boolean roadWeaverFullMap() {
+        try {
+            return ROADWEAVER_FULL_MAP.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether RoadWeaver's structures are offered as destinations, on before the config loads. */
+    public static boolean roadWeaverStructures() {
+        try {
+            return ROADWEAVER_STRUCTURES.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /** Whether trips may be planned over RoadWeaver's roads, on before the config loads. */
+    public static boolean roadWeaverRouting() {
+        try {
+            return ROADWEAVER_ROUTING.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
         }

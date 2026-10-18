@@ -337,6 +337,14 @@
       ['生成时间', model.formatTime(m.generatedAt)],
       ['数据版本', 'v' + m.version],
     ];
+    // The auto-recognised layers are part of the map now, so say how much of the map they are:
+    // a player who wonders why the browser shows roads they never drew gets the answer here.
+    if (m.readOnlySegments > 0) {
+      const sources = Object.keys(m.sourceCounts).sort()
+        .map((id) => model.sourceLabel(id) + ' ' + model.formatThousands(m.sourceCounts[id]))
+        .join('、');
+      rows.splice(4, 0, ['自动识别', model.formatThousands(m.readOnlySegments) + ' 段（' + sources + '）']);
+    }
     for (const [term, value] of rows) {
       for (const node of statRow(term, value)) refs.statsList.appendChild(node);
     }
@@ -372,11 +380,14 @@
     for (const seg of m.segments) {
       if (!seg.drawable) continue;
       if (state.hiddenClasses.has(seg.roadClass) || state.hiddenLayers.has(seg.layer)) continue;
+      // The painted shape, so the readout agrees with what the cursor is on: a recognised road is
+      // drawn as its smoothed curve, not as the block staircase it is stored as.
+      const points = seg.drawPoints || seg.points;
       let minX = Infinity;
       let minZ = Infinity;
       let maxX = -Infinity;
       let maxZ = -Infinity;
-      for (const p of seg.points) {
+      for (const p of points) {
         if (p.x < minX) minX = p.x;
         if (p.x > maxX) maxX = p.x;
         if (p.z < minZ) minZ = p.z;
@@ -384,7 +395,7 @@
       }
       if (x < minX - radiusBlocks || x > maxX + radiusBlocks ||
           z < minZ - radiusBlocks || z > maxZ + radiusBlocks) continue;
-      const near = geom.nearestOnPolyline(seg.points, x, z);
+      const near = geom.nearestOnPolyline(points, x, z);
       if (near.distance <= radiusBlocks && (!best || near.distance < best.distance)) {
         best = {segment: seg, distance: near.distance};
       }
@@ -427,13 +438,18 @@
     // Class, then which way it runs, then where it is, then how long this piece is -- the same list the
     // in-game readout gives for a selected road, in the same order. Length is the piece's own: the page
     // has no idea which of a name's pieces are one road and which are two that were named alike, and a
-    // segment's own length is a fact about the segment.
+    // segment's own length is a fact about the segment. A recognised road says which layer it came
+    // from and that it is read-only, so a line the game will not let the player edit is not read as
+    // one of their own.
     const parts = [
       model.classLabel(seg.roadClass),
       model.directionLabel(seg.direction),
       model.layerLabel(seg.layer),
       '本段 ' + model.formatLength(seg.lengthBlocks),
     ];
+    if (seg.source) {
+      parts.unshift(seg.sourceLabel + ' · 只读');
+    }
     refs.hover.textContent = '道路：' + (seg.hasName ? seg.name : '未命名道路') + '（' + parts.join(' · ') + '）';
   }
 

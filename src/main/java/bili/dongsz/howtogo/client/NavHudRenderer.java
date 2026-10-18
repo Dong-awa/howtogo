@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -236,54 +237,44 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         // half-width plus forty -- which is *less* than the corner distance -- a road visible in a
         // corner of the panel was thrown away for being too far from the player.
         double reach = VIEW_RADIUS * Math.sqrt(2.0) + 8;
+        // The same projection the old per-edge loops did, as one affine map, so the stroke pass can
+        // join each road's bends instead of leaving a notch at every one of them.
+        double m00 = cos * scale;
+        double m01 = -sin * scale;
+        double m10 = sin * scale;
+        double m11 = cos * scale;
+        double m02 = centerX - playerX * m00 - playerZ * m01;
+        double m12 = centerY - playerX * m10 - playerZ * m11;
         RoadNetwork network = RoadStore.get();
-        for (RoadSegment segment : network.segments()) {
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                double ax = segment.x(i - 1);
-                double az = segment.z(i - 1);
-                double bx = segment.x(i);
-                double bz = segment.z(i);
-                if (outsideReach(ax, az, bx, bz, playerX, playerZ, reach)) {
-                    continue;
-                }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                emitClipped(last,
-                        screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
-                        screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
-                        screenX(bx - playerX, bz - playerZ, cos, sin, scale, centerX),
-                        screenY(bx - playerX, bz - playerZ, cos, sin, scale, centerY),
-                        ROAD_THICKNESS * 0.5, color, 0x9A, minX, minY, maxX, maxY);
-            }
-        }
+        emitNetwork(last, network, m00, m01, m02, m10, m11, m12,
+                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
 
         // The machine-read rails -- Create's tracks and MTR's -- drawn in with the roads and culled by
         // the same reach: the map is a view of the ground, and a rail the player can see on the world
-        // map belongs on this one too. Both layers are bounded by their own read radius, so this pass
-        // is a handful of polylines.
-        for (RoadSegment segment : RailLayers.all()) {
-            for (int i = 1; i < segment.vertexCount(); i++) {
-                double ax = segment.x(i - 1);
-                double az = segment.z(i - 1);
-                double bx = segment.x(i);
-                double bz = segment.z(i);
-                if (outsideReach(ax, az, bx, bz, playerX, playerZ, reach)) {
-                    continue;
-                }
-                int color = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-                emitClipped(last,
-                        screenX(ax - playerX, az - playerZ, cos, sin, scale, centerX),
-                        screenY(ax - playerX, az - playerZ, cos, sin, scale, centerY),
-                        screenX(bx - playerX, bz - playerZ, cos, sin, scale, centerX),
-                        screenY(bx - playerX, bz - playerZ, cos, sin, scale, centerY),
-                        ROAD_THICKNESS * 0.5, color, 0x9A, minX, minY, maxX, maxY);
-            }
-        }
+        // map belongs on this one too. Each layer is drawn chain by chain, so a long rail is one
+        // stroke rather than one per sampled piece.
+        emitNetwork(last, RailTrackStore.network(), m00, m01, m02, m10, m11, m12,
+                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
+        emitNetwork(last, MtrTransit.railLayer(), m00, m01, m02, m10, m11, m12,
+                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
+
+        // The roads read out of RoadWeaver, drawn with the same two passes and the same reach: they
+        // are drawn on the world map and planned over, so the mini-map has to show them too. They are
+        // drawn chain by chain -- whole roads rather than one piece at a time -- so a long road is one
+        // continuous stroke. The layer holds a whole region's worth of roads, so chains outside this
+        // window are skipped before anything is projected.
+        emitNetworkInBox(last, RoadWeaverLayer.network(), m00, m01, m02, m10, m11, m12,
+                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY,
+                playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
         Route route = Navigation.route();
         if (route.isPresent()) {
             List<double[]> points = route.points();
             double travelled = Navigation.travelled();
             double cumulative = 0;
+            int splitAt = -1;
+            double splitX = 0;
+            double splitY = 0;
             for (int i = 1; i < points.size(); i++) {
                 double[] a = points.get(i - 1);
                 double[] b = points.get(i);
@@ -291,30 +282,43 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 if (segmentLength < 1.0E-9) {
                     continue;
                 }
-                double ax = screenX(a[0] - playerX, a[1] - playerZ, cos, sin, scale, centerX);
-                double ay = screenY(a[0] - playerX, a[1] - playerZ, cos, sin, scale, centerY);
-                double bx = screenX(b[0] - playerX, b[1] - playerZ, cos, sin, scale, centerX);
-                double by = screenY(b[0] - playerX, b[1] - playerZ, cos, sin, scale, centerY);
-                double half = ROUTE_THICKNESS * 0.5;
-
-                if (cumulative + segmentLength <= travelled) {
-                    emitClipped(last, ax, ay, bx, by, half, COLOR_ROUTE_DONE, 0xFF,
-                            minX, minY, maxX, maxY);
-                } else if (cumulative >= travelled) {
-                    emitClipped(last, ax, ay, bx, by, half, COLOR_ROUTE, 0xFF,
-                            minX, minY, maxX, maxY);
-                } else {
-                    // Split exactly where the player is, so the grey edge creeps along with them
-                    // instead of snapping forward one whole segment at a time.
+                if (cumulative + segmentLength >= travelled) {
+                    splitAt = i;
                     double t = (travelled - cumulative) / segmentLength;
-                    double mx = ax + (bx - ax) * t;
-                    double my = ay + (by - ay) * t;
-                    emitClipped(last, ax, ay, mx, my, half, COLOR_ROUTE_DONE, 0xFF,
-                            minX, minY, maxX, maxY);
-                    emitClipped(last, mx, my, bx, by, half, COLOR_ROUTE, 0xFF,
-                            minX, minY, maxX, maxY);
+                    splitX = a[0] + (b[0] - a[0]) * t;
+                    splitY = a[1] + (b[1] - a[1]) * t;
+                    break;
                 }
                 cumulative += segmentLength;
+            }
+            List<double[]> done = new ArrayList<>();
+            List<double[]> ahead = new ArrayList<>();
+            if (splitAt < 0) {
+                // Past the end of the route (or a route whose segments are all zero length): what is
+                // left to draw is whatever has not been walked, which is nothing once the player has
+                // travelled. Drawing everything in the "ahead" colour was the one place the grey and
+                // the cyan could disagree with where the player actually was.
+                if (travelled > 0) {
+                    done.addAll(points);
+                } else {
+                    ahead.addAll(points);
+                }
+            } else if (splitAt <= 0) {
+                ahead.addAll(points);
+            } else {
+                done.addAll(points.subList(0, splitAt));
+                done.add(new double[]{splitX, splitY});
+                ahead.add(new double[]{splitX, splitY});
+                ahead.addAll(points.subList(splitAt, points.size()));
+            }
+            double half = ROUTE_THICKNESS * 0.5;
+            if (done.size() >= 2) {
+                emitPath(last, done, m00, m01, m02, m10, m11, m12, half, COLOR_ROUTE_DONE,
+                        0xFF, minX, minY, maxX, maxY);
+            }
+            if (ahead.size() >= 2) {
+                emitPath(last, ahead, m00, m01, m02, m10, m11, m12, half, COLOR_ROUTE,
+                        0xFF, minX, minY, maxX, maxY);
             }
         }
 

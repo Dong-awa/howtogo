@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -207,8 +208,17 @@ final class MtrLineTracks {
         for (double[] point : run) {
             segment.addVertex((int) Math.round(point[0]), (int) Math.round(point[1]));
         }
-        segment.setFromNode(endNode(marks, nextId, run.get(0), height).id());
-        segment.setToNode(endNode(marks, nextId, run.get(run.size() - 1), height).id());
+        RoadNode from = endNode(marks, nextId, run.get(0), height);
+        RoadNode to = endNode(marks, nextId, run.get(run.size() - 1), height);
+        segment.setFromNode(from.id());
+        segment.setToNode(to.id());
+        // The run is MTR's own world-coordinate sampling of its track; keeping those samples for the
+        // display line is what stops a curved track being drawn as a block staircase. The ends are
+        // pinned to the two nodes so the stretch meets the next one at the same point.
+        List<double[]> display = new ArrayList<>(run);
+        display.set(0, new double[]{from.x(), from.z()});
+        display.set(display.size() - 1, new double[]{to.x(), to.z()});
+        segment.setCurve(RoadCurve.precise(display));
         marks.putSegment(segment);
     }
 
@@ -356,6 +366,7 @@ final class MtrLineTracks {
         }
         segment.setFromNode(from.id());
         segment.setToNode(to.id());
+        segment.setCurve(RoadCurve.of(segment));
         marks.putSegment(segment);
     }
 

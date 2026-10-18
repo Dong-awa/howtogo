@@ -4,6 +4,7 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.CreateStationSource;
 import bili.dongsz.howtogo.client.MtrStationSource;
 import bili.dongsz.howtogo.client.PoiDestinationSource;
+import bili.dongsz.howtogo.client.RoadWeaverStructureSource;
 import bili.dongsz.howtogo.client.XaeroWaypointSource;
 import bili.dongsz.howtogo.route.DestinationSource;
 
@@ -15,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Every destination source the picker knows about: the four this mod ships, plus any an addon
+ * Every destination source the picker knows about: the five this mod ships, plus any an addon
  * registers.
  *
  * <h2>What was wrong before</h2>
@@ -32,7 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <h2>Order and duplicates</h2>
  * Sources are ordered by {@link DestinationSource#priority()} and, within one priority, by
- * registration order. The four built-ins carry priorities 0 to 30, which is the order they have always
+ * registration order. The five built-ins carry priorities 0 to 40, which is the order they have always
  * been listed in, so nothing moves for a player who has installed no addons. An id already in use is
  * refused rather than replacing what is there: two sources answering to one id would make every
  * destination's {@code source} field ambiguous, and the picker's source notes are keyed on that field.
@@ -44,12 +45,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class DestinationSources {
 
-    /** The four sources this mod ships, in their long-standing order. */
+    /** The five sources this mod ships, in their long-standing order. */
     private static final List<DestinationSource> BUILT_IN = List.of(
             new PoiDestinationSource(),
             new CreateStationSource(),
             new MtrStationSource(),
-            new XaeroWaypointSource());
+            new XaeroWaypointSource(),
+            new RoadWeaverStructureSource());
 
     private static final List<DestinationSource> REGISTERED = new CopyOnWriteArrayList<>();
 
@@ -158,7 +160,7 @@ public final class DestinationSources {
         return source == null ? "" : source.noteKey();
     }
 
-    /** How many addon sources have been registered; the four built-ins are not counted. */
+    /** How many addon sources have been registered; the five built-ins are not counted. */
     public static int registeredCount() {
         return REGISTERED.size();
     }
@@ -173,3 +175,4 @@ public final class DestinationSources {
         return List.copyOf(combined);
     }
 }
+

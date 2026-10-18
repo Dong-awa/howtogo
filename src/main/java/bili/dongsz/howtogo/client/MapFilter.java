@@ -70,6 +70,28 @@ public final class MapFilter {
             PlaceKind.PLACE, 0.2,
             PlaceKind.RESOURCE, 0.12);
 
+    /**
+     * The map scale below which each kind of place's <em>name</em> is left off, in pixels per block.
+     *
+     * <p>Not the same question as {@link #PLACE_FROM}, and deliberately later than it: a marker is a
+     * dot that says "something is here" and is worth drawing while the map is still far out, while a
+     * name has to be readable and has to not sit on top of the next one. So the marker is what a
+     * zoomed-out map shows, and the name joins it once the map is close enough for the word to be a
+     * word -- a shop, which is the least important and the commonest, waits longest; a resource
+     * point, which is worth travelling to from a distance, is named first.
+     *
+     * <p>What this does for two places close together is the other half of the story: their markers
+     * may sit a few pixels apart at any zoom, but their names are boxes with a width and a height, and
+     * the label pass drops one of them while the boxes overlap. Zooming in separates the boxes -- the
+     * map grows faster than the font does -- so the pair that showed one name at one zoom shows both
+     * names at the next, which is exactly the reading a map wants.
+     */
+    private static final Map<PlaceKind, Double> PLACE_LABEL_FROM = Map.of(
+            PlaceKind.SHOP, 1.0,
+            PlaceKind.STATION, 0.7,
+            PlaceKind.PLACE, 0.55,
+            PlaceKind.RESOURCE, 0.4);
+
     private static final Set<RoadClass> HIDDEN_ROADS = EnumSet.noneOf(RoadClass.class);
     private static final Set<PlaceKind> HIDDEN_PLACES = EnumSet.noneOf(PlaceKind.class);
     private static boolean linesHidden;
@@ -115,6 +137,17 @@ public final class MapFilter {
         }
         Double from = PLACE_FROM.get(kind);
         return from == null || Math.abs(scale) >= from;
+    }
+
+    /**
+     * Whether a place's name is drawn at this map scale.
+     *
+     * <p>The place has to be drawn at all first -- the player's own switch still hides the name with
+     * the marker -- and then the kind's own label threshold has to be reached. See
+     * {@link #PLACE_LABEL_FROM} for why names come later than markers and in this order.
+     */
+    public static boolean showsLabel(PlaceKind kind, double scale) {
+        return shows(kind, scale) && Math.abs(scale) >= PLACE_LABEL_FROM.getOrDefault(kind, 0.55);
     }
 
     /** Whether the transit lines are drawn, which the zoom never takes away. */

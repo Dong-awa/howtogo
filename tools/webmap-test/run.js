@@ -475,6 +475,57 @@ section('model: normalising the payload', () => {
     close(degenerate.segments[2].lengthBlocks, 0, 1e-9) &&
     close(degenerate.stats.computed.lengthBlocks, 0, 1e-9));
 
+  /*
+   * The payload can carry a smoothed display curve beside the block vertices. It is what the game's
+   * own map draws for a road it recognised out of another mod; the page used to paint the block
+   * staircase, which is why a machine-read road was smooth in the game and jagged in the browser.
+   */
+  const curvedModel = model.normalize({
+    classes: [{id: 'PATH', color: '#C8A24A', width: 3}],
+    bounds: {minX: 0, minZ: 0, maxX: 10, maxZ: 10},
+    segments: [{
+      id: 1, roadClass: 'PATH', source: 'roadweaver',
+      points: [[0, 0], [10, 0], [10, 10]],
+      curve: [[0, 0], [5, 5], [10, 10]],
+    }],
+  });
+  const curvedSeg = curvedModel.segments[0];
+  ok('a display curve becomes the paint geometry and the block vertices stay the measured geometry',
+    curvedSeg.hasCurve === true && curvedSeg.drawPoints === curvedSeg.curve &&
+    curvedSeg.points.length === 3 && close(curvedSeg.lengthBlocks, 20, 1e-9),
+    JSON.stringify({drawPoints: curvedSeg.drawPoints.length, points: curvedSeg.points.length}));
+  const plainModel = model.normalize({
+    segments: [{id: 2, roadClass: 'PATH', points: [[0, 0], [4, 0]]}],
+  });
+  ok('a road the player drew is painted from its block vertices, since it has no curve',
+    plainModel.segments[0].hasCurve === false &&
+    plainModel.segments[0].drawPoints === plainModel.segments[0].points);
+  ok('a curve keeps its sub-block coordinates rather than being snapped to the grid',
+    curvedSeg.drawPoints[1].x === 5 && curvedSeg.drawPoints[1].z === 5);
+
+  const curvedView = geom.fitView(curvedModel.bounds, 400, 300, {padding: 20});
+  const curvedScreen = render.segmentScreenPoints(curvedSeg, curvedView);
+  const expectedMid = geom.worldToScreen(curvedView, 5, 5);
+  const expectedCorner = geom.worldToScreen(curvedView, 10, 0);
+  ok('the screen path follows the curve through the bend, not the block corner',
+    curvedScreen.length === 3 &&
+    close(curvedScreen[1].x, expectedMid.x, 1e-6) && close(curvedScreen[1].y, expectedMid.y, 1e-6) &&
+    !(close(curvedScreen[1].x, expectedCorner.x, 1e-6) &&
+      close(curvedScreen[1].y, expectedCorner.y, 1e-6)),
+    JSON.stringify(curvedScreen));
+  const curvedCtx = recordingContext();
+  render.drawMap(curvedCtx, curvedModel, curvedView, {});
+  const curvedStrokes = paths(curvedCtx.calls).filter((op) => op.kind === 'stroke' &&
+    op.strokeStyle === curvedSeg.klass.color);
+  ok('and the map strokes that curve rather than the staircase',
+    curvedStrokes.length === 1 && curvedStrokes[0].points.length === 3,
+    JSON.stringify(curvedStrokes.map((op) => op.points.length)));
+
+  ok('a recognised layer says where it came from, and the player\'s own road says nothing',
+    curvedSeg.source === 'ROADWEAVER' && model.sourceLabel(curvedSeg.source) === '阡陌交通' &&
+    plainModel.segments[0].source === null && plainModel.segments[0].sourceLabel === model.OWN_SOURCE_LABEL &&
+    model.sourceLabel('SOMETHING') === 'SOMETHING');
+
   const clamped = model.normalize({
     segments: [
       {id: 1, roadClass: 'ROAD', layer: 99, points: [[0, 0], [1, 0]]},
@@ -747,6 +798,93 @@ section('labels: greedy placement', () => {
     placedHere.placed.length + placedHere.dropped.length === items.length &&
     (placedHere.dropped.length === 0 || placedHere.dropped.every((d) => d.reason === 'no-fit')),
     JSON.stringify({placed: placedHere.placed.length, dropped: placedHere.dropped.length}));
+});
+
+// ---------------------------------------------------------------------------------
+// A label is not just text: its size is capped by the road it names, a long road gets
+// several names, and a place's name waits for its kind's zoom. These are the rules the
+// game map and this map now share, checked here against the payload and the view rather
+// than against whatever the fixture happens to contain.
+// ---------------------------------------------------------------------------------
+section('labels: road width, long roads and place kinds', () => {
+  const roadModel = model.normalize({
+    version: 1,
+    generatedAt: 1,
+    world: 't',
+    dimension: 't:t',
+    empty: false,
+    bounds: {minX: 0, minZ: 0, maxX: 1000, maxZ: 100},
+    classes: model.DEFAULT_CLASSES,
+    nodes: [
+      {id: 1, x: 0, y: 64, z: 0, type: 'ENDPOINT'},
+      {id: 2, x: 1000, y: 64, z: 0, type: 'ENDPOINT'},
+      {id: 3, x: 0, y: 64, z: 10, type: 'ENDPOINT'},
+      {id: 4, x: 1000, y: 64, z: 10, type: 'ENDPOINT'},
+    ],
+    segments: [
+      {id: 1, roadClass: 'HIGHWAY', y: 64, layer: 0, from: 1, to: 2, direction: 'TWO_WAY',
+        name: '长高速', points: [[0, 0], [1000, 0]]},
+      {id: 2, roadClass: 'PATH', y: 64, layer: 0, from: 3, to: 4, direction: 'TWO_WAY',
+        name: '长小路', points: [[0, 10], [1000, 10]]},
+    ],
+    stats: {nodes: 4, segments: 2, lengthBlocks: 2000, layers: [0]},
+  });
+  const view = geom.makeView({centerX: 500, centerZ: 5, scale: 1.2, width: 1200, height: 300});
+  const highway = roadModel.segments.find((s) => s.roadClass === 'HIGHWAY');
+  const path = roadModel.segments.find((s) => s.roadClass === 'PATH');
+  const options = {px: 1, labelFontPx: render.BASE_LABEL_FONT_PX};
+  const highwayFont = render.roadLabelFontPx(highway, view, options);
+  const pathFont = render.roadLabelFontPx(path, view, options);
+  const highwayCap = render.roadStrokePx(highway.klass.width, view.scale, 1) / 1.25;
+  const pathCap = render.roadStrokePx(path.klass.width, view.scale, 1) / 1.25;
+  ok('a road name is never taller than the road it names',
+    highwayFont <= highwayCap + 1e-9 && pathFont <= pathCap + 1e-9,
+    JSON.stringify({highwayFont, highwayCap, pathFont, pathCap}));
+  ok('and a narrower road gets a smaller name than a wider one at the same zoom',
+    pathFont < highwayFont, JSON.stringify({pathFont, highwayFont}));
+
+  const items = render.buildLabelItems(roadModel, view, {});
+  const longNames = items.filter((item) => item.kind === 'road' && item.text === '长高速');
+  ok('a road long enough to cross the screen gets more than one name',
+    longNames.length > 1, longNames.length + ' names');
+  ok('and those names sit at different points along it',
+    longNames.length > 1 && new Set(longNames.map((i) => Math.round(i.x))).size > 1,
+    JSON.stringify(longNames.map((i) => Math.round(i.x))));
+
+  const zoomedOut = geom.makeView({centerX: 500, centerZ: 5, scale: 0.4, width: 800, height: 300});
+  const outItems = render.buildLabelItems(roadModel, zoomedOut, {});
+  ok('a map zoomed out too far names no road, because none is wide enough to hold the word',
+    outItems.filter((item) => item.kind === 'road').length === 0,
+    outItems.length + ' items');
+
+  ok('place names wait for their own kind\'s zoom',
+    render.placeLabelVisible({placeKind: 'SHOP'}, 0.8) === false &&
+    render.placeLabelVisible({placeKind: 'SHOP'}, 1.0) === true &&
+    render.placeLabelVisible({placeKind: 'STATION'}, 0.7) === true &&
+    render.placeLabelVisible({placeKind: 'PLACE'}, 0.55) === true &&
+    render.placeLabelVisible({placeKind: 'RESOURCE'}, 0.4) === true,
+    JSON.stringify(render.PLACE_LABEL_MIN_SCALE));
+
+  // The placer itself now works per item: a font on one label does not resize the next,
+  // and a candidate the caller marked as lying over a road is tried after the clear ones.
+  const itemMeasure = (text, fontPx) => String(text).length * (isFinite(fontPx) ? fontPx : 12) * 0.6;
+  const fonted = labels.placeLabels([
+    {id: 1, kind: 'road', text: 'AAA', x: 100, y: 100, fontPx: 12,
+      candidates: [{x: 100, y: 100, angle: 0}]},
+    {id: 2, kind: 'road', text: 'AAA', x: 100, y: 220, fontPx: 24,
+      candidates: [{x: 100, y: 220, angle: 0}]},
+  ], {width: 400, height: 400, fontPx: 12, measure: itemMeasure});
+  ok('each label is placed in its own font rather than the pass\'s',
+    fonted.placed.length === 2 && fonted.placed[1].box.h > fonted.placed[0].box.h * 1.5,
+    JSON.stringify(fonted.placed.map((p) => p.box && p.box.h)));
+  const routed = labels.placeLabels([
+    {id: 3, kind: 'place', text: '路口', x: 300, y: 200,
+      candidates: [{x: 100, y: 100, angle: 0, blocked: true}, {x: 300, y: 200, angle: 0}]},
+  ], {width: 400, height: 400, fontPx: 12, measure: itemMeasure});
+  ok('a candidate over a road is tried only after the clear ones',
+    routed.placed.length === 1 && routed.placed[0].anchor.x === 300 &&
+    routed.placed[0].blocked === false,
+    JSON.stringify(routed.placed.map((p) => ({anchor: p.anchor, blocked: p.blocked}))));
 });
 
 // ---------------------------------------------------------------------------------

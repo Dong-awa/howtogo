@@ -75,6 +75,18 @@ The readout that goes with a selected road is checked as a scenario rather than 
 its pieces, with a separate road not swept into the sum and an id that names no segment answering zero), and
 the caption it is appended to is built from the same `chainDirection` the one-way arrows are.
 
+`StrokeOutlineCheck.java` covers the shape of a road stroke, which is the one drawing in this file that a
+game cannot be asked about from here. The arithmetic behind it -- where the two sides of a line go, how two
+edges meet at a bend, what a cap owns -- is `StrokeOutline`, pure screen-space geometry, so the check
+rasterises what it returns the way a `QUADS` buffer is drawn and measures across the line. It found a real
+fault: the end of every segment took the perpendicular of the reversed outgoing direction, which is the same
+line viewed from the other side, so the last quad of every segment was a bow-tie and painted half its edge --
+roads thinned for a stretch before every junction. The check measures the full width along straight runs,
+bends of every angle up to a hairpin and a road doubling straight back, the ground the two ends' caps own,
+how far a mitre may reach, and, per segment, the shape the map really draws: a block-sampled road, smoothed
+into a display curve and split where the network splits it. Degenerate input -- one point, every point on top
+of every other, no width -- has to paint nothing rather than throw.
+
 `RouteDirectionCheck.java` covers the reading the wrong-way call is built on: that a planned route never
 reads as running **backwards** where it is drawn forwards. `Route.bearingAt` answers with the nearest
 segment of the drawn line, and a line that passes over the same ground twice -- a road that loops back,

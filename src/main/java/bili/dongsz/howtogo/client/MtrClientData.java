@@ -411,6 +411,10 @@ public final class MtrClientData {
         if (noWhole && noOverlay) {
             return window;
         }
+        // Per-call collections rather than shared ones, because this runs once a second at most --
+        // tick() only reaches it every REREAD_TICKS -- and a merge that reused its scratch maps from a
+        // static field would be a race against anything else that asked for one, for the sake of a few
+        // thousand short-lived entries a second that the young generation collects for nothing.
         Map<Long, Station> stations = new LinkedHashMap<>();
         Map<Long, Platform> platforms = new LinkedHashMap<>();
         Map<Long, Line> lines = new LinkedHashMap<>();

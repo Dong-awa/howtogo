@@ -13,11 +13,17 @@ Road marking and real-time navigation for Minecraft
 authors = "DongSZ"
 
 # One node's release only, and the bounds are computed per node by the build script rather than
-# written here -- this file is shared by all eight, so a literal in it would be right on exactly one
-# and would make the other seven refuse to load on the version they were built for. The upper bound
-# is closed deliberately: an open-ended range claims compatibility with every later NeoForge, none of
-# which this has been run against, and a wrong upper bound is worse than a missing feature -- it lets
-# a player load the mod on a version it was never tested on and then report the breakage as a bug.
+# written here -- this file is shared by all twenty-one, so a literal in it would be right on exactly
+# one and would make the other twenty refuse to load on the version they were built for. The upper
+# bound is closed deliberately: an open-ended range claims compatibility with every later NeoForge,
+# none of which this has been run against, and a wrong upper bound is worse than a missing feature --
+# it lets a player load the mod on a version it was never tested on and then report the breakage as a
+# bug.
+#
+# The two ranges below and the version above are expanded from the node's gradle.properties at build
+# time (see the expand() call in build.neoforge.gradle.kts); bumping a version means editing that
+# file, not this one. See docs/bumping-versions.md.
+#
 # The access transformer below widens five RenderStateShard constants that NeoForge's 1.20.6 jar
 # keeps protected. Declared here rather than per node because it is a no-op where they are already
 # public.

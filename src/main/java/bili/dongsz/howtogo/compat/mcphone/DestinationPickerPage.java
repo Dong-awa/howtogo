@@ -1,8 +1,10 @@
 package bili.dongsz.howtogo.compat.mcphone;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.client.Destinations;import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
@@ -416,14 +418,20 @@ public final class DestinationPickerPage implements IPhonePage {
         }
 
         canvas.clipped(minX, minY, maxX, maxY, () -> {
-            for (RoadSegment segment : RoadStore.get().segmentsSnapshot()) {
-                emitRoad(quads, last, segment, minX, minY, maxX, maxY);
-            }
-            // Both machine-read rail layers, so a station the list offers has its line drawn under it
-            // whether that station is Create's or MTR's.
-            for (RoadSegment segment : RailLayers.all()) {
-                emitRoad(quads, last, segment, minX, minY, maxX, maxY);
-            }
+            // One stroke per road (a chain of segments), not one per segment: the joints between
+            // pieces are what read as jagged on a small map, whichever mod the road came from.
+            HudDraw.emitNetwork(last, quads, RoadStore.get(),
+                    pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                    0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                    0.7, 0x9A, minX, minY, maxX, maxY);
+            HudDraw.emitNetwork(last, quads, RailTrackStore.network(),
+                    pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                    0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                    0.7, 0x9A, minX, minY, maxX, maxY);
+            HudDraw.emitNetwork(last, quads, MtrTransit.railLayer(),
+                    pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                    0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                    0.7, 0x9A, minX, minY, maxX, maxY);
             for (Destination place : all) {
                 double px = toScreenX(place.x());
                 double pz = toScreenZ(place.z());
@@ -465,15 +473,10 @@ public final class DestinationPickerPage implements IPhonePage {
             // the line looked at before committing and the line drawn afterwards read as one thing.
             Navigation.RoutePreview planned = preview;
             if (planned != null && planned.isPresent()) {
-                List<double[]> points = planned.route().points();
-                for (int i = 1; i < points.size(); i++) {
-                    double[] a = points.get(i - 1);
-                    double[] b = points.get(i);
-                    HudDraw.emitClipped(last, quads,
-                            toScreenX(a[0]), toScreenZ(a[1]),
-                            toScreenX(b[0]), toScreenZ(b[1]),
-                            1.1, 0xFF2FD0FF, 0xE0, minX, minY, maxX, maxY);
-                }
+                HudDraw.emitPath(last, quads, planned.route().points(),
+                        pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                        0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                        1.1, 0xFF2FD0FF, 0xE0, minX, minY, maxX, maxY);
             }
         });
 
@@ -684,13 +687,13 @@ public final class DestinationPickerPage implements IPhonePage {
             return;
         }
 
-        int colour = 0xFF000000 | (segment.roadClass().color() & 0xFFFFFF);
-        for (int i = 1; i < segment.vertexCount(); i++) {
-            HudDraw.emitClipped(last, quads,
-                    toScreenX(segment.x(i - 1)), toScreenZ(segment.z(i - 1)),
-                    toScreenX(segment.x(i)), toScreenZ(segment.z(i)),
-                    0.7, colour, 0x9A, minX, minY, maxX, maxY);
-        }
+        int colour = RoadConfig.roadColor(segment.roadClass());
+        // One stroke rather than a loop of clipped segments: the bends are mitred, so a railway read
+        // out of another mod as one-block steps does not look like a broken, jagged line on the phone.
+        HudDraw.emitPath(last, quads, segment,
+                pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                0.7, colour, 0x9A, minX, minY, maxX, maxY);
     }
 
     private void drawSheetBackground(GuiGraphics graphics) {

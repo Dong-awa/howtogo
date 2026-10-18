@@ -131,6 +131,10 @@ public final class Navigation {
      * trip.
      */
     private static String tripDimension;
+    
+    // Cache for dimension check optimization to avoid repeated string allocations and comparisons
+    private static Object lastCheckedLevel;
+    private static String lastCheckedDimension;
 
     /**
      * The mode the last plan gave up on, or null when the mode that was asked for was kept.
@@ -304,7 +308,23 @@ public final class Navigation {
     /** The dimension the player is in, or null when no world is loaded. */
     private static String currentDimension() {
         net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
-        return level == null ? null : level.dimension().location().toString();
+        if (level == null) {
+            // Drop the cache on the way out. It holds the level strongly, and a ClientLevel that has
+            // been unloaded must not be kept alive by a navigation overlay that is doing nothing: the
+            // next world builds its own, so there is nothing here worth carrying across.
+            lastCheckedLevel = null;
+            lastCheckedDimension = null;
+            return null;
+        }
+        // A ClientLevel's dimension never changes, so the answer is a property of the identity of the
+        // level: the same reference answers the same string, and one string allocation serves every
+        // tick of a trip instead of one per tick.
+        if (level == lastCheckedLevel) {
+            return lastCheckedDimension;
+        }
+        lastCheckedLevel = level;
+        lastCheckedDimension = level.dimension().location().toString();
+        return lastCheckedDimension;
     }
 
     /** Where the trip started; stays fixed even after the route is re-planned. */
@@ -321,7 +341,18 @@ public final class Navigation {
         if (target == null) {
             return;
         }
-        LocalPlayer player = Minecraft.getInstance().player;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            // The world is gone. A trip belongs to the world it was planned in, and leaving it must
+            // end the trip rather than leave its progress waiting for the next world -- where the
+            // destination, the route and the distance already travelled would all describe a place
+            // that is not here. There is no player to tell, so the log is the only report.
+            HowToGo.LOGGER.info("[HowToGo] the world was left while navigating to {}; the trip is ended",
+                    target.name());
+            clear();
+            return;
+        }
+        LocalPlayer player = minecraft.player;
         if (player == null) {
             return;
         }
@@ -1320,6 +1351,47 @@ public final class Navigation {
                 underfootSegmentId = segment.id();
             }
         }
+
+        // The roads RoadWeaver generated, read only as the same kind of fallback: they are drawn on
+        // the map and planned over, so a player walking along one is on a road like any other, and
+        // the pace, the road-surface call and the wrong-way readout have to see it. Boxed by the
+        // widest tolerance rather than walked whole: this runs once per block crossed, and the layer
+        // can hold a whole region's worth of roads.
+        if (nearest == null && !RoadWeaverLayer.segments().isEmpty()) {
+            double reach = 0;
+            for (RoadClass roadClass : RoadClass.values()) {
+                if (active.speedOn(roadClass) > 0) {
+                    reach = Math.max(reach, RoadConfig.onRoadTolerance(roadClass));
+                }
+            }
+            if (reach > 0) {
+                double[] closest = {Double.MAX_VALUE};
+                RoadClass[] found = {null};
+                int[] foundSegment = {RoadSegment.NO_SEGMENT};
+                RoadWeaverLayer.forEachSegmentInBox(x - reach, z - reach, x + reach, z + reach,
+                        segment -> {
+                            if (active.speedOn(segment.roadClass()) <= 0) {
+                                return;
+                            }
+                            double distance = distanceToRoad(segment, x, z);
+                            if (distance > RoadConfig.onRoadTolerance(segment.roadClass())
+                                    || distance >= closest[0]) {
+                                return;
+                            }
+                            closest[0] = distance;
+                            found[0] = segment.roadClass();
+                            // An id from the layer, not from the saved network: the wrong-way anchor
+                            // looks it up in the saved network and finds nothing, which is the same
+                            // answer it gives when there is no road underfoot at all.
+                            foundSegment[0] = segment.id();
+                        });
+                if (found[0] != null) {
+                    nearestDistance = closest[0];
+                    nearest = found[0];
+                    underfootSegmentId = foundSegment[0];
+                }
+            }
+        }
         return nearest;
     }
 
@@ -2100,7 +2172,8 @@ public final class Navigation {
                     RoadStore.get().nodeCount(), RoadStore.get().segmentCount());
         } else {
             HowToGo.LOGGER.info("[HowToGo] no route to {} for {}: {}", target.name(),
-                    mode().id(), RoadRouter.explainFailure(RoadStore.get(), routeOriginX,
+                    mode().id(), RoadRouter.explainFailure(
+                            RailTrackStore.forRouting(mode(), preferences), routeOriginX,
                             routeOriginZ, target.x(), target.z(), mode(), preferences));
         }
     }

@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.road;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * A polyline between two {@link RoadNode}s.
@@ -35,6 +36,23 @@ public final class RoadSegment {
         return directionChanges;
     }
 
+    /**
+     * How many times any segment's class or name has been set, over the life of this program run.
+     *
+     * <p>Neither is geometry, so {@link RoadNetwork#revision()} does not move for one -- but both
+     * decide how a road is drawn: the class picks the colour and width, and the name is what a
+     * display-only chain may join on. A cache that groups segments into strokes has to be able to
+     * tell that the answer has changed, and this is the cheap counter that says so. Whole-program
+     * rather than per-network for the same reason as {@link #directionChanges}: the segment is
+     * handed out without a reference to the network holding it.
+     */
+    private static int appearanceChanges;
+
+    /** @see #appearanceChanges */
+    public static int appearanceChanges() {
+        return appearanceChanges;
+    }
+
     private final int id;
     private RoadClass roadClass;
     private int fromNode = NO_NODE;
@@ -60,6 +78,14 @@ public final class RoadSegment {
      * {@link bili.dongsz.howtogo.route.RoadRouter}.
      */
     private int layer;
+
+    /**
+     * A smoothed display line for this segment, or null when there is none.
+     *
+     * <p>Presentation only: see {@link RoadCurve}. Routing, length and every hit test stay on the
+     * integer vertices above, so a curve cannot change what connects to what or how far a trip is.
+     */
+    private RoadCurve curve;
 
     /** The lowest storey a road may be on. */
     public static final int MIN_LAYER = -32;
@@ -93,6 +119,15 @@ public final class RoadSegment {
             this.layer = clamped;
             layerChanges++;
         }
+    }
+
+    /** The smoothed display line, or null when this road is drawn from its vertices. */
+    public RoadCurve curve() {
+        return curve;
+    }
+
+    public void setCurve(RoadCurve curve) {
+        this.curve = curve;
     }
 
     /** Interleaved vertex data: xs[i], zs[i] form the i-th vertex. */
@@ -140,7 +175,10 @@ public final class RoadSegment {
     }
 
     public void setRoadClass(RoadClass roadClass) {
-        this.roadClass = roadClass;
+        if (roadClass != this.roadClass) {
+            this.roadClass = roadClass;
+            appearanceChanges++;
+        }
     }
 
     public int fromNode() {
@@ -218,7 +256,11 @@ public final class RoadSegment {
     }
 
     public void setName(String name) {
-        this.name = name == null || name.isBlank() ? null : name.trim();
+        String next = name == null || name.isBlank() ? null : name.trim();
+        if (!Objects.equals(next, this.name)) {
+            this.name = next;
+            appearanceChanges++;
+        }
     }
 
     /** Midpoint of the polyline, used to anchor the name label. */
@@ -310,6 +352,7 @@ public final class RoadSegment {
         c.direction = direction;
         c.layer = layer;
         c.name = name;
+        c.curve = curve;
         return c;
     }
 

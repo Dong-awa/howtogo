@@ -76,7 +76,12 @@ public final class HighwayBendCheck {
         addRoad(tee, RoadClass.HIGHWAY, 0, 200, 20, 200);
         addRoad(tee, RoadClass.HIGHWAY, 20, 200, 20, 400);
         checkPlan(tee, 0, 0, 0, 400, true, "a highway that carries on straight is still planned");
-        checkPlan(tee, 0, 0, 20, 400, true, "and so is a bend well under the limit");
+        // The side road starts in the middle of the highway with no node there: a junction the map
+        // does not have. It used to be answered by the node fallback's straight line across the gap;
+        // with a drive confined to its own road that fallback is refused, which is the correct
+        // answer -- a car may not invent a junction by driving over the field.
+        checkPlan(tee, 0, 0, 20, 400, false,
+                "and a bend that needs a junction the map does not have is not invented");
 
         // A dual carriageway: two highway lanes 20 blocks apart with a turning loop at each end. The
         // 90 degree bends at the loops are what a divided highway really has, and they must plan.
