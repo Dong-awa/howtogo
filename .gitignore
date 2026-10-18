@@ -47,3 +47,8 @@ local-first.gradle
 forge-build/src
 forge-build/versions
 forge-build/.gradle
+
+# The forge build's own GRADLE_USER_HOME. Separate from .gradle-home on purpose: sharing one
+# across Gradle versions corrupts its caches.
+.gradle-home-forge/
+.gradle-dist/
