@@ -157,7 +157,7 @@ public final class RoadConfig {
         public Map<String, String> transitLineColors = defaultTransitLineColors();
 
         @SerializedName("walk_offroad_blocks")
-        public double walkOffroadBlocks = 4096.0;
+        public double walkOffroadBlocks = 32.0;
 
         @SerializedName("roadweaver_roads")
         public boolean roadWeaverRoads = true;
