@@ -590,8 +590,9 @@ open. The classes are not missing from the classpath; they were renamed or remov
   client/rendering/v1/hud/...              -> HudElementRegistry; HudRenderCallback was REMOVED
 
 So this is a port, not a build problem -- the second of the two candidates, and the one that costs
-source changes. A copy of the guide is in docs/fabric-api-26.1-porting.md because it is the
-authority for every remaining 26.x Fabric question and re-fetching it costs a round each time.
+source changes. The guide used to be copied into the tree while that port was in progress; it has
+since been removed, so this section is what survives of it locally. Fetch the guide again for
+anything it does not cover.
 
 ### 26.1 Fabric: the four remaining causes, read out of the jars
 
