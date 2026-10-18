@@ -145,8 +145,20 @@ public final class RoadEditHandler {
      */
     public static final KeyMapping MAIN_MENU = new KeyMapping(
             "key.howtogo.main_menu",
+            // 26.1 narrowed the key-type enum to two members and renamed the one for ordinary keys:
+            // what was KEYSYM is KEYBOARD. Same codes, same meaning.
+            //? if >=26.3 {
+            /*InputConstants.Type.KEYBOARD,
+            *///?} else {
             InputConstants.Type.KEYSYM,
+            //?}
+            // 1.21.9 reads key codes from the SDL-backed platform layer, so the GLFW constants this
+            // used to name are gone; InputConstants carries the same values.
+            //? if >=1.21.9 {
+            /*InputConstants.KEY_K,
+            *///?} else {
             GLFW.GLFW_KEY_K,
+            //?}
             KEY_CATEGORY);
 
     private RoadEditHandler() {
@@ -177,8 +189,8 @@ public final class RoadEditHandler {
     public static void tickMainMenuKey() {
         Minecraft minecraft = Minecraft.getInstance();
         while (MAIN_MENU.consumeClick()) {
-            if (minecraft.screen == null && minecraft.level != null && minecraft.player != null) {
-                minecraft.setScreen(new MainScreen());
+            if (Screens.current() == null && minecraft.level != null && minecraft.player != null) {
+                Screens.set(new MainScreen());
             }
         }
     }

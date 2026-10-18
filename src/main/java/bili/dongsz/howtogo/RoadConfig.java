@@ -731,8 +731,12 @@ public final class RoadConfig {
                         "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
                         "unknown entries are ignored. Empty by default.")
                 // Water is what the list exists for, so it is what the config UI offers to add.
+                //
+                // Three arguments, not four: the four-argument overload takes a Supplier of a default
+                // LIST, not of a single suggested entry, and 1.20.4 and 1.20.6 have no overload that
+                // would accept the latter. The suggestion is the config screen's to make.
                 .translation("howtogo.configuration.avoid_road_classes")
-                .defineListAllowEmpty("avoid_road_classes", List.<String>of(), () -> "water",
+                .defineListAllowEmpty("avoid_road_classes", java.util.Collections.<String>emptyList(),
                         element -> element instanceof String);
 
         PREFER_MAJOR_ROADS = builder.comment(

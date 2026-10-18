@@ -289,6 +289,14 @@ stonecutter parameters {
                     "new ClickEvent.OpenUrl(java.net.URI.create($1))")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
+        // The same for the second action this mod makes: the map archive screen's "open the exports
+        // folder" link. OpenFile takes the path straight through -- no parse at the call site,
+        // because a file path is not a URI -- so this one only changes the type.
+        regex(eval(current.version, ">=1.21.6")) {
+            replace("new ClickEvent\\(ClickEvent\\.Action\\.OPEN_FILE,\\s*([^)]+?)\\)",
+                    "new ClickEvent.OpenFile($1)")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         regex(eval(current.version, ">=26.3")) {
             replace("com\\.mojang\\.blaze3d\\.pipeline\\.RenderPipeline",
                     "com.mojang.renderpearl.api.pipeline.RenderPipeline")

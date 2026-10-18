@@ -943,7 +943,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * least clear of the other labels wins, because a name across a road is readable and a name
      * across another name is not.
      */
+    //? if >=1.21.6 {
+    /*private void drawPlaceName(MapElementGraphics graphics, PoseStack pose, Font font, PlaceName place,
+    *///?} else {
     private void drawPlaceName(GuiGraphics graphics, PoseStack pose, Font font, PlaceName place,
+    //?}
                                float factor, int viewRight, int viewBottom, LabelBoard board,
                                RoadInk ink) {
         double width = font.width(place.name()) * factor;
@@ -1007,7 +1011,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      *
      * @param rail whether these are railway names, which are drawn in the railway palette
      */
+    //? if >=1.21.6 {
+    /*private void drawLineNames(MapElementGraphics graphics, PoseStack pose, Font font, RoadNetwork network,
+    *///?} else {
     private void drawLineNames(GuiGraphics graphics, PoseStack pose, Font font, RoadNetwork network,
+    //?}
                                boolean rail, double scale, Projection projection, int margin,
                                int viewRight, int viewBottom, LabelBoard board) {
         if (network == null || network.segmentCount() == 0) {

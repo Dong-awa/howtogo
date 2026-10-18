@@ -2,7 +2,6 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.worlddata.WorldArchive;
-import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
@@ -271,7 +270,7 @@ public final class MapDataTransfer {
     public static void openFolder(Path folder) {
         try {
             Files.createDirectories(folder);
-            Util.getPlatform().openPath(folder);
+            OsShell.openFolder(folder);
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] could not open {}: {}", folder, failed.toString());
         }

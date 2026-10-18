@@ -544,7 +544,7 @@ public final class HowToGoCommand {
     private static int mapData(CommandContext<CommandSourceStack> context) {
         pending = () -> {
             Minecraft minecraft = Minecraft.getInstance();
-            minecraft.setScreen(new MapDataScreen(minecraft.screen));
+            Screens.set(new MapDataScreen(Screens.of(minecraft)));
         };
         say(context, Component.translatable("command.howtogo.mapdata"));
         return 1;
@@ -554,7 +554,7 @@ public final class HowToGoCommand {
     private static int mapImportOpen(CommandContext<CommandSourceStack> context) {
         pending = () -> {
             Minecraft minecraft = Minecraft.getInstance();
-            minecraft.setScreen(new MapDataScreen(minecraft.screen));
+            Screens.set(new MapDataScreen(Screens.of(minecraft)));
         };
         say(context, Component.translatable("command.howtogo.import.open"));
         return 1;
@@ -574,6 +574,8 @@ public final class HowToGoCommand {
                     .withStyle(Style.EMPTY
                             .withColor(ChatFormatting.AQUA)
                             .withUnderlined(true)
+                            // Same event, same folder: the rule that rewrites the OPEN_URL site above
+                            // also rewrites this one for the nodes that name a subclass per action.
                             .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE,
                                     MapDataTransfer.exportsDirectory().toAbsolutePath().toString())));
             say(context, Component.translatable("command.howtogo.export.done",
@@ -608,7 +610,7 @@ public final class HowToGoCommand {
             Path finalArchive = archive;
             pending = () -> {
                 Minecraft minecraft = Minecraft.getInstance();
-                minecraft.setScreen(new MapImportScreen(minecraft.screen, minecraft.screen,
+                Screens.set(new MapImportScreen(Screens.of(minecraft), Screens.of(minecraft),
                         finalArchive, contents));
             };
             say(context, Component.translatable("command.howtogo.import.confirm"));
@@ -711,7 +713,7 @@ public final class HowToGoCommand {
      */
     public static void openInBrowser(String url) {
         try {
-            net.minecraft.Util.getPlatform().openUri(url);
+            bili.dongsz.howtogo.client.OsShell.openUrl(url);
         } catch (RuntimeException | LinkageError failed) {
             HowToGo.LOGGER.info("[HowToGo] webmap | could not open a browser at {} ({}); "
                     + "the address is on screen", url, failed.toString());

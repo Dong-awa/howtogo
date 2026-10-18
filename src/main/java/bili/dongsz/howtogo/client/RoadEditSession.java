@@ -744,7 +744,7 @@ public final class RoadEditSession {
         // screen that is not one of this editor's own panels (a name prompt, the line editor, the map
         // archive screen), ends it -- and this is checked a tick after the map was replaced, because
         // the screen event that fires when it happens cannot say what replaced it.
-        Screen screen = Minecraft.getInstance().screen;
+        Screen screen = Screens.current();
         if (mapScreenClosing) {
             mapScreenClosing = false;
             if (!isEditorCompanion(screen)) {

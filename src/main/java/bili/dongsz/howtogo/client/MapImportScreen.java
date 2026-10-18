@@ -7,6 +7,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 
 import java.io.IOException;
@@ -97,7 +102,7 @@ public final class MapImportScreen extends Screen {
                         b -> confirm())
                 .bounds(startX, buttonY, confirmWidth, BUTTON_HEIGHT).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.cancel"),
-                        b -> Minecraft.getInstance().setScreen(cancelTo))
+                        b -> Screens.set(cancelTo))
                 .bounds(startX + confirmWidth + GAP, buttonY, cancelWidth, BUTTON_HEIGHT).build());
     }
 
@@ -120,7 +125,7 @@ public final class MapImportScreen extends Screen {
                             archive.getFileName().toString(), done.contents.files(),
                             MapDataTransfer.humanSize(done.contents.bytes),
                             done.backup.file.getFileName().toString());
-            Minecraft.getInstance().setScreen(new MapDataScreen(nextParent).withStatus(status, false));
+            Screens.set(new MapDataScreen(nextParent).withStatus(status, false));
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] map import from {} failed: {}", archive,
                     failed.toString());
@@ -129,8 +134,12 @@ public final class MapImportScreen extends Screen {
     }
 
     @Override
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(graphics, mouseX, mouseY, partialTick);
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
+
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xF0181818);
     }

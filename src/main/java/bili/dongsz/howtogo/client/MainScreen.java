@@ -16,6 +16,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
@@ -181,11 +186,11 @@ public final class MainScreen extends Screen {
     // ------------------------------------------------------------------ actions
 
     private void openDestination() {
-        Minecraft.getInstance().setScreen(new DestinationScreen(this));
+        Screens.set(new DestinationScreen(this));
     }
 
     private void openMapData() {
-        Minecraft.getInstance().setScreen(new MapDataScreen(this));
+        Screens.set(new MapDataScreen(this));
     }
 
     private void stopNavigation() {
@@ -270,24 +275,43 @@ public final class MainScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().setScreen(null);
+        Screens.set(null);
     }
 
     // ------------------------------------------------------------------- input
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
         if (button == 0 && insideMap(mouseX, mouseY)) {
             dragging = true;
             lastMouseX = mouseX;
             lastMouseY = mouseY;
             return true;
         }
+        //? if >=1.21.9 {
+        /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                new MouseButtonInfo(button, 0)), false);
+        *///?} else {
         return super.mouseClicked(mouseX, mouseY, button);
+        //?}
     }
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+    //?}
         if (dragging && button == 0) {
             centerX -= dragX / scale;
             centerZ -= dragY / scale;
@@ -295,16 +319,33 @@ public final class MainScreen extends Screen {
             lastMouseY = mouseY;
             return true;
         }
+        //? if >=1.21.9 {
+        /*return super.mouseDragged(new MouseButtonEvent(mouseX, mouseY,
+                new MouseButtonInfo(button, 0)), dragX, dragY);
+        *///?} else {
         return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        //?}
     }
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseReleased(MouseButtonEvent event) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+    //?}
         if (dragging && button == 0) {
             dragging = false;
             return true;
         }
+        //? if >=1.21.9 {
+        /*return super.mouseReleased(new MouseButtonEvent(mouseX, mouseY,
+                new MouseButtonInfo(button, 0)));
+        *///?} else {
         return super.mouseReleased(mouseX, mouseY, button);
+        //?}
     }
 
     /**
@@ -353,7 +394,11 @@ public final class MainScreen extends Screen {
     // ----------------------------------------------------------------- drawing
 
     @Override
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
         graphics.fill(0, 0, this.width, this.height, COLOR_DIM);
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
                 COLOR_PANEL_EDGE);
@@ -362,8 +407,6 @@ public final class MainScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        super.render(graphics, mouseX, mouseY, partialTick);
-
         // Shapes first, then every piece of text: drawing a string flushes the vertex buffer this
         // uses, so a shape emitted after one would go through a stale consumer.
         List<MapLabel> labels = drawMap(graphics);
@@ -388,9 +431,8 @@ public final class MainScreen extends Screen {
         int maxX = mapX + mapW;
         int maxY = mapY + mapH;
 
-        PoseStack.Pose pose = graphics.pose().last();
-        VertexConsumer vc = HudDraw.consumer(graphics);
-        HudDraw.VertexSink sink = HudDraw.sink(pose, vc);
+        HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
+        HudDraw.VertexSink sink = drawing.sink;
 
         double worldLeft = worldXAt(minX) - 4;
         double worldRight = worldXAt(maxX) + 4;
@@ -466,6 +508,7 @@ public final class MainScreen extends Screen {
         }
 
         drawPlayerArrow(sink);
+        HudDraw.endBlock(graphics, drawing);
         return labels;
     }
 

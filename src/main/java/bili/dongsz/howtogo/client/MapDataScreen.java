@@ -6,6 +6,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+// 1.21.9 bundled mouse coordinates and the button into a record.
+//? if >=1.21.9 {
+/*import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+*///?}
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
@@ -183,7 +188,7 @@ public final class MapDataScreen extends Screen {
     private void askToImport(Path archive) {
         try {
             WorldArchive.Contents contents = MapDataTransfer.inspect(archive);
-            Minecraft.getInstance().setScreen(new MapImportScreen(this, parent, archive, contents));
+            Screens.set(new MapImportScreen(this, parent, archive, contents));
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] could not read map archive {}: {}", archive,
                     failed.toString());
@@ -213,7 +218,14 @@ public final class MapDataScreen extends Screen {
     // ------------------------------------------------------------------- input
 
     @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
         if (button == 0) {
             int row = rowAt(mouseX, mouseY);
             if (row >= 0 && row < candidates.size()) {
@@ -221,7 +233,12 @@ public final class MapDataScreen extends Screen {
                 return true;
             }
         }
+        //? if >=1.21.9 {
+        /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                new MouseButtonInfo(button, 0)), false);
+        *///?} else {
         return super.mouseClicked(mouseX, mouseY, button);
+        //?}
     }
 
     @Override
@@ -253,14 +270,18 @@ public final class MapDataScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().setScreen(parent);
+        Screens.set(parent);
     }
 
     // ------------------------------------------------------------------ drawing
 
     @Override
+    //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(graphics, mouseX, mouseY, partialTick);
+    //?} else {
+    /*public void renderBackground(GuiGraphics graphics) {
+    *///?}
+
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xF0181818);
     }
