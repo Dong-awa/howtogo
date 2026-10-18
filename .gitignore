@@ -28,7 +28,6 @@ tools/routing-harness/build/
 # the unpacked Gradle distribution and the redirected GRADLE_USER_HOME. Machine-local,
 # reproducible from the notes in .recon/NETWORK-NOTES.md — never commit the binaries.
 .recon/
-.gradle-dist/
 .gradle-home/
 local-first.gradle
 
@@ -42,13 +41,5 @@ local-first.gradle
 .scratch-htg/
 .workbuddy-ai/
 
-# The Forge build is a second Gradle root. Its src/ is a junction to ../src, and its versions/
 # and build outputs are generated.
-forge-build/src
-forge-build/versions
-forge-build/.gradle
 
-# The forge build's own GRADLE_USER_HOME. Separate from .gradle-home on purpose: sharing one
-# across Gradle versions corrupts its caches.
-.gradle-home-forge/
-.gradle-dist/

@@ -18,7 +18,6 @@ pluginManagement {
     // the root properties are readable, and the build scripts apply the plugins by id alone.
     plugins {
         id("fabric-loom") version providers.gradleProperty("fabric_loom_version").get()
-        id("net.minecraftforge.gradle") version providers.gradleProperty("forge_gradle_version").get()
     }
     // Loom publishes a plugin marker for some versions and not others -- 1.10.5 has none on either
     // Fabric's Maven or the plugin portal, yet resolves; 1.14.10 has one on Fabric's Maven. Mapping
@@ -38,7 +37,7 @@ pluginManagement {
         gradlePluginPortal()
         // Fabric Loom. On Fabric's own Maven, not the plugin portal.
         maven("https://maven.fabricmc.net/") { name = "Fabric" }
-        // ForgeGradle. Forge's Maven, likewise.
+        // MinecraftForge's Maven. ModDevGradle needs it for its own artifacts.
         maven("https://maven.minecraftforge.net/") { name = "MinecraftForge" }
         // Stonecutter itself. Not on Maven Central -- this is its home repository.
         maven("https://maven.kikugie.dev/releases") { name = "KikuGie Releases" }
@@ -67,27 +66,17 @@ stonecutter {
             version("$version-neoforge", version).buildscript("build.neoforge.gradle.kts")
         }
 
-        // Fabric and Forge nodes take the same shape: the loader is a suffix on the node name and
+        // Fabric and NeoForge nodes take the same shape: the loader is a suffix on the node name and
         // selects the build script, so `//? if >=26.1` still evaluates against 26.1 whichever
         // loader the node builds for. That is what lets one source tree serve all three loaders.
         fun fabric(version: String) {
             version("$version-fabric", version).buildscript("build.fabric.gradle.kts")
         }
 
-        fun forge(version: String) {
-            version("$version-forge", version).buildscript("build.forge.gradle.kts")
-        }
 
         // The MC versions this project supports. Ported nodes build; the rest are the
         // migration queue -- `./gradlew build` only touches the active one, so a half-ported
         // tree still builds the version you are working on. `chiseledBuild` needs them all.
-        // Forge is NOT registered in this build. ForgeGradle 6 applies on Gradle 9.5.1 -- its
-        // version check is skippable and dependencies do resolve -- but it registers its task
-        // GROUPS and no tasks inside them, so nothing ever produces the mapped Minecraft
-        // artifact and compileClasspath cannot resolve. That is what "Gradle 9 is not supported"
-        // actually means for this plugin. Forge therefore moves to its own Gradle 8.14.6 build,
-        // which is the split decided earlier; build.forge.gradle.kts and versions/1.20.1-forge/
-        // are written and are what that build will use.
         neoforge("1.20.4")
         neoforge("1.20.6")
         neoforge("1.21.1")
@@ -137,7 +126,7 @@ stonecutter {
         //  1. Loom requires the Gradle JVM itself to be the Java the Minecraft version needs
         //     ("Minecraft 26.1 requires Java 25 but Gradle is using 21"), which is why the tree
         //     is on Gradle 9.5.1 with Java 25 rather than 8.14.6. Gradle 9 is fine for
-        //     everything except ForgeGradle, which is why Forge moves to its own build.
+        //     everything this tree needs.
         //  2. Mojang publishes NO client_mappings or server_mappings for 26.1.2, 26.2 or 26.3
         //     -- both keys are absent from the version JSON. Loom's officialMojangMappings()
         //     has nothing to fetch, so a Fabric node cannot be given Mojang names at all.

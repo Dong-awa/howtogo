@@ -4,19 +4,19 @@
 
 ## 矩阵
 
-| Minecraft | Fabric | NeoForge | Forge |
+| Minecraft | Fabric | NeoForge |
 |---|---|---|---|
-| 1.20.1 | ✅ `+mc1.20.1-fabric` | — | ⛔ 未交付 |
-| 1.20.4 | ✅ `+mc1.20.4-fabric` | ✅ `+mc1.20.4-neoforge` | ⛔ 未交付 |
-| 1.20.6 | ✅ `+mc1.20.6-fabric` | ✅ `+mc1.20.6-neoforge` | ⛔ 未交付 |
-| 1.21.1 | ✅ `+mc1.21.1-fabric` | ✅ `+mc1.21.1-neoforge` | — |
-| 1.21.4 | ✅ `+mc1.21.4-fabric` | ✅ `+mc1.21.4-neoforge` | — |
-| 1.21.6 | ✅ `+mc1.21.6-fabric` | ✅ `+mc1.21.6-neoforge` | — |
-| 1.21.8 | ✅ `+mc1.21.8-fabric` | ✅ `+mc1.21.8-neoforge` | — |
-| 1.21.11 | ✅ `+mc1.21.11-fabric` | ✅ `+mc1.21.11-neoforge` | — |
-| 26.1 | ✅ `+mc26.1-fabric` | ✅ `+mc26.1-neoforge` | — |
-| 26.2 | ✅ `+mc26.2-fabric` | ✅ `+mc26.2-neoforge` | — |
-| 26.3 | ✅ `+mc26.3-fabric` | ✅ `+mc26.3-neoforge` | — |
+| 1.20.1 | ✅ `+mc1.20.1-fabric` | — |
+| 1.20.4 | ✅ `+mc1.20.4-fabric` | ✅ `+mc1.20.4-neoforge` |
+| 1.20.6 | ✅ `+mc1.20.6-fabric` | ✅ `+mc1.20.6-neoforge` |
+| 1.21.1 | ✅ `+mc1.21.1-fabric` | ✅ `+mc1.21.1-neoforge` |
+| 1.21.4 | ✅ `+mc1.21.4-fabric` | ✅ `+mc1.21.4-neoforge` |
+| 1.21.6 | ✅ `+mc1.21.6-fabric` | ✅ `+mc1.21.6-neoforge` |
+| 1.21.8 | ✅ `+mc1.21.8-fabric` | ✅ `+mc1.21.8-neoforge` |
+| 1.21.11 | ✅ `+mc1.21.11-fabric` | ✅ `+mc1.21.11-neoforge` |
+| 26.1 | ✅ `+mc26.1-fabric` | ✅ `+mc26.1-neoforge` |
+| 26.2 | ✅ `+mc26.2-fabric` | ✅ `+mc26.2-neoforge` |
+| 26.3 | ✅ `+mc26.3-fabric` | ✅ `+mc26.3-neoforge` |
 
 ✅ 21 个已交付　⛔ 0 个未交付　— 该版本没有这个加载器
 
@@ -27,14 +27,15 @@
 - 两个加载器都需要 **Xaero's World Map**（`libs/` 里的那个 jar 只是编译用的；运行时装玩家自己的版本）。
 - **Create** 与 **MTR** 是可选的，代码里对两者都做了存在性判断。
 
-## 已无未交付节点
 
 都不是代码问题——26.x Fabric 和 Forge 的代码能编译到只差外部依赖，26.3 是上游补丁。
 
-| 节点 | 卡在哪 |
+## 未交付
+
 |---|---|
 | 26.3 NeoForge | **NeoForge 的补丁在 recompile 时打不上**（`HolderSet` 那行），是上游 beta 的问题。 |
-| 1.20.1 / 1.20.4 / 1.20.6 Forge | **ForgeGradle 的依赖解析在这里活不下来。** 见 `MIGRATION.md`：四个假设（坐标、网络、下载、Gradle 版本）逐一排除后，`--info` 给出的是 `MinecraftUserRepo: Failed to get Minecraft Vanilla Base` 加 `Caused by: java.lang.IllegalStateException: project services has been closed`。 |
+
+Forge 已从仓库移除：ForgeGradle 6 需要 Gradle 8.1.x，而 Stonecutter 0.7.11 在 8.1.1 上加载不了，两者互斥。详见 `MIGRATION.md`。
 
 ## 怎么重新构建
 

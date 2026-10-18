@@ -849,28 +849,31 @@ record that these several nested callbacks all use.
 Next step is to javap that shared type and read its accessors, rather than to guess at which of the
 two calls is wrong.
 
-### Forge: the answer from the search, and why it still does not close
+---
 
-The DefaultToolchainSpec failure is a known ForgeGradle 6 limitation, not a bug in this build:
+## Forge: removed from the repository
 
-  - MinecraftForge/ForgeGradle#933, "Support Gradle 8.2+": upgrading the wrapper to 8.2 or above
-    produces this error; "It builds properly on Gradle 8.1.x."
-  - The FG 6.x porting guide says "Update Gradle to 8.1.1".
+Forge was dropped rather than fixed, and this section records why so it is not attempted again
+without reading this first.
 
-So ForgeGradle 6 needs Gradle 8.1.x and the tree was on 8.14.6. That much is settled.
+Two facts, both verified:
 
-Gradle 8.1.1 was tried, with Java 17 because 8.1.1 predates Java 21, and in a separate
-GRADLE_USER_HOME because sharing one across Gradle versions corrupted its caches. It fails before
-ForgeGradle is reached at all:
+  1. ForgeGradle 6 needs Gradle 8.1.x. MinecraftForge/ForgeGradle#933 says upgrading the wrapper to
+     8.2 or above produces "Could not create an instance of type DefaultToolchainSpec" and "It builds
+     properly on Gradle 8.1.x"; the FG 6.x porting guide says to use 8.1.1. Every earlier Forge
+     failure in this file -- project services has been closed, Failed to get Minecraft Vanilla Base,
+     zero-byte mapped artifacts, a 261-byte jar -- is downstream of that one mismatch.
 
-    Running Stonecutter 0.7.11
-    FAILURE: Protocol message contained an invalid tag (zero).
+  2. Stonecutter 0.7.11 does not load on Gradle 8.1.1. With 8.1.1 and Java 17 in a clean
+     GRADLE_USER_HOME the build fails the moment the plugin applies:
 
-That is Stonecutter failing to load under Gradle 8.1.1 -- a protobuf error from the Kotlin DSL side,
-raised the moment the plugin applies. So the two requirements are on opposite sides again, and this
-time it is not a Gradle JVM question: ForgeGradle 6 needs 8.1.x and Stonecutter 0.7.11 needs
-something newer.
+         Running Stonecutter 0.7.11
+         FAILURE: Protocol message contained an invalid tag (zero).
 
-What that means concretely: the forge-build cannot use Stonecutter on 8.1.x. Getting Forge would need
-the Forge nodes built without Stonecutter -- either a separate checkout with the //? markers already
-resolved, or an older Stonecutter that runs on 8.1.1. Neither has been tried.
+So the two requirements are mutually exclusive on this tree. Getting Forge would mean building those
+nodes without Stonecutter -- a separate checkout with the //? markers pre-resolved, or an older
+Stonecutter -- and both cost ongoing maintenance rather than a one-off change.
+
+Everything Forge-specific has been deleted: build.forge.gradle.kts, forge-build/, versions/*-forge/,
+the ForgeGradle plugin declaration and its version property. What remains above is the record of the
+investigation.
