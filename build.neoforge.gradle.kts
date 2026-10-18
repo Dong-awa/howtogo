@@ -27,6 +27,36 @@ plugins {
     id("net.neoforged.moddev") version "2.0.148"
 }
 
+// Offline-mirror escape hatch: a node may declare dependencySubstitutions as a comma-separated
+// list of "group:artifact[:version]->group:artifact[:version]" pairs, used when neither the
+// blocked official repo nor bmclapi has the exact version but the mirror holds a sibling.
+// Implemented with eachDependency (NOT dependencySubstitution): moddev resolves some of its
+// neoFormRuntimeDependencies* configurations eagerly during evaluation, where static
+// substitution rules never take effect while eachDependency callbacks do.
+//
+// This has to sit ABOVE the neoForge { } block, not at the bottom of the file. ModDevGradle
+// resolves the neoFormRuntime tool coordinates while that block is being configured, so a rule
+// registered after it is registered too late -- the build silently keeps the pinned tool and the
+// substitution looks like it did nothing.
+val substitutions = (findProperty("dependencySubstitutions") ?: "").toString()
+    .split(",").map { it.trim() }.filter { it.contains("->") }
+if (substitutions.isNotEmpty()) {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            substitutions.forEach { raw ->
+                val (from, to) = raw.split("->").map { it.trim() }
+                val fromParts = from.split(":")
+                val fromVersion = fromParts.getOrNull(2)
+                if (requested.group == fromParts[0] && requested.name == fromParts[1] &&
+                    (fromVersion == null || requested.version == fromVersion)) {
+                    val toParts = to.split(":")
+                    useTarget(if (toParts.size > 2) to else "${toParts[0]}:${toParts[1]}:${requested.version}")
+                }
+            }
+        }
+    }
+}
+
 // Stonecutter 0.7 names this accessor `stonecutter` rather than `sc`, and has no `parsed`
 // property -- version tests go through eval(version, predicate) instead of a >= on a parsed
 // value. Same two questions, older spelling.
@@ -94,8 +124,10 @@ neoForge {
 
     // NeoFormRuntime downloads its own tool jars from maven.neoforged.net, which is unreachable
     // on this network. Pinning the version keeps it on the copy the workspace mirror serves.
+    // findProperty, not rootProject.property: a node may override the version in its own
+    // gradle.properties (26.3 does, see there), and the root value is the fallback.
     neoFormRuntime {
-        version = rootProject.property("nfrt_version") as String
+        version = findProperty("nfrt_version") as String
     }
 
     runs {
@@ -232,31 +264,6 @@ tasks.named<ProcessResources>("processResources") {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-}
-
-// Offline-mirror escape hatch: a node may declare dependencySubstitutions as a comma-separated
-// list of "group:artifact[:version]->group:artifact[:version]" pairs, used when neither the
-// blocked official repo nor bmclapi has the exact version but the mirror holds a sibling.
-// Implemented with eachDependency (NOT dependencySubstitution): moddev resolves some of its
-// neoFormRuntimeDependencies* configurations eagerly during evaluation, where static
-// substitution rules never take effect while eachDependency callbacks do.
-val substitutions = (findProperty("dependencySubstitutions") ?: "").toString()
-    .split(",").map { it.trim() }.filter { it.contains("->") }
-if (substitutions.isNotEmpty()) {
-    configurations.configureEach {
-        resolutionStrategy.eachDependency {
-            substitutions.forEach { raw ->
-                val (from, to) = raw.split("->").map { it.trim() }
-                val fromParts = from.split(":")
-                val fromVersion = fromParts.getOrNull(2)
-                if (requested.group == fromParts[0] && requested.name == fromParts[1] &&
-                    (fromVersion == null || requested.version == fromVersion)) {
-                    val toParts = to.split(":")
-                    useTarget(if (toParts.size > 2) to else "${toParts[0]}:${toParts[1]}:${requested.version}")
-                }
-            }
-        }
-    }
 }
 
 // Gradle 9 fails the build on this rather than warning: createMinecraftArtifacts reads

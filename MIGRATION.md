@@ -380,17 +380,51 @@ the tick wiring in HowToGo and RoadLayer has to be written against whatever that
     ERROR Line: 44, <..net.minecraft.core.HolderSet$1>..contents()....net.minecraft.core.HolderSet.Named..contents()
     NodeExecutionException: Node action for recompile failed
 
-That is a NeoForge patch failing to apply during recompile -- upstream, and 26.3 is a beta. It went
-unnoticed for a long time because the task result was cached: createMinecraftArtifacts had run
-successfully at some earlier point and Gradle kept reusing the output, so the node compiled
-against artifacts that a fresh run cannot reproduce.
+It went unnoticed for a long time because the task result was cached: createMinecraftArtifacts had
+run successfully at some earlier point and Gradle kept reusing the output, so the node compiled
+against artifacts that a fresh run could not reproduce.
 
 This was established by removing the access transformer, which was the suspected cause, and
-watching 26.3 fail identically without it. The AT is not involved.
+watching 26.3 fail identically without it. The AT is not involved -- that part of the old reading
+still holds.
 
-The practical consequence: any change to the NeoForge build script invalidates that cache and 26.3
-stops building until the upstream patch problem is dealt with. Worth knowing before reading it as
-a regression from whatever was just edited.
+**What it actually was.** Not a NeoForge patch, and not a beta-only bug: the failure is one step
+later, in the source transformation that applies NeoForge's access transformer to the decompiled
+sources before they are recompiled. NeoForge's own AT widens both
+
+    public net.minecraft.core.HolderSet$Named contents()Ljava/util/List;
+    public net.minecraft.core.HolderSet$1     contents()Ljava/util/List;
+
+and `jst-cli-bundle` 2.0.6 applies the first but not the second. Diffing the patched source against
+the transformed source makes it a one-line diff -- `Named.contents()` comes back `public` while the
+anonymous subclass that overrides it in `HolderSet.emptyNamed` still declares it `protected`, which
+javac rejects:
+
+    attempting to assign weaker access privileges; was public
+
+Nothing in this project's source is involved; `HolderSet` is Minecraft's.
+
+**The fix.** `neoform-runtime` 2.0.18 (what ModDevGradle 2.0.148 pins) names jst-cli-bundle 2.0.6 in
+its `tools.properties`. 2.0.31 is the lowest runtime that names 2.0.11, and 2.0.11 widens both
+declarations. The version is overridden per node rather than globally -- see `nfrt_version` in
+`versions/26.3-neoforge/gradle.properties` -- so the ten nodes that already build stay on the
+pipeline they were verified against. `build.neoforge.gradle.kts` reads it with `findProperty` so the
+root value remains the fallback.
+
+**One more thing on the way.** With the newer runtime the pipeline then died earlier, in `patch`:
+
+    NeoForm archive entry patches/ does not exist in .../maven-local/.../neoform-26.3-1.zip
+
+The workspace mirror's copy of `neoform-26.3-1.zip` was a repack with no directory entries at all
+(79 KB, 152 entries) rather than the published archive (98 KB, 276 entries, including the `patches/`
+entries). 2.0.18 did not care; 2.0.31 resolves `{patches}` through an archive entry lookup and does.
+The mirror copy was replaced with the published file -- sha1 `084632c2b30028e0eddbc54428d2dad317c95e9e`,
+identical to what Gradle had cached from the CDN.
+
+Both are environment/toolchain repairs, not mod changes. 26.3-neoforge now builds with no stale
+cached artifact behind it -- decompile, patch, applyNeoforgePatches, transformSources and recompile
+all re-ran, and the transformed `HolderSet.java` comes out with `contents()` public at both line 44
+and line 189.
 
 ### 1.20.6 NeoForge: defineListAllowEmpty changed shape
 
