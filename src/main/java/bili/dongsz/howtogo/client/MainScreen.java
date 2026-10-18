@@ -1,7 +1,6 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
-import bili.dongsz.howtogo.HowToGoCommand;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -219,7 +218,7 @@ public final class MainScreen extends Screen {
             String url = WebMapService.start();
             // The same manual start as the command: open the page rather than leave a bare address
             // that only a click would turn into a browser, and a click would ask for confirmation.
-            HowToGoCommand.openInBrowser(url);
+            OsShell.openUrl(url);
             notice(Component.translatable("screen.howtogo.main.webmap_running", url).getString());
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] webmap | could not start: {}", failed.toString());
@@ -356,9 +355,17 @@ public final class MainScreen extends Screen {
      * whole map there first.
      */
     @Override
+    //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    //?} else {
+    /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+    *///?}
         if (!insideMap(mouseX, mouseY) || scrollY == 0) {
+            //? if >=1.20.2 {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+            //?} else {
+            /*return super.mouseScrolled(mouseX, mouseY, scrollY);
+            *///?}
         }
         double worldX = worldXAt(mouseX);
         double worldZ = worldYAt(mouseY);

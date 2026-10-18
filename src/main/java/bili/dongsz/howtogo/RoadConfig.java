@@ -16,6 +16,7 @@
 /*
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.route.RoutePreference;
 import bili.dongsz.howtogo.route.RoutePreferences;
@@ -147,6 +148,32 @@ public final class RoadConfig {
         @SerializedName("webmap_port")
         public int webmapPort = 7573;
 
+        // The two colour sections: one hex string per class, same format the NeoForge arm documents
+        // in ColorHex -- "#RRGGBB" or "#AARRGGBB", anything else ignored with the class default kept.
+        @SerializedName("road_colors")
+        public Map<String, String> roadColors = defaultRoadColors();
+
+        @SerializedName("transit_line_colors")
+        public Map<String, String> transitLineColors = defaultTransitLineColors();
+
+        @SerializedName("walk_offroad_blocks")
+        public double walkOffroadBlocks = 4096.0;
+
+        @SerializedName("roadweaver_roads")
+        public boolean roadWeaverRoads = true;
+
+        @SerializedName("roadweaver_road_class")
+        public String roadWeaverRoadClass = "auto";
+
+        @SerializedName("roadweaver_full_map")
+        public boolean roadWeaverFullMap = true;
+
+        @SerializedName("roadweaver_structures")
+        public boolean roadWeaverStructures = true;
+
+        @SerializedName("roadweaver_routing")
+        public boolean roadWeaverRouting = true;
+
 // 
 // * These values with any field a hand-edited file left null replaced by its declared default.
 // *
@@ -173,6 +200,15 @@ public final class RoadConfig {
             }
             if (createStationBlockIds == null) {
                 createStationBlockIds = new ArrayList<>(List.of("create:track_station"));
+            }
+            if (roadColors == null) {
+                roadColors = defaultRoadColors();
+            }
+            if (transitLineColors == null) {
+                transitLineColors = defaultTransitLineColors();
+            }
+            if (roadWeaverRoadClass == null) {
+                roadWeaverRoadClass = "auto";
             }
             return this;
         }
@@ -459,6 +495,98 @@ public final class RoadConfig {
 // Whether the browser map's server starts with the first world loaded, off before the config loads. 
     public static boolean webMapAutoStart() {
         return values.webmapAutoStart;
+    }
+
+    // The colour a class of road is drawn in.
+    //
+    // The NeoForge arm defines these through the config spec and caches the parse; here the section
+    // is a plain map of hex strings, so the parse happens per call. That is a string parse and a
+    // switch per segment per frame, which is why roadColors() exists: a whole frame asks once and
+    // indexes, rather than asking per segment.
+    public static int roadColor(RoadClass roadClass) {
+        String text = values.roadColors.get(keyOf(roadClass));
+        return ColorHex.parse(text, roadClass.color());
+    }
+
+    // Every class's drawn colour, parsed once, for a caller about to draw a whole map.
+    public static java.util.Map<RoadClass, Integer> roadColors() {
+        java.util.Map<RoadClass, Integer> colours = new java.util.EnumMap<>(RoadClass.class);
+        for (RoadClass roadClass : RoadClass.values()) {
+            colours.put(roadClass, roadColor(roadClass));
+        }
+        return java.util.Map.copyOf(colours);
+    }
+
+    // The colour a kind of transit line is drawn in. See the NeoForge arm for why by kind.
+    public static int transitLineColor(RoadClass kind) {
+        String text = values.transitLineColors.get(keyOf(kind));
+        return ColorHex.parse(text, defaultTransitLineColor(kind));
+    }
+
+    // How far a walking trip may leave the network, in blocks.
+    public static double walkOffroadBlocks() {
+        return values.walkOffroadBlocks;
+    }
+
+    // Whether RoadWeaver's roads are read.
+    public static boolean roadWeaverRoads() {
+        return values.roadWeaverRoads;
+    }
+
+    // The class configured for RoadWeaver's roads, or "auto".
+    public static String roadWeaverRoadClass() {
+        return values.roadWeaverRoadClass == null ? "auto" : values.roadWeaverRoadClass;
+    }
+
+    // Whether RoadWeaver's whole road store is read while the player hosts the world.
+    public static boolean roadWeaverFullMap() {
+        return values.roadWeaverFullMap;
+    }
+
+    // Whether RoadWeaver's structures are offered as destinations.
+    public static boolean roadWeaverStructures() {
+        return values.roadWeaverStructures;
+    }
+
+    // Whether trips may be planned over RoadWeaver's roads.
+    public static boolean roadWeaverRouting() {
+        return values.roadWeaverRouting;
+    }
+
+    // The section key for a class: the enum name, lower case, as the NeoForge arm writes it.
+    private static String keyOf(RoadClass roadClass) {
+        return roadClass == null ? "unknown" : roadClass.name().toLowerCase(Locale.ROOT);
+    }
+
+    private static java.util.Map<String, String> defaultRoadColors() {
+        java.util.Map<String, String> colours = new java.util.LinkedHashMap<>();
+        for (RoadClass roadClass : RoadClass.values()) {
+            colours.put(keyOf(roadClass), ColorHex.formatRgb(roadClass.color()));
+        }
+        return colours;
+    }
+
+    private static java.util.Map<String, String> defaultTransitLineColors() {
+        java.util.Map<String, String> colours = new java.util.LinkedHashMap<>();
+        colours.put("rail", ColorHex.formatRgb(0xFF8AB4FF));
+        colours.put("water", ColorHex.formatRgb(0xFF3FA9F5));
+        colours.put("ice", ColorHex.formatRgb(0xFF9FE8FF));
+        colours.put("road", ColorHex.formatRgb(0xFFB8E986));
+        colours.put("highway", ColorHex.formatRgb(0xFFB8E986));
+        colours.put("path", ColorHex.formatRgb(0xFFB8E986));
+        return colours;
+    }
+
+    private static int defaultTransitLineColor(RoadClass kind) {
+        if (kind == null) {
+            return 0xFFB8E986;
+        }
+        return switch (kind) {
+            case RAIL -> 0xFF8AB4FF;
+            case WATER -> 0xFF3FA9F5;
+            case ICE -> 0xFF9FE8FF;
+            default -> 0xFFB8E986;
+        };
     }
 }
 
@@ -1274,7 +1402,7 @@ public final class RoadConfig {
         }
     }
 
-    /** How far a walking trip may leave the network, in blocks. */
+    // How far a walking trip may leave the network, in blocks.
     public static double walkOffroadBlocks() {
         try {
             return WALK_OFFROAD_BLOCKS.get();
@@ -1422,7 +1550,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether RoadWeaver's whole road store is read while the player hosts the world. */
+    // Whether RoadWeaver's whole road store is read while the player hosts the world.
     public static boolean roadWeaverFullMap() {
         try {
             return ROADWEAVER_FULL_MAP.get();

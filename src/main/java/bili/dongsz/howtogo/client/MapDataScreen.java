@@ -242,7 +242,11 @@ public final class MapDataScreen extends Screen {
     }
 
     @Override
+    //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    //?} else {
+    /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+    *///?}
         if (mouseX >= listX && mouseX < listX + listW && mouseY >= listY && mouseY < listY + listH) {
             int step = (int) Math.signum(scrollY);
             if (step != 0) {
@@ -250,7 +254,11 @@ public final class MapDataScreen extends Screen {
                 return true;
             }
         }
+        //? if >=1.20.2 {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        //?} else {
+        /*return super.mouseScrolled(mouseX, mouseY, scrollY);
+        *///?}
     }
 
     /** The candidate row under the pointer, or -1. */

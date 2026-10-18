@@ -5,7 +5,6 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
 import net.minecraft.client.Minecraft;
-import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -280,7 +279,7 @@ public final class MtrOverlayToggles {
 
     /** Client-wide: the two buttons are about an interface, not about a world. */
     private static Path file() {
-        Path config = FMLPaths.CONFIGDIR.get();
+        Path config = bili.dongsz.howtogo.GamePaths.configDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
@@ -295,8 +294,12 @@ public final class MtrOverlayToggles {
 
     private static boolean modLoaded() {
         try {
+            //? if fabric {
+            /*return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded(MOD_ID);
+            *///?} else {
             return net.neoforged.fml.ModList.get() != null
                     && net.neoforged.fml.ModList.get().isLoaded(MOD_ID);
+            //?}
         } catch (RuntimeException | LinkageError notBootstrapped) {
             return false;
         }

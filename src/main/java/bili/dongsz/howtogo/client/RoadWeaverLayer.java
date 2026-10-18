@@ -1449,8 +1449,12 @@ public final class RoadWeaverLayer {
     /** Whether RoadWeaver is installed, asked without loading any of its classes when it is not. */
     private static boolean modLoaded() {
         try {
+            //? if fabric {
+            /*return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded(MOD_ID);
+            *///?} else {
             return net.neoforged.fml.ModList.get() != null
                     && net.neoforged.fml.ModList.get().isLoaded(MOD_ID);
+            //?}
         } catch (RuntimeException | LinkageError notBootstrapped) {
             return false;
         }
