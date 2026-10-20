@@ -1,7 +1,6 @@
 package bili.dongsz.howtogo.item;
 
 import bili.dongsz.howtogo.HowToGo;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
@@ -9,7 +8,6 @@ import net.minecraft.world.item.Item;
 /*import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 *///?} else {
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
@@ -34,7 +32,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public final class ModItems {
 
     //? if fabric {
-    /*public static final Item NAVIGATOR = new NavigatorItem(new Item.Properties().stacksTo(1));
+    /*public static final Item NAVIGATOR = new NavigatorItem(ItemProperties.properties("navigator"));
     *///?} else {
     public static final DeferredRegister.Items ITEMS =
             DeferredRegister.createItems(HowToGo.MODID);
@@ -69,8 +67,7 @@ public final class ModItems {
     // code on every node -- the same trap MIGRATION.md records for whole-file conditions.
     //? if fabric {
     /*public static void register() {
-        Registry.register(BuiltInRegistries.ITEM,
-                new ResourceLocation(HowToGo.MODID, "navigator"), NAVIGATOR);
+        Registry.register(BuiltInRegistries.ITEM, ItemProperties.id("navigator"), NAVIGATOR);
         ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.TOOLS_AND_UTILITIES)
                 .register(entries -> entries.accept(NAVIGATOR));
     }
