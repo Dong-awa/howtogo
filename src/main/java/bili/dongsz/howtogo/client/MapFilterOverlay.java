@@ -83,7 +83,7 @@ public final class MapFilterOverlay {
     //? if fabric && <1.21.9 {
     /*public static void register() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            if (!RoadEditHandler.isMapScreen(screen)) {
+            if (!RoadEditHandler.isXaeroScreen(screen)) {
                 return;
             }
             ScreenEvents.afterRender(screen).register(MapFilterOverlay::onScreenRender);
@@ -99,7 +99,7 @@ public final class MapFilterOverlay {
     //? if fabric && >=1.21.9 {
     /*public static void register() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            if (!RoadEditHandler.isMapScreen(screen)) {
+            if (!RoadEditHandler.isXaeroScreen(screen)) {
                 return;
             }
             ScreenEvents.afterRender(screen).register(MapFilterOverlay::onScreenRender);

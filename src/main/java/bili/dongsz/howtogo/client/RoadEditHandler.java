@@ -369,7 +369,7 @@ public final class RoadEditHandler {
     //? if fabric && <1.21.9 {
     /*public static void registerScreenHandlers() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            if (!isMapScreen(screen)) {
+            if (!isXaeroScreen(screen)) {
                 return;
             }
             ScreenKeyboardEvents.allowKeyPress(screen).register((open, keyCode, scanCode, modifiers) ->
@@ -385,7 +385,7 @@ public final class RoadEditHandler {
     //? if fabric && >=1.21.9 {
     /*public static void registerScreenHandlers() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            if (!isMapScreen(screen)) {
+            if (!isXaeroScreen(screen)) {
                 return;
             }
             ScreenKeyboardEvents.allowKeyPress(screen).register((open, event) ->
@@ -541,6 +541,25 @@ public final class RoadEditHandler {
             return false;
         }
         return isMapScreen(screen);
+    }
+
+    /**
+     * Whether the screen belongs to Xaero's world map mod at all, without asking whether the map is
+     * what is currently being drawn.
+     *
+     * <p>This is the registration-time question, and it is deliberately weaker than
+     * {@link #isMapScreen}. Registering a listener happens in {@code ScreenEvents.AFTER_INIT}, which
+     * runs when the screen is created and therefore before it has rendered a single frame. The
+     * freshness half of {@link #isMapScreen} is evidence only the render pass can supply, so asking
+     * it here answers no for every freshly opened map -- and a listener that was never registered
+     * cannot be asked again later. That is why R and L did nothing on the world map on Fabric while
+     * the same keys worked on NeoForge, which subscribes globally instead of per screen.
+     *
+     * <p>The per-key gate still goes through {@link #isMapScreen}, so the other screens that package
+     * holds -- export, settings, world switching -- are still left alone once a key is pressed.
+     */
+    static boolean isXaeroScreen(Screen screen) {
+        return screen != null && isInPackage(screen, "xaero.");
     }
 
     /**
