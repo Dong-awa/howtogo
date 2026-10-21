@@ -260,6 +260,38 @@ tasks.named<ProcessResources>("processResources") {
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.
     from(rootProject.file("LICENSE")) { into("META-INF") }
     filesMatching(listOf("META-INF/neoforge.mods.toml")) { expand(replaceProperties) }
+
+    // The data pack, assembled for this node. Two independent things about it changed under this
+    // tree, at two different versions, and neither can be expressed inside the JSON:
+    //
+    //   1.20.1 .. 1.20.6   data/howtogo/recipes/     + advancements/
+    //   1.21.1 and later   data/howtogo/recipe/      + advancement/
+    //
+    //   1.20.1 .. 1.21.1   "I": {"item": "minecraft:iron_ingot"}
+    //   1.21.4 and later   "I": "minecraft:iron_ingot"
+    //
+    // The ingredient one is a codec swap, not a spelling: 1.21.1's Ingredient parses
+    // either(TagKey, Item) and rejects a bare string, 1.21.4's uses HolderSetCodec and rejects the
+    // object. Shipping either form to the other era is a parse failure at world load, which is how
+    // this surfaced -- "Failed to parse howtogo:navigator from pack howtogo", every recipe in the
+    // registry erroring out, and the world never finishing its load.
+    //
+    // 1.20.5 also renamed the result's "item" to "id", which is why there are three recipe files
+    // and not two. Stonecutter does not touch resources -- a //? in the JSON comes out of
+    // stonecutterGenerate verbatim -- so the choice is made here and the files live outside
+    // src/main/resources, where nothing copies them by accident.
+    val recipeEra = when {
+        stonecutter.eval(minecraftVersion, ">=1.21.4") -> "recipe-modern"
+        stonecutter.eval(minecraftVersion, ">=1.20.5") -> "recipe-mid"
+        else -> "recipe-legacy"
+    }
+    val singular = stonecutter.eval(minecraftVersion, ">=1.21.1")
+    from(rootProject.file("src/main/datapack/$recipeEra")) {
+        into("data/howtogo/" + if (singular) "recipe" else "recipes")
+    }
+    from(rootProject.file("src/main/datapack/advancement")) {
+        into("data/howtogo/" + if (singular) "advancement/recipes" else "advancements/recipes")
+    }
 }
 
 tasks.withType<JavaCompile>().configureEach {

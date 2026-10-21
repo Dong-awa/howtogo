@@ -252,4 +252,22 @@ tasks.named<ProcessResources>("processResources") {
     filesMatching(listOf("fabric.mod.json")) { expand(replaceProperties) }
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.
     from(rootProject.file("LICENSE")) { into("META-INF") }
+
+    // The data pack, assembled for this node -- same three-way choice the NeoForge script makes,
+    // and for the same reasons. See the long comment there; the short version is that the data
+    // directory is plural before 1.21.1, the ingredient is an object before 1.21.4, and 1.20.5
+    // renamed the result's "item" to "id". Stonecutter does not touch resources, so the choice has
+    // to be made at copy time.
+    val recipeEra = when {
+        stonecutter.eval(minecraftVersion, ">=1.21.4") -> "recipe-modern"
+        stonecutter.eval(minecraftVersion, ">=1.20.5") -> "recipe-mid"
+        else -> "recipe-legacy"
+    }
+    val singular = stonecutter.eval(minecraftVersion, ">=1.21.1")
+    from(rootProject.file("src/main/datapack/$recipeEra")) {
+        into("data/howtogo/" + if (singular) "recipe" else "recipes")
+    }
+    from(rootProject.file("src/main/datapack/advancement")) {
+        into("data/howtogo/" + if (singular) "advancement/recipes" else "advancements/recipes")
+    }
 }
