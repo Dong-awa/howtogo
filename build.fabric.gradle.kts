@@ -183,10 +183,33 @@ loom {
 // access widener are read by Fabric and by nothing else, so putting them in the shared resources
 // would ship them inside the NeoForge and Forge jars as well -- harmless, but it invites the
 // question of which loader a jar is for when the answer should be obvious from its contents.
+//
+// Both shared directories are copied into the node's own build directory unless this is the
+// active node, for the same IntelliJ content-root reason spelled out in build.neoforge.gradle.kts:
+// a directory registered by every node's module is de-duplicated down to one module by the IDE,
+// which leaves the active node without it. Copies are unique per node, so nothing is de-duplicated.
 sourceSets {
     main {
-        java.srcDir(rootProject.file("src/common/java"))
-        resources.srcDir(rootProject.file("src/fabric/resources"))
+        if (stonecutter.current.isActive) {
+            java.srcDir(rootProject.file("src/common/java"))
+            resources.srcDir(rootProject.file("src/fabric/resources"))
+        } else {
+            val commonCopy = layout.buildDirectory.dir("generated/common/java")
+            val syncCommon = tasks.register<Sync>("syncCommonSources") {
+                from(rootProject.file("src/common/java"))
+                into(commonCopy)
+            }
+            java.srcDir(commonCopy)
+            tasks.named<JavaCompile>("compileJava") { dependsOn(syncCommon) }
+
+            val fabricResourcesCopy = layout.buildDirectory.dir("generated/fabric-resources")
+            val syncFabricResources = tasks.register<Sync>("syncFabricResources") {
+                from(rootProject.file("src/fabric/resources"))
+                into(fabricResourcesCopy)
+            }
+            resources.srcDir(fabricResourcesCopy)
+            tasks.named<ProcessResources>("processResources") { dependsOn(syncFabricResources) }
+        }
     }
 }
 

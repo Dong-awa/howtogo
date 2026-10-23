@@ -164,11 +164,27 @@ neoForge {
 // src/common is pure Java (road network, routing, transit model, reflective bridges) with no
 // Minecraft, loader or Xaero import at all, and src/main is everything that has to know which
 // Minecraft and which loader it is running on. Stonecutter owns src/main -- that is the tree
-// it toggles between versions -- while src/common is the same bytes for every node and is
-// therefore attached as-is.
+// it toggles between versions -- while src/common is the same bytes for every node.
+//
+// The editor is why this is not a plain srcDir on every node. Gradle exports each node's source
+// directories to IntelliJ as content roots, and one directory registered by twenty-one modules is
+// de-duplicated down to a single module's -- which left the ACTIVE node, the only one whose module
+// the editor resolves against, without the shared classes. So the active node points at the real
+// directory and every other node compiles a copy under its own build directory, which is unique
+// per node and therefore never de-duplicated. Same sources and same output as before.
 sourceSets {
     main {
-        java.srcDir(rootProject.file("src/common/java"))
+        if (stonecutter.current.isActive) {
+            java.srcDir(rootProject.file("src/common/java"))
+        } else {
+            val commonCopy = layout.buildDirectory.dir("generated/common/java")
+            val syncCommon = tasks.register<Sync>("syncCommonSources") {
+                from(rootProject.file("src/common/java"))
+                into(commonCopy)
+            }
+            java.srcDir(commonCopy)
+            tasks.named<JavaCompile>("compileJava") { dependsOn(syncCommon) }
+        }
     }
 }
 

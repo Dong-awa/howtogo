@@ -27,6 +27,17 @@ settings.gradle.kts                 the node tree
 Adding a mod loader later (Fabric) means a loader entry in `settings.gradle.kts`, a
 `build.fabric.gradle.kts`, and nodes named `<mc>-fabric`. The shared source does not move.
 
+### IntelliJ IDEA and the shared source
+
+Gradle exports every node's source directories to IntelliJ as content roots, and a directory
+declared by all twenty-one modules is de-duplicated down to one module by the IDE (its log says
+`Duplicating content roots detected`). That used to leave the active node -- the one the editor
+resolves source files against -- without `src/common/java`, so it showed unresolved symbols
+everywhere. The build scripts therefore hand the real `src/common/java` (and, on Fabric,
+`src/fabric/resources`) to the ACTIVE node only; every other node compiles a copy under its own
+`build/generated/`, which is unique per node and never de-duplicated. The sources and the jars are
+unchanged -- if the editor is stale after a switch, Reload All Gradle Projects.
+
 ## Commands
 
 ```powershell
