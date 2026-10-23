@@ -332,6 +332,20 @@ stonecutter parameters {
                     "parent.extractRenderState(graphics, mouseX, mouseY, partialTick)")
             reverse("NO_REVERSE", "NO_REVERSE")
         }
+        // The ResourceLocation factory is a version question, not a receiver question: before 1.21
+        // the class is built with its public constructor and has no fromNamespaceAndPath; from 1.21
+        // the constructor is private and the factory is the only way in. ItemProperties' pre-1.21.2
+        // arm is one block serving Fabric nodes on both sides of that boundary, so the call is
+        // written through a placeholder and resolved here, per version. The token appears nowhere
+        // else in the tree.
+        regex(eval(current.version, "<1.21")) {
+            replace("HTG_RESOURCE_LOCATION", "new ResourceLocation")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
+        regex(eval(current.version, ">=1.21")) {
+            replace("HTG_RESOURCE_LOCATION", "ResourceLocation.fromNamespaceAndPath")
+            reverse("NO_REVERSE", "NO_REVERSE")
+        }
         // The map's viewport question is NOT a rule here, and neither is its text call. Xaero's own
         // MapElementGraphics reports no size of its own and keeps drawString -- it is not the vanilla
         // type and did not follow it -- so the blanket .drawString( rule above must not reach it.

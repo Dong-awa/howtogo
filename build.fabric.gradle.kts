@@ -51,6 +51,10 @@ val requiredJava = when {
 java.toolchain.languageVersion = JavaLanguageVersion.of(requiredJava.majorVersion)
 
 repositories {
+    // Maven Central through a mirror first, for the same network reason as the NeoForge script:
+    // Loom also pulls natives and mapping artifacts through Central, and the direct host's TLS
+    // handshake is intermittent here.
+    maven("https://maven.aliyun.com/repository/central") { name = "mavenCentralMirror" }
     mavenCentral()
     // Corrected copies of artifacts whose UPSTREAM publication is broken, consulted before the
     // repository that publishes them. Restricted by content to the one module it fixes, so it

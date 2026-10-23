@@ -1,5 +1,5 @@
 //? if neoforge && >=26.1 {
-package bili.dongsz.howtogo;
+/*package bili.dongsz.howtogo;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
@@ -42,15 +42,43 @@ final class HowToGoConfig {
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
     }
 }
+*///?}
+//? if neoforge && >=1.21.1 && <26.1 {
+package bili.dongsz.howtogo;
+
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.neoforge.client.gui.ConfigurationScreen;
+import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
+
+// 1.21.1 through 1.21.11. See the first arm of this file for why this is a helper and why the
+// config screen is only registered where both halves of it exist.
+final class HowToGoConfig {
+
+    private HowToGoConfig() {
+    }
+
+    static void registerClient(ModContainer container) {
+        container.registerConfig(ModConfig.Type.CLIENT, RoadConfig.SPEC);
+        // The config screen: the button beside this mod in the mods list. NeoForge's own editor
+        // reads the very SPEC the file is written from -- the same sections, defaults, comments and
+        // ranges -- so nothing here is a second copy of the settings that could drift from the file.
+        // Without this no screen is offered at all, which is why the colour sections would otherwise
+        // only be editable by hand in the TOML. This arm covered the whole 1.20.5..26.1 range until
+        // the screen registration was split out; leaving it out is what made the Config button
+        // vanish on the 1.21.x nodes.
+        container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
+    }
+}
 //?}
-//? if neoforge && >=1.20.5 && <26.1 {
+//? if neoforge && >=1.20.5 && <1.21.1 {
 /*package bili.dongsz.howtogo;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
 
-// 1.20.6 and the 1.21.x series. See the first arm of this file for why this is a helper and why the
-// config screen is only registered where both halves of it exist.
+// 1.20.6 only: IConfigScreenFactory exists but ConfigurationScreen does not, so the config is
+// registered and no screen is offered -- there is nothing to pass as the factory.
 final class HowToGoConfig {
 
     private HowToGoConfig() {

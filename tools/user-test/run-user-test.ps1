@@ -33,6 +33,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = (Resolve-Path (Join-Path $here '..\..')).Path
+# The active node, read from stonecutter.gradle.kts (`stonecutter active "1.21.1-neoforge"`).
+# A bare `runClient` must not be used: Gradle runs an unqualified task in EVERY node subproject,
+# so that launches one client per Minecraft version at once -- and the per-node run directories
+# are empty, which is a mod-loading crash for every node but the one whose mods are in run/mods.
+$activeNode = (Select-String -Path (Join-Path $project 'stonecutter.gradle.kts') `
+    -Pattern '^\s*stonecutter active "([^"]+)"').Matches[0].Groups[1].Value
+$runTask = ":${activeNode}:runClient"
 $runDir = Join-Path $project 'run'
 $latest = Join-Path $runDir 'logs\latest.log'
 $dataDir = Join-Path $runDir 'config\howtogo'
@@ -107,7 +114,7 @@ if ($Auto) {
 $bat = Join-Path $here 'run-client.cmd'
 Set-Content -Path $bat -Encoding ASCII -Value @(
     '@echo off',
-    "`"$project\gradlew.bat`" runClient $($properties -join ' ') > `"$log`" 2>&1"
+    "`"$project\gradlew.bat`" $runTask $($properties -join ' ') > `"$log`" 2>&1"
 )
 $launcher = Start-Process -FilePath $bat -WorkingDirectory $project -WindowStyle Hidden -PassThru
 

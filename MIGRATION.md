@@ -37,10 +37,13 @@ $env:GRADLE_USER_HOME = "E:\Projects\Minecraft\Mods\howtogo\.gradle-home"
 $gradle = "E:\Projects\Minecraft\Mods\howtogo\.gradle-dist\gradle-9.7.1\bin\gradle.bat"
 $lm = "-PhtgLocalMaven=E:/Projects/Minecraft/Mods/howtogo/.recon/maven-local"
 
-& $gradle -p . $lm build                      # the ACTIVE node only -- what you work with
+& $gradle -p . $lm :1.21.1-neoforge:build     # one node -- the active one is what src/ holds
 & $gradle -p . $lm :26.2-neoforge:build       # one named node
-& $gradle -p . $lm chiseledBuild              # every node -- what CI runs
+& $gradle -p . $lm build                      # every node -- a bare name runs in every project
 & $gradle -p . $lm "Set active project to 1.21.4-neoforge"   # switch the active node
+
+# Stonecutter 0.7 has no chiseledBuild task: the bare `build` IS the all-node build. A bare
+# `runClient` is different -- it starts one client per node -- so always name the node there.
 ```
 
 Switching the active node **rewrites `src/`** to that version's state, by commenting and

@@ -3,9 +3,15 @@
 // they all compile the SAME shared source in src/ -- the per-version differences live in
 // `//?` comments inside that source (see stonecutter.gradle.kts) instead of in N git branches.
 //
-//   ./gradlew build                      builds the ACTIVE node only (fast, what you edit)
+//   ./gradlew :1.21.1-neoforge:build     builds ONE node (the active one is the state src/ holds)
+//   ./gradlew build                      builds EVERY node (a bare task name runs in every project)
 //   ./gradlew "Set active project to X"  switches the active node and rewrites src/ to its state
-//   ./gradlew chiseledBuild              builds every node (what CI runs)
+//
+// For one node, name it. Gradle executes an unqualified task name in EVERY project that has it,
+// so a bare `./gradlew runClient` starts a client for every node at once, most of them against an
+// empty per-node run/ directory, which is a mod-loading crash. `build` is the deliberate
+// exception: all twenty-one nodes is what `build` means here, and Stonecutter 0.7 has no separate
+// chiseled task for it.
 //
 // Why nodes are named "<version>-<loader>": the loader is part of the name but NOT of the
 // logical version, so `//? if >=26.1` still evaluates against 26.1 for the 26.1-neoforge node.
@@ -34,6 +40,12 @@ pluginManagement {
 
     repositories {
         mavenCentral()
+        // Plugin artifacts are served from plugins-artifacts.gradle.org after a redirect from
+        // plugins.gradle.org, and that host is unreachable from this network -- a clean checkout
+        // fails on Stonecutter's own jar here, not just on this project. Aliyun mirrors the Gradle
+        // Plugin Portal, jars included, so it is asked before the portal; the portal stays as the
+        // fallback for anything the mirror has not picked up yet.
+        maven("https://maven.aliyun.com/repository/gradle-plugin") { name = "AliyunGradlePlugin" }
         gradlePluginPortal()
         // Fabric Loom. On Fabric's own Maven, not the plugin portal.
         maven("https://maven.fabricmc.net/") { name = "Fabric" }
@@ -42,9 +54,10 @@ pluginManagement {
         // Stonecutter itself. Not on Maven Central -- this is its home repository.
         maven("https://maven.kikugie.dev/releases") { name = "KikuGie Releases" }
         maven("https://maven.kikugie.dev/snapshots") { name = "KikuGie Snapshots" }
-        // moddev / NeoForge. maven.neoforged.net is unreachable from this network; bmclapi
-        // proxies most of it and the workspace mirror carries the rest (see the root build).
-        maven("https://bmclapi2.bangbang93.com/maven") { name = "BMCLAPI" }
+        // bmclapi used to stand here, proxying the NeoForged Maven (which is unreachable directly
+        // from this network) and Maven Central. It answers 403 now, so it is gone: the NeoForged
+        // half comes from its CDN in the per-node build script, and Maven Central is mavenCentral()
+        // above plus the Aliyun mirror the same script uses.
         maven {
             name = "workspaceLocalMirror"
             url = uri(providers.gradleProperty("htgLocalMaven").getOrElse("${rootDir}/.recon/maven-local"))

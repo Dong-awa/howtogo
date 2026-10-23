@@ -29,7 +29,7 @@ plugins {
 
 // Offline-mirror escape hatch: a node may declare dependencySubstitutions as a comma-separated
 // list of "group:artifact[:version]->group:artifact[:version]" pairs, used when neither the
-// blocked official repo nor bmclapi has the exact version but the mirror holds a sibling.
+// blocked official repo nor its CDN has the exact version but the mirror holds a sibling.
 // Implemented with eachDependency (NOT dependencySubstitution): moddev resolves some of its
 // neoFormRuntimeDependencies* configurations eagerly during evaluation, where static
 // substitution rules never take effect while eachDependency callbacks do.
@@ -133,6 +133,15 @@ neoForge {
     runs {
         register("client") {
             client()
+            // The dev test environment -- mods, configs, saves and Xaero's own data -- lives in the
+            // ROOT run/ directory, which is where tools/user-test/run-user-test.ps1 looks for it and
+            // where docs/bumping-versions.md says to swap the test mods. Only the active node uses
+            // it: those mods are one Minecraft version's, so loading them on another node is a
+            // guaranteed mod-loading crash. Every other node keeps its own versions/<node>/run,
+            // empty until someone fills it.
+            if (stonecutter.current.isActive) {
+                gameDirectory.set(rootProject.layout.projectDirectory.dir("run"))
+            }
             systemProperty("forge.logging.markers", "REGISTRIES")
             // The in-game self-test rig (tools/user-test/run-user-test.ps1) drives these.
             systemProperty("howtogo.selftest", rootProject.findProperty("htgSelftest")?.toString() ?: "")
@@ -164,10 +173,25 @@ sourceSets {
 }
 
 // The mcphone compat package compiles against the (private, not on Modrinth) mcphone mod's API
-// jar. When that jar is absent from libs/, exclude the compat sources and their ServiceLoader
+// jar. When no jar for this node is in libs/, exclude the compat sources and their ServiceLoader
 // registration instead of failing: the classes are only ever loaded when mcphone itself is
 // installed, so an install without the jar loses nothing.
-val mcphoneApiJar = fileTree(rootProject.file("libs")) { include("*.jar") }.find { f ->
+//
+// The jar is selected by the node's own Minecraft version, not by "any mcphone jar in libs/".
+// One jar is built against one Minecraft generation and neither half of that is portable:
+//
+//   * its class files are compiled for the Java that generation needs, so the 1.21.1 jar
+//     (class file 65.0, Java 21) cannot even be read by the 1.20.4 node's Java 17 compiler;
+//   * the API it implements moved. ResourceLocation.fromNamespaceAndPath does not exist before
+//     1.21, and 1.21.11 renamed the class itself to Identifier, so on those nodes the page's
+//     overrides of IPhoneApp no longer match.
+//
+// With a 1.21.1 jar in libs/ the 1.21.1 node therefore compiles the integration and every other
+// node compiles without it, which is what a build of the whole tree needs. Dropping in a jar for
+// another version enables the integration on that node automatically.
+val mcphoneApiJar = fileTree(rootProject.file("libs")) {
+    include("mcphone-*-$minecraftVersion-neoforge*.jar")
+}.find { f ->
     try {
         // ZipFile, not java.util.zip.ZipFile: in a Kotlin build script `java` is the Java
         // plugin extension and shadows the package root.
@@ -185,7 +209,7 @@ if (mcphoneApiJar == null) {
 repositories {
     // moddev injects two maven.neoforged.net repositories at apply time and sorts them first.
     // That host is unreachable here and stalls every resolution until timeout, so drop them;
-    // what they served is in the workspace mirror or on bmclapi below.
+    // what they served is in the workspace mirror or on the CDN below.
     val deadRepos = repositories.filter { r ->
         val u = (r as? MavenArtifactRepository)?.url?.toString()
         u != null && u.contains("maven.neoforged.net")
@@ -201,10 +225,35 @@ repositories {
         url = uri(rootProject.findProperty("htgLocalMaven")?.toString() ?: "${rootProject.rootDir}/.recon/maven-local")
         metadataSources { gradleMetadata() }
     }
-    // bmclapi proxies Maven Central (and parts of the NeoForged repo), which is what satisfies
-    // the parent POMs the Mojang library POMs reference -- Mojang's host serves only the leaves.
-    maven { name = "bmclapi"; url = uri("https://bmclapi2.bangbang93.com/maven") }
-    maven { name = "mojangLibraries"; url = uri("https://libraries.minecraft.net/") }
+    // Maven Central, through a mirror first and Central itself as the fallback. Mojang's host
+    // serves only the leaf POMs; the parent POMs those reference, and third-party artifacts such
+    // as the log4j version range the 1.20.x NeoForge build declares, live on Central. bmclapi used
+    // to proxy this and answers 403 now, so nothing else here covers that group.
+    maven { name = "mavenCentralMirror"; url = uri("https://maven.aliyun.com/repository/central") }
+    mavenCentral()
+    maven {
+        name = "NeoForged"
+        url = uri("https://neoforged.forgecdn.net/releases")
+        // See the mojangLibraries note: dynamic versions are looked up in every repository, and a
+        // TLS failure in any of them aborts the resolution. This host serves no log4j.
+        content { excludeGroup("org.apache.logging.log4j") }
+    }
+    maven {
+        name = "mojangLibraries"
+        url = uri("https://libraries.minecraft.net/")
+        // Dynamic-version lookups consult every repository, and this host's TLS handshake fails
+        // intermittently from this network -- which then aborts the whole resolution even though a
+        // mirror already had the artifact. Excluding a group it never serves keeps those lookups
+        // off it; the log4j range the 1.20.x NeoForge artifacts declare is the one that hit this.
+        content { excludeGroup("org.apache.logging.log4j") }
+    }
+    maven {
+        name = "NeoForgedMojangMeta"
+        url = uri("https://neoforged.forgecdn.net/mojang-meta")
+        content {
+            includeModule("net.neoforged", "minecraft-dependencies")
+        }
+    }
     maven {
         name = "Modrinth"
         url = uri("https://api.modrinth.com/maven")
@@ -219,23 +268,35 @@ repositories {
     // NeoForge's Maven, reached through its CDN. maven.neoforged.net is unreachable from here, but
     // neoforged.forgecdn.net/releases serves the same tree -- verified against the NeoForm metadata
     // and against neoform-1.20.4-20240627.114801.zip directly. This is what the 1.20.x nodes needed:
-    // the workspace mirror carries NeoForm for 1.21.x and 26.x only, and bmclapi has no neoform
-    // group at all, so without this the 1.20.x nodes cannot build their Minecraft artifacts.
-    maven("https://neoforged.forgecdn.net/releases/") { name = "NeoForgeCDN" }
+    // the workspace mirror carries NeoForm for 1.21.x and 26.x only, and Maven Central has no
+    // neoform group at all, so without this the 1.20.x nodes cannot build their Minecraft artifacts.
+    maven("https://neoforged.forgecdn.net/releases/") {
+        name = "NeoForgeCDN"
+        // Same reason as the two repositories above: no log4j here, and a dynamic-version lookup
+        // must not be sent to a host whose TLS handshake this network drops intermittently.
+        content { excludeGroup("org.apache.logging.log4j") }
+    }
 
 }
 
 dependencies {
-    // Xaero's World Map is closed-source and on no Maven repo: compile against the shipped jar.
-    compileOnly(xaeroCoordinate)
-
+    // Xaero's World Map is closed-source and on no Maven repo: compile against a shipped jar.
     // Every Xaero jar in libs/ belongs to exactly one Minecraft version, and their APIs are NOT
     // interchangeable across the eras -- a 1.21.11 XaeroLib names net.minecraft.render.MultiBufferSource
     // in its signatures, a class 26.x no longer has, so putting the whole directory on one node's
     // classpath makes javac fail on a type the node's own code never mentions. Select this node's
     // jars by name: "<version>" appears in both the world map and the XaeroLib file name.
+    //
+    // The jar in libs/ is the primary source and, for the 26.x nodes, the only one: this network
+    // cannot fetch their Modrinth coordinates. The coordinate stays as the fallback for a checkout
+    // that has not supplied a jar.
     val libs = rootProject.file("libs")
-    compileOnly(fileTree(libs) { include("xaero-$minecraftVersion-*.jar") })
+    val xaeroJar = fileTree(libs) { include("xaero-$minecraftVersion-*.jar") }
+    if (xaeroJar.isEmpty) {
+        compileOnly(xaeroCoordinate)
+    } else {
+        compileOnly(xaeroJar)
+    }
     val xaerolib = findProperty("deps.xaerolib")?.toString().orEmpty()
     if (xaerolib.isNotEmpty()) {
         compileOnly(fileTree(libs) { include(xaerolib) })

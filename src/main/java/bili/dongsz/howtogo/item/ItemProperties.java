@@ -42,7 +42,7 @@ public final class ItemProperties {
     // id and the key it lives under disagree; both call sites go through here so there is one place
     // to change and no way for them to drift.
     public static ResourceLocation id(String name) {
-        return new ResourceLocation(HowToGo.MODID, name);
+        return ResourceLocation.fromNamespaceAndPath(HowToGo.MODID, name);
     }
 
     // The registry key for that id.
@@ -74,8 +74,11 @@ public final class ItemProperties {
     }
 
     // The id an item is registered under.
+    //
+    // The factory is a version question -- see HTG_RESOURCE_LOCATION in stonecutter.gradle.kts:
+    // before 1.21 there is only the public constructor, from 1.21 only the static factory.
     public static ResourceLocation id(String name) {
-        return new ResourceLocation(HowToGo.MODID, name);
+        return HTG_RESOURCE_LOCATION(HowToGo.MODID, name);
     }
 
     // Properties for an item registered under the given name, one per stack.

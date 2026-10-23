@@ -1,8 +1,8 @@
 package bili.dongsz.howtogo.compat.mcphone;
 
 import bili.dongsz.howtogo.HowToGo;
-import bili.dongsz.howtogo.RoadConfig;
-import bili.dongsz.howtogo.client.Destinations;import bili.dongsz.howtogo.client.HudDraw;
+import bili.dongsz.howtogo.client.Destinations;
+import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.RailLayers;
@@ -18,7 +18,6 @@ import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import com.november.mcphone.api.client.ui.IPhonePage;
 import com.november.mcphone.api.client.ui.PhoneCanvas;
@@ -59,10 +58,11 @@ import java.util.Locale;
  * get a usable map and a usable list.
  *
  * <h2>Drawing order</h2>
- * The map is emitted through one {@link HudDraw#consumer} and every quad of it goes out before any
- * string anywhere on the page: {@code drawString} flushes the buffer source, which ends the builder
- * behind that consumer, and one more quad through it throws {@code Not building!}. So {@link #drawMap}
- * runs first and only emits geometry; the sheet, its labels and the list follow it.
+ * The map is emitted inside one {@link HudDraw#beginBlock drawing block} and every quad of it goes
+ * out before any string anywhere on the page: drawing a string ends the builder the older side
+ * writes into (and a deferred batch has to be closed before the GUI renderer replays it), so
+ * {@link #drawMap} runs first, opens and closes that block, and only emits geometry; the sheet, its
+ * labels and the list follow it.
  */
 public final class DestinationPickerPage implements IPhonePage {
 
@@ -403,10 +403,6 @@ public final class DestinationPickerPage implements IPhonePage {
      * label anywhere on the page. See the class javadoc.
      */
     private void drawMap(PhoneCanvas canvas) {
-        PoseStack pose = canvas.graphics().pose();
-        VertexConsumer quads = HudDraw.consumer(canvas.graphics());
-        PoseStack.Pose last = pose.last();
-
         int minX = mapLeft();
         int minY = mapTop();
         int maxX = mapRight();
@@ -417,18 +413,25 @@ public final class DestinationPickerPage implements IPhonePage {
             return;
         }
 
+        GuiGraphics graphics = canvas.graphics();
+        // One drawing block, opened the same way on either side of 1.21.6: a live consumer through
+        // the pose before, a deferred batch the GUI renderer plays back after. The emitters only
+        // know the sink, so nothing below this line depends on which of the two is in use.
+        HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
+        HudDraw.VertexSink out = drawing.sink;
+
         canvas.clipped(minX, minY, maxX, maxY, () -> {
             // One stroke per road (a chain of segments), not one per segment: the joints between
             // pieces are what read as jagged on a small map, whichever mod the road came from.
-            HudDraw.emitNetwork(last, quads, RoadStore.get(),
+            HudDraw.emitNetwork(out, RoadStore.get(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
                     0.7, 0x9A, minX, minY, maxX, maxY);
-            HudDraw.emitNetwork(last, quads, RailTrackStore.network(),
+            HudDraw.emitNetwork(out, RailTrackStore.network(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
                     0.7, 0x9A, minX, minY, maxX, maxY);
-            HudDraw.emitNetwork(last, quads, MtrTransit.railLayer(),
+            HudDraw.emitNetwork(out, MtrTransit.railLayer(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
                     0.7, 0x9A, minX, minY, maxX, maxY);
@@ -443,7 +446,7 @@ public final class DestinationPickerPage implements IPhonePage {
                 if (outside(px, pz, minX, minY, maxX, maxY, HudDraw.PLACE_MARKER_SMALL_PX)) {
                     continue;
                 }
-                HudDraw.emitPlaceMarker(last, quads, px, pz,
+                HudDraw.emitPlaceMarker(out, px, pz,
                         HudDraw.PLACE_MARKER_SMALL_PX * 0.5, HudDraw.COLOR_PLACE);
             }
             Destination pick = marked;
@@ -451,7 +454,7 @@ public final class DestinationPickerPage implements IPhonePage {
                 double px = toScreenX(pick.x());
                 double pz = toScreenZ(pick.z());
                 if (!outside(px, pz, minX, minY, maxX, maxY, HudDraw.PLACE_MARKER_SMALL_PX)) {
-                    HudDraw.emitPlaceMarker(last, quads, px, pz,
+                    HudDraw.emitPlaceMarker(out, px, pz,
                             HudDraw.PLACE_MARKER_SMALL_PX * 0.7, 0xFFFF5555);
                 }
             }
@@ -464,8 +467,8 @@ public final class DestinationPickerPage implements IPhonePage {
                 double playerX = toScreenX(minecraft.player.getX());
                 double playerZ = toScreenZ(minecraft.player.getZ());
                 if (!outside(playerX, playerZ, minX, minY, maxX, maxY, 8.0)) {
-                    HudDraw.emitDisc(last, quads, playerX, playerZ, 3.6, 0xFF10171C, 0xFF);
-                    HudDraw.emitDisc(last, quads, playerX, playerZ, 2.4, 0xFFFFFFFF, 0xFF);
+                    HudDraw.emitDisc(out, playerX, playerZ, 3.6, 0xFF10171C, 0xFF);
+                    HudDraw.emitDisc(out, playerX, playerZ, 2.4, 0xFFFFFFFF, 0xFF);
                 }
             }
 
@@ -473,16 +476,19 @@ public final class DestinationPickerPage implements IPhonePage {
             // the line looked at before committing and the line drawn afterwards read as one thing.
             Navigation.RoutePreview planned = preview;
             if (planned != null && planned.isPresent()) {
-                HudDraw.emitPath(last, quads, planned.route().points(),
+                HudDraw.emitPath(out, planned.route().points(),
                         pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                         0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
                         1.1, 0xFF2FD0FF, 0xE0, minX, minY, maxX, maxY);
             }
+            // Closed while the scissor is still on: the pre-1.21.6 path flushes here, and flushing
+            // after the clip came off would paint the roads and markers over the sheet.
+            HudDraw.endBlock(graphics, drawing);
         });
 
         // Outside the clip: this is chrome sitting on the map, and a control half cut off by the
         // scissor is a control the player cannot see well enough to press.
-        drawRecentre(canvas.graphics());
+        drawRecentre(graphics);
     }
 
     // --------------------------------------------------------------- recentre
@@ -517,9 +523,9 @@ public final class DestinationPickerPage implements IPhonePage {
     /**
      * Names on the map, and the notice in the corner.
      *
-     * <p>A separate pass from {@link #drawMap} because that one holds a {@link HudDraw#consumer}: a
-     * string flushes the buffer source and ends the builder behind it, so every quad has to be out
-     * before the first character is drawn. Both passes are clipped to the map area.
+     * <p>A separate pass from {@link #drawMap} because that one holds an open drawing block: a string
+     * ends the builder behind it, so every quad has to be out before the first character is drawn.
+     * Both passes are clipped to the map area.
      */
     private void drawMapLabels(PhoneCanvas canvas, GuiGraphics graphics, Font font) {
         int minX = mapLeft();
@@ -660,40 +666,6 @@ public final class DestinationPickerPage implements IPhonePage {
                                    double size) {
         double half = size * 0.7;
         return x + half < minX || x - half > maxX || y + half < minY || y - half > maxY;
-    }
-
-    private void emitRoad(VertexConsumer quads, PoseStack.Pose last, RoadSegment segment,
-                          int minX, int minY, int maxX, int maxY) {
-        // The same conservative guard the desktop picker uses: reject only a polyline wholly outside,
-        // because a road crossing the view has neither end inside it.
-        int lowestX = Integer.MAX_VALUE;
-        int highestX = Integer.MIN_VALUE;
-        int lowestZ = Integer.MAX_VALUE;
-        int highestZ = Integer.MIN_VALUE;
-        for (int i = 0; i < segment.vertexCount(); i++) {
-            int x = segment.x(i);
-            int z = segment.z(i);
-            lowestX = Math.min(lowestX, x);
-            highestX = Math.max(highestX, x);
-            lowestZ = Math.min(lowestZ, z);
-            highestZ = Math.max(highestZ, z);
-        }
-        double worldMinX = Math.min(toWorldX(minX), toWorldX(maxX));
-        double worldMaxX = Math.max(toWorldX(minX), toWorldX(maxX));
-        double worldMinZ = Math.min(toWorldZ(minY), toWorldZ(maxY));
-        double worldMaxZ = Math.max(toWorldZ(minY), toWorldZ(maxY));
-        if (highestX < worldMinX || lowestX > worldMaxX
-                || highestZ < worldMinZ || lowestZ > worldMaxZ) {
-            return;
-        }
-
-        int colour = RoadConfig.roadColor(segment.roadClass());
-        // One stroke rather than a loop of clipped segments: the bends are mitred, so a railway read
-        // out of another mod as one-block steps does not look like a broken, jagged line on the phone.
-        HudDraw.emitPath(last, quads, segment,
-                pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
-                0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                0.7, colour, 0x9A, minX, minY, maxX, maxY);
     }
 
     private void drawSheetBackground(GuiGraphics graphics) {
