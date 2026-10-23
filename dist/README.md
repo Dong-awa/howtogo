@@ -34,11 +34,19 @@ Forge 已从仓库移除：ForgeGradle 6 需要 Gradle 8.1.x，而 Stonecutter 0
 需要 **Java 25** 和 **Gradle 9.5.1**（Loom 要求 Gradle 的 JVM 本身就是 26.x 需要的 Java 25，而 Gradle 8 跑不了 Java 25）：
 
 ```
-JAVA_HOME=D:\java\zulu25
+JAVA_HOME=<JDK 25>
 gradle -p . :<version>-<loader>:build
 ```
 
-一次只构建一个节点。全部 21 个节点一起构建时加 `--max-workers=3`：21 个 Loom `remapJar` 并行会打爆根 `gradle.properties` 里设的 2G 堆。Stonecutter 0.7.11 没有 `chiseledBuild` 任务，要把节点名显式列出来。
+一次只构建一个节点。全部 21 个节点一起构建并收集到这个目录，用根任务：
+
+```
+gradle -p . collectDist
+```
+
+它依赖全部 21 个节点的 `build`，跑完把每个 `versions/<node>/build/libs` 里**当前版本**的 jar 按发布名复制进 `dist/`；`build/libs` 里由其它 Gradle 用户目录留下的旧版本 jar 会被忽略。这台机器上 Gradle 的堆已在根 `gradle.properties` 提到 4G（2G 时 21 个 Loom `remapJar` 并行会 OOM）；机器小时可再加 `--max-workers=3`。Stonecutter 0.7.11 没有 `chiseledBuild` 任务，`collectDist` 就是代替它的入口。
+
+只想构建、不收集时仍用 `:<version>-<loader>:build`。
 
 26.3-neoforge 例外地在自己节点的 `gradle.properties` 里把 `nfrt_version` 钉到 2.0.31——原因写在那个文件里，是 jst-cli-bundle 2.0.6 的一个访问转换器缺陷。
 
