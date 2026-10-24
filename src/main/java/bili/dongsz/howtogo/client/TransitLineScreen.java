@@ -399,8 +399,17 @@ public final class TransitLineScreen extends Screen {
         return row >= 0 && row < visibleRows() && index >= 0 && index < rows ? index : -1;
     }
 
+    /**
+     * One row of a column: its resting band, and the chosen fill on top of it.
+     *
+     * <p>The band is drawn for every row, not only under the cursor: a row here is clicked to select a
+     * line, add a stop or pick a candidate, and a list of bare text lines on the sheet reads as a block
+     * of labels rather than as rows a player may pick. The chosen row's fill is painted over the band,
+     * so the band is what an ordinary row looks like and the blue is what being chosen does to it.
+     */
     private void drawRow(GuiGraphics graphics, int columnX, int index, boolean highlighted) {
         int y = listY + index * ROW_HEIGHT;
+        graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, UiTheme.rowSurface());
         if (highlighted) {
             graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, UiTheme.selection());
         }
@@ -608,8 +617,11 @@ public final class TransitLineScreen extends Screen {
             int room = columnW - 4 - (marked ? TOGGLE_WIDTH + 2 : 0) - ROW_MARKER_STEP;
             String shown = this.font.plainSubstrByWidth(
                     source + candidate.label() + "  (" + kind + ")", Math.max(8, room));
+            // Hovering paints the chosen fill, so both ranks of text follow the chosen row's pair: a
+            // body-text grey on the selection blue is the one row on the screen that stops being read.
+            boolean filled = isSelected || index == hovered;
             graphics.drawString(this.font, shown, linesX + 3 + ROW_MARKER_STEP, rowY + 2,
-                    isSelected ? UiTheme.onSelection() : UiTheme.text(), false);
+                    filled ? UiTheme.onSelection() : UiTheme.text(), false);
             if (marked) {
                 drawMarksToggle(graphics, mouseX, mouseY, candidate,
                         linesX + columnW - TOGGLE_WIDTH - 1, listY + row * ROW_HEIGHT);
@@ -665,6 +677,9 @@ public final class TransitLineScreen extends Screen {
         for (int row = 0; row < visible && stopsScroll + row < line.stopCount(); row++) {
             int i = stopsScroll + row;
             int y = listY + row * ROW_HEIGHT;
+            // The stops are rows to act on -- every one of them carries its own four controls -- so
+            // they take the same resting band as the other two columns.
+            drawRow(graphics, stopsX, row, false);
             int nameColour = i > 0 && i - 1 < rideable.length
                     && rideable[i - 1] == RIDE_BROKEN ? UiTheme.error() : UiTheme.text();
             drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
@@ -709,16 +724,16 @@ public final class TransitLineScreen extends Screen {
             int i = candidatesScroll + row;
             LineStop stop = offered.get(i);
             boolean already = line != null && line.callsAt(stop.x(), stop.z());
-            if (i == hovered) {
-                drawRow(graphics, candidatesX, row, true);
-            }
+            drawRow(graphics, candidatesX, row, i == hovered);
             // A stop that cannot be renamed here says so, and one the line already calls at is dimmed
             // rather than hidden: seeing that it is already on the line is the answer to "why is it
-            // not in the list".
+            // not in the list". The hovered row is filled, so its text takes the pair that reads on
+            // that fill instead of the row's own ranks.
             String suffix = stop.editable() ? ""
                     : " " + Component.translatable("screen.howtogo.line_readonly").getString();
-            int colour = already ? UiTheme.textFaint()
-                    : (stop.editable() ? UiTheme.text() : UiTheme.textSecondary());
+            int colour = i == hovered ? UiTheme.onSelection()
+                    : already ? UiTheme.textFaint()
+                            : (stop.editable() ? UiTheme.text() : UiTheme.textSecondary());
             drawLabel(graphics, candidatesX, row, stop.label() + suffix, colour);
         }
     }

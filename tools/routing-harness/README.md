@@ -87,6 +87,17 @@ how far a mitre may reach, and, per segment, the shape the map really draws: a b
 into a display curve and split where the network splits it. Degenerate input -- one point, every point on top
 of every other, no width -- has to paint nothing rather than throw.
 
+The other half of that invariant is that no part of a stroke may be painted twice, because road colours can
+be configured translucent and a doubled pixel is a brighter bead. `StrokeOutlineCheck` measures it as blend
+counts over the stroke's own box, and `HudDrawCheck.java` measures both halves for the maps this mod draws
+itself -- the main screen's viewer, the destination picker's preview, the navigation panel's mini-map and the
+phone page, all stroked by `HudDraw`: a straight road, a right-angled bend, a bend too sharp to mitre and a
+hairpin, plus a road handed over as a network of two segments, which has to come out as one stroke and not two
+abutted ones. Those maps draw roads translucent, so a fan whose triangle was written twice read as a bright
+semicircle at every stroke end; and a bend whose mitre was only clamped read as a spike out of the corner once
+the world map's stroke reached its full width. Both checks rasterise through `StrokeCoverage`, so they cannot
+disagree with each other -- or with the game -- about what a `QUADS` buffer draws.
+
 `RouteDirectionCheck.java` covers the reading the wrong-way call is built on: that a planned route never
 reads as running **backwards** where it is drawn forwards. `Route.bearingAt` answers with the nearest
 segment of the drawn line, and a line that passes over the same ground twice -- a road that loops back,

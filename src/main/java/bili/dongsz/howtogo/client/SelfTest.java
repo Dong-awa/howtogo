@@ -758,16 +758,20 @@ public final class SelfTest {
      * in, which is exactly what auto depends on.
      */
     private static Result checkTheme() {
-        boolean day = UiTheme.autoIsLight(true, 0);
-        boolean night = !UiTheme.autoIsLight(true, 11);
-        boolean noSky = !UiTheme.autoIsLight(false, 0);
+        boolean day = UiTheme.autoIsLight(true, 1.0F);
+        boolean night = !UiTheme.autoIsLight(true, 0.2F);
+        boolean noSky = !UiTheme.autoIsLight(false, 1.0F);
         boolean ids = true;
         for (UiTheme.Mode mode : UiTheme.Mode.values()) {
             ids &= UiTheme.Mode.byId(mode.id()) == mode;
         }
         boolean unknownFallsBack = UiTheme.Mode.byId("not-a-mode") == null;
         boolean ok = day && night && noSky && ids && unknownFallsBack;
+        // The live brightness is reported with the verdict: "the theme is wrong" is otherwise a
+        // report nobody can act on, and it is the number auto decides on -- a player can read it at
+        // noon and again at night and see the game's own reading move.
         String detail = "mode=" + RoadConfig.uiTheme().id() + " light=" + UiTheme.light()
+                + " sky=" + UiTheme.liveSkyBrightness()
                 + " day=" + day + " night=" + night + " noSky=" + noSky
                 + " ids=" + ids + " unknown=" + unknownFallsBack;
         return new Result("command.howtogo.selftest.check.theme", ok, detail);

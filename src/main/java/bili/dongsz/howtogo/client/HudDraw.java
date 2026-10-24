@@ -115,29 +115,44 @@ public final class HudDraw {
                 cx - half, cy + half, argb);
     }
 
-    /**
-     * Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
-     * obvious choice, but its default depth test can bury an overlay behind the world.
-     *
-     * <p>1.21.6 replaced this render type with a pipeline; see the HUD_PIPELINE constant on
-     * {@link HudBatchLegacy}/{@link HudBatchNewer}. What a render type used to configure is a pipeline
-     * property now, so the two are the same layer in two vocabularies, and only the pre-1.21.6 path
-     */
     //? if <1.21.6 {
-    public static final RenderType QUADS = RenderType.create(
-            "howtogo_hud",
-            DefaultVertexFormat.POSITION_COLOR,
-            VertexFormat.Mode.QUADS,
-            1536,
-            false,
-            true,
-            RenderType.CompositeState.builder()
-                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
-                    .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
-                    .setCullState(RenderStateShard.NO_CULL)
-                    .setWriteMaskState(RenderStateShard.COLOR_WRITE)
-                    .createCompositeState(false));
+    /**
+     * The shared layer, built on first use rather than when the class is loaded.
+     *
+     * <p>Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
+     * obvious choice, but its default depth test can bury an overlay behind the world. 1.21.6 replaced
+     * this render type with a pipeline; see the HUD_PIPELINE constant on {@link HudBatchLegacy} and
+     * {@link HudBatchNewer}. What a render type used to configure is a pipeline property now, so the
+     * two are the same layer in two vocabularies, and only the pre-1.21.6 path is built here.
+     *
+     * <p>Built lazily because a {@code RenderType} pulls in the game's own static state, which is not
+     * available -- and must not be required -- in a harness: doing it from the class initialiser meant
+     * this class could not be loaded at all outside a game, and the stroke geometry below is exactly
+     * the kind of thing that has to be measurable without one (see {@code HudDrawCheck}). Nothing here
+     * needs the layer until a frame is drawn, so the first frame builds it.
+     */
+    private static RenderType quads;
+
+    /** The shared layer, built once. */
+    public static RenderType quads() {
+        if (quads == null) {
+            quads = RenderType.create(
+                    "howtogo_hud",
+                    DefaultVertexFormat.POSITION_COLOR,
+                    VertexFormat.Mode.QUADS,
+                    1536,
+                    false,
+                    true,
+                    RenderType.CompositeState.builder()
+                            .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
+                            .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
+                            .setDepthTestState(RenderStateShard.NO_DEPTH_TEST)
+                            .setCullState(RenderStateShard.NO_CULL)
+                            .setWriteMaskState(RenderStateShard.COLOR_WRITE)
+                            .createCompositeState(false));
+        }
+        return quads;
+    }
     //?}
 
     private HudDraw() {
@@ -150,9 +165,9 @@ public final class HudDraw {
         // rather than off the drawing context, so the same BufferSource is fetched from Minecraft
         // instead. The source on disk carries 1.21.1's form; Stonecutter swaps the pair per node.
         //? if >=1.21.4 {
-        /*return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(QUADS);
+        /*return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(quads());
         *///?} else {
-        return graphics.bufferSource().getBuffer(QUADS);
+        return graphics.bufferSource().getBuffer(quads());
         //?}
     }
     //?}
@@ -292,7 +307,9 @@ public final class HudDraw {
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
         int a = (argb >>> 24) & 0xFF;
-        // QUADS mode, so a triangle is written as a quad with its last corner repeated.
+        // QUADS mode, so a triangle is written as a degenerate quad. The third corner is repeated, which
+        // leaves the second triangle with no area; repeating the second corner fills the triangle twice.
+        // See fanTriangle, which every fan in this class goes through.
         out.vertex(x1, y1, r, g, b, a);
         out.vertex(x2, y2, r, g, b, a);
         out.vertex(x3, y3, r, g, b, a);
@@ -313,6 +330,26 @@ public final class HudDraw {
         out.vertex(x4, y4, r, g, b, a);
     }
 
+    /**
+     * One triangle of a fan, painted once.
+     *
+     * <p>The layer is {@code QUADS}, so a triangle is written as a degenerate quad. Which corner gets
+     * repeated is the whole point: repeating the <em>third</em> leaves the second triangle with no
+     * area, while repeating the second -- the same four corners in a different order -- fills the very
+     * same triangle again the other way round. Culling is off, so both are drawn, and on a translucent
+     * road the whole cap or disc is then blended twice: that is what made the ends of the strokes on
+     * this mod's own maps read as a bright semicircle. Everything here fans through this one method so
+     * that ordering cannot be got wrong again.
+     */
+    private static void fanTriangle(VertexSink out,
+                                    double cx, double cy, double x0, double y0, double x1, double y1,
+                                    int r, int g, int b, int a) {
+        out.vertex(cx, cy, r, g, b, a);
+        out.vertex(x0, y0, r, g, b, a);
+        out.vertex(x1, y1, r, g, b, a);
+        out.vertex(x1, y1, r, g, b, a);
+    }
+
     /** Emits a filled circle as a fan of degenerate quads. */
     public static void emitDisc(VertexSink out, double cx, double cy,
                             double radius, int argb, int alpha) {
@@ -328,10 +365,7 @@ public final class HudDraw {
             double y0 = cy + Math.sin(a0) * radius;
             double x1 = cx + Math.cos(a1) * radius;
             double y1 = cy + Math.sin(a1) * radius;
-            out.vertex(cx, cy, r, g, b, a);
-            out.vertex(x0, y0, r, g, b, a);
-            out.vertex(x1, y1, r, g, b, a);
-            out.vertex(x0, y0, r, g, b, a);
+            fanTriangle(out, cx, cy, x0, y0, x1, y1, r, g, b, a);
         }
     }
 
@@ -531,6 +565,34 @@ public final class HudDraw {
     private static double[] PATH_X = new double[64];
     private static double[] PATH_Y = new double[64];
 
+    /**
+     * The cross-section of each projected vertex, per edge: the offset the edge arriving at the vertex
+     * uses, and the one the edge leaving it uses. Equal everywhere a mitre can serve both edges; they
+     * differ only at a bend too sharp to mitre, where each edge keeps its own perpendicular and a
+     * round join fills the wedge between them.
+     */
+    private static double[] ARRIVING_X = new double[64];
+    private static double[] ARRIVING_Y = new double[64];
+    private static double[] LEAVING_X = new double[64];
+    private static double[] LEAVING_Y = new double[64];
+
+    /** Whether a vertex is joined round, so a wedge has to be painted there. Per projected vertex. */
+    private static boolean[] ROUND_JOINT = new boolean[64];
+
+    /** One round join's boundary, filled and consumed one bend at a time. */
+    private static final double[] JOIN_X = new double[StrokeOutline.MAX_JOIN_POINTS];
+    private static final double[] JOIN_Y = new double[StrokeOutline.MAX_JOIN_POINTS];
+
+    /**
+     * The cosine of half a turn at which a bend stops being mitred: at or below it the corner is
+     * rounded instead.
+     *
+     * <p>Derived from {@link StrokeOutline#MITER_LIMIT} rather than picked here, so this mod's own
+     * maps and its layer on the world map round the same bends: a corner that is a spike on one map
+     * and a curve on the other is a difference a player would notice before any of the two.
+     */
+    private static final double SHARP_JOINT = 1.0 / StrokeOutline.MITER_LIMIT;
+
     private static void ensurePathCapacity(int count) {
         if (PATH_X.length >= count) {
             return;
@@ -538,6 +600,11 @@ public final class HudDraw {
         int capacity = Math.max(count, PATH_X.length * 2);
         PATH_X = new double[capacity];
         PATH_Y = new double[capacity];
+        ARRIVING_X = new double[capacity];
+        ARRIVING_Y = new double[capacity];
+        LEAVING_X = new double[capacity];
+        LEAVING_Y = new double[capacity];
+        ROUND_JOINT = new boolean[capacity];
     }
 
     /**
@@ -548,10 +615,12 @@ public final class HudDraw {
      * quad stops flush at the shared point, and at a block-sampled corner there is a wedge of
      * background between them. On the small maps -- the navigation panel, the destination picker,
      * the main screen's viewer -- that reads as a jagged, broken road, especially where a railway was
-     * sampled once per block. Here the two ends of a bend are joined by a miter: the offset at a
-     * shared vertex is the bisector of the two edges' normals, so the stroke is continuous round the
-     * corner. The miter length is capped, so a very sharp turn falls back to a plain join rather than
-     * shooting a spike off the road.
+     * sampled once per block. Here the two ends of a bend are joined: an ordinary corner takes the
+     * mitre of the two edges' normals, so the stroke is continuous round it, and a corner too sharp for
+     * that -- which is what a hairpin, a switchback or a sharp bend in the player's own road looks like
+     * -- keeps one perpendicular per edge and gets the circular wedge between them painted instead.
+     * A mitre there would be a spike several half widths long; at {@link StrokeOutline#MITER_LIMIT} the
+     * corner is rounded, which is a shape a road can have and a spike is not.
      *
      * <p>The transform is an affine map from world blocks to screen pixels, which is all these views
      * use: {@code screenX = m00*x + m01*z + m02}, {@code screenY = m10*x + m11*z + m12}. It is passed
@@ -1036,13 +1105,17 @@ public final class HudDraw {
         return false;
     }
 
-    /** The stroke pass over {@link #PATH_X} / {@link #PATH_Y}: one mitered quad per visible edge. */
+    /**
+     * The stroke pass over {@link #PATH_X} / {@link #PATH_Y}: one joined quad per visible edge, then a
+     * wedge at every bend too sharp to mitre, then the two end caps.
+     */
     private static void emitProjectedPath(VertexSink out, int count,
                                           double halfWidth, int argb, int alpha,
                                           double minX, double minY, double maxX, double maxY) {
         if (count < 2 || !(halfWidth > 0)) {
             return;
         }
+        offsetJoints(count, halfWidth);
         for (int i = 0; i < count - 1; i++) {
             double x1 = PATH_X[i];
             double y1 = PATH_Y[i];
@@ -1063,18 +1136,19 @@ public final class HudDraw {
             double startY = y1 + CLIP_T[0] * dy;
             double endX = x1 + CLIP_T[1] * dx;
             double endY = y1 + CLIP_T[1] * dy;
-            // A vertex fully inside the view gets the miter of the edges on either side of it; a
-            // point introduced by the clip is mid-edge, so the edge's own normal is the right one.
-            double[] start = CLIP_T[0] <= 0.0 ? jointOffset(i, count, halfWidth)
-                    : new double[]{nx, ny};
-            double[] end = CLIP_T[1] >= 1.0 ? jointOffset(i + 1, count, halfWidth)
-                    : new double[]{nx, ny};
-            emitFlatQuad(out, startX + start[0], startY + start[1],
-                    endX + end[0], endY + end[1],
-                    endX - end[0], endY - end[1],
-                    startX - start[0], startY - start[1], argb, alpha);
+            // A vertex fully inside the view uses the joint worked out for the edges on either side of
+            // it; a point introduced by the clip is mid-edge, so the edge's own normal is the right one.
+            double fromX = CLIP_T[0] <= 0.0 ? LEAVING_X[i] : nx;
+            double fromY = CLIP_T[0] <= 0.0 ? LEAVING_Y[i] : ny;
+            double toX = CLIP_T[1] >= 1.0 ? ARRIVING_X[i + 1] : nx;
+            double toY = CLIP_T[1] >= 1.0 ? ARRIVING_Y[i + 1] : ny;
+            emitFlatQuad(out, startX + fromX, startY + fromY,
+                    endX + toX, endY + toY,
+                    endX - toX, endY - toY,
+                    startX - fromX, startY - fromY, argb, alpha);
         }
-        // Outward semicircular caps on both ends of the stroke. Within one stroke the miters above
+        emitRoundJoins(out, count, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+        // Outward semicircular caps on both ends of the stroke. Within one stroke the joins above
         // close every bend; what they cannot close is the place where two strokes meet -- a chain is
         // cut at a junction, and a road read out of another mod is stroked one piece at a time. Two
         // strokes that meet at an angle leave a wedge of background on the outside of the joint, and
@@ -1128,68 +1202,119 @@ public final class HudDraw {
             double y0 = y + Math.sin(a0) * halfWidth;
             double x1 = x + Math.cos(a1) * halfWidth;
             double y1 = y + Math.sin(a1) * halfWidth;
-            // QUADS mode: a triangle is a quad with its last corner repeated.
-            out.vertex(x, y, r, g, b, a);
-            out.vertex(x0, y0, r, g, b, a);
-            out.vertex(x1, y1, r, g, b, a);
-            out.vertex(x0, y0, r, g, b, a);
+            fanTriangle(out, x, y, x0, y0, x1, y1, r, g, b, a);
         }
     }
 
     /**
-     * The stroke offset at one polyline vertex, as a miter between the edge before and after it.
+     * Works out the cross-section at every projected vertex, before the edges are laid down.
      *
-     * <p>Allocates a two-element array per corner; a map pass has a few thousand of these and they do
-     * not escape, which the JIT elides. Keeping it out of the array bag would mean a second scratch
-     * pair and a wider interface for no measurable gain.
+     * <p>Where the mitre of the two edges fits within {@link StrokeOutline#MITER_LIMIT} both edges
+     * share it, which is the cheap case and the one that leaves the bend square: two edges meet along
+     * a common edge instead of overlapping. Where it does not fit, each edge keeps its own
+     * perpendicular and the vertex is marked for a round join, because a mitre at that angle is a
+     * spike as long as the road is wide -- the spike being the thing the shared cross-section would
+     * otherwise draw beyond the bend -- and forcing a shared cross-section from either edge would
+     * measure the other edge across its own length.
      */
-    private static double[] jointOffset(int index, int count, double halfWidth) {
-        double prevX;
-        double prevY;
-        if (index > 0) {
-            prevX = PATH_X[index] - PATH_X[index - 1];
-            prevY = PATH_Y[index] - PATH_Y[index - 1];
-        } else {
-            prevX = PATH_X[1] - PATH_X[0];
-            prevY = PATH_Y[1] - PATH_Y[0];
+    private static void offsetJoints(int count, double halfWidth) {
+        for (int vertex = 0; vertex < count; vertex++) {
+            ROUND_JOINT[vertex] = false;
+            double previousX;
+            double previousY;
+            if (vertex > 0) {
+                previousX = PATH_X[vertex] - PATH_X[vertex - 1];
+                previousY = PATH_Y[vertex] - PATH_Y[vertex - 1];
+            } else {
+                previousX = PATH_X[1] - PATH_X[0];
+                previousY = PATH_Y[1] - PATH_Y[0];
+            }
+            double nextX;
+            double nextY;
+            if (vertex < count - 1) {
+                nextX = PATH_X[vertex + 1] - PATH_X[vertex];
+                nextY = PATH_Y[vertex + 1] - PATH_Y[vertex];
+            } else {
+                nextX = previousX;
+                nextY = previousY;
+            }
+            double previousLength = Math.hypot(previousX, previousY);
+            double nextLength = Math.hypot(nextX, nextY);
+            if (previousLength < 1.0E-9 && nextLength < 1.0E-9) {
+                ARRIVING_X[vertex] = 0.0;
+                ARRIVING_Y[vertex] = 0.0;
+                LEAVING_X[vertex] = 0.0;
+                LEAVING_Y[vertex] = 0.0;
+                continue;
+            }
+            if (previousLength < 1.0E-9) {
+                previousX = nextX;
+                previousY = nextY;
+                previousLength = nextLength;
+            }
+            if (nextLength < 1.0E-9) {
+                nextX = previousX;
+                nextY = previousY;
+                nextLength = previousLength;
+            }
+            double previousNormalX = -previousY / previousLength;
+            double previousNormalY = previousX / previousLength;
+            double nextNormalX = -nextY / nextLength;
+            double nextNormalY = nextX / nextLength;
+            double sumX = previousNormalX + nextNormalX;
+            double sumY = previousNormalY + nextNormalY;
+            double sumLength = Math.hypot(sumX, sumY);
+            if (sumLength >= 1.0E-6) {
+                double mitreX = sumX / sumLength;
+                double mitreY = sumY / sumLength;
+                double cosine = mitreX * nextNormalX + mitreY * nextNormalY;
+                if (cosine >= SHARP_JOINT) {
+                    double length = halfWidth / cosine;
+                    ARRIVING_X[vertex] = mitreX * length;
+                    ARRIVING_Y[vertex] = mitreY * length;
+                    LEAVING_X[vertex] = ARRIVING_X[vertex];
+                    LEAVING_Y[vertex] = ARRIVING_Y[vertex];
+                    continue;
+                }
+            }
+            // Too sharp to mitre: each edge keeps its own perpendicular, and the wedge between them is
+            // left for a round join. The exact reversal is here too, where both normals are the same
+            // line and there is no bisector at all.
+            ARRIVING_X[vertex] = previousNormalX * halfWidth;
+            ARRIVING_Y[vertex] = previousNormalY * halfWidth;
+            LEAVING_X[vertex] = nextNormalX * halfWidth;
+            LEAVING_Y[vertex] = nextNormalY * halfWidth;
+            ROUND_JOINT[vertex] = vertex > 0 && vertex < count - 1;
         }
-        double nextX;
-        double nextY;
-        if (index < count - 1) {
-            // The caller guarantees a vertex index below count; the next point may be the last one
-            // only when this is called for the final vertex, which has no next edge.
-            int next = Math.min(index + 1, count - 1);
-            nextX = PATH_X[next] - PATH_X[index];
-            nextY = PATH_Y[next] - PATH_Y[index];
-        } else {
-            nextX = prevX;
-            nextY = prevY;
+    }
+
+    /** Paints the circular wedge at every bend too sharp to mitre, so the stroke stays continuous. */
+    private static void emitRoundJoins(VertexSink out, int count, double halfWidth,
+                                       int argb, int alpha,
+                                       double minX, double minY, double maxX, double maxY) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int a = Math.min(alpha, (argb >>> 24) & 0xFF);
+        for (int vertex = 1; vertex < count - 1; vertex++) {
+            if (!ROUND_JOINT[vertex]) {
+                continue;
+            }
+            double x = PATH_X[vertex];
+            double y = PATH_Y[vertex];
+            if (x + halfWidth < minX || x - halfWidth > maxX
+                    || y + halfWidth < minY || y - halfWidth > maxY) {
+                continue;
+            }
+            int points = StrokeOutline.roundJoinWedge(x, y,
+                    PATH_X[vertex] - PATH_X[vertex - 1], PATH_Y[vertex] - PATH_Y[vertex - 1],
+                    PATH_X[vertex + 1] - PATH_X[vertex], PATH_Y[vertex + 1] - PATH_Y[vertex],
+                    halfWidth, JOIN_X, JOIN_Y);
+            for (int i = 0; i + 1 < points; i++) {
+                fanTriangle(out, x, y, JOIN_X[i], JOIN_Y[i], JOIN_X[i + 1], JOIN_Y[i + 1],
+                        r, g, b, a);
+            }
         }
-        double prevLength = Math.hypot(prevX, prevY);
-        double nextLength = Math.hypot(nextX, nextY);
-        if (prevLength < 1.0E-9 || nextLength < 1.0E-9) {
-            return new double[]{0, 0};
-        }
-        double nPrevX = -prevY / prevLength;
-        double nPrevY = prevX / prevLength;
-        double nNextX = -nextY / nextLength;
-        double nNextY = nextX / nextLength;
-        double sumX = nPrevX + nNextX;
-        double sumY = nPrevY + nNextY;
-        double sumLength = Math.hypot(sumX, sumY);
-        if (sumLength < 1.0E-6) {
-            // The line doubles straight back on itself: there is no bisector, so a plain join is the
-            // only sensible stroke.
-            return new double[]{nNextX * halfWidth, nNextY * halfWidth};
-        }
-        double miterX = sumX / sumLength;
-        double miterY = sumY / sumLength;
-        double denominator = miterX * nNextX + miterY * nNextY;
-        if (denominator < 0.25) {
-            return new double[]{nNextX * halfWidth, nNextY * halfWidth};
-        }
-        double miterLength = Math.min(halfWidth / denominator, halfWidth * 3.0);
-        return new double[]{miterX * miterLength, miterY * miterLength};
     }
 
     /** A quad from four explicit screen-space corners, in the winding a stroke expects. */

@@ -2823,8 +2823,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Emits a filled circle as a triangle fan.
      *
-     * <p>The target render type is {@code QUADS}, so each triangle is written as a degenerate
-     * quad with its last corner repeated (triangle strip winding is not available here).
+     * <p>The target render type is {@code QUADS}, so each triangle is written as a degenerate quad.
+     * The <em>third</em> corner is repeated, which leaves the quad's second triangle with no area;
+     * repeating the second corner instead -- the same four corners in a different order -- fills the
+     * triangle a second time the other way round, and a road drawn in a translucent configured colour
+     * would then have every junction dot and marker blended twice.
      */
     private static void emitDisc(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
                                  double radius, int r, int g, int b, int a) {
@@ -2843,7 +2846,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             vertex(pose, vc, cx, cy, r, g, b, a);
             vertex(pose, vc, x0, y0, r, g, b, a);
             vertex(pose, vc, x1, y1, r, g, b, a);
-            vertex(pose, vc, x0, y0, r, g, b, a);
+            vertex(pose, vc, x1, y1, r, g, b, a);
         }
     }
 

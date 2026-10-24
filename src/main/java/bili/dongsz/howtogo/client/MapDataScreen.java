@@ -392,6 +392,12 @@ public final class MapDataScreen extends Screen {
             int index = listScroll + row;
             MapDataTransfer.Candidate candidate = candidates.get(index);
             int y = listY + row * ROW_HEIGHT;
+            // A band under every row, always, not only under the cursor: a row here is opened by a
+            // click, so the row is the thing to click, and a list of bare text lines reads as a
+            // directory listing rather than as a list of things that can be picked. The hovered row's
+            // fill is painted over it, so the band is the resting shape of a row and the blue is what
+            // the cursor does to it.
+            graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, UiTheme.rowSurface());
             if (index == hovered) {
                 graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, UiTheme.selection());
             }

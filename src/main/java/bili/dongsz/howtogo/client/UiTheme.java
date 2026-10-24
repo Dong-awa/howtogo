@@ -2,6 +2,13 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.level.Level;
+//? if <1.21.9 {
+import net.minecraft.client.multiplayer.ClientLevel;
+//?} else {
+/*import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.phys.Vec3;
+*///?}
 
 /**
  * The colours this mod's interfaces are drawn in, in one of two styles.
@@ -58,19 +65,23 @@ import net.minecraft.client.Minecraft;
  * <h2>Auto: day white, night black, and never white underground</h2>
  * {@link Mode#AUTO} asks the world rather than the clock: a dimension with no sky -- the Nether, the
  * End, and anything else that declares {@code has_skylight: false} -- is always dark, and a
- * dimension with a sky goes light while the sky is bright. Brightness is the game's own
- * {@code getSkyDarken()}, the number the sky itself is shaded by, so the interface turns over at the
- * same moment the world does, follows a thunderstorm dark, and needs no table of sunrise times. The
- * sky-darken reading was chosen over the day-time counter for a second reason: it is the reading
- * every supported version still has. {@code Level.getDayTime()} was removed in the 26.x versions
- * this mod builds for, and a colour picked from a method that no longer exists would have had to be
- * version-fenced; this one is one line everywhere.
+ * dimension with a sky goes light while the sky is bright. "Bright" is the game's own sky-light
+ * reading, so the interface turns over when the world does and needs no table of sunrise times; the
+ * reading carries rain and thunder as well, so a storm dims it the way it dims the world.
+ *
+ * <p>Read <em>live</em>, from the shape the game exposes it in. The obvious reading,
+ * {@code level.getSkyDarken()}, is an int the server refreshes every tick and the client writes once,
+ * when the level is built: a session that logged in at noon kept a noon reading all night, so the
+ * automatic style never turned over. That is why this class asks for a brightness float instead --
+ * the client's sky-light calculation up to 1.21.8, the environment attribute it feeds from 1.21.9 on
+ * -- and turns over where that reading crosses half, which is where vanilla's own "bright outside"
+ * line falls (see {@link #TURNOVER_SKY_BRIGHTNESS}).
  *
  * <h2>Why methods and not constants</h2>
  * A {@code static final int} is decided when the class is loaded, and this answer is not: it changes
  * with the config, with the dimension, and with the sky. Methods also mean a reload of the config
  * takes effect on the next frame drawn, with no listener and no cache to invalidate -- the read
- * behind them is a field on a config value and an integer on the level, which is cheap enough to do
+ * behind them is a field on a config value and the level's sky reading, which is cheap enough to do
  * once per colour per frame, and is done in a draw loop rather than a simulation hot path.
  */
 public final class UiTheme {
@@ -125,14 +136,16 @@ public final class UiTheme {
     }
 
     /**
-     * The sky-darken value at or above which the sky counts as night.
+     * The sky brightness at which the interface turns over, from a dark night to a bright day.
      *
-     * <p>The game's own threshold for "bright outside": vanilla's {@code Level.isBrightOutside()} in
-     * the versions that have one is {@code skyDarken < 4}, and the sky-darken scale runs from 0 at
-     * noon to 11 at midnight. Using the game's own line rather than inventing one keeps the
-     * interface from turning white a few minutes after the sun has visibly gone down.
+     * <p>Half, because that is where vanilla's own "bright outside" line falls in the reading this
+     * class asks for: the client's sky-light value runs from 1.0 at noon to 0.2 at midnight and crosses
+     * 0.5 about thirty ticks from the moment vanilla's {@code isBrightOutside()} calls the world dark,
+     * so the interface turns over when the world does rather than at a threshold invented here. The
+     * environment attribute that replaced this reading on 1.21.9+ runs from 1.0 by day to 0.24 at night
+     * and crosses the same line at the same time of day.
      */
-    private static final int NIGHT_SKY_DARKEN = 4;
+    private static final float TURNOVER_SKY_BRIGHTNESS = 0.5F;
 
     private UiTheme() {
     }
@@ -142,23 +155,64 @@ public final class UiTheme {
     /**
      * Whether the light palette is in force right now.
      *
-     * <p>Read on every colour, so it must stay cheap: a config value, a dimension test and an
-     * integer, with no allocation and no state of its own to go stale. The one thing it can do that
-     * a cached answer could not is follow the world into the Nether mid-session.
+     * <p>Read on every colour, so it must stay cheap: a config value, a dimension test and the level's
+     * own sky reading, with no allocation and no state of its own to go stale. The one thing it can do
+     * that a cached answer could not is follow the world into the Nether, and the sun down, mid-session.
      */
     public static boolean light() {
         return switch (RoadConfig.uiTheme()) {
             case LIGHT -> true;
             case DARK -> false;
-            case AUTO -> {
-                var level = Minecraft.getInstance().level;
-                // No world to ask -- the config screens are not our clients and this mod's own
-                // screens only exist over a world -- so the dark style is the answer that cannot
-                // surprise anybody: it is what a player who has never seen the setting has.
-                yield level != null && autoIsLight(level.dimensionType().hasSkyLight(),
-                        level.getSkyDarken());
-            }
+            case AUTO -> autoLight();
         };
+    }
+
+    /**
+     * The auto rule applied to the world on screen.
+     *
+     * <p>No world to ask -- the config screens are not our clients and this mod's own screens only
+     * exist over a world -- so the dark style is the answer that cannot surprise anybody: it is what a
+     * player who has never seen the setting has.
+     */
+    private static boolean autoLight() {
+        var level = Minecraft.getInstance().level;
+        if (level == null) {
+            return false;
+        }
+        return autoIsLight(level.dimensionType().hasSkyLight(), skyBrightness(level));
+    }
+
+    /**
+     * The sky's brightness right now, from 0 under a dark night to 1 under a bright day.
+     *
+     * <p>The two shapes the game has had for this reading, fenced rather than reflected: up to 1.21.8
+     * the client's own sky-light calculation, which is named {@code getSkyDarken} but is in fact the
+     * brightness multiplier the light texture uses (one at noon, a fifth at midnight); from 1.21.9 on
+     * the environment attribute that calculation feeds, read at the world's origin because the value
+     * is time-based rather than a fact about a place. Both carry rain and thunder as well, so a storm
+     * is already in the number.
+     */
+    //? if <1.21.9 {
+    private static float skyBrightness(Level level) {
+        return ((ClientLevel) level).getSkyDarken(1.0F);
+    }
+    //?} else {
+    /*private static float skyBrightness(Level level) {
+        return level.environmentAttributes()
+                .getValue(EnvironmentAttributes.SKY_LIGHT_FACTOR, Vec3.ZERO);
+    }
+    *///?}
+
+    /**
+     * The sky's brightness in the world on screen right now, or -1 when no world is loaded.
+     *
+     * <p>For the self-test's report rather than for drawing: it is the number the auto rule decides
+     * on, so a player reporting that the white style did not turn over can say what the game thought
+     * the sky was at the time.
+     */
+    static float liveSkyBrightness() {
+        var level = Minecraft.getInstance().level;
+        return level == null ? -1.0F : skyBrightness(level);
     }
 
     /**
@@ -168,11 +222,11 @@ public final class UiTheme {
      * that has an opinion rather than a constant, and an opinion that only runs while a world is
      * loaded is one nobody can test.
      *
-     * @param hasSkyLight whether the dimension declares a sky at all
-     * @param skyDarken   the game's own sky-darken reading, 0 at noon to 11 at midnight
+     * @param hasSkyLight   whether the dimension declares a sky at all
+     * @param skyBrightness the sky's brightness, from 0 under a dark night to 1 under a bright day
      */
-    static boolean autoIsLight(boolean hasSkyLight, int skyDarken) {
-        return hasSkyLight && skyDarken < NIGHT_SKY_DARKEN;
+    static boolean autoIsLight(boolean hasSkyLight, float skyBrightness) {
+        return hasSkyLight && skyBrightness > TURNOVER_SKY_BRIGHTNESS;
     }
 
     /** The dark or light value, which is the whole of every role below. */
@@ -364,6 +418,23 @@ public final class UiTheme {
     /** The fill of the chosen row in a list. */
     public static int selection() {
         return pick(0xFF1F6FEB, 0xFF1A73E8);
+    }
+
+    /**
+     * The fill of a row that can be clicked, at rest.
+     *
+     * <p>For a list whose rows open something rather than staying chosen -- the map-data window's
+     * archive list is one -- there is no selection to fill, and a row that is nothing but text is read
+     * as a line of a directory listing rather than as something to click. A grey band per row is the
+     * shape every list in the game uses for "these are rows", and it is the one hint that shows before
+     * the cursor arrives. The hover and active tints are laid over this, not instead of it.
+     *
+     * <p>The white style takes the pale grey the map's land and the search field already use, one step
+     * off the sheet. The black style steps up from its {@code #181818} sheet instead: a band darker than
+     * the panel reads there as a hole rather than as a row.
+     */
+    public static int rowSurface() {
+        return pick(0xFF232B33, 0xFFF1F3F4);
     }
 
     /** A cursor tint laid over whatever is already in the row, for lists drawn on the panel. */

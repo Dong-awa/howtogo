@@ -46,6 +46,7 @@ public final class StrokeOutlineCheck {
         System.out.println("== road stroke geometry ==");
         straight();
         bends();
+        paintedOnce();
         ends();
         bounded();
         segments();
@@ -108,6 +109,48 @@ public final class StrokeOutlineCheck {
         double worst = worstCrossSection(roundTrip, xs, ys, halfWidth);
         expect("a road doubling straight back keeps its width too (" + percent(worst) + ")",
                 worst >= FULL);
+    }
+
+    /**
+     * Nothing is painted twice: the half of the invariant a translucent road depends on.
+     *
+     * <p>A road colour may be configured with an alpha, and a pixel painted by two pieces of the same
+     * stroke is that colour blended twice -- a brighter (or darker) bead exactly along the stroke's own
+     * edges. It is what the end caps and the round join got wrong when their fan triangles were written
+     * as degenerate quads with the wrong corner repeated: each triangle was filled once forwards and
+     * once backwards, so a whole cap mixed twice.
+     *
+     * <p>Only mitred bends are measured here. A joint too sharp to mitre keeps one cross-section per
+     * edge so that neither edge is measured across its own length, and the two bands then overlap by a
+     * pixel or two on the inside of the turn -- which is what a round pen does at a hairpin, and is
+     * bounded by the check on how far the geometry may reach rather than by this one.
+     */
+    private static void paintedOnce() {
+        System.out.println("   painted once");
+        double halfWidth = 4.0;
+        double[] xs = {0, 60, 130, 200};
+        double[] ys = {0, 0, 0, 0};
+        double[] quads = outline(xs, ys, halfWidth);
+        int straight = StrokeCoverage.worstCoverage(quads, -10, -10, 210, 10);
+        expect("a straight road and its two caps paint each pixel once (" + straight + ")",
+                straight == 1);
+
+        double[] turns = {10, 20, 45, 60, 90, 110};
+        int worst = 0;
+        double worstTurn = 0;
+        for (double turn : turns) {
+            double radians = Math.toRadians(turn);
+            double[] bx = {0, 120, 120 + 120 * Math.cos(radians)};
+            double[] by = {0, 0, 120 * Math.sin(radians)};
+            double[] bend = outline(bx, by, halfWidth);
+            int here = StrokeCoverage.worstCoverage(bend, -20, -20, 260, 200);
+            if (here > worst) {
+                worst = here;
+                worstTurn = turn;
+            }
+        }
+        expect("and so does a mitred bend at every angle up to the limit (worst " + worst + " at "
+                + round(worstTurn) + " degrees)", worst == 1);
     }
 
     /**
@@ -289,38 +332,13 @@ public final class StrokeOutlineCheck {
     /**
      * Is this point painted by any of the quads?
      *
-     * <p>Exactly the triangles a {@code QUADS} buffer draws for one quad: its first three corners, and
-     * its first, third and fourth. For a quad with a corner repeated that is one triangle or the same
-     * triangle both ways round; for a stroke quad it is the two halves of the quad.
+     * <p>Exactly the triangles a {@code QUADS} buffer draws for one quad, which is
+     * {@link StrokeCoverage}'s rule -- shared with the self-drawn maps' check so the two cannot disagree
+     * about what the buffer draws. A quad with a corner repeated is one triangle, and the degenerate
+     * second triangle of a fan piece paints nothing.
      */
     private static boolean painted(double[] quads, double x, double y) {
-        for (int at = 0; at + StrokeOutline.VALUES_PER_QUAD <= quads.length;
-             at += StrokeOutline.VALUES_PER_QUAD) {
-            double ax = quads[at];
-            double ay = quads[at + 1];
-            double bx = quads[at + 2];
-            double by = quads[at + 3];
-            double cx = quads[at + 4];
-            double cy = quads[at + 5];
-            double dx = quads[at + 6];
-            double dy = quads[at + 7];
-            if (inTriangle(x, y, ax, ay, bx, by, cx, cy)
-                    || inTriangle(x, y, ax, ay, cx, cy, dx, dy)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Point in triangle, boundary included, for either winding. */
-    private static boolean inTriangle(double px, double py, double ax, double ay, double bx, double by,
-                                      double cx, double cy) {
-        double ab = (px - bx) * (ay - by) - (ax - bx) * (py - by);
-        double bc = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
-        double ca = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
-        boolean negative = ab < 0 || bc < 0 || ca < 0;
-        boolean positive = ab > 0 || bc > 0 || ca > 0;
-        return !(negative && positive);
+        return StrokeCoverage.paints(quads, x, y);
     }
 
     private static double distanceToPath(double[] xs, double[] ys, double x, double y) {
