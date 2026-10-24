@@ -8,6 +8,23 @@ logs/
 .eclipse/
 .vscode/
 
+# Release output. `gradlew collectDist` regenerates it and names the files after mod_version, so the
+# directory is build state, not source: the previous version's jars live in its GitHub release and in
+# git history, and the current ones are reproduced by one command. Nothing in here is committed any
+# more -- dist/README.md included, since it describes whatever the last collect produced.
+dist/
+
+# Stonecutter's per-node project tree, with one exception. Each versions/<node>/build holds that
+# node's own copy of the sources, its jars and its run directory, all of which are build state. The
+# per-node gradle.properties is the opposite: it carries the dependency wiring (deps.neo_loader,
+# deps.xaero, dependencySubstitutions...) that the shared build scripts read, so it stays tracked.
+# Ignoring everything under versions/ and re-including just that file keeps `git add -A` from picking
+# the tree up again while leaving the node configuration in the repository.
+/versions/*
+!/versions/*/
+/versions/*/*
+!/versions/*/gradle.properties
+
 # The Xaero World Map jar is a compileOnly dependency and is NOT redistributed: it is closed-source
 # commercial software. Put your own copy in libs/ before building -- see libs/README.md.
 libs/*.jar
