@@ -223,6 +223,17 @@ public final class MainScreen extends Screen {
                 BUTTON_HEIGHT, Component.translatable("gui.done"),
                 PanelButton.Kind.NEUTRAL, this::onClose));
 
+        // Settings, on the title line rather than in a third button row: the panel's height is
+        // shared with the map, and a third row would take room from it to hold one control. The
+        // title line has had empty space at its right end since this screen existed, and the
+        // button is drawn and hit-tested by the same list as the rows below, so it costs no
+        // geometry and no new click routing.
+        String settingsLabel = Component.translatable("screen.howtogo.main.settings").getString();
+        int settingsWidth = Math.max(52, this.font.width(settingsLabel) + 12);
+        buttons.add(new PanelButton(panelX + panelW - PAD - settingsWidth, panelY + PAD - 3,
+                settingsWidth, 14, Component.translatable("screen.howtogo.main.settings"),
+                PanelButton.Kind.NEUTRAL, this::openSettings));
+
         // The status block sits between the map and the buttons; remember where it starts, and
         // where the first row of buttons starts, because that is the block's floor.
         this.firstButtonY = row1Y;
@@ -261,6 +272,17 @@ public final class MainScreen extends Screen {
 
     private void openMapData() {
         Screens.set(new MapDataScreen(this));
+    }
+
+    /**
+     * Opens the in-game settings.
+     *
+     * <p>A screen of its own rather than a section of this one: the settings are a list with
+     * scrolling, grouped rows and controls, and keeping them off the map keeps this screen's two
+     * jobs -- showing the trip and starting a new one -- as the only things on it.
+     */
+    private void openSettings() {
+        Screens.set(new SettingsScreen(this));
     }
 
     private void stopNavigation() {

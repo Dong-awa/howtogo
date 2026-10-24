@@ -27,6 +27,7 @@ import bili.dongsz.howtogo.route.TravelMode;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
+import bili.dongsz.howtogo.client.Navigation;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
@@ -303,6 +304,112 @@ public final class RoadConfig {
         } catch (IOException failed) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", path, failed);
         }
+    }
+
+    // --------------------------------------------------- writing (in-game settings)
+    //
+    // The settings screen writes through these instead of through {@link Values}: one named method
+    // per key is the same surface the NeoForge arm offers, so the screen is written once and knows
+    // nothing about the two storage shapes. A setter only writes the value in memory. The screen
+    // calls {@link #save()} after it, which persists it, and {@link #applyRuntimeChanges()}, which
+    // re-reads the few keys the mod latches rather than reads where it uses them.
+    //
+    // Range checks live here rather than in the screen because the JSON arm has no validator of its
+    // own: an out-of-range number in the file is accepted and only the NeoForge arm's spec would
+    // correct it on the next load, so both arms clamp at the one door a value is written through.
+
+// The interface theme; the two loader arms store the id and the constant respectively.
+    public static void setUiTheme(UiTheme.Mode mode) {
+        values.uiTheme = (mode == null ? UiTheme.Mode.AUTO : mode).id();
+    }
+
+// Where the map half of navigation is drawn.
+    public static void setMapDisplayMode(MapDisplayMode mode) {
+        values.mapDisplayMode = (mode == null ? MapDisplayMode.defaultMode() : mode).id();
+    }
+
+// The compact HUD card's corner, and how far inside that corner it sits.
+    public static void setCompactHudAnchor(HudAnchor anchor) {
+        values.compactHudAnchor = (anchor == null ? HudAnchor.defaultAnchor() : anchor).id();
+    }
+
+    public static void setCompactHudOffsetX(int pixels) {
+        values.compactHudOffsetX = clamp(pixels, -200, 200);
+    }
+
+    public static void setCompactHudOffsetY(int pixels) {
+        values.compactHudOffsetY = clamp(pixels, -200, 200);
+    }
+
+// The travel mode navigation starts in.
+    public static void setDefaultTravelMode(TravelMode mode) {
+        values.defaultTravelMode = (mode == null ? TravelMode.WALK : mode).id();
+    }
+
+// Whether a slower-than-walking trip is replanned on foot.
+    public static void setFallBackToWalkingWhenSlower(boolean on) {
+        values.fallBackToWalkingWhenSlower = on;
+    }
+
+// How far a walking trip may leave the network, in blocks.
+    public static void setWalkOffroadBlocks(double blocks) {
+        values.walkOffroadBlocks = clamp(blocks, 0.0, 4096.0);
+    }
+
+// How close to a stop of the journey counts as being at that stop, in blocks.
+    public static void setStationSnapBlocks(double blocks) {
+        values.stationSnapBlocks = clamp(blocks, 1.0, 256.0);
+    }
+
+// Seconds of waiting one boarding of a service costs.
+    public static void setTransitWaitSeconds(double seconds) {
+        values.transitWaitSeconds = clamp(seconds, 0.0, 3600.0);
+    }
+
+// The read-only map layers and where the browser map's server starts.
+    public static void setCreateTrainTracks(boolean on) {
+        values.createTrainTracks = on;
+    }
+
+    public static void setMtrTransit(boolean on) {
+        values.mtrTransit = on;
+    }
+
+    public static void setMtrFullMap(boolean on) {
+        values.mtrFullMap = on;
+    }
+
+    public static void setRoadWeaverRoads(boolean on) {
+        values.roadWeaverRoads = on;
+    }
+
+    public static void setWebMapAutoStart(boolean on) {
+        values.webmapAutoStart = on;
+    }
+
+//
+// * Applies the keys the mod holds rather than reads where it uses them.
+// *
+// * <p>This arm has no loader config service and so no reload event: the default travel mode is
+// * latched in {@link Navigation}, so a saved change to it would otherwise wait for the next game
+// * launch. NeoForge's arm has the same method, but there {@link #save()} fires
+// * {@code ModConfigEvent.Reloading} itself and the listener in {@code HowToGo} already does this
+// * work.
+// *
+// * <p>The other key the NeoForge listener invalidates -- RoadWeaver's road class -- is not one of
+// * the keys this screen exposes, and the Fabric arm does not tick that layer at all yet, so there is
+// * nothing here to invalidate.
+//
+    public static void applyRuntimeChanges() {
+        Navigation.reloadConfiguredMode();
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private RoadConfig() {
@@ -1895,6 +2002,126 @@ public final class RoadConfig {
         } catch (IllegalStateException notLoadedYet) {
             return false;
         }
+    }
+
+    // --------------------------------------------------- writing (in-game settings)
+    //
+    // The settings screen writes through these instead of through the spec: one named method per
+    // key keeps the two loader arms on one surface, and every range check the spec declares is
+    // repeated here because {@code ConfigValue#set} writes straight into the loaded config and does
+    // not run the value's predicate.
+    //
+    // A setter only writes the value. The screen calls {@link #save()} after it, which persists the
+    // file and -- through {@code ModConfigSpec#save()} -- fires {@code ModConfigEvent.Reloading}.
+    // That event is already handled in HowToGo: it re-reads the default travel mode and invalidates
+    // RoadWeaver's layer, which is what {@link #applyRuntimeChanges()} exists for on the JSON arm.
+
+// The interface theme.
+    public static void setUiTheme(UiTheme.Mode mode) {
+        write(UI_THEME, mode == null ? UiTheme.Mode.AUTO : mode);
+    }
+
+// Where the map half of navigation is drawn.
+    public static void setMapDisplayMode(MapDisplayMode mode) {
+        write(MAP_DISPLAY_MODE, mode == null ? MapDisplayMode.defaultMode() : mode);
+    }
+
+// The compact HUD card's corner, and how far inside that corner it sits.
+    public static void setCompactHudAnchor(HudAnchor anchor) {
+        write(COMPACT_HUD_ANCHOR, anchor == null ? HudAnchor.defaultAnchor() : anchor);
+    }
+
+    public static void setCompactHudOffsetX(int pixels) {
+        write(COMPACT_HUD_OFFSET_X, clamp(pixels, -200, 200));
+    }
+
+    public static void setCompactHudOffsetY(int pixels) {
+        write(COMPACT_HUD_OFFSET_Y, clamp(pixels, -200, 200));
+    }
+
+// The travel mode navigation starts in, written as the id both arms agree on.
+    public static void setDefaultTravelMode(TravelMode mode) {
+        write(DEFAULT_TRAVEL_MODE, (mode == null ? TravelMode.WALK : mode).id());
+    }
+
+// Whether a slower-than-walking trip is replanned on foot.
+    public static void setFallBackToWalkingWhenSlower(boolean on) {
+        write(FALL_BACK_TO_WALKING_WHEN_SLOWER, on);
+    }
+
+// How far a walking trip may leave the network, in blocks.
+    public static void setWalkOffroadBlocks(double blocks) {
+        write(WALK_OFFROAD_BLOCKS, clamp(blocks, 0.0, 4096.0));
+    }
+
+// How close to a stop of the journey counts as being at that stop, in blocks.
+    public static void setStationSnapBlocks(double blocks) {
+        write(STATION_SNAP_BLOCKS, clamp(blocks, 1.0, 256.0));
+    }
+
+// Seconds of waiting one boarding of a service costs.
+    public static void setTransitWaitSeconds(double seconds) {
+        write(TRANSIT_WAIT_SECONDS, clamp(seconds, 0.0, 3600.0));
+    }
+
+// The read-only map layers and where the browser map's server starts.
+    public static void setCreateTrainTracks(boolean on) {
+        write(CREATE_TRAIN_TRACKS, on);
+    }
+
+    public static void setMtrTransit(boolean on) {
+        write(MTR_TRANSIT, on);
+    }
+
+    public static void setMtrFullMap(boolean on) {
+        write(MTR_FULL_MAP, on);
+    }
+
+    public static void setRoadWeaverRoads(boolean on) {
+        write(ROADWEAVER_ROADS, on);
+    }
+
+    public static void setWebMapAutoStart(boolean on) {
+        write(WEBMAP_AUTO_START, on);
+    }
+
+    /**
+     * Writes one value, and does nothing at all before the file has been read.
+     *
+     * <p>{@code ConfigValue#set} assumes a loaded config and throws if there is none -- the same
+     * state {@link #save()} guards against -- so the guard lives here rather than in fifteen
+     * setters. Nothing in the mod can call these before client setup; the guard keeps that a
+     * property of this class rather than of every future caller.
+     */
+    private static <T> void write(ModConfigSpec.ConfigValue<T> entry, T value) {
+        if (SPEC.isLoaded()) {
+            entry.set(value);
+        }
+    }
+
+    /** Writes the spec to disk and fires the reload event the rest of the mod listens for. */
+    public static void save() {
+        if (SPEC.isLoaded()) {
+            SPEC.save();
+        }
+    }
+
+    /**
+     * Kept for the one call site both arms share.
+     *
+     * <p>On this arm {@link #save()} already fires {@code ModConfigEvent.Reloading}, whose listener
+     * re-reads the latched travel mode and invalidates RoadWeaver's layer -- the two things the
+     * JSON arm has no event to do for it.
+     */
+    public static void applyRuntimeChanges() {
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 }
 //?}
