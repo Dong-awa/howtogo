@@ -3,6 +3,9 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.SelfChecks;
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceKey;
+import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
@@ -37,10 +40,12 @@ import java.util.List;
  * map -- the map already has its own editing keys, and this screen is the alternative to the map.
  *
  * <h2>The map is a viewer, not a navigator</h2>
- * It draws the same roads, rails, places and route the world map does, and it drags and zooms, but a
- * click chooses nothing: picking a destination belongs to the destination screen, which this screen
- * opens. Keeping the two apart means the viewer can be simple enough to trust -- there is no hidden
- * mode, no selection, and no way to start a trip by looking at the map.
+ * It draws the same roads, rails, places and route the world map does, and it drags and zooms. A
+ * single click still chooses nothing: a double-click on a place opens that place's details, which is
+ * reading rather than travelling -- the card offers "navigate here", and only that button starts a
+ * trip. Picking a destination from a list belongs to the destination screen, which this screen
+ * opens. Keeping the two apart means the viewer can be simple enough to trust: there is no editing
+ * mode and no way to start a trip by looking at the map.
  *
  * <h2>What is not duplicated</h2>
  * Export and import already have their own screen with the archive list and the overwrite warning;
@@ -70,6 +75,33 @@ public final class MainScreen extends Screen {
     private static final double DEFAULT_SCALE = 0.30;
     private static final double ZOOM_STEP = 1.15;
 
+    /**
+     * How close two clicks on the same place have to be together to open the details.
+     *
+     * <p>The same figure a desktop uses for a double-click: long enough for a deliberate second
+     * press, short enough that two unrelated clicks on a marker are two clicks.
+     */
+    private static final long DOUBLE_CLICK_MS = 400L;
+
+    /**
+     * How far from a marker's centre a press still counts as a press on that marker.
+     *
+     * <p>Larger than the marker itself: at the default zoom a place is under two pixels across, and
+     * asking the player to hit two pixels would make the details panel unreachable except zoomed in.
+     * Small enough that two markers eight pixels apart are still two markers.
+     */
+    private static final double PLACE_HIT_HALF_PX = 8.0;
+
+    /** Movement beyond this between press and release turns the gesture into a drag, not a click. */
+    private static final double CLICK_SLOP_PX = 3.0;
+
+    /** The details card's widest form, and the gap it keeps from the map's edge. */
+    private static final int DETAIL_PANEL_WIDTH = 280;
+    private static final int DETAIL_PANEL_MARGIN = 4;
+
+    /** Half the size of the favourite badge: the marker's own scale rather than a second marker. */
+    private static final double FAVOURITE_BADGE_RADIUS = 2.0;
+
     private final List<String> notices = new ArrayList<>();
 
     /** The two rows of buttons, built in {@link #init()} and drawn and hit-tested by hand. */
@@ -84,6 +116,28 @@ public final class MainScreen extends Screen {
     private boolean dragging;
     private double lastMouseX;
     private double lastMouseY;
+
+    /**
+     * The place whose details are showing, or null when no details card is up.
+     *
+     * <p>The card is a property of this screen rather than a screen of its own -- see
+     * {@link PlaceDetailPanel} -- and it deliberately outlives the press that opened it: the map
+     * keeps drawing behind it, and the player reads a description over the roads it describes.
+     */
+    private Destination selectedPlace;
+
+    /** The one card this screen draws; it remembers its own controls between a render and a click. */
+    private final PlaceDetailPanel detailPanel = new PlaceDetailPanel();
+
+    /** The place under a press that is still down, and where that press began. */
+    private Destination pressedPlace;
+    private double pressX;
+    private double pressY;
+    private boolean pressMoved;
+
+    /** The last place clicked and when, which is the whole of the double-click test. */
+    private Destination lastClickedPlace;
+    private long lastClickedAt;
 
     private int panelX;
     private int panelY;
@@ -306,6 +360,159 @@ public final class MainScreen extends Screen {
         Screens.set(null);
     }
 
+    // ------------------------------------------------------------ place details
+
+    /**
+     * Records a press-and-release on the map that was not a drag.
+     *
+     * <p>The second click on the same place within {@link #DOUBLE_CLICK_MS} opens the details. A
+     * click on the empty map is not the first half of anything: it clears the pending click, so two
+     * background presses can never open whichever marker the next click happens to land on.
+     */
+    private void registerMapClick(Destination place) {
+        if (place == null) {
+            lastClickedPlace = null;
+            return;
+        }
+        long now = System.currentTimeMillis();
+        boolean second = lastClickedPlace != null && now - lastClickedAt <= DOUBLE_CLICK_MS
+                && samePlace(lastClickedPlace, place);
+        // Cleared after a successful double-click, so a third press starts over rather than opening
+        // the same card twice.
+        lastClickedPlace = second ? null : place;
+        lastClickedAt = now;
+        if (second) {
+            selectPlace(place);
+        }
+    }
+
+    /** Whether two destinations name the same stored place; their source and id decide it. */
+    private static boolean samePlace(Destination first, Destination second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        PlaceKey firstKey = PlaceDetailStore.keyOf(first);
+        PlaceKey secondKey = PlaceDetailStore.keyOf(second);
+        return firstKey != null && firstKey.equals(secondKey);
+    }
+
+    /** Shows a place's details. */
+    private void selectPlace(Destination place) {
+        if (!Destinations.isPlace(place)) {
+            return;
+        }
+        selectedPlace = place;
+    }
+
+    /**
+     * The place whose marker is inside the click tolerance of a point, or null.
+     *
+     * <p>Nearest wins: two markers can both be inside the tolerance, and the one the pointer is on
+     * is the one that was aimed at. Every place this map draws is selectable -- the map has no
+     * filter panel of its own, so what is on screen is exactly the list walked here.
+     */
+    private Destination placeAt(double mouseX, double mouseY) {
+        Destination nearest = null;
+        double nearestDistance = PLACE_HIT_HALF_PX;
+        for (Destination place : Destinations.places()) {
+            double distance = Math.hypot(screenX(place.x()) - mouseX, screenY(place.z()) - mouseY);
+            if (distance <= nearestDistance) {
+                nearestDistance = distance;
+                nearest = place;
+            }
+        }
+        return nearest;
+    }
+
+    /**
+     * The selected place as the sources state it now, or null when no source has it any more.
+     *
+     * <p>The reference taken when the card opened goes stale as soon as the place is edited from the
+     * card itself: name and kind are rebuilt from source data every frame, so drawing the reference
+     * would keep showing the old name after the player's own rename. A place no source lists any
+     * more -- deleted in the map's edit mode, or its mod gone -- is nothing to describe either, and a
+     * card offering edit for it could only fail.
+     */
+    private Destination liveSelectedPlace() {
+        if (selectedPlace == null) {
+            return null;
+        }
+        PlaceKey key = PlaceDetailStore.keyOf(selectedPlace);
+        if (key == null) {
+            return null;
+        }
+        for (Destination place : Destinations.places()) {
+            if (key.equals(PlaceDetailStore.keyOf(place))) {
+                return place;
+            }
+        }
+        return null;
+    }
+
+    /** One of the details card's controls was clicked. */
+    private void clickDetailPanel(double mouseX, double mouseY) {
+        PlaceDetailPanel.Action action = detailPanel.actionAt(mouseX, mouseY);
+        if (action == PlaceDetailPanel.Action.NONE || selectedPlace == null) {
+            // A press on the card's blank space is still a press on the card: it must not fall
+            // through to the map.
+            return;
+        }
+        switch (action) {
+            case FAVORITE -> PlaceDetailStore.toggleFavorite(selectedPlace);
+            case EDIT -> editSelectedPlace();
+            case NAVIGATE -> {
+                Navigation.setTarget(selectedPlace);
+                // The same commit the picker makes: the trip is set and the screen goes away, so the
+                // HUD, not this map, is what the player looks at next.
+                onClose();
+            }
+            case BACK -> {
+                // Collapse only: the map stays where it was, and the screen stays open.
+                selectedPlace = null;
+            }
+            default -> {
+                // NONE is handled above; DELETE is not offered by a details card. A place is deleted
+                // in the world map's edit mode, where the node, its roads and the undo history are.
+            }
+        }
+    }
+
+    /**
+     * Opens the place editor for the selected place.
+     *
+     * <p>Two editors behind one button, because a place's text is stored in two different places: the
+     * player's own node lives in the road network and is edited by the map's place editor, while a
+     * place read from another mod has no node to edit and is edited by the detail dialog writing the
+     * store directly. Which one applies is the source's answer, exactly as in the picker.
+     */
+    private void editSelectedPlace() {
+        Destination place = selectedPlace;
+        if (place == null) {
+            return;
+        }
+        if (PlaceSources.isManual(place.source())) {
+            int nodeId = manualNodeId(place);
+            if (nodeId >= 0) {
+                RoadEditSession.openPlaceEditorFromPanel(nodeId);
+            }
+            return;
+        }
+        PlaceDetailScreen.openForStore(Screens.current(), place);
+    }
+
+    /** The road node id of a hand-placed place, or -1 when the place is not one. */
+    private static int manualNodeId(Destination place) {
+        if (place == null || !PlaceSources.isManual(place.source()) || place.placeId() == null) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(place.placeId().trim());
+        } catch (NumberFormatException notANode) {
+            // A record whose id is not a node id: there is nothing in the network to edit.
+            return -1;
+        }
+    }
+
     // ------------------------------------------------------------------- input
 
     @Override
@@ -317,6 +524,13 @@ public final class MainScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
+        // The details card is on top of the map, so it sees the click before the map does: a press
+        // inside the card is a press on the card's empty space or on one of its controls, never the
+        // beginning of a drag that would move the map under it.
+        if (button == 0 && selectedPlace != null && detailPanel.contains(mouseX, mouseY)) {
+            clickDetailPanel(mouseX, mouseY);
+            return true;
+        }
         // The buttons are drawn, not widgets, so nothing else will route a click to them: this is
         // their only chance to see it, and it comes before the map so a click on a button is never
         // also a drag that moves the view under it.
@@ -331,6 +545,12 @@ public final class MainScreen extends Screen {
             dragging = true;
             lastMouseX = mouseX;
             lastMouseY = mouseY;
+            // Which marker the press was on, and where it started: the release needs both to tell a
+            // click from a drag.
+            pressedPlace = placeAt(mouseX, mouseY);
+            pressX = mouseX;
+            pressY = mouseY;
+            pressMoved = false;
             return true;
         }
         //? if >=1.21.9 {
@@ -351,6 +571,11 @@ public final class MainScreen extends Screen {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
     //?}
         if (dragging && button == 0) {
+            // A gesture that moved is a pan, not a click: recording it would make dragging the map
+            // open whatever was under the first press.
+            if (Math.hypot(mouseX - pressX, mouseY - pressY) > CLICK_SLOP_PX) {
+                pressMoved = true;
+            }
             centerX -= dragX / scale;
             centerZ -= dragY / scale;
             lastMouseX = mouseX;
@@ -376,6 +601,13 @@ public final class MainScreen extends Screen {
     //?}
         if (dragging && button == 0) {
             dragging = false;
+            Destination pressed = pressedPlace;
+            pressedPlace = null;
+            // The click is decided on release, because only then is it known whether the gesture was
+            // a click at all; a drag over a marker must pan the map and select nothing.
+            if (!pressMoved) {
+                registerMapClick(pressed);
+            }
             return true;
         }
         //? if >=1.21.9 {
@@ -468,7 +700,11 @@ public final class MainScreen extends Screen {
         // Shapes first, then every piece of text: drawing a string flushes the vertex buffer this
         // uses, so a shape emitted after one would go through a stale consumer.
         List<MapLabel> labels = drawMap(graphics);
-        drawText(graphics, labels);
+        drawText(graphics, labels, mouseX, mouseY);
+        // The details card last and alone: it is an opaque sheet floating over one corner of the map,
+        // so every label the map drew under it has to come first. It opens its own drawing blocks
+        // internally, which is also why it cannot be called inside the map's block above.
+        drawDetailPanel(graphics, mouseX, mouseY);
         drawButtons(graphics, mouseX, mouseY);
     }
 
@@ -539,6 +775,11 @@ public final class MainScreen extends Screen {
             }
             HudDraw.emitPlaceMarker(sink, sx, sy, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
                     UiTheme.place());
+            if (PlaceDetailStore.isFavorite(place)) {
+                // The badge is one more shape in the same block as the marker, before any text: a
+                // star emitted later would be writing into a buffer a string has already flushed.
+                HudDraw.emitStar(sink, sx + 3.0, sy - 3.0, FAVOURITE_BADGE_RADIUS, UiTheme.accent());
+            }
             if (!names) {
                 continue;
             }
@@ -639,8 +880,67 @@ public final class MainScreen extends Screen {
         HudDraw.emitTriangle(sink, tipX, tipY, leftX, leftY, rightX, rightY, UiTheme.player());
     }
 
+    /**
+     * The one-line description of the place under the cursor, when there is one.
+     *
+     * <p>Beside the cursor rather than in a fixed line, and clamped inside the map: a fixed line
+     * would either cover the hint at the foot of the map or point at nothing, and a summary outside
+     * the map's frame would read as part of the panel. Only the first line of the description is
+     * shown -- this is a signpost, and the whole text is the details card's job.
+     */
+    private void drawHoverSummary(GuiGraphics graphics, Destination place, int mouseX, int mouseY) {
+        String summary = PlaceText.summary(font,
+                PlaceDetailStore.detailsOf(place).description(), Math.max(1, mapW - 16));
+        if (summary.isEmpty()) {
+            return;
+        }
+        int textW = font.width(summary);
+        int x = Mth.clamp(mouseX + 10, mapX + 2, Math.max(mapX + 2, mapX + mapW - textW - 2));
+        int y = mouseY - 12;
+        if (y < mapY + 2) {
+            y = mouseY + 12;
+        }
+        y = Mth.clamp(y, mapY + 2, Math.max(mapY + 2, mapY + mapH - LINE_HEIGHT - 2));
+        graphics.drawString(font, summary, x, y, UiTheme.mapLabelStrong(), false);
+    }
+
+    /**
+     * The details card of the selected place, docked in the map's bottom-right corner.
+     *
+     * <p>Inside the map and not beside it: the card belongs to the place under it, and the map is
+     * what the player is reading. The height is what the content asks for, clamped to the room the
+     * map has, so a small window shortens the card rather than pushing it over the buttons. Nothing
+     * here writes: a favourite toggle or a delete is reported by the card and routed by this screen.
+     */
+    private void drawDetailPanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        if (selectedPlace == null) {
+            return;
+        }
+        Destination place = liveSelectedPlace();
+        if (place == null) {
+            // Nothing a source lists now, so there is no place to describe: closing is the only
+            // honest answer, and it also takes away buttons that could only fail.
+            selectedPlace = null;
+            return;
+        }
+        selectedPlace = place;
+        PlaceDetails details = PlaceDetailStore.detailsOf(place);
+        int width = Math.min(DETAIL_PANEL_WIDTH, mapW - DETAIL_PANEL_MARGIN * 2);
+        int height = Math.min(PlaceDetailPanel.preferredHeight(font, width, details),
+                mapH - DETAIL_PANEL_MARGIN * 2);
+        if (width <= 0 || height <= 0) {
+            // A window too small to hold even a card: the map is the only thing worth drawing, and
+            // the card comes back as soon as there is room for it.
+            return;
+        }
+        int x = mapX + mapW - DETAIL_PANEL_MARGIN - width;
+        int y = mapY + mapH - DETAIL_PANEL_MARGIN - height;
+        detailPanel.render(graphics, font, x, y, width, height, place, details,
+                PlaceDetailPanel.Options.STANDARD, false, mouseX, mouseY);
+    }
+
     /** Every string on the screen, after every shape. */
-    private void drawText(GuiGraphics graphics, List<MapLabel> labels) {
+    private void drawText(GuiGraphics graphics, List<MapLabel> labels, int mouseX, int mouseY) {
         var font = this.font;
 
         graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
@@ -687,8 +987,14 @@ public final class MainScreen extends Screen {
                     panelX + PAD, y, UiTheme.text(), false);
         }
 
+        // The map's two hints: what a drag does, and the one gesture that opens the details card.
+        // Two lines rather than one joined sentence, because a separator between them would be
+        // punctuation hard-coded in Java, and at a narrow window each has to be cut on its own.
+        String placeHint = Component.translatable("screen.howtogo.main.place_hint").getString();
+        graphics.drawString(font, PlaceText.ellipsis(font, placeHint, mapW - 8), mapX + 4,
+                mapY + mapH - LINE_HEIGHT * 2 - 3, UiTheme.textMuted(), false);
         String hint = Component.translatable("screen.howtogo.main.map_hint").getString();
-        graphics.drawString(font, hint, mapX + 4,
+        graphics.drawString(font, PlaceText.ellipsis(font, hint, mapW - 8), mapX + 4,
                 mapY + mapH - LINE_HEIGHT - 2, UiTheme.textMuted(), false);
 
         for (MapLabel label : labels) {
@@ -706,6 +1012,17 @@ public final class MainScreen extends Screen {
                     .getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
                     panelX + PAD, addressY, UiTheme.textMuted(), false);
+        }
+
+        // The hover readout comes after every other string so a place name beside it cannot hide
+        // it. The card is drawn after this whole pass and may cover it, which is right: the card is
+        // the full text of what this line previews.
+        if (insideMap(mouseX, mouseY)
+                && (selectedPlace == null || !detailPanel.contains(mouseX, mouseY))) {
+            Destination hovered = placeAt(mouseX, mouseY);
+            if (hovered != null) {
+                drawHoverSummary(graphics, hovered, mouseX, mouseY);
+            }
         }
     }
 }

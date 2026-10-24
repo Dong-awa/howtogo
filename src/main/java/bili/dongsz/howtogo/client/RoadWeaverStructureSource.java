@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.place.PlaceKeys;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
@@ -95,8 +96,12 @@ public final class RoadWeaverStructureSource implements DestinationSource {
         List<RoadWeaverLayer.Structure> structures = RoadWeaverLayer.structures();
         List<Destination> destinations = new ArrayList<>(structures.size());
         for (RoadWeaverLayer.Structure structure : structures) {
+            // The structure id is the key RoadWeaver itself identifies the place by, so it is what the
+            // player's notes are attached to: a new road drawn to the same village must not orphan
+            // them. (Two villages of one type share the id; RoadWeaver's reading is what says which
+            // key belongs to which of them, and that is the source's choice, not this mod's.)
             destinations.add(new Destination(nameOf(structure), structure.x(), structure.markerY(),
-                    structure.z(), ID, Destination.NO_COLOR, PlaceKind.PLACE));
+                    structure.z(), ID, Destination.NO_COLOR, PlaceKind.PLACE, structure.id()));
         }
         built = List.copyOf(destinations);
         builtRevision = revision;

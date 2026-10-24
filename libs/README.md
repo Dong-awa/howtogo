@@ -76,7 +76,10 @@ the world map and XaeroLib are `compileOnly`; at run time the world map provides
 
 - Xaero's World Map: every node compiles against the build of the same Minecraft generation, and the
   declared range in `neoforge.mods.toml` is `[1.40.0,)` (`[1.1.0,)` for XaeroLib). Older
-  generations (1.20.6, 1.21.6) only ever got the 1.39.x world map, which is what those nodes use.
+  generations (1.20.6, 1.21.6) only ever got the 1.39.x world map, which is what those nodes use —
+  they declare `deps.xaero_range=[1.39.0,)` in their own `gradle.properties`, and their XaeroLib
+  entry goes out as `optional` because the 1.39.x jars ship no XaeroLib at all. Requiring either at
+  the newer values made those two nodes refuse to start on every install.
 - MCphone: the app API is versioned and MCphone logs `MCphoneApi.VERSION`. It also logs an
   `App 已登记: howtogo:navigator` line when the integration registers — if that line is missing while
   MCphone is installed, the service file or the app class is the place to look.

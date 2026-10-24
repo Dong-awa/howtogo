@@ -1,11 +1,14 @@
 package bili.dongsz.howtogo.webmap;
 
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceSummary;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -16,7 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -58,6 +63,7 @@ public final class WebMapCheck {
         payloadTheme();
         payloadValues();
         payloadEscaping();
+        payloadPlaces();
         payloadEmpty();
         fixtureDump();
 
@@ -66,6 +72,8 @@ public final class WebMapCheck {
         readWaitsForTheGameThread();
         readTimesOutRatherThanHangs();
         readReportsWhyItCouldNotRead();
+        readPlaceRunsOnTheGameThread();
+        sourceWithoutPlacesRefuses();
         concurrentRequestsAllAnswered();
 
         System.out.println(failures == 0
@@ -82,7 +90,9 @@ public final class WebMapCheck {
      * <p>Deliberately not a realistic map: it is one of each thing, including the ones that are only
      * interesting because they are awkward -- an unnamed road, a place with no road, a bridge at
      * storey one over a road at storey zero, a one-way street drawn backwards, and a name holding
-     * characters that would end a JSON string if anybody built the payload by hand.
+     * characters that would end a JSON string if anybody built the payload by hand. The places the
+     * payload carries are built separately in {@link #fixturePlaces()}, from the real detail-record
+     * class, so the payload's cut description is the one the game would compute.
      */
     static RoadNetwork fixtureNetwork() {
         RoadNetwork network = new RoadNetwork();
@@ -139,7 +149,7 @@ public final class WebMapCheck {
      */
     static RoadMapSnapshot fixtureSnapshot(String theme) {
         return RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork(),
-                java.util.Map.of(), fixtureReadOnlyLayers(), theme);
+                java.util.Map.of(), fixtureReadOnlyLayers(), theme, fixturePlaces());
     }
 
     /**
@@ -156,6 +166,103 @@ public final class WebMapCheck {
     /** The payload of the fixture, as the page receives it. */
     static String fixtureJson() {
         return fixtureSnapshot().toJson(1760000000000L);
+    }
+
+    // --------------------------------------------------> the fixture's places
+
+    /**
+     * The place the HTTP check asks {@code /api/place} for, and the one the payload's place checks
+     * read: a manual place whose name is the awkward string the escaping check uses.
+     */
+    static final String FIXTURE_PLACE_ID = "12";
+    static final String FIXTURE_PLACE_SOURCE = "poi";
+
+    /** The name with the quote, the backslash, the Chinese and the newline in it. */
+    static final String FIXTURE_PLACE_NAME = "Resource \"quarry\"\\一号\n线";
+
+    /**
+     * The full description the endpoint answers with; the payload carries the cut form of it.
+     *
+     * <p>Deliberately longer than the payload's 200-character cut and with line breaks in it, so one
+     * case covers both facts the page depends on: the payload is shortened and flagged, and its
+     * shortened text still has the lines the card's CSS wraps.
+     */
+    static final String FIXTURE_FULL_DESCRIPTION =
+            "第一行：靠近传送门。\n第二行：引号\"、反斜杠\\和换行都保留："
+                    + "很长的描述".repeat(45) + "\n第三行：结尾。";
+
+    /** When the fixture place was last edited, for the endpoint's timestamp. */
+    static final long FIXTURE_PLACE_UPDATED_AT = 1712345678901L;
+
+    /**
+     * The places the fixture network offers: one of each shape the card has to show.
+     *
+     * <p>Built with the real {@link PlaceDetails} rather than with hand-written strings, so the
+     * summary in the payload is the one the game would compute -- which is the whole point of
+     * checking that the payload carries a summary and the endpoint carries the full text.
+     */
+    static List<RoadMapSnapshot.Place> fixturePlaces() {
+        PlaceSummary description = fixturePlaceDetails().truncated(200);
+        PlaceSummary second = PlaceDetails.of("靠近传送门", List.of("快捷"), false).truncated(200);
+        return List.of(
+                new RoadMapSnapshot.Place(FIXTURE_PLACE_ID, FIXTURE_PLACE_NAME, -40, 70, 20,
+                        "RESOURCE", FIXTURE_PLACE_SOURCE, List.of("餐饮", "可停车"), true,
+                        description.text(), description.truncated()),
+                new RoadMapSnapshot.Place("42", "East Station", 900, 70, 300,
+                        "STATION", "mtr_station", List.of(), false,
+                        second.text(), second.truncated()));
+    }
+
+    /** The detail record the fixture place's summary and full text are both derived from. */
+    static PlaceDetails fixturePlaceDetails() {
+        return PlaceDetails.of(FIXTURE_FULL_DESCRIPTION, List.of("餐饮", "可停车"), true);
+    }
+
+    /**
+     * The body {@code /api/place} answers with for the fixture place, or null when the source and id
+     * name no fixture place.
+     *
+     * <p>The same fields in the same shape {@code WebMapService} builds in the game, written here
+     * with Gson for the same reason it is there: a name with a quote or a newline has to be escaped
+     * by a serialiser, not by string concatenation.
+     */
+    static String fixturePlaceJson(String source, String id) {
+        if (!FIXTURE_PLACE_SOURCE.equals(source) || !FIXTURE_PLACE_ID.equals(id)) {
+            return null;
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("id", FIXTURE_PLACE_ID);
+        body.put("source", FIXTURE_PLACE_SOURCE);
+        body.put("name", FIXTURE_PLACE_NAME);
+        body.put("x", -40);
+        body.put("y", 70);
+        body.put("z", 20);
+        body.put("kind", "RESOURCE");
+        body.put("tags", List.of("餐饮", "可停车"));
+        body.put("favorite", true);
+        body.put("description", FIXTURE_FULL_DESCRIPTION);
+        body.put("updatedAt", FIXTURE_PLACE_UPDATED_AT);
+        return new Gson().toJson(body);
+    }
+
+    /**
+     * A source that answers both of the game's readings from the fixture: the map, and one place.
+     *
+     * <p>This is what {@code WebMapHttpCheck} starts its server with, so the endpoint is exercised
+     * against a real socket rather than against the reader in isolation.
+     */
+    static RoadMapSource fixtureSource() {
+        return new RoadMapSource() {
+            @Override
+            public RoadMapSnapshot snapshot() {
+                return fixtureSnapshot();
+            }
+
+            @Override
+            public String placeJson(String source, String id) {
+                return fixturePlaceJson(source, id);
+            }
+        };
     }
 
     // ------------------------------------------------------------------- checks
@@ -180,7 +287,7 @@ public final class WebMapCheck {
         expect("the root keys are the documented ones, no more ("
                         + new TreeSet<>(keys) + ")",
                 keys.equals(Set.of("version", "generatedAt", "world", "dimension", "empty",
-                        "theme", "bounds", "classes", "nodes", "segments", "stats")));
+                        "theme", "bounds", "classes", "nodes", "segments", "places", "stats")));
 
         JsonObject bounds = root.getAsJsonObject("bounds");
         expect("the bounds are four numbers",
@@ -357,6 +464,74 @@ public final class WebMapCheck {
                 json.contains("\\\"quarry\\\"") && json.contains("\\n"));
         expect("while Chinese is left as itself, because the payload is fetched and not embedded",
                 json.contains("一号"));
+        // The places array carries a name too, and it is the same string: one serialiser, one rule.
+        JsonObject place = placeById(root.getAsJsonArray("places"), FIXTURE_PLACE_ID);
+        expect("a place's own name survives the same round trip, in the places array",
+                place.has("name") && FIXTURE_PLACE_NAME.equals(place.get("name").getAsString()));
+    }
+
+    /**
+     * The version-3 places array: the field the page's markers, cards and favourite badges read.
+     *
+     * <p>Two things about it are contract: the shape of one place, and that a place's description is
+     * the summary rather than the detail record's full text. The second is what the {@code /api/place}
+     * endpoint exists for, so it is checked here beside the flag that says the page should offer it --
+     * a payload that carried the full text and an endpoint that answered with it again would be a
+     * contract nobody needs, and one that carried no summary would need the endpoint on every load.
+     */
+    private static void payloadPlaces() {
+        JsonObject root = JsonParser.parseString(fixtureJson()).getAsJsonObject();
+        JsonArray places = root.getAsJsonArray("places");
+        expect("the payload carries the places the page is to mark (" + places.size() + ")",
+                places.size() == 2);
+
+        JsonObject place = placeById(places, FIXTURE_PLACE_ID);
+        expect("a place carries exactly the documented fields", place.keySet().equals(Set.of(
+                "id", "name", "x", "y", "z", "kind", "source", "tags", "favorite",
+                "description", "descriptionTruncated")));
+        expect("its id is the source-stable id and its source is the source's own id",
+                FIXTURE_PLACE_ID.equals(place.get("id").getAsString())
+                        && FIXTURE_PLACE_SOURCE.equals(place.get("source").getAsString()));
+        expect("its position and kind are what it was handed",
+                place.get("x").getAsInt() == -40 && place.get("y").getAsInt() == 70
+                        && place.get("z").getAsInt() == 20
+                        && "RESOURCE".equals(place.get("kind").getAsString()));
+        JsonArray tags = place.getAsJsonArray("tags");
+        expect("its tags are the list it was given, in order",
+                tags.size() == 2 && "餐饮".equals(tags.get(0).getAsString())
+                        && "可停车".equals(tags.get(1).getAsString()));
+        expect("its favourite flag is a JSON boolean, not a string the page has to interpret",
+                place.get("favorite").isJsonPrimitive()
+                        && place.get("favorite").getAsJsonPrimitive().isBoolean()
+                        && place.get("favorite").getAsBoolean());
+        String carried = place.get("description").getAsString();
+        expect("its description is the cut payload form, not the detail record's full text",
+                !carried.equals(FIXTURE_FULL_DESCRIPTION)
+                        && FIXTURE_FULL_DESCRIPTION.startsWith(carried));
+        expect("with its line breaks kept, because the card can wrap them",
+                carried.contains("\n"));
+        expect("cut to the payload's own limit",
+                PlaceDetails.lengthInCodePoints(carried) == 200);
+        expect("and the payload says it is truncated, which is what offers the full-text button",
+                place.get("descriptionTruncated").getAsBoolean());
+        expect("the cut text is the one PlaceDetails computed from the detail record",
+                carried.equals(fixturePlaceDetails().truncated(200).text()));
+
+        JsonObject second = placeById(places, "42");
+        expect("a place with nothing extra still carries every field, so the page has one shape",
+                second.getAsJsonArray("tags").isEmpty()
+                        && !second.get("favorite").getAsBoolean()
+                        && "靠近传送门".equals(second.get("description").getAsString())
+                        && !second.get("descriptionTruncated").getAsBoolean());
+        expect("a reading built without a place list still has an empty array, not a missing field",
+                JsonParser.parseString(RoadMapSnapshot.of("sp_TEST", "minecraft:overworld",
+                        fixtureNetwork()).toJson(1L)).getAsJsonObject()
+                        .getAsJsonArray("places").isEmpty());
+        expect("and a world with only places in it is not an empty reading",
+                !RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", new RoadNetwork(),
+                        Map.of(), List.of(), RoadMapSnapshot.DARK_THEME, List.of(
+                                new RoadMapSnapshot.Place("1", "Somewhere", 40, 64, 40,
+                                        "PLACE", "poi", List.of(), false, "", false))).empty());
     }
 
     private static void payloadEmpty() {
@@ -367,6 +542,9 @@ public final class WebMapCheck {
         expect("with empty lists rather than missing fields, so the page needs one branch and not two",
                 root.getAsJsonArray("nodes").isEmpty() && root.getAsJsonArray("segments").isEmpty()
                         && root.getAsJsonObject("stats").getAsJsonArray("layers").isEmpty());
+        expect("and an empty places list, never a missing one: the page's fallback is for old "
+                        + "payloads, not for this one",
+                root.getAsJsonArray("places").isEmpty());
         expect("and a zero-size extent rather than no extent at all",
                 root.getAsJsonObject("bounds").get("minX").getAsInt() == 0
                         && root.getAsJsonObject("bounds").get("maxX").getAsInt() == 0);
@@ -586,6 +764,54 @@ public final class WebMapCheck {
         }
     }
 
+    /** The place read goes through the same hand-off as the roads, or it is not safe at all. */
+    private static void readPlaceRunsOnTheGameThread() {
+        FakeGameThread game = new FakeGameThread();
+        AtomicReference<String> readOn = new AtomicReference<>();
+        MainThreadRoadMapSource source = new MainThreadRoadMapSource(game::queueFor,
+                WebMapCheck::fixtureSnapshot, (wantedSource, wantedId) -> {
+                    readOn.set(Thread.currentThread().getName());
+                    return fixturePlaceJson(wantedSource, wantedId);
+                });
+        try {
+            String body = source.placeJson(FIXTURE_PLACE_SOURCE, FIXTURE_PLACE_ID);
+            expect("a place request is answered with the place's document", body != null
+                    && JsonParser.parseString(body).getAsJsonObject().has("description"));
+            expect("the place read runs on the game's thread, not the handler's (" + readOn.get() + ")",
+                    "fake-game-thread".equals(readOn.get()));
+            expect("an unknown place is a null reading rather than a failure",
+                    source.placeJson(FIXTURE_PLACE_SOURCE, "no-such-id") == null);
+        } catch (RoadMapUnavailableException failed) {
+            expect("a fixture place read through the hand-off succeeds (" + failed.getMessage() + ")",
+                    false);
+        } finally {
+            game.stop();
+        }
+    }
+
+    /**
+     * A source without places says so with the interface's own failure, rather than by returning an
+     * empty body that the page would render as a place with nothing in it.
+     */
+    private static void sourceWithoutPlacesRefuses() {
+        FakeGameThread game = new FakeGameThread();
+        try {
+            MainThreadRoadMapSource noPlaces = new MainThreadRoadMapSource(game::queueFor,
+                    WebMapCheck::fixtureSnapshot);
+            String message = null;
+            try {
+                noPlaces.placeJson(FIXTURE_PLACE_SOURCE, FIXTURE_PLACE_ID);
+            } catch (RoadMapUnavailableException expected) {
+                message = expected.getMessage();
+            }
+            expect("a source with no place reader fails the place request with the interface's own "
+                            + "reason (" + message + ")",
+                    message != null && message.contains("cannot read place details"));
+        } finally {
+            game.stop();
+        }
+    }
+
     /** A page that fetches twice at once, and a browser that opens several tabs, both work. */
     private static void concurrentRequestsAllAnswered() {
         FakeGameThread game = new FakeGameThread();
@@ -641,6 +867,17 @@ public final class WebMapCheck {
             JsonObject segment = element.getAsJsonObject();
             if (segment.get("id").getAsInt() == id) {
                 return segment;
+            }
+        }
+        return new JsonObject();
+    }
+
+    /** One place by its source-stable id, or an empty object when the payload has none. */
+    private static JsonObject placeById(JsonArray places, String id) {
+        for (JsonElement element : places) {
+            JsonObject place = element.getAsJsonObject();
+            if (place.has("id") && id.equals(place.get("id").getAsString())) {
+                return place;
             }
         }
         return new JsonObject();

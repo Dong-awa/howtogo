@@ -65,6 +65,33 @@ public final class WorldFiles {
     }
 
     /**
+     * {@code config/howtogo/<world>/<name>.json}: a file of this world's own rather than one dimension's.
+     *
+     * <h2>Why not per dimension, like everything else here</h2>
+     * A place detail is keyed by dimension, source and id (see {@code PlaceKey}), so the dimension is
+     * part of the record rather than part of the file name. Keeping the details in one file per world
+     * is what lets the unlinked-details screen count every record this world still has -- a
+     * per-dimension file would make the count mean "in the dimension the player happens to be in",
+     * which is a different and much less useful question. The dimension is still in the key, so a
+     * record about the Nether can never be confused with one about the overworld.
+     *
+     * <p>Package-private because what names these files is the mod's own decision, not an addon's:
+     * addons store per dimension through {@code HowToGoApi.dataFile}.
+     */
+    static Path worldFile(String name) {
+        return directory().resolve(safeWorldFileName(name) + ".json");
+    }
+
+    /** A file-name stem for {@link #worldFile}; blank input becomes a usable name rather than ".json". */
+    private static String safeWorldFileName(String name) {
+        if (name == null || name.isBlank()) {
+            return "data";
+        }
+        String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
+        return safe.isBlank() ? "data" : safe;
+    }
+
+    /**
      * The data directory of the level now loaded: {@code config/howtogo/<world>}, with its record.
      *
      * <p>What {@link #of} resolves one file against, and what the import and export need as a whole:

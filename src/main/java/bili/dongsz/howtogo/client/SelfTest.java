@@ -2,6 +2,12 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceKey;
+import bili.dongsz.howtogo.place.PlaceKeys;
+import bili.dongsz.howtogo.place.PlaceSources;
+import bili.dongsz.howtogo.place.PlaceStorage;
+import bili.dongsz.howtogo.place.PlaceSummary;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -41,8 +47,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -125,6 +133,7 @@ public final class SelfTest {
         results.add(checkSimulatedRide());
         results.add(checkRoutes(network));
         results.add(checkStorage(network, lines));
+        results.add(checkPlaceDetails());
         results.add(checkArchive());
         results.add(checkWebMap(network));
         results.add(checkTheme());
@@ -512,6 +521,162 @@ public final class SelfTest {
     }
 
     /**
+     * Whether the notes a player writes about a place are kept as this mod promises.
+     *
+     * <h2>What only the game can answer</h2>
+     * The regression harness covers the same limits and the same file on a directory of its own, and
+     * it covers the tolerant reading -- unknown fields, a repeated key, a version from a newer build
+     * -- which a player's own file can hold but which this check must not fake. What the harness
+     * cannot reach is the half that ties a record to a place: whether the five destination sources
+     * and the portable {@link PlaceSources} still agree on the ids the records are keyed by. A
+     * renamed source would not fail loudly -- every note from it would simply stop being found -- so
+     * the ids are pinned here against the source classes themselves, which only the compiled game
+     * has. The constants are compile-time constants and are inlined, so no MTR or Xaero class has to
+     * be present at run time for the comparison to work.
+     *
+     * <p>Every file this uses is a temporary one of the check's own; the player's store is never
+     * opened. A failure is reported as one line of counts rather than as a stack trace: this runs for
+     * a player who asked what is wrong with their world, not for a developer with a console.
+     */
+    private static Result checkPlaceDetails() {
+        Path file = null;
+        try {
+            // --- the limits, at their own boundaries, with a surrogate pair across one of them
+            String emoji = "\uD83D\uDE00";
+            String overlong = "a".repeat(PlaceDetails.MAX_DESCRIPTION - 1) + emoji + "b";
+            PlaceDetails cut = PlaceDetails.of(overlong, List.of(), false).normalize();
+            boolean valuesPinned = PlaceDetails.MAX_DESCRIPTION == 512
+                    && PlaceDetails.MAX_TAGS == 16 && PlaceDetails.MAX_TAG_LENGTH == 8;
+            boolean trimmed = "贴边".equals(
+                    PlaceDetails.of("  贴边 \r\n", List.of(), false).normalize().description());
+            // What is kept last has to be the whole emoji: a cut between its two chars would leave a
+            // lone surrogate, which no font and no JSON reader accepts.
+            boolean surrogateSafe = PlaceDetails.lengthInCodePoints(cut.description())
+                    == PlaceDetails.MAX_DESCRIPTION
+                    && cut.description().endsWith(emoji)
+                    && Character.isHighSurrogate(
+                            cut.description().charAt(cut.description().length() - 2));
+
+            List<String> messy = new ArrayList<>();
+            messy.add("   ");
+            messy.add("");
+            messy.add("MTR");
+            messy.add("mtr");
+            messy.add("文化中心站台层出入口东西两侧");
+            for (int i = 0; i < 20; i++) {
+                messy.add("t" + i);
+            }
+            PlaceDetails tags = PlaceDetails.of("", messy, false).normalize();
+            boolean tagsCapped = tags.tags().size() == PlaceDetails.MAX_TAGS;
+            boolean firstSpellingKept = !tags.tags().isEmpty() && "MTR".equals(tags.tags().get(0));
+            boolean tagShortened = tags.tags().size() > 1
+                    && PlaceDetails.lengthInCodePoints(tags.tags().get(1))
+                    == PlaceDetails.MAX_TAG_LENGTH;
+            boolean noBlankOrDuplicate = tags.tags().stream().noneMatch(String::isBlank)
+                    && tags.tags().stream().filter(tag -> tag.equalsIgnoreCase("mtr")).count() == 1;
+            boolean limits = valuesPinned && trimmed && surrogateSafe && tagsCapped
+                    && firstSpellingKept && tagShortened && noBlankOrDuplicate;
+
+            // --- the one-line preview and the cut payload: short text is not flagged, long text is,
+            // and no newline or tab survives the preview
+            PlaceDetails shortDetails = PlaceDetails.of("短描述", List.of(), false);
+            PlaceSummary shortPreview = shortDetails.summary(200);
+            PlaceSummary longPreview = PlaceDetails.of("描".repeat(300), List.of(), false)
+                    .summary(200);
+            PlaceSummary collapsed = PlaceDetails.of("第一行\n\n第二行\t结束", List.of(), false)
+                    .summary(200);
+            PlaceSummary longPayload = PlaceDetails.of("第一行\n" + "x".repeat(300),
+                    List.of(), false).truncated(200);
+            boolean preview = !shortPreview.truncated() && "短描述".equals(shortPreview.text())
+                    && longPreview.truncated()
+                    && PlaceDetails.lengthInCodePoints(longPreview.text()) == 200
+                    && "第一行 第二行 结束".equals(collapsed.text())
+                    && longPayload.truncated()
+                    && longPayload.text().startsWith("第一行\n")
+                    && !PlaceDetails.of("短\n描述", List.of(), false).truncated(200).truncated();
+
+            // --- two records through a temporary file, one of them carrying every awkward character
+            file = Files.createTempFile("howtogo-selftest-details", ".json");
+            Files.delete(file);
+            Map<PlaceKey, PlaceDetails> written = new LinkedHashMap<>();
+            PlaceKey manualKey = new PlaceKey("minecraft:overworld", PlaceSources.MANUAL,
+                    String.valueOf(12));
+            PlaceKey stationKey = new PlaceKey("minecraft:the_nether", PlaceSources.MTR,
+                    String.valueOf(42));
+            written.put(manualKey, new PlaceDetails(
+                    "第一行 \"引号\" 反斜杠 \\ 换行\n第二行 表情 " + emoji,
+                    List.of("餐饮", "可停车"), true, 1712345678901L).normalize());
+            written.put(stationKey, new PlaceDetails("车站备注", List.of(), false, 42L).normalize());
+            boolean saved = PlaceStorage.save(file, written);
+            Map<PlaceKey, PlaceDetails> read = PlaceStorage.load(file);
+            boolean roundTrip = saved && read.size() == 2
+                    && written.get(manualKey).equals(read.get(manualKey))
+                    && written.get(stationKey).equals(read.get(stationKey));
+
+            // --- the key of a place, built the way each of the five built-in sources builds it
+            String dimension = "minecraft:overworld";
+            Destination manual = new Destination("家", 10, 64, 20, PlaceSources.MANUAL,
+                    Destination.NO_COLOR, PlaceKind.PLACE, String.valueOf(12));
+            Destination mtr = new Destination("中央站", 100, 70, -30, PlaceSources.MTR,
+                    Destination.NO_COLOR, PlaceKind.STATION, String.valueOf(42));
+            Destination create = new Destination("货运站", 300, 65, 400, PlaceSources.CREATE,
+                    Destination.NO_COLOR, PlaceKind.STATION, PlaceKeys.createStationId(300, 400));
+            Destination xaero = new Destination("营地", 500, 0, 600, PlaceSources.XAERO,
+                    Destination.NO_COLOR, PlaceKind.PLACE, PlaceKeys.xaeroId("营地", 500, 600));
+            Destination roadWeaver = new Destination("村庄", 700, 80, 800,
+                    PlaceSources.ROADWEAVER, Destination.NO_COLOR, PlaceKind.PLACE,
+                    "minecraft:village_plains");
+            boolean keys = PlaceKeys.of(dimension, manual)
+                    .equals(new PlaceKey(dimension, PlaceSources.MANUAL, "12"))
+                    && PlaceKeys.of(dimension, mtr)
+                    .equals(new PlaceKey(dimension, PlaceSources.MTR, "42"))
+                    && PlaceKeys.of(dimension, create)
+                    .equals(new PlaceKey(dimension, PlaceSources.CREATE, "300,400"))
+                    && PlaceKeys.of(dimension, xaero).equals(new PlaceKey(dimension,
+                    PlaceSources.XAERO, PlaceKeys.xaeroId("营地", 500, 600)))
+                    && PlaceKeys.of(dimension, roadWeaver).equals(new PlaceKey(dimension,
+                    PlaceSources.ROADWEAVER, "minecraft:village_plains"));
+            // The five source ids are a file-format contract: a renamed source would leave every note
+            // it ever wrote behind as an unlinked record. The sources live in this same package, so
+            // the comparison needs no import and no class to be constructed.
+            boolean idsPinned = PlaceSources.MANUAL.equals(PoiDestinationSource.ID)
+                    && PlaceSources.MTR.equals(MtrStationSource.ID)
+                    && PlaceSources.XAERO.equals(XaeroWaypointSource.ID)
+                    && PlaceSources.CREATE.equals(CreateStationSource.ID)
+                    && PlaceSources.ROADWEAVER.equals(RoadWeaverStructureSource.ID);
+
+            // --- only the player's own places may be deleted; an unknown id is an addon's, and is
+            // automatic like every other source that is not the road network
+            boolean delete = manualKey.isManual()
+                    && PlaceSources.deletable(PlaceSources.MANUAL)
+                    && !PlaceSources.deletable(PlaceSources.MTR)
+                    && !PlaceSources.deletable(PlaceSources.XAERO)
+                    && !PlaceSources.deletable(PlaceSources.CREATE)
+                    && !PlaceSources.deletable(PlaceSources.ROADWEAVER)
+                    && !PlaceSources.deletable("some_addon:places");
+
+            boolean ok = limits && preview && roundTrip && keys && idsPinned && delete;
+            String detail = "limits " + (limits ? "512cp/16tags/8cp ok" : "FAILED")
+                    + " | preview " + (preview ? "ok" : "FAILED")
+                    + " | round trip " + (roundTrip ? read.size() + "/2" : "FAILED")
+                    + " | keys " + (keys && idsPinned ? "5/5 pinned" : "FAILED")
+                    + " | delete " + (delete ? "manual only" : "FAILED");
+            return new Result("command.howtogo.selftest.check.details", ok, detail);
+        } catch (IOException | RuntimeException failed) {
+            return new Result("command.howtogo.selftest.check.details", false,
+                    "the place details check threw " + failed);
+        } finally {
+            if (file != null) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException ignored) {
+                    HowToGo.LOGGER.debug("[HowToGo] selftest could not remove {}", file);
+                }
+            }
+        }
+    }
+
+    /**
      * Whether this world's map really survives being packed into an archive and unpacked again.
      *
      * <h2>What this adds to the storage check above</h2>
@@ -558,13 +723,29 @@ public final class SelfTest {
                         && Arrays.equals(Files.readAllBytes(current), Files.readAllBytes(copy));
             }
 
+            // The place details, byte for byte, when the player has written any: the notes are the
+            // one thing in this directory that exists nowhere else, and they travel as an ordinary
+            // JSON member of it simply because the archive packs every JSON file. The name is the
+            // one PlaceDetailStore writes; the store's own constant is private, and a check that
+            // guessed a different name would compare two missing files and pass.
+            Path detailsFile = WorldFiles.worldFile("place_details");
+            boolean detailsExist = Files.isRegularFile(detailsFile);
+            boolean detailsOk = true;
+            if (detailsExist) {
+                Path copy = unpacked.resolve(detailsFile.getFileName().toString());
+                detailsOk = Files.isRegularFile(copy)
+                        && Arrays.equals(Files.readAllBytes(detailsFile), Files.readAllBytes(copy));
+            }
+
             StringBuilder detail = new StringBuilder()
                     .append("files=").append(packed.files)
                     .append(" bytes=").append(packed.bytes)
                     .append(" marker=").append(markerOk ? "rewritten" : marker)
                     .append(" manifest=").append(manifestOk ? "this world"
                             : contents.manifest == null ? "none" : contents.manifest.world)
-                    .append(" roads=").append(roadsOk ? "same" : "changed");
+                    .append(" roads=").append(roadsOk ? "same" : "changed")
+                    .append(" details=").append(!detailsExist ? "none"
+                            : detailsOk ? "same" : "changed");
             if (read.leftover != null) {
                 detail.append(" leftover=").append(read.leftover.getFileName());
             }
@@ -572,7 +753,7 @@ public final class SelfTest {
                 detail.append(" | some files did not come back");
             }
             return new Result("command.howtogo.selftest.check.archive",
-                    markerOk && filesOk && manifestOk && roadsOk, detail.toString());
+                    markerOk && filesOk && manifestOk && roadsOk && detailsOk, detail.toString());
         } catch (IOException | RuntimeException failed) {
             return new Result("command.howtogo.selftest.check.archive", false,
                     "the map archive round trip threw " + failed);

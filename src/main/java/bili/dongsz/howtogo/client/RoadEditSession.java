@@ -1,6 +1,8 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadDirection;
@@ -479,8 +481,10 @@ public final class RoadEditSession {
      *
      * <p>Name and kind together, rather than the rename prompt this used to be: a place's kind is as
      * much a part of it as its name, and asking for one without the other meant the kind could only
-     * ever be set at the moment of creation. Everything is read inside the deferred action, because
-     * the editor opens a tick later and the place may have moved or gone by then.
+     * ever be set at the moment of creation. The details are the third part and are handed in as the
+     * draft the {@code More…} dialog edits; {@code Done} writes all three, so one edit is one undo
+     * step. Everything is read inside the deferred action, because the editor opens a tick later and
+     * the place may have moved or gone by then.
      */
     private static void promptPlaceEditor(int nodeId) {
         RoadEditor places = editor();
@@ -499,18 +503,153 @@ public final class RoadEditSession {
             if (node == null) {
                 return;
             }
+            Destination place = manualPlace(node);
+            PlaceDetails initial = PlaceDetailStore.detailsOf(place);
             Screen parent = Screens.current();
             Screens.set(new RoadNameScreen(parent,
                     RoadNameScreen.TITLE_PLACE_EDIT, node.name(), node.placeKind(),
                     // The station rule is asked here, where the node is known, so the screen can keep
                     // itself open and say why rather than closing on a change that was refused.
                     kind -> kind != PlaceKind.STATION || places.stationAllowed(nodeId),
-                    anchorX, anchorY,
-                    (name, kind) -> {
-                        places.setPlace(nodeId, name, kind);
-                        RoadStore.markDirty();
-                    }));
+                    initial, anchorX, anchorY,
+                    (name, kind, details) -> applyPlaceEdit(places, nodeId, name, kind, details)));
         };
+    }
+
+    /**
+     * Opens the same place panel from outside edit mode, for a details card.
+     *
+     * <p>The destination picker and the main screen offer "edit" on a place that already exists, and
+     * that place is edited through the map's own panel rather than a second one written for them: the
+     * panel is where a place's name and kind are already edited, and a copy of it in another screen
+     * would be a copy that drifts. There is no edit session to open it from, so the session opens it on
+     * the map's behalf -- its own editor, its own station rule, its own undo history.
+     *
+     * <p>Deferred by a tick for the same reason every other screen here is: this is called from a
+     * click handler, and a screen set from inside one is replaced again before it is ever drawn.
+     *
+     * @param nodeId the road-network node of the hand-placed place
+     */
+    public static void openPlaceEditorFromPanel(int nodeId) {
+        // The same test the map's N uses: a plain road vertex has no name of its own, so a details
+        // card that somehow offered one would get the place panel pointing at a road corner.
+        if (!isPlaceNode(nodeId)) {
+            return;
+        }
+        RoadEditor places = editor();
+        places.setStationOverride(RoadEditSession::nearTrack);
+        pendingAction = () -> {
+            RoadNode node = RoadStore.get().node(nodeId);
+            if (node == null) {
+                return;
+            }
+            Destination place = manualPlace(node);
+            PlaceDetails initial = PlaceDetailStore.detailsOf(place);
+            Screen parent = Screens.current();
+            // Centred rather than beside a cursor: this was opened from a details card, not from a
+            // point on the map, so the panel's usual "next to what you clicked" anchor has nothing to
+            // point at -- and the map cursor may be anywhere, or nowhere.
+            double anchorX = widthOf(parent, 320) / 2.0;
+            double anchorY = heightOf(parent, 240) / 2.0;
+            Screens.set(new RoadNameScreen(parent,
+                    RoadNameScreen.TITLE_PLACE_EDIT, node.name(), node.placeKind(),
+                    kind -> kind != PlaceKind.STATION || places.stationAllowed(nodeId),
+                    initial, anchorX, anchorY,
+                    (name, kind, details) -> applyPlaceEdit(places, nodeId, name, kind, details)));
+        };
+    }
+
+    /** A screen's width, or {@code fallback} when there is no screen to ask. */
+    private static int widthOf(Screen screen, int fallback) {
+        return screen == null ? fallback : screen.width;
+    }
+
+    /** A screen's height, or {@code fallback} when there is no screen to ask. */
+    private static int heightOf(Screen screen, int fallback) {
+        return screen == null ? fallback : screen.height;
+    }
+
+    /**
+     * Writes a committed place edit: the name and kind on the node, the details in the store.
+     *
+     * <p>One method for both ways the panel is opened so the two cannot save different things. The
+     * details are stored only when the name and kind were accepted: a record for a place whose edit was
+     * refused would outlive a change that never happened, and the unlinked-details screen would have to
+     * offer to delete it.
+     */
+    private static void applyPlaceEdit(RoadEditor places, int nodeId, String name, PlaceKind kind,
+                                       PlaceDetails details) {
+        if (!places.setPlace(nodeId, name, kind)) {
+            return;
+        }
+        RoadStore.markDirty();
+        RoadNode stored = RoadStore.get().node(nodeId);
+        if (stored != null) {
+            PlaceDetailStore.put(manualPlace(stored), details);
+        }
+    }
+
+    /**
+     * The destination a hand-placed place node stands for.
+     *
+     * <p>Built from the node rather than read from the source, because the store is keyed by the id a
+     * source gives and this mod's own places are identified by their node id: a caller that has the
+     * node and not the picker's list would otherwise be unable to name the record it wants.
+     */
+    private static Destination manualPlace(RoadNode node) {
+        return new Destination(node.name(), node.x(), node.y(), node.z(), PlaceSources.MANUAL,
+                Destination.NO_COLOR, node.placeKind(), String.valueOf(node.id()));
+    }
+
+    /**
+     * Deletes a hand-placed place and everything that belongs to it.
+     *
+     * <p>The node branch of {@link RoadEditor#deleteSelection} is reused rather than reimplemented: it
+     * removes the node, takes the segments that end on it with it and records one undo step, and it is
+     * the operation the map's own Delete key performs. Selecting the node first is how a call from a
+     * details card reaches it; the selection it leaves behind is the editor's, which is where a deletion
+     * made on the map would leave it too.
+     *
+     * <p>The detail record goes with the place -- an orphaned record would be offered on the unlinked
+     * screen for a place the player deliberately removed -- and a navigation targeting the place is
+     * cleared, because a route to something that no longer exists is a route that can never arrive.
+     *
+     * @return whether the node was a hand-placed place and was removed
+     */
+    public static boolean deletePlace(int nodeId) {
+        RoadEditor ed = editor();
+        RoadNode node = RoadStore.get().node(nodeId);
+        if (node == null || node.type() != RoadNode.Type.POI) {
+            return false;
+        }
+        Destination place = manualPlace(node);
+        ed.selectNode(nodeId);
+        if (!ed.deleteSelection()) {
+            return false;
+        }
+        if (draggingNodeId == nodeId) {
+            // The handle being dragged has just gone; leaving its id here would have every later move
+            // of the mouse ask the network for a node that no longer exists.
+            draggingNodeId = RoadSegment.NO_NODE;
+        }
+        PlaceDetailStore.remove(place);
+        RoadStore.markDirty();
+        clearNavigationTo(place);
+        return true;
+    }
+
+    /** Drops the navigation when it was heading for the place just deleted, and only then. */
+    private static void clearNavigationTo(Destination place) {
+        Destination target = Navigation.target();
+        if (target == null || !PlaceSources.MANUAL.equals(target.source())) {
+            return;
+        }
+        // The id rather than the name or the position: a place can be renamed and moved, and the whole
+        // point of a stable id is that the target still says which place it meant.
+        if (place.placeId() == null || !place.placeId().equals(target.placeId())) {
+            return;
+        }
+        Navigation.clear();
     }
 
     /** Opens the naming prompt for a railway, addressed by shape key. */
@@ -772,6 +911,9 @@ public final class RoadEditSession {
      */
     static boolean isEditorCompanion(Screen screen) {
         return screen instanceof RoadNameScreen
+                // Opened from the place panel's More… button, over that panel: closing it returns to
+                // the panel, so the editing session it was opened from is still the one on screen.
+                || screen instanceof PlaceDetailScreen
                 || screen instanceof TransitLineScreen
                 || screen instanceof MapDataScreen
                 || screen instanceof MapImportScreen
@@ -1096,8 +1238,23 @@ public final class RoadEditSession {
         draggingNodeId = RoadSegment.NO_NODE;
     }
 
+    /**
+     * Deletes whatever is selected, taking a deleted place's details with it.
+     *
+     * <p>A selected place goes through {@link #deletePlace}, the same operation a details card would
+     * have used: it removes the node and the segments attached to it, removes the detail record and
+     * ends a navigation aimed at the place. The record removal is what makes the map's Delete key
+     * obey the same rule as every other deletion: a place and its notes go together, and a record
+     * left behind is exactly what the unlinked-details screen exists to clean up.
+     */
     public static void deleteSelected() {
-        if (editor().deleteSelection()) {
+        RoadEditor ed = editor();
+        // The node branch only: a selected road takes no place with it, and a place is a node.
+        if (ed.selectedSegmentId() == RoadSegment.NO_SEGMENT && isPlaceNode(ed.selectedNodeId())) {
+            deletePlace(ed.selectedNodeId());
+            return;
+        }
+        if (ed.deleteSelection()) {
             RoadStore.markDirty();
         }
     }

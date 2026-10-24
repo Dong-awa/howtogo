@@ -115,6 +115,39 @@ public final class HudDraw {
                 cx - half, cy + half, argb);
     }
 
+    /**
+     * A five-pointed star: the badge a favourite place carries on every map this mod draws.
+     *
+     * <p>Drawn rather than written as the character "★": the game's font has no glyph for it in
+     * every version this mod builds for, and a missing glyph is a box that says nothing. A star is
+     * ten points round a centre -- five outer and five inner -- and a fan of ten triangles is both
+     * the whole shape and the cheapest way to draw one with the quads this renderer already has.
+     *
+     * @param radius distance from the centre to an outer point, in the sink's units
+     */
+    public static void emitStar(VertexSink out, double cx, double cy, double radius, int argb) {
+        if (radius <= 0) {
+            return;
+        }
+        final int points = 5;
+        final int corners = points * 2;
+        final double inner = radius * 0.45;
+        double[] xs = new double[corners];
+        double[] ys = new double[corners];
+        for (int i = 0; i < corners; i++) {
+            // Pointing up, because a badge is read as an icon and every star icon anybody knows
+            // points up. The first point is at the top, then alternate outer/inner corners.
+            double angle = -Math.PI / 2.0 + i * Math.PI / points;
+            double reach = (i % 2 == 0) ? radius : inner;
+            xs[i] = cx + Math.cos(angle) * reach;
+            ys[i] = cy + Math.sin(angle) * reach;
+        }
+        for (int i = 0; i < corners; i++) {
+            emitTriangle(out, cx, cy, xs[i], ys[i], xs[(i + 1) % corners], ys[(i + 1) % corners],
+                    argb);
+        }
+    }
+
     //? if <1.21.6 {
     /**
      * The shared layer, built on first use rather than when the class is loaded.
@@ -373,11 +406,14 @@ public final class HudDraw {
                                int r, int g, int b, int a) {
         // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the
         // method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...).
-        // The pose carries the same matrix, so only the wrapper and the two names differ.
+        // The pose carries the same matrix, so only the wrapper and the two names differ -- plus
+        // endVertex(), which the 1.20.x API needs and the newer one does not have. See the same
+        // helper in RoadElementRenderer for what leaving it out cost: a vertex count of 0 (nothing
+        // drawn) and a buffer that never grew until putFloat ran past the end of it.
         //? if >=1.21 {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
         //?} else {
-        /*vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a);
+        /*vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
         *///?}
     }
 

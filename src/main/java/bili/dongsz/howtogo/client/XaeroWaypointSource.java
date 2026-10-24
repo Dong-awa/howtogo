@@ -1,6 +1,8 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.place.PlaceKeys;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
 import net.minecraft.client.Minecraft;
@@ -173,7 +175,12 @@ public final class XaeroWaypointSource implements DestinationSource {
                 int z = (Integer) waypointGetZ.invoke(waypoint);
                 // Y is deliberately ignored: waypoints carry the height they were made at and
                 // destinations are 2D, so the coordinate shown and routed to is the column.
-                result.add(new Destination(name, x, 0, z, ID, displayColor(waypoint)));
+                //
+                // The id is the waypoint's name and column, hashed: Xaero has no id of its own for a
+                // waypoint, and those are the two things that identify one in its storage. See
+                // PlaceKeys.xaeroId for why the hash is a specified one rather than any hash.
+                result.add(new Destination(name, x, 0, z, ID, displayColor(waypoint),
+                        PlaceKind.PLACE, PlaceKeys.xaeroId(name, x, z)));
             }
             return result;
         } catch (ReflectiveOperationException | RuntimeException e) {

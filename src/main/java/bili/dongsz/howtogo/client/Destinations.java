@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.api.DestinationSources;
+import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.DestinationSource;
 import net.minecraft.network.chat.Component;
@@ -89,6 +90,73 @@ public final class Destinations {
         }
         return Component.translatable("hud.howtogo.station.name",
                 String.valueOf(x), String.valueOf(z)).getString();
+    }
+
+    /**
+     * Whether a destination stands for a place this mod can hold details about.
+     *
+     * <p>Not the same question as "is it a destination": a point picked on the map is a destination
+     * for the next few minutes and nothing else -- its source is {@code "map"}, no source registered
+     * it, and there is no record to show or write. Every real place comes from a source: the mod's
+     * own nodes, another mod's stations, Xaero's waypoints, a generated structure, or an addon.
+     *
+     * <p>Asked by the details panel before it opens, so the picker's pin does not draw a panel with
+     * an edit button that could only fail.
+     */
+    public static boolean isPlace(Destination destination) {
+        if (destination == null || destination.source() == null
+                || destination.source().isBlank()) {
+            return false;
+        }
+        return PlaceSources.isManual(destination.source())
+                || DestinationSources.byId(destination.source()) != null;
+    }
+
+    /**
+     * What the reader is told a place's source is: {@code 手动}, {@code MTR}, an addon's own name.
+     *
+     * <p>Read-only in the interface and derived here rather than stored: the source of a place is a
+     * property of where it came from, not something the player may type, and a stored copy would go
+     * stale the moment another mod renamed itself. The mod's own five ids get keys of their own; an
+     * addon is asked for its display name, and one that cannot be resolved -- an uninstalled mod's
+     * record, an id nobody registered -- is shown as its own id, which is at least the truth.
+     */
+    public static String sourceLabel(String sourceId) {
+        if (sourceId == null || sourceId.isBlank()) {
+            return "";
+        }
+        String key = PlaceSources.labelKey(sourceId);
+        if (!key.isEmpty()) {
+            return translated(key, sourceId);
+        }
+        DestinationSource source = DestinationSources.byId(sourceId);
+        if (source != null) {
+            String display = source.displayName();
+            if (display != null && !display.isBlank()) {
+                return translated(display, sourceId);
+            }
+        }
+        return sourceId;
+    }
+
+    /** The short form of {@link #sourceLabel}, for the badge on a row or a marker. */
+    public static String sourceShortLabel(String sourceId) {
+        if (sourceId == null || sourceId.isBlank()) {
+            return "";
+        }
+        String key = PlaceSources.shortLabelKey(sourceId);
+        if (!key.isEmpty()) {
+            return translated(key, sourceId);
+        }
+        return sourceLabel(sourceId);
+    }
+
+    /** A translation, or the given fallback when the key has nothing behind it. */
+    private static String translated(String key, String fallback) {
+        String text = Component.translatable(key).getString();
+        // Component.translatable falls back to the key itself, and a dotted key drawn where a name
+        // belongs is worse than the honest id.
+        return text.equals(key) ? fallback : text;
     }
 }
 

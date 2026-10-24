@@ -91,6 +91,31 @@
   };
   const OWN_SOURCE_LABEL = '自绘';
 
+  /*
+   * Where a place came from. Place sources are the destination sources' own lowercase ids -- the
+   * same strings the game stores a detail record under -- so this table is separate from
+   * SOURCE_LABELS above, which names the read-only *road* layers. The two vocabularies overlap in
+   * meaning and not in spelling, and conflating them would badge a waypoint with a road's name.
+   *
+   * The short label is what the card's badge has room for; the long one is what the hover readout
+   * and the header can say in full.
+   */
+  const PLACE_SOURCE_LABELS = {
+    poi: '手动',
+    mtr_station: 'MTR',
+    xaero_waypoint: 'Xaero',
+    create_station: '机械动力',
+    roadweaver: '阡陌交通',
+  };
+  const PLACE_SOURCE_SHORT_LABELS = {
+    poi: '手动',
+    mtr_station: 'MTR',
+    xaero_waypoint: 'XMM',
+    create_station: '机械',
+    roadweaver: '阡陌',
+  };
+  const PLACE_SOURCE_FALLBACK = '';
+
   function num(value, fallback) {
     return typeof value === 'number' && isFinite(value) ? value : fallback;
   }
@@ -204,6 +229,101 @@
       name: cleanName(n.name),
       hasName: cleanName(n.name) !== null,
     };
+  }
+
+  /**
+   * One place from the payload's `places` array.
+   *
+   * Places are the version-3 addition. Everything here is tolerant for the same reason every other
+   * normaliser is: the payload describes a player's own world, and one addon source returning a null
+   * name or a number where a string was expected must not be the reason the map stops drawing.
+   *
+   * `description` is the cut payload text the server computed -- shortened, with its line breaks
+   * kept, because the card wraps -- never the full detail text; the card fetches that separately.
+   * `descriptionTruncated` says whether there is more to fetch. Anything that needs a single line
+   * (the hover readout) collapses the whitespace itself rather than the payload being pre-flattened.
+   */
+  function normalizePlace(raw, index) {
+    const p = raw && typeof raw === 'object' ? raw : {};
+    let id = null;
+    if (typeof p.id === 'string' && p.id !== '') id = p.id;
+    else if (typeof p.id === 'number' && isFinite(p.id)) id = String(p.id);
+    if (id === null) id = 'place-' + index;
+    const name = cleanName(p.name);
+    const source = typeof p.source === 'string' ? p.source.trim() : '';
+    const tags = [];
+    const addTag = (value) => {
+      if (typeof value !== 'string') return;
+      const text = value.trim();
+      if (text === '' || tags.indexOf(text) >= 0) return;
+      tags.push(text);
+    };
+    if (Array.isArray(p.tags)) {
+      for (const tag of p.tags) addTag(tag);
+    } else if (typeof p.tags === 'string') {
+      // A shape the contract does not promise, but one an addon or a hand-written fixture may send:
+      // a comma or whitespace separated string is read as the same list rather than dropped.
+      for (const piece of p.tags.split(/[,，\s]+/)) addTag(piece);
+    }
+    const description = typeof p.description === 'string' ? p.description : '';
+    return {
+      id,
+      name,
+      hasName: name !== null,
+      x: num(p.x, 0),
+      y: num(p.y, 0),
+      z: num(p.z, 0),
+      kind: upperIn(p.kind, PLACE_KINDS, 'PLACE'),
+      source,
+      sourceLabel: placeSourceLabel(source),
+      sourceShortLabel: placeSourceShortLabel(source),
+      tags,
+      hasTags: tags.length > 0,
+      favorite: p.favorite === true,
+      description,
+      hasDescription: description.trim() !== '',
+      descriptionTruncated: p.descriptionTruncated === true,
+      // True for a marker that exists only because the payload predates `places`; see
+      // derivePlacesFromNodes. The card can still show it, but it has no detail record behind it, so
+      // it offers no full-text button.
+      derived: false,
+    };
+  }
+
+  /**
+   * Places for a payload written before `places` existed: the POI nodes, as they used to be marked.
+   *
+   * This is the fallback that keeps an older server's payload drawing place markers, and it is also
+   * why an *absent* `places` field and an *empty* one are different answers: absent means "a payload
+   * from an older build", empty means "this build has no places to mark". The ids are `node:<id>`,
+   * which cannot collide with a stable id (those are numbers or hashes).
+   */
+  function derivePlacesFromNodes(nodes) {
+    const places = [];
+    for (const node of nodes) {
+      if (!node || node.type !== 'POI') continue;
+      const name = node.hasName ? node.name : null;
+      places.push({
+        id: 'node:' + node.id,
+        name,
+        hasName: name !== null,
+        x: node.x,
+        y: node.y,
+        z: node.z,
+        kind: node.placeKind || 'PLACE',
+        source: '',
+        sourceLabel: '',
+        sourceShortLabel: '',
+        tags: [],
+        hasTags: false,
+        favorite: false,
+        description: '',
+        hasDescription: false,
+        descriptionTruncated: false,
+        derived: true,
+      });
+    }
+    return places;
   }
 
   /**
@@ -373,6 +493,18 @@
     const nodeById = {};
     for (const n of nodes) nodeById[String(n.id)] = n;
 
+    /*
+     * Places: the new array when the payload has one -- even an empty one, which is this build
+     * saying it has no places to mark -- and the POI nodes when it does not, which is a payload from
+     * before places existed. The difference matters and is deliberate; see derivePlacesFromNodes.
+     */
+    const rawPlaces = Array.isArray(p.places) ? p.places : null;
+    const places = rawPlaces === null
+      ? derivePlacesFromNodes(nodes)
+      : rawPlaces.map((raw, i) => normalizePlace(raw, i));
+    const placeById = {};
+    for (const place of places) placeById[place.id] = place;
+
     const classCounts = {};
     const layerCounts = {};
     const segmentsByLayer = {};
@@ -397,10 +529,11 @@
 
     let namedPlaces = 0;
     let placeKinds = {};
-    for (const n of nodes) {
-      if (n.type !== 'POI') continue;
-      if (n.hasName) namedPlaces++;
-      const key = n.placeKind || 'UNKNOWN';
+    let favoritePlaces = 0;
+    for (const place of places) {
+      if (place.hasName) namedPlaces++;
+      if (place.favorite) favoritePlaces++;
+      const key = place.kind || 'UNKNOWN';
       placeKinds[key] = (placeKinds[key] || 0) + 1;
     }
 
@@ -409,7 +542,7 @@
       generatedAt: num(p.generatedAt, null),
       world: typeof p.world === 'string' ? p.world : '',
       dimension: typeof p.dimension === 'string' ? p.dimension : '',
-      empty: p.empty === true || (nodes.length === 0 && segments.length === 0),
+      empty: p.empty === true || (nodes.length === 0 && segments.length === 0 && places.length === 0),
       theme: normalizeTheme(p.theme),
       bounds: resolveBounds(reported, extent),
       reportedBounds: reported,
@@ -425,6 +558,9 @@
       nodes,
       nodeById,
       segments,
+      places,
+      placeById,
+      favoritePlaceCount: favoritePlaces,
       stats: normalizeStats(p.stats, nodes, segments, layers, totalLength),
       totalLengthBlocks: totalLength,
       namedSegmentCount: segments.filter((s) => s.hasName).length,
@@ -471,6 +607,25 @@
     if (typeof source !== 'string' || source.trim() === '') return OWN_SOURCE_LABEL;
     const key = source.trim().toUpperCase();
     return SOURCE_LABELS[key] || key;
+  }
+
+  /**
+   * Where a place came from, as the card's meta line names it: 手动, MTR, Xaero, 机械动力…
+   *
+   * Empty for the derived places of an older payload, which have no source to name. A source id the
+   * page does not know is shown as itself: an addon's badge is better than no badge.
+   */
+  function placeSourceLabel(source) {
+    if (typeof source !== 'string' || source.trim() === '') return PLACE_SOURCE_FALLBACK;
+    const key = source.trim().toLowerCase();
+    return PLACE_SOURCE_LABELS[key] || source.trim();
+  }
+
+  /** The same, short enough for the badge on a card: 手动 / MTR / XMM / 机械 / 阡陌. */
+  function placeSourceShortLabel(source) {
+    if (typeof source !== 'string' || source.trim() === '') return PLACE_SOURCE_FALLBACK;
+    const key = source.trim().toLowerCase();
+    return PLACE_SOURCE_SHORT_LABELS[key] || source.trim();
   }
 
   /** Storeys are named the way the map panel talks about them, height included. */
@@ -540,6 +695,8 @@
     PLACE_KINDS,
     PLACE_KIND_COLORS,
     PLACE_COLOR_FALLBACK,
+    PLACE_SOURCE_LABELS,
+    PLACE_SOURCE_SHORT_LABELS,
     DIRECTIONS,
     SOURCE_LABELS,
     OWN_SOURCE_LABEL,
@@ -552,6 +709,8 @@
     placeKindLabel,
     directionLabel,
     sourceLabel,
+    placeSourceLabel,
+    placeSourceShortLabel,
     layerLabel,
     formatLength,
     formatThousands,

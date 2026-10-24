@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -24,14 +25,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The browser map's little web server: a page, its assets, and one JSON reading of the roads.
+ * The browser map's little web server: a page, its assets, and two read-only JSON answers.
  *
  * <h2>What it is</h2>
  * {@code com.sun.net.httpserver.HttpServer}, bound to the loopback interface on a port the player
- * can set, serving this mod's own files out of the jar and one API call that answers with
- * {@link RoadMapSnapshot}. No servlet container, no dependency, no internet: the whole feature is
- * three hundred kilobytes of page and one HTTP port opened by the game the player is already running,
- * which is what makes it work on a train.
+ * can set, serving this mod's own files out of the jar and two API calls: {@code /api/roads}, which
+ * answers with {@link RoadMapSnapshot}, and {@code /api/place}, which answers with one place's full
+ * detail when the player opens its card. No servlet container, no dependency, no internet: the whole
+ * feature is three hundred kilobytes of page and one HTTP port opened by the game the player is
+ * already running, which is what makes it work on a train.
+ *
+ * <h2>Why the place endpoint exists at all</h2>
+ * The map's payload carries a one-line summary per place, because a map with tens of places on it
+ * has no reason to ship a description each. The full text is fetched by the one player who clicks a
+ * marker, and fetched from the same hand-off as the roads: the game's thread reads its own stores and
+ * the HTTP threads never touch them.
  *
  * <h2>Why loopback and only loopback</h2>
  * The page draws the world the player is standing in, and it is not behind a password. Binding
@@ -74,6 +82,17 @@ public final class WebMapServer implements AutoCloseable {
      * let the daemon thread follow the JVM down.
      */
     private static final long SHUTDOWN_WAIT_MILLIS = 1000L;
+
+    /**
+     * The longest a place query parameter may be, in characters, before the request is refused.
+     *
+     * <p>Both parameters are ids the mod itself produced: a source id is a dozen characters at most,
+     * and a stable id is a node number or a hash. 256 is far above any real value and far below a
+     * length that could bloat a log line or a comparison, so a request over it is not a client of
+     * this page but something probing the port -- and it is answered with a 400 rather than by doing
+     * work on it.
+     */
+    private static final int MAX_PLACE_PARAM_LENGTH = 256;
 
     private static final String JSON = "application/json; charset=utf-8";
     private static final String HTML = "text/html; charset=utf-8";
@@ -208,9 +227,17 @@ public final class WebMapServer implements AutoCloseable {
         return ASSETS.keySet();
     }
 
-    /** The API paths, which are not files; kept apart so the asset check does not look for them. */
+    /**
+     * The API paths, which are not files; kept apart so the asset check does not look for them.
+     *
+     * <p>The place path is listed without its query string: a request for {@code /api/place} is
+     * routed by path and then reads {@code ?source=...&id=...} from the query, so the path --
+     * the thing this set is about -- has no parameters. A caller comparing a URL against this set
+     * strips the query first; {@code WebMapHttpCheck} does exactly that, which is what keeps the
+     * check honest for a parameterised path.
+     */
     public static Set<String> apiPaths() {
-        return Set.of("/api/roads", "/api/status");
+        return Set.of("/api/roads", "/api/status", "/api/place");
     }
 
     /** Stops serving and releases the port. Idempotent. */
@@ -276,6 +303,7 @@ public final class WebMapServer implements AutoCloseable {
             switch (path) {
                 case "/api/roads" -> serveRoads(exchange);
                 case "/api/status" -> serveStatus(exchange);
+                case "/api/place" -> servePlace(exchange);
                 default -> serveAsset(exchange, path);
             }
         } catch (Throwable failed) {
@@ -312,6 +340,86 @@ public final class WebMapServer implements AutoCloseable {
         status.put("source", "HowToGo");
         status.put("address", "127.0.0.1");
         respond(exchange, 200, JSON, GSON.toJson(status).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The full detail of one place, read on the game's thread, for a card the player just opened.
+     *
+     * <p>Three failures the page has to tell apart, and so three statuses: a malformed request is a
+     * 400, a place this dimension does not have is a 404 (the id may be one an edit has since
+     * removed), and no world loaded is the same 503 {@code /api/roads} gives. A 200 is always the
+     * body the source built; nothing here formats JSON itself, so a name with a quote or a newline
+     * cannot be the reason a response stops parsing.
+     */
+    private void servePlace(HttpExchange exchange) throws IOException {
+        Map<String, String> query;
+        try {
+            query = queryOf(exchange.getRequestURI().getRawQuery());
+        } catch (IllegalArgumentException malformed) {
+            respond(exchange, 400, JSON,
+                    error("the place query could not be read: " + malformed.getMessage()));
+            return;
+        }
+        String placeSource = query.get("source");
+        String placeId = query.get("id");
+        if (!acceptablePlaceParam(placeSource) || !acceptablePlaceParam(placeId)) {
+            respond(exchange, 400, JSON, error("the place endpoint needs a source and an id, both "
+                    + "non-blank and at most " + MAX_PLACE_PARAM_LENGTH + " characters"));
+            return;
+        }
+
+        String body;
+        try {
+            body = source.placeJson(placeSource, placeId);
+        } catch (RoadMapUnavailableException unavailable) {
+            // The same answer as a roads request with no world loaded, because it is the same
+            // situation: there is nothing to read yet, and retrying once the game is ready works.
+            HowToGo.diagnostic("[HowToGo] webmap | place unavailable: {}", unavailable.getMessage());
+            respond(exchange, 503, JSON, error(unavailable.getMessage()));
+            return;
+        }
+        if (body == null) {
+            // Not an error in the page: a marker in an older reading, or a place deleted behind the
+            // open tab. The card shows the message and stops asking.
+            respond(exchange, 404, JSON,
+                    error("no place " + placeSource + "/" + placeId + " in this dimension"));
+            return;
+        }
+        respond(exchange, 200, JSON, body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Whether one place query parameter is something the endpoint is willing to look up. */
+    private static boolean acceptablePlaceParam(String value) {
+        return value != null && !value.isBlank() && value.length() <= MAX_PLACE_PARAM_LENGTH;
+    }
+
+    /**
+     * A query string as a map of decoded values.
+     *
+     * <p>Both parameters are ids the mod produced and the page URL-encodes, so the only decoding
+     * needed is the standard form encoding a browser applies ({@code %2B} for a plus, and so on).
+     * First value wins on a duplicate: guessing which of two ids a caller meant is worse than
+     * looking up the first and answering honestly.
+     *
+     * @throws IllegalArgumentException when a percent escape is malformed, which the caller answers
+     *                                  with a 400 rather than by looking up a mangled id
+     */
+    private static Map<String, String> queryOf(String rawQuery) {
+        Map<String, String> values = new LinkedHashMap<>();
+        if (rawQuery == null || rawQuery.isEmpty()) {
+            return values;
+        }
+        for (String pair : rawQuery.split("&")) {
+            if (pair.isEmpty()) {
+                continue;
+            }
+            int equals = pair.indexOf('=');
+            String name = equals < 0 ? pair : pair.substring(0, equals);
+            String value = equals < 0 ? "" : pair.substring(equals + 1);
+            values.putIfAbsent(URLDecoder.decode(name, StandardCharsets.UTF_8),
+                    URLDecoder.decode(value, StandardCharsets.UTF_8));
+        }
+        return values;
     }
 
     private void serveAsset(HttpExchange exchange, String path) throws IOException {

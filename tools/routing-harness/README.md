@@ -342,6 +342,17 @@ The mod itself is compiled **without** MTR or the overlay on its classpath, deli
 are reflective, and compiling against a mod only some users have would be a dependency by another name.
 Those jars are added only for the harness, after the mod has been compiled.
 
+`PlaceDetailsCheck.java` covers the notes a player attaches to a place. It is the pure half of the
+feature, on temporary files: `PlaceDetails` cuts a description at 512 code points without splitting a
+surrogate pair, trims, de-duplicates and caps tags at sixteen of eight characters, and collapses a
+preview to one line; the JSON store writes and reads back Chinese, quotes, backslashes and newlines,
+ignores unknown fields, defaults the missing ones, keeps the first of a repeated key, reads a file
+from a newer build, and sets an unparseable one aside as `.corrupt` rather than overwriting it; each
+of the five built-in sources' destination shapes maps to the key its source states, with a derived
+fallback id that is the same across calls and a storage round trip, and only the player's own places
+are deletable. A world directory holding both a road network and a details file is then put through
+export, inspect and import, and the details load back equal.
+
 ## The browser map checks
 
 `WebMapCheck.java` and `WebMapHttpCheck.java` run as part of the harness and cover the local web server
@@ -352,13 +363,20 @@ that feature that a running game cannot show you.
 written against: the root keys are exactly the documented set, a class carries a colour and a width
 rather than the page hard-coding them, a name with a quote, a backslash, a newline and Chinese in it
 survives the round trip, an empty network is empty lists rather than missing fields, storeys are listed
-ascending and distinct. The other half is the rule the whole feature turns on: the roads are read on
-the game's thread and never on the HTTP thread. It is checked with a stand-in for the client tick -- a
+ascending and distinct. The version-3 half is the `places` array: each place carries the documented
+fields, its id is the source-stable id, its tags and favourite flag survive, and its `description` is
+the *cut* payload form -- the detail record's text shortened by `PlaceDetails.truncated(200)` with its
+line breaks kept -- with `descriptionTruncated` saying whether there is more. A payload built without a
+place list still has an empty `places` array rather than a missing one, and a reading whose only content
+is places is not an empty map. The other half is the rule the whole feature turns on: the roads are read
+on the game's thread and never on the HTTP thread. It is checked with a stand-in for the client tick -- a
 queue plus a thread that drains it, which is exactly what `ClientScheduler` is -- so the harness can
 assert that a request is queued rather than answered in place, that the read runs on the other thread,
 that a game which never answers produces a 503-shaped failure after its timeout rather than a hang,
 that a reader which throws is a failed request and not a dead browser tab, and that eight concurrent
-requests are all answered, each with its own read on the game's thread.
+requests are all answered, each with its own read on the game's thread. The place read goes through
+that same hand-off and is checked the same way, and a source built without a place reader fails with
+the interface's own reason rather than an empty body the page would show as a place with nothing in it.
 
 `WebMapHttpCheck` starts the real server on a real socket and fetches it with `HttpClient`. Every path
 the server advertises is fetched and required to be present, non-empty and served as the type a browser
@@ -367,11 +385,18 @@ what catches a renamed script before a player finds a blank page; a traversal is
 405 with `Allow: GET`; a source with nothing to read is a 503 carrying its reason while the page itself
 still loads; and two requests that each make the handler wait 400 ms finish in about 400 ms, which is
 what the two-thread executor is for -- with `HttpServer`'s default single dispatcher they would take
-800.
+800. The place endpoint has its own cases: a known place answers 200 with the documented body -- the
+full text, newlines included, not the payload's cut form -- an unknown id is a 404, a missing, blank or
+over-long parameter is a 400, no world loaded is the same 503 the roads get, and `apiPaths()` lists
+`/api/place` without its query, which is how a set of paths stays meaningful for a parameterised
+endpoint.
 
 Both are fed by the same fixture network, built in `WebMapCheck` rather than read from a file: one of
 each shape the payload has to carry, including the awkward ones -- an unnamed road, a place with no
-road, a bridge at storey one over a road at storey zero, a one-way street drawn backwards.
+road, a bridge at storey one over a road at storey zero, a one-way street drawn backwards. The fixture
+also carries two places, built with the real `PlaceDetails` so the payload carries the text the game
+would compute: one with tags, a favourite flag, a long multi-line description and a name holding a
+quote, a backslash and a newline, and one with nothing extra at all.
 
 `-WriteWebMapFixture <path>` writes that fixture's payload out as the server would send it, which is
 how the page's own Node tests are pointed at a payload the Java serialiser really produced:

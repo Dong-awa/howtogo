@@ -1,5 +1,11 @@
 modLoader = "javafml"
-loaderVersion = "[4,)"
+# Expanded per node. javafml's major tracks FancyModLoader's, which moves at every NeoForge
+# generation (20.4 -> 2, 20.6 -> 3, 21.1 -> 4, 21.4 -> 6, 21.6/21.8 -> 9, 26.x -> 11/12), so a
+# literal is below the loader on the older nodes -- "Missing language javafml version [4,)" is
+# what 1.20.6 answered to the old "[4,)" -- and above nothing on the newer ones. The range only
+# has to admit the node's own loader; what actually pins compatibility is the NeoForge and
+# Minecraft range below, which is computed from this node's versions.
+loaderVersion = "${loader_range}"
 license = "MIT"
 
 [[mods]]
@@ -10,7 +16,7 @@ description = '''
 我的世界道路标记与实时导航。
 Road marking and real-time navigation for Minecraft
 '''
-authors = "DongSZ"
+authors = "DongSZ, mc506lw, moshushi_mjs"
 
 # One node's release only, and the bounds are computed per node by the build script rather than
 # written here -- this file is shared by all twenty-one, so a literal in it would be right on exactly
@@ -57,10 +63,14 @@ side = "BOTH"
 # keeps protected. Declared here rather than per node because it is a no-op where they are already
 # public.
 
+# The lower bound is expanded per node: Xaero's World Map split into World Map + XaeroLib at
+# 1.40.0, and 1.20.6/1.21.6 only ever got the 1.39.x generation, so those two nodes declare
+# [1.39.0,) in their own gradle.properties. Requiring 1.40.0 there is a demand no player can
+# satisfy and FML refuses to start over it.
 [[dependencies.howtogo]]
 modId = "xaeroworldmap"
 type = "required"
-versionRange = "[1.40.0,)"
+versionRange = "${xaero_range}"
 ordering = "AFTER"
 side = "CLIENT"
 
@@ -68,9 +78,14 @@ side = "CLIENT"
 # keeps protected. Declared here rather than per node because it is a no-op where they are already
 # public.
 
+# Required where this node's world map actually ships XaeroLib (1.40.0 and later), optional where
+# it does not. The 1.39.x generation -- all 1.20.6 and 1.21.6 ever got -- bundles no XaeroLib, and
+# a required entry there is unsatisfiable: FML answers "Mod howtogo requires xaerolib 1.1.0 or
+# above, currently xaerolib is not installed" and the game never starts. The type is expanded per
+# node from whether that node compiles against a XaeroLib jar at all.
 [[dependencies.howtogo]]
 modId = "xaerolib"
-type = "required"
+type = "${xaerolib_type}"
 versionRange = "[1.1.0,)"
 ordering = "NONE"
 side = "CLIENT"

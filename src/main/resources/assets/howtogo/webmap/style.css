@@ -49,6 +49,10 @@
   --danger-ink: #ffd9d9;
   --warn-ink: #ffeec4;
   --swatch-edge: #0b0f14;
+  --favorite: #ffc857;
+  --card-shadow: rgba(0, 0, 0, 0.45);
+  --tag-bg: #202a35;
+  --tag-edge: #2c3a4a;
 }
 
 /*
@@ -86,6 +90,10 @@
   --danger-ink: #D93025;
   --warn-ink: #B06000;
   --swatch-edge: #BDC1C6;
+  --favorite: #F9AB00;
+  --card-shadow: rgba(60, 64, 67, 0.24);
+  --tag-bg: #E8EAED;
+  --tag-edge: #DADCE0;
 }
 
 * {
@@ -389,6 +397,167 @@ input[type="checkbox"] {
 
 .toast-ok {
   border-color: var(--accent-dim);
+}
+
+/* --- the place card ----------------------------------------------------------- */
+
+/*
+ * The card is chrome, not map content: it is HTML over the canvas, styled here, so both themes reach
+ * it through the same variables as the rest of the page. It is deliberately not part of the export --
+ * the export draws its own caption around a canvas -- so nothing here has to be reproduced in
+ * app.js's inline export styles.
+ *
+ * Long descriptions scroll inside the card rather than stretching it over the map, and keep their
+ * newlines (`pre-wrap`): a place's description is multiline plain text in the game and is read the
+ * same way here.
+ */
+.place-card {
+  position: absolute;
+  z-index: 5;
+  width: 290px;
+  max-width: calc(100% - 24px);
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px var(--card-shadow);
+}
+
+.place-card[hidden] {
+  display: none;
+}
+
+.place-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.place-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.place-card-fav {
+  flex: 0 0 auto;
+  color: var(--favorite);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.place-card-fav[hidden] {
+  display: none;
+}
+
+.place-card-close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.place-card-close:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--button-hover);
+  color: var(--text);
+}
+
+.place-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.place-card-source {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.place-card-source[hidden] {
+  display: none;
+}
+
+.place-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.place-card-tags[hidden] {
+  display: none;
+}
+
+.place-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--tag-edge);
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.place-card-desc {
+  margin: 8px 0 0;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.place-card-desc.muted {
+  color: var(--muted);
+}
+
+.place-card-status {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.place-card-status[hidden] {
+  display: none;
+}
+
+.place-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.place-card-actions button[hidden] {
+  display: none;
+}
+
+.place-card-full {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.place-card-full:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--button-hover);
 }
 
 /* --- status bar --------------------------------------------------------------- */

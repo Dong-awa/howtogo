@@ -35,6 +35,30 @@
 
     <div id="banner" class="banner" hidden></div>
     <div id="toast" class="toast" hidden></div>
+
+    <!--
+      The place card: one place's name, kind, source, tags, favourite star and one-line description,
+      with the full text fetched on demand. It lives inside the map area because it is positioned
+      beside the marker that was clicked. Every string on it is written by app.js with textContent,
+      never as markup.
+    -->
+    <div id="place-card" class="place-card" hidden>
+      <div class="place-card-head">
+        <span id="place-card-name" class="place-card-name"></span>
+        <span id="place-card-fav" class="place-card-fav" hidden title="已收藏">★</span>
+        <button id="place-card-close" class="place-card-close" type="button" title="关闭详情">×</button>
+      </div>
+      <div class="place-card-meta">
+        <span id="place-card-kind" class="place-card-kind"></span>
+        <span id="place-card-source" class="place-card-source" hidden></span>
+      </div>
+      <div id="place-card-tags" class="place-card-tags" hidden></div>
+      <p id="place-card-desc" class="place-card-desc"></p>
+      <p id="place-card-status" class="place-card-status" hidden></p>
+      <div class="place-card-actions">
+        <button id="place-card-full" class="place-card-full" type="button">查看完整详情</button>
+      </div>
+    </div>
   </section>
 
   <aside class="side">
@@ -61,6 +85,7 @@
         <input id="show-places" type="checkbox" checked>
         <span>显示地点</span>
       </label>
+      <p class="hint">点击地点标记查看详情；收藏的地点带一枚星形角标。</p>
     </section>
 
     <section class="panel">

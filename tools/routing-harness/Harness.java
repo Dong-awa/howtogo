@@ -132,6 +132,9 @@ public final class Harness {
         int[] archives = bili.dongsz.howtogo.worlddata.WorldArchiveCheck.run();
         checks += archives[0];
         failures += archives[1];
+        int[] placeDetails = bili.dongsz.howtogo.place.PlaceDetailsCheck.run();
+        checks += placeDetails[0];
+        failures += placeDetails[1];
         int[] drawOrder = DrawOrderCheck.run();
         checks += drawOrder[0];
         failures += drawOrder[1];

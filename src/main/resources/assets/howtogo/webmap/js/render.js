@@ -22,9 +22,9 @@
  *      painted later and therefore win a crossing, which is the same instinct as
  *      giving a highway the first pick of label positions.
  *   4. One-way arrows follow their storey's fills, so a bridge still covers the arrows
- *      on the road beneath it. Junction dots, then place markers, then text come after
- *      all road paint: a name is the last thing to be covered and the first thing to
- *      be read.
+ *      on the road beneath it. Junction dots, then place markers, then the corner badge
+ *      on a favourite, then text come after all road paint: a name is the last thing to
+ *      be covered and the first thing to be read.
  *
  * The export is the same picture, bigger. Everything here that is measured in pixels
  * rather than in blocks is multiplied by `resolutionScale` (the road-width floor, the
@@ -87,6 +87,9 @@
       labelPlace: '#FFE7A8',
       message: '#9FB0C0',
       marker: '#E8EDF2',
+      // The corner badge on a favourite place. Amber, because the favourite star is amber in the
+      // game's own interfaces and a marker is read before its label.
+      favorite: '#FFC857',
     },
     light: {
       background: '#F1F3F4',
@@ -104,6 +107,8 @@
       labelPlace: '#3C4043',
       message: '#5F6368',
       marker: '#3C4043',
+      // Google's dark amber, the one that still reads as a star on a white sheet.
+      favorite: '#F9AB00',
     },
   };
 
@@ -583,13 +588,45 @@
   }
 
   /**
-   * Junction dots, then place markers.
+   * A five-pointed star, for the corner badge on a favourite place.
+   *
+   * <p>Drawn as a filled path rather than with a glyph: the canvas font is the map's own, and a
+   * Unicode star would depend on that font having it -- the export and the screen would then be able
+   * to disagree about whether a favourite is marked. Ten points, alternating outer and inner radius,
+   * in the palette's own plain hex, so html2canvas has nothing to parse.
+   */
+  function drawStar(ctx, x, y, outer, inner, colour, resolutionScale) {
+    const px = num(resolutionScale, 1) > 0 ? num(resolutionScale, 1) : 1;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const radius = i % 2 === 0 ? outer : inner;
+      const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+      const sx = x + Math.cos(angle) * radius;
+      const sy = y + Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fillStyle = colour;
+    ctx.fill();
+    ctx.strokeStyle = palette.markerOutline;
+    ctx.lineWidth = 1 * px;
+    ctx.stroke();
+  }
+
+  /**
+   * Junction dots, then place markers, then the corner badge on a favourite.
    *
    * Nodes carry no storey in the payload, so markers cannot join the per-storey
    * grouping; they are drawn after every storey's roads instead. A dot is a point the
    * map is read against, and burying one under a bridge would be worse than drawing an
    * underground junction over it. Their size is in reference pixels, so a 2x export
    * shows markers as large, relative to the roads, as the screen does.
+   *
+   * <p>Place markers come from `model.places` and not from the POI nodes: a place is a
+   * destination -- a station, a waypoint, a landmark with a description -- and the version-3
+   * payload says which ones there are. The badge pass runs after every diamond, so a badge is
+   * never covered by a neighbouring marker; it is the last mark before the names.
    */
   function drawMarkers(ctx, model, view, opts) {
     const G = deps();
@@ -608,11 +645,21 @@
         drawDot(ctx, s.x, s.y, JUNCTION_RADIUS_PX * px, opts.markerColor, px);
       }
     }
-    for (const node of nodes) {
-      if (node.type !== 'POI') continue;
-      const s = G.worldToScreen(view, node.x, node.z);
+    const places = Array.isArray(model.places) ? model.places : [];
+    for (const place of places) {
+      const s = G.worldToScreen(view, place.x, place.z);
       if (!onScreen(s)) continue;
-      drawDiamond(ctx, s.x, s.y, POI_RADIUS_PX * px, M.placeColor(node.placeKind), px);
+      drawDiamond(ctx, s.x, s.y, POI_RADIUS_PX * px, M.placeColor(place.kind), px);
+    }
+    for (const place of places) {
+      if (!place.favorite) continue;
+      const s = G.worldToScreen(view, place.x, place.z);
+      if (!onScreen(s)) continue;
+      // Up and to the right: clear of the diamond, and the direction a corner badge is read from.
+      const bx = s.x + POI_RADIUS_PX * px * 0.78;
+      const by = s.y - POI_RADIUS_PX * px * 0.78;
+      drawStar(ctx, bx, by, POI_RADIUS_PX * px * 0.62, POI_RADIUS_PX * px * 0.28,
+        palette.favorite, px);
     }
   }
 
@@ -687,9 +734,12 @@
    * here" and is worth drawing while the map is far out, while a name has to be readable.
    * The thresholds are in CSS pixels per block (the view's scale divided by the render's
    * pixel ratio), so the 2x export names exactly the places the screen named.
+   *
+   * <p>Reads a normalised place's `kind`, and also the `placeKind` of a raw POI node, so the
+   * function works on either the payload and on the model.
    */
-  function placeLabelVisible(node, pixelsPerBlock) {
-    const kind = node && node.placeKind;
+  function placeLabelVisible(place, pixelsPerBlock) {
+    const kind = place && (place.kind || place.placeKind);
     const from = Object.prototype.hasOwnProperty.call(PLACE_LABEL_MIN_SCALE, kind)
       ? PLACE_LABEL_MIN_SCALE[kind] : PLACE_LABEL_MIN_SCALE.PLACE;
     return pixelsPerBlock >= from;
@@ -933,18 +983,21 @@
     }
 
     if (opts.showPlaces) {
-      const nodes = Array.isArray(model.nodes) ? model.nodes : [];
+      // Names come from the places, the same list the markers are drawn from: a marker without a
+      // name and a name without a marker are the two ways this can mismatch, and one list makes
+      // both impossible. An older payload's places are the POI nodes, derived in model.js.
+      const places = Array.isArray(model.places) ? model.places : [];
       const placeFontPx = opts.labelFontPx;
       const placeItems = [];
-      for (const node of nodes) {
-        if (node.type !== 'POI' || !node.hasName) continue;
-        if (!placeLabelVisible(node, pixelsPerBlock)) continue;
-        const candidates = placeCandidates(node, view, placeFontPx);
+      for (const place of places) {
+        if (!place.hasName) continue;
+        if (!placeLabelVisible(place, pixelsPerBlock)) continue;
+        const candidates = placeCandidates(place, view, placeFontPx);
         if (!candidates.length) continue;
         placeItems.push({
-          id: 'node:' + node.id,
+          id: 'place:' + place.id,
           kind: 'place',
-          text: node.name,
+          text: place.name,
           fontPx: placeFontPx,
           x: candidates[0].x,
           y: candidates[0].y,
@@ -1095,6 +1148,7 @@
     get LABEL_PLACE_COLOR() { return palette.labelPlace; },
     get MESSAGE_COLOR() { return palette.message; },
     get MARKER_COLOR() { return palette.marker; },
+    get FAVORITE_COLOR() { return palette.favorite; },
     BASE_LABEL_FONT_PX,
     LABEL_HALO_PX,
     LABEL_PADDING_PX,

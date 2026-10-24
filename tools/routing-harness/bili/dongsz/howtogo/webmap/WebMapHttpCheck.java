@@ -59,7 +59,9 @@ public final class WebMapHttpCheck {
         int port = freePort();
         WebMapServer server;
         try {
-            server = WebMapServer.start(WebMapCheck::fixtureSnapshot, port);
+            // The source answers both readings: the map, and one place -- the fixture source is what
+            // makes the parameterised endpoint fetchable over a real socket.
+            server = WebMapServer.start(WebMapCheck.fixtureSource(), port);
         } catch (IOException couldNotStart) {
             expect("a server starts on a free port (" + couldNotStart.getMessage() + ")", false);
             return new int[]{checks, failures};
@@ -71,6 +73,7 @@ public final class WebMapHttpCheck {
                     server.url().startsWith("http://127.0.0.1:") && server.running());
             assets(server);
             api(server);
+            placeApi(server);
             refusals(server);
             statusCodesForAFailingSource();
             handlersRunInParallel();
@@ -92,6 +95,9 @@ public final class WebMapHttpCheck {
         expect("the server advertises the page and its parts (" + served.size() + " paths)",
                 served.contains("/") && served.contains("/js/app.js")
                         && served.contains("/vendor/html2canvas.min.js"));
+        expect("the place endpoint is an API path, not a file in the asset table, so the asset check "
+                        + "cannot look for it in the jar",
+                !served.contains("/api/place") && WebMapServer.apiPaths().contains("/api/place"));
 
         boolean allThere = true;
         boolean allTyped = true;
@@ -185,6 +191,15 @@ public final class WebMapHttpCheck {
                         && JsonParser.parseString(status.body).getAsJsonObject()
                                 .get("ok").getAsBoolean());
 
+        // The API paths are URL paths, not whole requests: the place endpoint's parameters live in
+        // the query, so a caller comparing a URL against this set strips the query first. Checking it
+        // this way is what keeps the set honest now that one of its entries is parameterised.
+        expect("the API list names the paths the page may call, the place one without its query "
+                        + "(" + WebMapServer.apiPaths() + ")",
+                WebMapServer.apiPaths().equals(Set.of("/api/roads", "/api/status", "/api/place"))
+                        && WebMapServer.apiPaths().contains(URI.create(
+                                "http://127.0.0.1:1/api/place?source=poi&id=12").getPath()));
+
         // The player is handed the 127.0.0.1 spelling in chat and may well type the localhost one
         // instead. On a dual-stack machine localhost resolves to ::1 first, which is why both
         // loopback addresses are bound; this is the check that the other spelling of the address
@@ -225,6 +240,54 @@ public final class WebMapHttpCheck {
                 roads.noStore && roads.nosniff);
     }
 
+    // ----------------------------------------------------------------- place api
+
+    /**
+     * The place endpoint: one place's full record, and the three failures a card has to tell apart.
+     *
+     * <p>The interesting cases are not the 200. A card that gets a 400 has been sent a query the page
+     * never builds, one that gets a 404 is a place that has since been deleted, and one that gets a
+     * 503 is a world not loaded yet -- three different things for the player to read, and a server
+     * that answered 200-with-an-empty-object to all of them would leave the card showing nothing at
+     * all. The full text is checked against the fixture's own record, including its newline, because
+     * that is the whole difference between this endpoint and the summary in the map payload.
+     */
+    private static void placeApi(WebMapServer server) {
+        Result known = get(server.url() + "api/place?source=" + WebMapCheck.FIXTURE_PLACE_SOURCE
+                + "&id=" + WebMapCheck.FIXTURE_PLACE_ID);
+        expect("a known place is answered 200 with JSON (" + known.contentType + ")",
+                known.status == 200 && known.contentType.contains("application/json"));
+        JsonObject body = JsonParser.parseString(known.body).getAsJsonObject();
+        expect("the body is the place's own document, not a wrapper around it",
+                body.keySet().equals(Set.of("id", "source", "name", "x", "y", "z", "kind", "tags",
+                        "favorite", "description", "updatedAt")));
+        expect("the description is the full text, newlines and all, not the summary the map carried",
+                WebMapCheck.FIXTURE_FULL_DESCRIPTION.equals(body.get("description").getAsString())
+                        && body.get("description").getAsString().contains("\n"));
+        expect("with the tags and the favourite flag the summary-only payload also carries",
+                body.getAsJsonArray("tags").size() == 2
+                        && body.get("tags").getAsJsonArray().get(0).getAsString().equals("餐饮")
+                        && body.get("favorite").getAsBoolean());
+        expect("and the time it was last edited, so a card can say how fresh it is",
+                body.get("updatedAt").getAsLong() == WebMapCheck.FIXTURE_PLACE_UPDATED_AT);
+        expect("the answer is as un-cacheable as every other one",
+                known.noStore && known.nosniff);
+
+        Result unknown = get(server.url() + "api/place?source=" + WebMapCheck.FIXTURE_PLACE_SOURCE
+                + "&id=no-such-place");
+        expect("an unknown place is a 404 the card can show rather than retry (" + unknown.status + ")",
+                unknown.status == 404 && unknown.body.contains("error"));
+
+        expect("a request with no parameters at all is a 400",
+                get(server.url() + "api/place").status == 400);
+        expect("a blank parameter is a 400 too",
+                get(server.url() + "api/place?source=&id=" + WebMapCheck.FIXTURE_PLACE_ID).status
+                        == 400);
+        expect("an over-long parameter is refused before anything is looked up",
+                get(server.url() + "api/place?source=" + WebMapCheck.FIXTURE_PLACE_SOURCE
+                        + "&id=" + "x".repeat(300)).status == 400);
+    }
+
     // ----------------------------------------------------------------- refusals
 
     private static void refusals(WebMapServer server) {
@@ -260,6 +323,12 @@ public final class WebMapHttpCheck {
             expect("and it carries the reason in the documented error shape",
                     JsonParser.parseString(result.body).getAsJsonObject()
                             .get("error").getAsString().contains("no world"));
+            Result place = get(server.url() + "api/place?source=poi&id=1");
+            expect("the place endpoint with nothing to read is the same 503, so the card can retry "
+                            + "when a world is loaded (" + place.status + ")",
+                    place.status == 503
+                            && JsonParser.parseString(place.body).getAsJsonObject()
+                                    .get("error").getAsString().contains("no world"));
             expect("while the page itself still loads, so the player can read that reason",
                     get(server.url()).status == 200);
         } catch (IOException failed) {

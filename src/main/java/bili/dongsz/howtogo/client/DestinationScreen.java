@@ -2,6 +2,8 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.DestinationSources;
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -11,6 +13,7 @@ import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 // 1.21.6 replaced the GUI's PoseStack with JOML's 2D matrix stack.
@@ -30,8 +33,10 @@ import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Destination picker: search, a pickable map, and the saved places.
@@ -42,6 +47,14 @@ import java.util.Locale;
  * <p>The map is drawn from this mod's own road data and can be clicked to choose a point, the way
  * tapping a map works in a navigation app. Picking is two-step -- a click drops a pin, a second
  * click on the action button commits -- so a stray click does not silently start a trip.
+ *
+ * <h2>Details of a place</h2>
+ * A list row and a place marker both choose on a single click, and a chosen place brings its details
+ * with it: the list keeps the top of its band for its rows and the {@link PlaceDetailPanel} takes the
+ * bottom, so what the player wrote and the controls that act on it are the same click away as the
+ * route. A point picked on the map is not a place -- there is no record behind it -- so it keeps the
+ * pin and the two-step commit and shows no card. The card is drawn rather than given a screen of its
+ * own: a modal over a picker whose whole point is comparing places would hide the comparison.
  */
 public final class DestinationScreen extends Screen {
 
@@ -136,6 +149,32 @@ public final class DestinationScreen extends Screen {
     /** Narrowest a list row may be squeezed to when a band has to be shared out. */
     private static final int MIN_LIST_ROW = 24;
     /**
+     * The details card's share of the list band while a place is selected, in per cent.
+     *
+     * <p>"About half": enough of the card to read a description in, while the list above it keeps
+     * showing the rows around the selected place. Below {@link #MIN_DETAILS_HEIGHT} the share is
+     * raised to it, because a card shorter than that cannot lay its own controls out at all.
+     */
+    private static final int DETAILS_BAND_SHARE = 55;
+    /**
+     * Shortest a details card may be and still draw its title, source and action row inside itself.
+     *
+     * <p>{@link PlaceDetailPanel#preferredHeight} bottoms out at this figure for the same reason. A
+     * band too short to give the card this much and the list a row as well is given to the card
+     * whole: a card squeezed below this point would paint its buttons over the list above them.
+     */
+    private static final int MIN_DETAILS_HEIGHT = 84;
+    /**
+     * Shortest a card may be squeezed to and still keep a list row above it.
+     *
+     * <p>Less than {@link #MIN_DETAILS_HEIGHT}, because the band is often too short for a full card
+     * and dropping the list to keep one would cost more than a clipped description: this is the
+     * height at which the title, the source pill and the four-button action row still sit inside the
+     * card's own edge. Below it the card takes the whole band and the list waits behind the
+     * panel's collapse button.
+     */
+    private static final int MIN_DETAILS_COMPACT = 70;
+    /**
      * Shortest the panel may become, in units.
      *
      * <p>The window is usually the taller of the two, and the panel simply fills it; this is the
@@ -224,17 +263,37 @@ public final class DestinationScreen extends Screen {
     private static final int ROW_MARKER = 6;
     private static final int ROW_MARKER_STEP = 9;
 
-    /** How soon a second click on the same place marker counts as a double click. */
-    private static final long PLACE_DOUBLE_CLICK_MS = 400L;
-
-    /** The place marker clicked last, and when, so a second click on it can be told apart. */
-    private Destination lastPlaceClick;
-    private long lastPlaceClickAt;
-
     /** The destination the preview belongs to, or null when nothing has been chosen yet. */
     private Destination previewTarget;
     /** The plan for {@link #previewTarget}, or null when there is nothing to preview. */
     private Navigation.RoutePreview preview;
+
+    /**
+     * The details card, and the place it is about, or null while the list has the whole band.
+     *
+     * <p>Not a widget and not a screen: {@link PlaceDetailPanel} only draws and reports clicks, so
+     * it lives as long as this screen does and is told where the list band left room for it. A
+     * separate {@code PlaceDetails} value is deliberately not kept here -- the store is asked every
+     * frame, so a favourite toggled from anywhere, or from the card itself, shows up on the next one.
+     */
+    private final PlaceDetailPanel detailPanel = new PlaceDetailPanel();
+    private Destination detailsPlace;
+
+    /** Height of the details card, and where its top edge is; zero when no card is shown. */
+    private int detailsHeight;
+    private int detailsY;
+
+    /** The list band the vertical layout produced, before the details card took its share of it. */
+    private int listBandHeight;
+
+    /**
+     * The places the current search matched through their description or tags.
+     *
+     * <p>Kept beside {@link #shown} rather than tested in the drawing, because the drawing would
+     * have to look up the store again and would still not know whether the <em>name</em> also
+     * matched. A row in this set shows the one-line summary that explains the hit.
+     */
+    private final Set<Destination> descriptionMatches = new HashSet<>();
 
     /**
      * World position at the centre of the picker map.
@@ -345,6 +404,7 @@ public final class DestinationScreen extends Screen {
     @Override
     protected void init() {
         all = Destinations.all();
+        dropVanishedSelection();
         scroll = 0;
         if (previewTarget != null) {
             // The window may have been resized since the choice was made, and the road data may
@@ -363,6 +423,10 @@ public final class DestinationScreen extends Screen {
         // where the readout begins -- so the columns' bottoms are the band's bottom by construction,
         // and the controls below start exactly there.
         listTop = columnsSideBySide ? mapY : mapY + mapH + gap;
+        // The details card sits at the bottom of the list band, directly under the rows it left room
+        // for. Both numbers come from the layout above, so the drawing, the wheel and the hit tests
+        // of the rows and of the card all agree about where one ends and the other begins.
+        detailsY = listTop + listBandHeight - detailsHeight;
         previewY = mapY + bandHeight;
         modeY = previewY + PREVIEW_LINE_HEIGHT + gap;
         preferenceY = modeY + MODE_ROW_HEIGHT + gap;
@@ -507,12 +571,10 @@ public final class DestinationScreen extends Screen {
         // Measuring the list from its share rather than from "whatever the map leaves" is what stops
         // the map eating the list, which it would now that it is no longer capped.
         int listBand = sideBySide ? band : (band - gap) * (100 - MAP_BAND_SHARE) / 100;
-        int[] metrics = listRowMetrics(listBand);
-        visibleRows = metrics[0];
-        rowHeight = metrics[1];
-        // What the row height division left over. It is spread one unit at a time over the first rows
-        // rather than dropped, so the rows between them end exactly at the bottom of the band.
-        rowRemainder = Math.max(0, Math.max(0, listBand) - visibleRows * rowHeight);
+        listBandHeight = listBand;
+        // The rows and the details card are measured from the same band by the same method, so the
+        // toggle path can re-run it when a place is selected without recomputing the whole layout.
+        applyListBand(listBand);
         // The map runs from the top of the band down to the top of the list, so the two always meet
         // exactly with only the column gap between them -- the split is a proportion, and letting it
         // round on both sides left a pixel of dead space. Nothing else caps the map: the pane ends up
@@ -527,6 +589,62 @@ public final class DestinationScreen extends Screen {
         bandHeight = band;
 
         panelHeight = panel;
+    }
+
+    /**
+     * Splits one list band between the rows and the details card, and applies the row metrics.
+     *
+     * <p>One function for the two moments the band has to be re-measured -- the vertical layout
+     * itself and a place being selected or collapsed in the middle of a frame -- because the two
+     * must produce exactly the same geometry. Written twice, the row count the wheel believes in
+     * and the rows the drawing believes in would drift the first time the card's share was tuned.
+     *
+     * <p>The card's share is a proportion of the band, raised to {@link #MIN_DETAILS_HEIGHT} when the
+     * band is short, and given the whole band when even that leaves no room for a list row. The
+     * short-window case is a compromise, not the design: on the smallest window the band is about
+     * one row tall, and a card squeezed below its own action row would paint its buttons on top of
+     * the list instead of shrinking further.
+     *
+     * @param band the height of the whole list band, before the card takes its share
+     */
+    private void applyListBand(int band) {
+        int room = Math.max(0, band);
+        detailsHeight = 0;
+        if (detailsPlace != null) {
+            int share = room * DETAILS_BAND_SHARE / 100;
+            int card = Math.max(share, MIN_DETAILS_HEIGHT);
+            if (card > room - MIN_LIST_ROW) {
+                card = room - MIN_LIST_ROW;
+            }
+            if (card < MIN_DETAILS_COMPACT) {
+                // Too short for both a card and a row: the card keeps the band and the list waits
+                // behind its collapse control, which the card always offers.
+                card = room;
+            }
+            detailsHeight = Math.max(0, card);
+            room -= detailsHeight;
+        }
+        int[] metrics = listRowMetrics(room);
+        visibleRows = metrics[0];
+        rowHeight = metrics[1];
+        // What the row height division left over. It is spread one unit at a time over the first rows
+        // rather than dropped, so the rows between them end exactly where the card begins.
+        rowRemainder = Math.max(0, room - visibleRows * rowHeight);
+        if (room < MIN_LIST_ROW) {
+            // No row fits: drawing one at a fraction of its height would put its text over whatever
+            // is above the band. The card above covers the band in that case, so nothing is lost.
+            visibleRows = 0;
+            rowHeight = ROW_HEIGHT;
+            rowRemainder = 0;
+        }
+    }
+
+    /** Re-measures the list band after the details card opened or closed, and re-clamps the scroll. */
+    private void relayoutList() {
+        applyListBand(listBandHeight);
+        detailsY = listTop + listBandHeight - detailsHeight;
+        int maxScroll = Math.max(0, shown.size() - visibleRows);
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
     }
 
     /** Header, search box and the padding above them: everything down to the columns. */
@@ -728,27 +846,51 @@ public final class DestinationScreen extends Screen {
             String distance = distanceLabel(destination);
             int distanceWidth = font.width(distance);
             int nameWidth = Math.max(24, listPaneW - 12 - distanceWidth - 6 - ROW_MARKER_STEP);
+            // Every row says where its place came from, as a pill at the far right of its second
+            // line. Measured before that line is laid out, because the summary sharing it has to
+            // stop where the pill starts -- the same rule the name follows for the distance.
+            String badge = Destinations.sourceShortLabel(destination.source());
+            int badgeWidth = badgeWidth(badge);
+            int secondWidth = Math.max(24, listPaneW - 12 - badgeWidth - 6 - ROW_MARKER_STEP);
             // Two lines inside a row whose height is the band's share: the pair is centred in the row
             // rather than pinned to its top, so stretched rows do not leave their text stranded.
             int nameY = rowY + (rowBottom - rowY - 17) / 2;
+            int secondY = nameY + 10;
             // The marker is the place's own colour where its source gives one -- a Xaero waypoint's
             // colour, say -- and the mod's place colour where it does not. Drawn after the row's
             // background so a hovered or active row does not paint over it, and it is the same mark
             // the maps draw for a place, sized down to a list.
             HudDraw.drawRowMarker(graphics, listPaneX + 3, nameY + 2, ROW_MARKER,
                     destination.hasColor() ? destination.color() : UiTheme.place());
+            int badgeX = listPaneX + listPaneW - 6 - badgeWidth;
+            if (badgeWidth > 0) {
+                // Shapes before strings: a string flushes the batch the fills written after it would
+                // have joined, so the pill's face is painted with the row's other fills.
+                HudDraw.fillRounded(graphics, badgeX, secondY - 1, badgeX + badgeWidth,
+                        secondY + 9, 2, UiTheme.rowMarkedTint());
+            }
             // No selection flag: the name keeps the source's colour whether or not the row is
             // picked out, and the row's background is what marks it.
             drawNameLine(graphics, destination, textX, nameY, nameWidth);
 
-            graphics.drawString(font, destination.coordinates(), textX, nameY + 10,
+            // The second line is the coordinates normally, and the player's own summary when the
+            // search is what found the row: the row is on screen because of what was written about
+            // it, so that is the line that should say so.
+            graphics.drawString(font, secondLine(destination, secondWidth), textX, secondY,
                     UiTheme.textMuted(), false);
 
             graphics.drawString(font, distance,
                     listPaneX + listPaneW - 6 - distanceWidth, nameY, UiTheme.textMuted(), false);
+
+            if (badgeWidth > 0) {
+                String shownBadge = PlaceText.ellipsis(font, badge, Math.max(1, badgeWidth - 4));
+                graphics.drawString(font, shownBadge,
+                        badgeX + Math.max(2, (badgeWidth - font.width(shownBadge)) / 2),
+                        secondY, UiTheme.textSecondary(), false);
+            }
         }
 
-        if (shown.size() > visibleRows) {
+        if (shown.size() > visibleRows && listHeight() > 0) {
             int trackX = listPaneX + listPaneW - 2;
             int bottom = listBottom();
             int maxScroll = shown.size() - visibleRows;
@@ -758,6 +900,37 @@ public final class DestinationScreen extends Screen {
             graphics.fill(trackX, listTop, trackX + 2, bottom, UiTheme.scrollTrack());
             graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, UiTheme.scrollThumb());
         }
+    }
+
+    /**
+     * The width of a row's source badge, or zero when the source has no short name to show.
+     *
+     * <p>Capped at a third of the list column: an addon that registered a long display name would
+     * otherwise take the room the second line needs for the summary that explains a search hit.
+     */
+    private int badgeWidth(String badge) {
+        if (badge == null || badge.isEmpty()) {
+            return 0;
+        }
+        return Math.min(font.width(badge) + 6, Math.max(20, listPaneW / 3));
+    }
+
+    /**
+     * The second line of a list row: the description that matched a search, or the coordinates.
+     *
+     * <p>Only rows the search matched through their description or tags get the summary; every
+     * other row keeps the coordinates it has always shown, so the second line means one thing at a
+     * time and a reader is never told a name is a location.
+     */
+    private String secondLine(Destination destination, int width) {
+        if (descriptionMatches.contains(destination)) {
+            String summary = PlaceText.summary(font,
+                    PlaceDetailStore.detailsOf(destination).description(), width);
+            if (!summary.isEmpty()) {
+                return summary;
+            }
+        }
+        return PlaceText.ellipsis(font, destination.coordinates(), width);
     }
 
     /** The preview readout, the four control rows, the footer and the padding under them. */
@@ -780,7 +953,17 @@ public final class DestinationScreen extends Screen {
         return Math.max(min, Math.min(max, value));
     }
 
+    /**
+     * Filters the list to the search box.
+     *
+     * <p>The name and the coordinates were the only things matched when the list was just places;
+     * a place now carries what the player wrote about it, and a search for "parking" that skipped
+     * the note saying where to park would be searching everything but the part the player wrote. A
+     * row found that way is remembered in {@link #descriptionMatches}, so its second line can show
+     * the summary that explains the hit instead of repeating coordinates the query did not contain.
+     */
     private void applyFilter() {
+        descriptionMatches.clear();
         String query = lastQuery == null ? "" : lastQuery.trim().toLowerCase(Locale.ROOT);
         if (query.isEmpty()) {
             shown = all;
@@ -796,11 +979,30 @@ public final class DestinationScreen extends Screen {
                 if (destination.name().toLowerCase(Locale.ROOT).contains(query)
                         || destination.coordinates().contains(query)) {
                     matches.add(destination);
+                    continue;
+                }
+                if (matchesWrittenText(destination, query)) {
+                    matches.add(destination);
+                    descriptionMatches.add(destination);
                 }
             }
             shown = matches;
         }
         scroll = 0;
+    }
+
+    /** Whether the player's own notes about a place are what a lower-cased query found. */
+    private static boolean matchesWrittenText(Destination destination, String query) {
+        PlaceDetails details = PlaceDetailStore.detailsOf(destination);
+        if (details.description().toLowerCase(Locale.ROOT).contains(query)) {
+            return true;
+        }
+        for (String tag : details.tags()) {
+            if (tag.toLowerCase(Locale.ROOT).contains(query)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ render
@@ -830,6 +1032,7 @@ public final class DestinationScreen extends Screen {
 
         drawPickerMap(graphics, mouseX, mouseY);
         drawList(graphics, mouseX, mouseY);
+        drawDetailsPanel(graphics, mouseX, mouseY);
         drawPreviewSummary(graphics);
         drawModeSelector(graphics, mouseX, mouseY);
         drawPreferenceControls(graphics, mouseX, mouseY);
@@ -857,6 +1060,24 @@ public final class DestinationScreen extends Screen {
             return;
         }
         drawRows(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The selected place's details, in the band the list left under its rows.
+     *
+     * <p>Drawn after the list and after the map's own block has been closed: the panel writes text
+     * and emits its star, and a string flushes whatever vertex batch it finds open, so it must not
+     * be called from inside the map's quad sequence. It is asked for the details every frame rather
+     * than handed a copy, because the favourite toggle writes the store and the star has to follow
+     * without this screen knowing that it changed.
+     */
+    private void drawDetailsPanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        if (detailsPlace == null || detailsHeight <= 0) {
+            return;
+        }
+        detailPanel.render(graphics, font, listPaneX, detailsY, listPaneW, detailsHeight,
+                detailsPlace, PlaceDetailStore.detailsOf(detailsPlace),
+                PlaceDetailPanel.Options.STANDARD, false, mouseX, mouseY);
     }
 
     // ------------------------------------------------------------------ map
@@ -1063,7 +1284,7 @@ public final class DestinationScreen extends Screen {
                 centerY + (playerZ - mapCenterZ) * scale, 3.0, UiTheme.player(), minX, minY, maxX, maxY);
 
         // Every place gets its marker on the preview as well, so the list and the map agree about
-        // where the places are: drawn through the same hit list the hover and double click use.
+        // where the places are: drawn through the same hit list the hover and click use.
         drawPlaceMarkers(places, last, minX, minY, maxX, maxY);
 
         // Names go last, after every quad: GuiGraphics.drawString flushes the batch it writes to,
@@ -1096,13 +1317,23 @@ public final class DestinationScreen extends Screen {
                     ? coordinates
                     : Component.translatable("screen.howtogo.hover_place",
                             hovered.destination().name(), coordinates).getString();
+            // What the player wrote about the place, if anything, on a line under the name: the map
+            // says which place a marker is, and this is the one line that says what it is like.
+            // Clipped to the map's own width so a long note cannot reach past its edge, and dropped
+            // whole when the readout has no room for a second line.
+            String summary = hovered == null ? "" : PlaceText.summary(font,
+                    PlaceDetailStore.detailsOf(hovered.destination()).description(), mapW - 12);
+            int labelLines = summary.isEmpty() ? 1 : 2;
             // Above the cursor when there is room, otherwise below it; only if neither side fits is
             // the readout dropped, which can only happen on a map shorter than the text itself.
             int labelY = (int) mouseY - 12;
             if (labelY < minY + 1) {
                 labelY = (int) mouseY + 6;
             }
-            if (labelY >= minY + 1 && labelY + 9 <= maxY - 1) {
+            if (labelY + labelLines * LABEL_HEIGHT > maxY - 1) {
+                labelLines = 1;
+            }
+            if (labelY >= minY + 1 && labelY + labelLines * LABEL_HEIGHT <= maxY - 1) {
                 int labelX = (int) mouseX + 5;
                 int width = font.width(label);
                 if (labelX + width > maxX - 1) {
@@ -1110,6 +1341,16 @@ public final class DestinationScreen extends Screen {
                 }
                 if (labelX >= minX + 1 && labelX + width <= maxX - 1) {
                     graphics.drawString(font, label, labelX, labelY, UiTheme.textStrong(), true);
+                    if (labelLines > 1) {
+                        // Clamped rather than hung off the name's own position: the name may have
+                        // been flipped to the cursor's left, and the summary is measured against the
+                        // map's width instead of the label's.
+                        int summaryWidth = mapW - 12;
+                        int summaryX = (int) Math.max(minX + 1,
+                                Math.min(labelX, maxX - 1 - summaryWidth));
+                        graphics.drawString(font, summary, summaryX, labelY + LABEL_HEIGHT,
+                                UiTheme.textSecondary(), true);
+                    }
                 }
             }
         }
@@ -1212,18 +1453,31 @@ public final class DestinationScreen extends Screen {
     private void drawPlaceMarkers(List<PlaceHit> places, HudDraw.VertexSink out,
                                   double minX, double minY, double maxX, double maxY) {
         for (PlaceHit hit : places) {
-            emitPlaceMarker(out, hit.x(), hit.y(), minX, minY, maxX, maxY);
+            if (!emitPlaceMarker(out, hit.x(), hit.y(), minX, minY, maxX, maxY)) {
+                continue;
+            }
+            // A favourite's corner mark, in the same block as the marker it decorates: a block of
+            // its own would be a second vertex batch, and the name pass after this one flushes the
+            // first -- the star has to be written before that happens.
+            if (PlaceDetailStore.isFavorite(hit.destination())) {
+                HudDraw.emitStar(out, hit.x() + 3, hit.y() - 3, 2.6, UiTheme.accent());
+            }
         }
     }
 
-    /** A place's marker, skipped entirely when it falls outside the map. */
-    private static void emitPlaceMarker(HudDraw.VertexSink out, double x, double y,
-                                        double minX, double minY, double maxX, double maxY) {
+    /**
+     * A place's marker, skipped entirely when it falls outside the map.
+     *
+     * @return whether the marker was drawn, so its decorations are skipped with it
+     */
+    private static boolean emitPlaceMarker(HudDraw.VertexSink out, double x, double y,
+                                           double minX, double minY, double maxX, double maxY) {
         if (x < minX || x > maxX || y < minY || y > maxY) {
-            return;
+            return false;
         }
         HudDraw.emitPlaceMarker(out, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
                 UiTheme.place());
+        return true;
     }
 
     /** Whether the whole hover crosshair falls inside the map rect. */
@@ -1593,6 +1847,28 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------- input
 
     @Override
+    // 1.21.9 turned key input into a record; the body only needs the key code, so it is unpacked on
+    // entry and reads the same on either side. ESC is intercepted here, before the screen's own
+    // handler, which closes the screen: with a place's details open it is the way back to the full
+    // list, not out of the picker.
+    //? if >=1.21.9 {
+    /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+        int keyCode = event.key();
+    *///?} else {
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    //?}
+        if (keyCode == InputConstants.KEY_ESCAPE && detailsPlace != null) {
+            setDetailsPlace(null);
+            return true;
+        }
+        //? if >=1.21.9 {
+        /*return super.keyPressed(event);
+        *///?} else {
+        return super.keyPressed(keyCode, scanCode, modifiers);
+        //?}
+    }
+
+    @Override
     //? if >=1.21.9 {
     /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
         double mouseX = event.x();
@@ -1609,29 +1885,36 @@ public final class DestinationScreen extends Screen {
             return super.mouseClicked(mouseX, mouseY, button);
             //?}
         }
+        // The details card comes before everything else: it lies inside the list column, so a click
+        // on one of its controls would otherwise be read as a click on the row behind it, and a
+        // click on the card's empty space as the beginning of a map drag or a pin below it.
+        if (detailsPlace != null) {
+            PlaceDetailPanel.Action action = detailPanel.actionAt(mouseX, mouseY);
+            if (action != PlaceDetailPanel.Action.NONE) {
+                handleDetailAction(action);
+                return true;
+            }
+            if (detailPanel.contains(mouseX, mouseY)) {
+                return true;
+            }
+        }
         if (insideMap(mouseX, mouseY)) {
             if (insideRecenter(mouseX, mouseY)) {
                 recenterOnPlayer();
                 return true;
             }
-            // Remember the press only. The pin is dropped on release, so panning the map does not
-            // leave a pin behind at the end of every drag.
+            // A place marker chooses its place on one click, exactly as its row in the list does.
+            // This used to take two clicks and let the first fall through to a pin; the list has
+            // always taken one, and a marker that needed two was a rule nothing explained. The
+            // place's details open with it, which is the point of the one click.
             PlaceHit hit = placeAt(mouseX, mouseY);
             if (hit != null) {
-                long now = System.currentTimeMillis();
-                if (hit.destination().equals(lastPlaceClick)
-                        && now - lastPlaceClickAt <= PLACE_DOUBLE_CLICK_MS) {
-                    // The second click chooses it, which is what clicking its row in the list does.
-                    // A single click is deliberately not swallowed: it still falls through to the
-                    // pin below, so a marker is not a dead patch of map.
-                    lastPlaceClick = null;
-                    pendingPick = null;
-                    selectPreview(hit.destination());
-                    return true;
-                }
-                lastPlaceClick = hit.destination();
-                lastPlaceClickAt = now;
+                pendingPick = null;
+                selectPreview(hit.destination());
+                return true;
             }
+            // Remember the press only. The pin is dropped on release, so panning the map does not
+            // leave a pin behind at the end of every drag.
             mapPressed = true;
             mapPressX = mouseX;
             mapPressY = mouseY;
@@ -1711,10 +1994,118 @@ public final class DestinationScreen extends Screen {
             //?}
     }
 
-    /** Chooses a destination to preview, planning the route it implies. */
+    /**
+     * Chooses a destination to preview, planning the route it implies and opening its details.
+     *
+     * <p>A real place opens its details card, because the list and the map now both choose on one
+     * click and the details are what that click was for. A point picked on the map is not a place --
+     * it has no record to show and nothing to edit -- so it closes the card rather than opening an
+     * empty one.
+     */
     private void selectPreview(Destination destination) {
         previewTarget = destination;
+        setDetailsPlace(Destinations.isPlace(destination) ? destination : null);
         replanPreview();
+    }
+
+    /**
+     * Opens or closes the details card, taking the list's band when it opens and giving it back
+     * when it closes.
+     *
+     * <p>Compared by value rather than by reference: the sources build a fresh {@link Destination}
+     * every time they are asked, so the same place arrives as a different object on every frame and
+     * an identity test would re-lay the list out on each one.
+     */
+    private void setDetailsPlace(Destination place) {
+        Destination next = Destinations.isPlace(place) ? place : null;
+        boolean wasOpen = detailsPlace != null;
+        if (wasOpen == (next != null) && (next == null || sameDestination(detailsPlace, next))) {
+            return;
+        }
+        detailsPlace = next;
+        relayoutList();
+    }
+
+    /** Runs one of the details card's controls, as reported by its last {@link PlaceDetailPanel#render}. */
+    private void handleDetailAction(PlaceDetailPanel.Action action) {
+        Destination place = detailsPlace;
+        if (place == null) {
+            return;
+        }
+        switch (action) {
+            case FAVORITE -> PlaceDetailStore.toggleFavorite(place);
+            case NAVIGATE -> commit(place);
+            case EDIT -> editDetailsPlace(place);
+            case BACK -> setDetailsPlace(null);
+            default -> {
+                // NONE cannot arrive here: actionAt only reports a control that was drawn. DELETE is
+                // not offered by a details card any more: a place is deleted in the world map's edit
+                // mode, which is where the node, the undo history and the roads attached to it live.
+            }
+        }
+    }
+
+    /**
+     * Opens the editor for the selected place.
+     *
+     * <p>Two editors, because the two kinds of place are stored differently. The player's own place
+     * is a node of the road network, and the place editor writes name, kind and details to it; every
+     * other place belongs to another source, so only the detail record can be edited, through the
+     * details dialog.
+     */
+    private void editDetailsPlace(Destination place) {
+        int nodeId = manualNodeId(place);
+        if (nodeId >= 0 && PlaceSources.isManual(place.source())) {
+            RoadEditSession.openPlaceEditorFromPanel(nodeId);
+            return;
+        }
+        PlaceDetailScreen.openForStore(Screens.current(), place);
+    }
+
+    /**
+     * Drops a selection whose place a rebuilt list no longer offers, before the layout asks the
+     * details card for its height.
+     *
+     * <p>Called from {@link #init}, which is where the list is rebuilt from the sources: a place
+     * that disappears while the picker is open is still in the snapshot being displayed, so it is
+     * noticed when that snapshot is next taken rather than by re-reading every source each frame.
+     * A source such as Xaero's is read through reflective calls that build a whole list per ask, and
+     * polling it for every selected frame would cost far more than the rare deletion it would catch
+     * sooner. Deleting a place is the world map's edit mode's job, so this screen only has to survive
+     * one disappearing under it.
+     */
+    private void dropVanishedSelection() {
+        if (detailsPlace != null && !all.contains(detailsPlace)) {
+            // The layout below is computed after this runs, so the card simply does not open again.
+            detailsPlace = null;
+        }
+        if (Destinations.isPlace(previewTarget) && !all.contains(previewTarget)) {
+            previewTarget = null;
+            preview = null;
+        }
+    }
+
+    /**
+     * The road node id a manual place stands for, or -1 when its id is not a node id.
+     *
+     * <p>Parsed rather than trusted: the id comes from the source and is a string, and a record
+     * whose id is not a number names no node this session can find. The caller then falls back to
+     * the details dialog instead of failing the click.
+     */
+    private static int manualNodeId(Destination place) {
+        if (place == null || place.placeId() == null) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(place.placeId().trim());
+        } catch (NumberFormatException notANode) {
+            return -1;
+        }
+    }
+
+    /** Value equality that also treats two nulls as the same, for the selection fields. */
+    private static boolean sameDestination(Destination a, Destination b) {
+        return a == null ? b == null : a.equals(b);
     }
 
     /**

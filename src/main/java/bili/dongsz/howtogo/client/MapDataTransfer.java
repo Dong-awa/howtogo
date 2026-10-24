@@ -291,6 +291,9 @@ public final class MapDataTransfer {
     private static void flushStores() {
         RoadStore.saveNow();
         TransitLineStore.saveNow();
+        // The details debounce like the roads, and an export taken right after an edit would
+        // otherwise pack a file that does not yet contain the note the player just wrote.
+        PlaceDetailStore.saveNow();
     }
 
     /**
@@ -305,6 +308,10 @@ public final class MapDataTransfer {
         RoadStore.reload();
         RailNameStore.reload();
         TransitLineStore.reload();
+        // The place details are one more file in the directory the import just replaced, and they
+        // travel with the archive; leaving the in-memory copy alone would autosave it back over the
+        // imported one. See PlaceDetailStore.
+        PlaceDetailStore.reload();
     }
 
     private static void requireWorld() throws IOException {

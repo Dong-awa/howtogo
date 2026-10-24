@@ -66,7 +66,10 @@ public final class PoiDestinationSource implements DestinationSource {
         List<Destination> result = new ArrayList<>();
         for (RoadNode node : RoadStore.get().nodes()) {
             if (node.type() == RoadNode.Type.POI && node.name() != null) {
-                result.add(new Destination(node.name(), node.x(), node.y(), node.z(), ID, Destination.NO_COLOR,node.placeKind()));
+                // The node id is the place's stable id: it is what the detail store keys the player's
+                // own places on, and what the editor deletes the node by.
+                result.add(new Destination(node.name(), node.x(), node.y(), node.z(), ID,
+                        Destination.NO_COLOR, node.placeKind(), String.valueOf(node.id())));
             }
         }
         return result;

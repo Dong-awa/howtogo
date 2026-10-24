@@ -35,6 +35,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 import xaero.map.element.render.ElementRenderInfo;
 import xaero.map.element.render.ElementRenderLocation;
@@ -168,6 +169,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * apart rather than to be a distance of its own. Small, because the marker already has a size.
      */
     private static final double PLACE_NAME_GAP_PX = 6.0;
+    /**
+     * How close the cursor has to be to a place's marker, in screen pixels, for the map to print that
+     * place's description.
+     *
+     * <p>Measured in screen pixels rather than in blocks because Xaero's zoom sweeps over orders of
+     * magnitude: a block radius would be a dot when zoomed out and a whole village when zoomed in,
+     * while the marker itself is the same few pixels across at every zoom. Slightly larger than the
+     * marker, so pointing at the mark does not have to be a pixel-perfect act.
+     */
+    private static final double PLACE_HOVER_RADIUS_PX = 8.0;
 
     // ------------------------------------------------------------- label layout
 
@@ -909,7 +920,78 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         drawLineNames(graphics, pose, font, network, false, scale, projection, margin, viewRight,
                 viewBottom, board);
 
+        // Last of all, after every name, so no label is painted over the readout. Nothing here is a
+        // label of the map: this is the place's own description, which only this mod has.
+        drawPlaceHoverSummary(graphics, font, info, projection, scale);
+
         pose.popPose();
+    }
+
+    /**
+     * The description of the place under the cursor, printed under the cursor on Xaero's world map.
+     *
+     * <h2>Why this mod draws it and the map does not</h2>
+     * Xaero already highlights the marker under the cursor and names the place, but a description is
+     * text the player wrote about that place: it lives in this mod's store, so no other map can show
+     * it. The destination picker and the K screen both print it as a hover readout, and a world map
+     * that said nothing would make the same place look as if it had no details here.
+     *
+     * <h2>Which place, and in what space</h2>
+     * The nearest place marker within {@link #PLACE_HOVER_RADIUS_PX} of the cursor, measured in screen
+     * pixels through the same {@link Projection} the markers were just drawn with -- the map can be
+     * panned between two readings of one frame, so asking the cached view state here would point the
+     * readout at a place the cursor is not on. The place markers are emitted by the same
+     * {@code renderLabels} call, and the visibility rule is repeated so a marker the map is not
+     * showing cannot be hovered.
+     *
+     * <p>Nothing is drawn when the nearest place has no description, or when the cursor is not on a
+     * marker: a blank readout would be a box of nothing following the cursor around.
+     */
+    //? if >=1.21.6 {
+    /*private void drawPlaceHoverSummary(MapElementGraphics graphics, Font font, ElementRenderInfo info,
+                                        Projection projection, double scale) {
+    *///?} else {
+    private void drawPlaceHoverSummary(GuiGraphics graphics, Font font, ElementRenderInfo info,
+                                       Projection projection, double scale) {
+    //?}
+        double mouseX = projection.screenX(info.mouseX);
+        double mouseY = projection.screenZ(info.mouseZ);
+        Destination nearest = null;
+        double nearestDistance = PLACE_HOVER_RADIUS_PX;
+        for (Destination place : Destinations.places()) {
+            if (!MapFilter.shows(place.kind(), scale)) {
+                continue;
+            }
+            double distance = Math.hypot(projection.screenX(place.x()) - mouseX,
+                    projection.screenZ(place.z()) - mouseY);
+            if (distance <= nearestDistance) {
+                nearestDistance = distance;
+                nearest = place;
+            }
+        }
+        if (nearest == null) {
+            return;
+        }
+        int screenW = mapViewRight(graphics);
+        int screenH = mapViewBottom(graphics);
+        String summary = PlaceText.summary(font,
+                PlaceDetailStore.detailsOf(nearest).description(), Math.max(1, screenW - 8));
+        if (summary.isEmpty()) {
+            return;
+        }
+        // Centred under the cursor, flipped above it when there is no room below, and clamped to the
+        // window in both directions: a readout half off the map is a readout nobody can finish.
+        double width = font.width(summary);
+        double x = Mth.clamp(mouseX, width / 2.0 + 4.0, screenW - width / 2.0 - 4.0);
+        double y = mouseY + 12.0;
+        if (y + font.lineHeight > screenH - 4) {
+            y = mouseY - 12.0 - font.lineHeight;
+        }
+        y = Mth.clamp(y, 4.0, screenH - font.lineHeight - 4.0);
+        // Full size rather than the map's label size: a description is a readout about the place,
+        // not a name belonging to the map, and map-scaled text would be unreadable when zoomed out --
+        // which is exactly when a saved place is hardest to find.
+        drawMapLabel(graphics, font, summary, x, y, HudDraw.COLOR_PLACE, 1.0F);
     }
 
     /**
@@ -2209,6 +2291,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * from covering the place it runs past. It is taken for the markers actually emitted, so a place
      * that the panel or the zoom has taken off the map does not keep a hole in the label layout for a
      * marker nobody can see.
+     *
+     * <p>A favourite carries a small star on its marker's corner, in the same block and the same
+     * sink as the marker: the star is a shape, and a shape emitted after the text pass below would
+     * be written into a buffer a string had already flushed. Only the places from
+     * {@link Destinations#places()} can carry one -- an addon's road-data points in the second loop
+     * have no {@code Destination} and so no source-stable id to key a detail record with.
      */
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
@@ -2233,7 +2321,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
                 continue;
             }
-            HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, half, HudDraw.COLOR_PLACE);
+            HudDraw.VertexSink markerSink = HudDraw.sink(screenPose, vc);
+            HudDraw.emitPlaceMarker(markerSink, x, y, half, HudDraw.COLOR_PLACE);
+            if (PlaceDetailStore.isFavorite(place)) {
+                // The star sits on the marker's top-right corner at the marker's own size: a badge
+                // is a mark on the marker, not a second marker that would compete with it.
+                HudDraw.emitStar(markerSink, x + half, y - half, Math.max(1.4, half * 0.9),
+                        UiTheme.accent());
+            }
 
             board.reserve(box(x, y, half * 2.0, half * 2.0));
         }
@@ -2854,11 +2949,20 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                int r, int g, int b, int a) {
         // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the
         // method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...).
-        // The pose carries the same matrix, so only the wrapper and the two names differ.
+        // The pose carries the same matrix, so only the wrapper and the two names differ -- plus
+        // endVertex(), which the newer API does not have and which is not decoration.
+        //
+        // On 1.20.x, BufferBuilder counts a vertex and checks or grows its buffer only inside
+        // endVertex(). Without it a batch was stored with a vertex count of 0, so nothing written
+        // through this path ever reached the screen, and the write offset kept advancing until
+        // putFloat ran off the end of the render type's fixed 131072-byte buffer. That is the
+        // IndexOutOfBoundsException at this method that the 1.20.1/1.20.4/1.20.6 builds crashed
+        // with after a node or two was placed, and it is also why the edit overlay drew nothing on
+        // those nodes.
         //? if >=1.21 {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
         //?} else {
-        /*vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a);
+        /*vc.vertex(pose.pose(), (float) x, (float) y, 0.0F).color(r, g, b, a).endVertex();
         *///?}
     }
 }

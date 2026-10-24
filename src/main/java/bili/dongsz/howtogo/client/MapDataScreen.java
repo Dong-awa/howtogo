@@ -76,6 +76,17 @@ public final class MapDataScreen extends Screen {
     private Component status;
     private boolean statusError;
 
+    /**
+     * How many detail records of this dimension no place accounts for, and where the line about them
+     * is drawn.
+     *
+     * <p>Read on {@link #init()}: the list only changes when a record is deleted (which happens on
+     * the maintenance screen and returns here through {@code init} again) or when an archive is
+     * imported, and the import's own screen comes back the same way.
+     */
+    private int orphanCount;
+    private int orphanLineY;
+
     private int panelX;
     private int panelY;
     private int panelW;
@@ -120,6 +131,7 @@ public final class MapDataScreen extends Screen {
     protected void init() {
         candidates = MapDataTransfer.candidates();
         stats = MapDataTransfer.worldLoaded() ? MapDataTransfer.dataStats() : null;
+        orphanCount = PlaceDetailStore.orphanCount();
         listScroll = clampScroll(listScroll);
 
         panelW = Math.min(440, this.width - 16);
@@ -135,7 +147,8 @@ public final class MapDataScreen extends Screen {
         listX = panelX + PAD;
         listW = panelW - PAD * 2;
         listY = headerY + LINE_HEIGHT + 1;
-        // Leave room for the two status lines above the buttons; the list takes whatever is left.
+        // Leave room for the two status lines above the buttons -- the last result, and the
+        // unlinked-details line -- and let the list take whatever is left.
         int listBottom = row1Y - (LINE_HEIGHT * 2 + 4);
         visibleRows = Math.max(1, (listBottom - listY) / ROW_HEIGHT);
         listH = visibleRows * ROW_HEIGHT;
@@ -227,6 +240,27 @@ public final class MapDataScreen extends Screen {
         statusError = true;
     }
 
+    /**
+     * Opens the maintenance list for detail records whose place is gone.
+     *
+     * <p>A screen of its own rather than rows here: this screen is about archives, and a list of
+     * records with a delete button each would be a second, destructive job in the middle of it.
+     */
+    private void openOrphans() {
+        Screens.set(new PlaceOrphanScreen(this));
+    }
+
+    /**
+     * Whether the pointer is on the unlinked-details line.
+     *
+     * <p>The line is a control only when there is something to clean up; with an empty list it is a
+     * quiet note and swallowing a click there would be a dead spot on the panel.
+     */
+    private boolean overOrphanLine(double mouseX, double mouseY) {
+        return orphanCount > 0 && mouseX >= listX && mouseX < listX + listW
+                && mouseY >= orphanLineY && mouseY < orphanLineY + LINE_HEIGHT;
+    }
+
     // ------------------------------------------------------------------- input
 
     @Override
@@ -246,6 +280,10 @@ public final class MapDataScreen extends Screen {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
                 }
+            }
+            if (overOrphanLine(mouseX, mouseY)) {
+                openOrphans();
+                return true;
             }
             int row = rowAt(mouseX, mouseY);
             if (row >= 0 && row < candidates.size()) {
@@ -361,6 +399,22 @@ public final class MapDataScreen extends Screen {
             drawLine(graphics, x, statusY, room, status,
                     statusError ? UiTheme.error() : UiTheme.okSoft());
         }
+
+        // The unlinked-detail count sits on the second status line the footer already reserves. That
+        // line is why this screen did not have to grow its context block: five info lines and the
+        // list keep their geometry at the minimum window size, and the note about records whose
+        // place is gone is still on the panel rather than in a log nobody reads.
+        orphanLineY = listY + listH + 4 + LINE_HEIGHT;
+        boolean overOrphans = overOrphanLine(mouseX, mouseY);
+        int orphanColour = orphanCount > 0
+                ? (overOrphans ? UiTheme.accentHover() : UiTheme.accent())
+                : UiTheme.textFaint();
+        // Ellipsised rather than hard-cut: the sentence is longer than the panel in some languages,
+        // and a visible "…" says the line was shortened instead of letting it end mid-word.
+        String orphanLine = PlaceText.ellipsis(this.font,
+                Component.translatable("screen.howtogo.mapdata.orphans", orphanCount).getString(),
+                room);
+        graphics.drawString(this.font, orphanLine, x, orphanLineY, orphanColour, false);
         drawButtons(graphics, mouseX, mouseY);
     }
 

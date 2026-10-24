@@ -8,6 +8,7 @@ import bili.dongsz.howtogo.client.NavHudRenderer;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.AutoSelfTest;
 import bili.dongsz.howtogo.client.MtrClientData;
+import bili.dongsz.howtogo.client.PlaceDetailStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.MapFilterOverlay;
 import bili.dongsz.howtogo.client.MtrOverlayToggles;
@@ -119,6 +120,10 @@ public final class HowToGo {
             ClientScheduler.tick();
             ApiBootstrap.fireOnce();
             RoadStore.tick();
+            // After the roads: the details' "unlinked" reading asks the road network which of the
+            // player's own places still exist, so it wants this tick's network rather than last
+            // tick's.
+            PlaceDetailStore.tick();
             TransitLineStore.tick();
             RailTrackStore.tick();
             MtrClientData.tick();
@@ -176,6 +181,9 @@ public final class HowToGo {
         HowToGoTicks.onClientTick(ClientScheduler::tick);
         HowToGoTicks.onClientTick(ApiBootstrap::fireOnce);
         HowToGoTicks.onClientTick(RoadStore::tick);
+        // After the roads, for the same reason as the Fabric arm: the details' "unlinked" reading
+        // asks the road network which of the player's own places still exist. See PlaceDetailStore.
+        HowToGoTicks.onClientTick(PlaceDetailStore::tick);
         HowToGoTicks.onClientTick(TransitLineStore::tick);
         HowToGoTicks.onClientTick(RailTrackStore::tick);
         // RoadWeaver's roads: read from its client map snapshot, or from its own road store while the

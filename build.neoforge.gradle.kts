@@ -77,6 +77,9 @@ val requiredJava = when {
 // scope reads the same file fine.
 val neoForgeVersion = property("deps.neo_loader") as String
 val xaeroCoordinate = property("deps.xaero") as String
+// Empty on the nodes whose Xaero generation predates the XaeroLib split. Read here for the same
+// reason as the two above, and reused by both the dependency block and the metadata below.
+val xaerolibJar = findProperty("deps.xaerolib")?.toString().orEmpty()
 val modVersion = rootProject.property("mod_version") as String
 
 // The NeoForge and Minecraft ranges this jar declares in its metadata.
@@ -108,6 +111,35 @@ val neoBase = if (minecraftVersion.startsWith("1.")) {
     minecraftVersion
 }
 val neoRange = "[$neoBase.0,${nextVersion(neoBase)})"
+
+// The loader and Xaero entries in the metadata. Neither can be a literal in the template, for the
+// same reason the two ranges above cannot: one template serves every node.
+//
+// javafml's major tracks FancyModLoader's and moves at every NeoForge generation -- 20.4 ships FML
+// 2.0.17, 20.6 ships 3.0.45, 21.1 ships 4.0.45, 21.4 ships 6.0.18, 21.6/21.8 ship 9.x and 26.x ships
+// 11.x/12.x. The old "[4,)" literal sat above the 20.4 and 20.6 generations, which then rejected the
+// jar with "Missing language javafml version [4,), found 3.0.45" before the mod was constructed --
+// a failure that reads like a corrupt install and is really one stale number. A lower bound of 1
+// admits every generation; what pins compatibility is neoRange and mcRange, which are exact.
+val loaderRange = "[1,)"
+
+// Xaero's World Map split into World Map + XaeroLib at 1.40.0. The 1.39.x generation, which is all
+// 1.20.6 and 1.21.6 ever got, ships no XaeroLib at all, so a required xaerolib entry there is a
+// demand no player can satisfy -- FML answers it with "Mod howtogo requires xaerolib 1.1.0 or above,
+// currently xaerolib is not installed" and never starts the game. Those two nodes declare
+// deps.xaero_range=[1.39.0,) in their own gradle.properties, and the dependency type is read off
+// that range: a 1.39.x world map means optional, anything from 1.40.0 on means required (all of
+// those bundle XaeroLib as a jar-in-jar, whether or not this node compiles against the API).
+val xaeroRange = findProperty("deps.xaero_range")?.toString() ?: "[1.40.0,)"
+val xaerolibType = if (xaeroRange.startsWith("[1.39")) "optional" else "required"
+
+// NeoForge 20.4 still ships FML 2, whose mod-file reader knows only META-INF/mods.toml; the
+// neoforge.mods.toml name arrives with 20.5 (its jar has no reference to the newer name at all). A
+// 20.4 jar carrying just the newer one is counted as one invalid mod file and silently left out of
+// the mod list, which is exactly what the 1.20.4-neoforge test reported: "the mod list does not show
+// it, no feature works", with nothing in latest.log naming a file. The processResources block below
+// renames the expanded copy on those nodes only.
+val legacyModsTomlName = !stonecutter.eval(minecraftVersion, ">=1.20.5")
 
 version = "$modVersion+$minecraftVersion"
 group = rootProject.property("maven_group") as String
@@ -313,9 +345,8 @@ dependencies {
     } else {
         compileOnly(xaeroJar)
     }
-    val xaerolib = findProperty("deps.xaerolib")?.toString().orEmpty()
-    if (xaerolib.isNotEmpty()) {
-        compileOnly(fileTree(libs) { include(xaerolib) })
+    if (xaerolibJar.isNotEmpty()) {
+        compileOnly(fileTree(libs) { include(xaerolibJar) })
     }
     // The mcphone integration, when its jar has been supplied. Deliberately not version-gated:
     // the exclusion above keys off the jar's presence, which is the only thing that matters.
@@ -327,16 +358,29 @@ tasks.named<ProcessResources>("processResources") {
         "minecraft_version" to minecraftVersion,
         "neoforge_version" to neoForgeVersion,
         "mod_version" to modVersion,
-        // The dependency ranges the mod declares. Computed above rather than written into the
-        // template, because the template is shared by every node and a literal there is right on
-        // exactly one of them.
+        // The dependency ranges and the loader/Xaero entries the mod declares. Computed above rather
+        // than written into the template, because the template is shared by every node and a literal
+        // there is right on exactly one of them -- which is how the 1.20.6 and 1.20.4 nodes came to
+        // reject their own jars over a loader version and a metadata file name.
         "minecraft_range" to mcRange,
         "neoforge_range" to neoRange,
+        "loader_range" to loaderRange,
+        "xaero_range" to xaeroRange,
+        "xaerolib_type" to xaerolibType,
     )
     inputs.properties(replaceProperties)
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.
     from(rootProject.file("LICENSE")) { into("META-INF") }
     filesMatching(listOf("META-INF/neoforge.mods.toml")) { expand(replaceProperties) }
+    // FML 2 reads META-INF/mods.toml and would ignore this jar otherwise; see legacyModsTomlName.
+    // Applies to the whole copy and filters on the file name, rather than sitting inside the
+    // filesMatching spec above: doing it there renamed the wrong entry (the LICENSE) on the one node
+    // that takes this branch, which only showed up by running the task and listing what it produced.
+    eachFile {
+        if (legacyModsTomlName && name == "neoforge.mods.toml") {
+            path = "META-INF/mods.toml"
+        }
+    }
 
     // The data pack, assembled for this node. Two independent things about it changed under this
     // tree, at two different versions, and neither can be expressed inside the JSON:

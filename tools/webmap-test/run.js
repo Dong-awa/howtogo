@@ -623,6 +623,107 @@ section('model: normalising the payload', () => {
 });
 
 // ---------------------------------------------------------------------------------
+// 2b. places
+//
+// Places are the version-3 addition. What is asserted here is the normalisation only -- no
+// drawing, no DOM -- because the places array is the one part of the payload a player can
+// author, and the page has to survive whatever an addon or an older server sends.
+// ---------------------------------------------------------------------------------
+section('model: places (the version-3 addition)', () => {
+  const placePayload = {
+    version: 3, generatedAt: 1, world: 'sp_PLACES', dimension: 'minecraft:overworld',
+    empty: false,
+    bounds: {minX: -100, minZ: -100, maxX: 100, maxZ: 100},
+    classes: model.DEFAULT_CLASSES,
+    nodes: [{id: 1, x: 0, y: 64, z: 0, type: 'POI', placeKind: 'SHOP', name: '节点里的地点'}],
+    segments: [],
+    places: [
+      {
+        id: '12', name: '人民广场 <b>"&', x: 10, y: 64, z: -20, kind: 'PLACE', source: 'poi',
+        tags: ['地标', ' 地标 ', '', '拍照'], favorite: true,
+        description: '第一行，带引号"和反斜杠\\的中文\n第二行', descriptionTruncated: true,
+      },
+      {
+        id: 'mtr-7', name: '中央车站', x: 40, y: 66, z: 40, kind: 'STATION', source: 'mtr_station',
+        tags: [], favorite: false, description: '', descriptionTruncated: false,
+      },
+      {id: 9},
+    ],
+  };
+  const p = model.normalize(placePayload);
+  ok('the places array is normalised rather than the POI nodes',
+    p.places.length === 3 && p.nodes.length === 1,
+    p.places.length + ' places, ' + p.nodes.length + ' nodes');
+  const first = p.places[0];
+  ok('a place keeps its id, name, position and kind',
+    first.id === '12' && first.name === '人民广场 <b>"&' && first.x === 10 && first.z === -20 &&
+    first.kind === 'PLACE' && first.hasName === true,
+    JSON.stringify({id: first.id, name: first.name, x: first.x, z: first.z, kind: first.kind}));
+  ok('its tags are trimmed, de-duplicated and blanks dropped',
+    first.tags.length === 2 && first.tags[0] === '地标' && first.tags[1] === '拍照',
+    JSON.stringify(first.tags));
+  ok('its favourite flag survives as a boolean, and is counted',
+    first.favorite === true && p.favoritePlaceCount === 1, String(p.favoritePlaceCount));
+  ok('its description is the cut payload text with its lines kept, and says whether it is truncated',
+    first.hasDescription === true && first.description.indexOf('\n') >= 0 &&
+    first.descriptionTruncated === true,
+    JSON.stringify({description: first.description, truncated: first.descriptionTruncated}));
+  ok('a source id becomes a badge and a long label, and an unknown source is shown as itself',
+    first.sourceLabel === '手动' && first.sourceShortLabel === '手动' &&
+    p.places[1].sourceLabel === 'MTR' && p.places[1].sourceShortLabel === 'MTR' &&
+    model.placeSourceShortLabel('xaero_waypoint') === 'XMM' &&
+    model.placeSourceShortLabel('create_station') === '机械' &&
+    model.placeSourceShortLabel('an_addon') === 'an_addon',
+    JSON.stringify([first.sourceLabel, p.places[1].sourceLabel,
+      model.placeSourceShortLabel('xaero_waypoint')]));
+  ok('an unnamed place is unnamed rather than the string "undefined"',
+    p.places[2].name === null && p.places[2].hasName === false && p.places[2].kind === 'PLACE' &&
+    p.places[2].tags.length === 0,
+    JSON.stringify({name: p.places[2].name, kind: p.places[2].kind}));
+  ok('the stats count places by kind',
+    p.placeKindCounts.PLACE === 2 && p.placeKindCounts.STATION === 1,
+    JSON.stringify(p.placeKindCounts));
+  ok('namedPlaceCount counts the named places', p.namedPlaceCount === 2, String(p.namedPlaceCount));
+
+  const legacy = model.normalize({
+    nodes: [
+      {id: 20, x: 5, y: 64, z: 5, type: 'POI', placeKind: 'SHOP', name: '旧商店'},
+      {id: 21, x: 6, y: 64, z: 6, type: 'POI'},
+      {id: 22, x: 7, y: 64, z: 7, type: 'JUNCTION'},
+    ],
+    segments: [],
+  });
+  ok('a payload with no places array derives them from its POI nodes, so an older server still draws',
+    legacy.places.length === 2 && legacy.places[0].id === 'node:20' &&
+    legacy.places[0].derived === true && legacy.places[0].kind === 'SHOP' &&
+    legacy.places[1].hasName === false,
+    JSON.stringify(legacy.places.map((place) => ({id: place.id, kind: place.kind}))));
+  ok('an empty places array means this build has no places, not "fall back to the nodes"',
+    model.normalize({
+      nodes: [{id: 20, x: 5, y: 64, z: 5, type: 'POI', name: '忽略我'}], places: [],
+    }).places.length === 0);
+  ok('a place kind the page does not know falls back to 地点',
+    model.normalize({places: [{id: 'x', kind: 'CASTLE', name: '城堡'}]}).places[0].kind === 'PLACE');
+  ok('tags sent as one comma-separated string are read as the same list',
+    model.normalize({places: [{id: 'x', tags: '餐饮,可停车，拍照'}]}).places[0].tags.length === 3);
+  ok('a place with no x/z/y does not become NaN',
+    model.normalize({places: [{id: 'x', name: '无坐标'}]}).places[0].x === 0);
+
+  if (usingBundled) {
+    ok('the bundled fixture predates places, and its markers come from its POI nodes',
+      !Object.prototype.hasOwnProperty.call(fixture, 'places') &&
+      m.places.length === m.nodes.filter((n) => n.type === 'POI').length &&
+      m.places.every((place) => place.derived === true),
+      m.places.length + ' derived places');
+  } else {
+    ok('the supplied payload carries its own places and the page uses them',
+      Array.isArray(fixture && fixture.places) && m.places.length === fixture.places.length,
+      m.places.length + ' places, payload ' +
+      (fixture && Array.isArray(fixture.places) ? fixture.places.length : 'none'));
+  }
+});
+
+// ---------------------------------------------------------------------------------
 // 3. labels
 // ---------------------------------------------------------------------------------
 section('labels: greedy placement', () => {
@@ -1057,6 +1158,49 @@ section('render: the occlusion order', () => {
     JSON.stringify({dot: junctionFills[0] && junctionFills[0].index,
       marker: markerFills[0] && markerFills[0].index}));
 
+  /*
+   * Markers come from the places array, not from the POI nodes. A version-3 payload can carry a
+   * place with no node behind it (a waypoint from another mod) and a POI node with no place (a point
+   * picked for one trip), and the marker has to follow the place. The favourite badge is a second
+   * pass over the same list, so it is checked together with the markers it belongs to.
+   */
+  const placeModel = model.normalize({
+    version: 3, generatedAt: 1, world: 't', dimension: 't:t', empty: false,
+    bounds: {minX: 0, minZ: 0, maxX: 100, maxZ: 100},
+    classes: [{id: 'ROAD', color: '#3FD07A', width: 5}],
+    nodes: [
+      {id: 3, x: 90, y: 64, z: 90, type: 'POI', placeKind: 'SHOP', name: '节点里的地点'},
+      {id: 1, x: 10, y: 64, z: 10, type: 'JUNCTION'},
+    ],
+    segments: [],
+    places: [
+      {id: 'a', name: '没有节点的地点', x: 20, y: 64, z: 20, kind: 'RESOURCE',
+        source: 'xaero_waypoint', tags: [], favorite: true, description: '', descriptionTruncated: false},
+      {id: 'b', name: '第二处', x: 50, y: 64, z: 50, kind: 'STATION',
+        source: 'mtr_station', tags: [], favorite: false, description: '', descriptionTruncated: false},
+    ],
+    stats: {nodes: 2, segments: 0, lengthBlocks: 0, layers: []},
+  });
+  const placeCtx = recordingContext();
+  render.drawMap(placeCtx, placeModel, geom.fitView(placeModel.bounds, 400, 300, {padding: 20}), {});
+  const placeOps = paths(placeCtx.calls);
+  const placeKindFills = placeOps.filter((op) => op.kind === 'fill' &&
+    (op.fillStyle === model.PLACE_KIND_COLORS.RESOURCE || op.fillStyle === model.PLACE_KIND_COLORS.STATION));
+  const favouriteFills = placeOps.filter((op) => op.kind === 'fill' &&
+    op.fillStyle === render.FAVORITE_COLOR);
+  ok('place markers are drawn from the places array, one per place and not from the POI nodes',
+    placeKindFills.length === 2, placeKindFills.length + ' markers');
+  ok('the POI node that is not a place gets no marker of its own',
+    placeOps.filter((op) => op.kind === 'fill' && op.fillStyle === model.PLACE_KIND_COLORS.SHOP).length === 0);
+  ok('a favourite place gets a corner badge and an ordinary one does not',
+    favouriteFills.length === 1, favouriteFills.length + ' badges');
+  ok('and the badge is drawn after the markers it belongs to',
+    favouriteFills.length === 1 && placeKindFills.every((op) => op.index < favouriteFills[0].index),
+    JSON.stringify({markers: placeKindFills.map((op) => op.index),
+      badge: favouriteFills.map((op) => op.index)}));
+  ok('the badge uses a palette colour html2canvas can parse',
+    /^#[0-9a-f]{6}$/i.test(render.FAVORITE_COLOR), render.FAVORITE_COLOR);
+
   // The sign of travel, independently of any drawing and of any fixture: FORWARD runs
   // from `from` to `to` however the polyline happens to be stored.
   const unitModel = {nodeById: {'5': {x: 0, z: 0}, '6': {x: 100, z: 0}}};
@@ -1388,6 +1532,10 @@ section('page: the HTTP contract and the classic-script rules', () => {
     ok('there are no inline event handler attributes',
       !/\son(click|load|change|input|submit|mouseover|keydown|keyup)\s*=/i.test(html));
     ok('the page is declared as UTF-8', /charset="?utf-8/i.test(html));
+    ok('the page carries the place card the app writes into, and its parts',
+      ['place-card', 'place-card-name', 'place-card-kind', 'place-card-source',
+        'place-card-fav', 'place-card-tags', 'place-card-desc', 'place-card-status',
+        'place-card-full', 'place-card-close'].every((id) => html.indexOf('id="' + id + '"') >= 0));
   }
 
   const classicFiles = ['model.js', 'geom.js', 'labels.js', 'render.js', 'app.js'];
@@ -1435,6 +1583,10 @@ section('page: the HTTP contract and the classic-script rules', () => {
       /toBlob/.test(app) && /html2canvas/.test(app));
     ok('no DOM is built from a road or place name with innerHTML',
       !/innerHTML\s*=\s*[^;]*(name|text)/i.test(app));
+    // Stronger than the regex above: the place card renders a description, tags and a name from the
+    // payload, and the rule is absolute, so app.js must never assign innerHTML at all.
+    ok('and app.js never assigns innerHTML anywhere, so no payload string can become markup',
+      !/innerHTML\s*=/.test(app));
   }
 
   const css = read('style.css');
@@ -1551,7 +1703,10 @@ function sectionAsync(title, body) {
     const ids = ['map', 'map-title', 'world-line', 'btn-fit', 'btn-zoom-in', 'btn-zoom-out',
       'btn-refresh', 'auto-refresh', 'btn-export', 'show-road-names', 'show-places',
       'class-list', 'layer-list', 'stats-list', 'status-cursor', 'status-zoom',
-      'status-hover', 'banner', 'toast'];
+      'status-hover', 'banner', 'toast',
+      'place-card', 'place-card-name', 'place-card-kind', 'place-card-source',
+      'place-card-fav', 'place-card-tags', 'place-card-desc', 'place-card-status',
+      'place-card-full', 'place-card-close'];
     const byId = {};
     const mapArea = fakeNode('section');
     const canvas = fakeCanvas();
@@ -1582,6 +1737,7 @@ function sectionAsync(title, body) {
     // --- the fake window ---------------------------------------------------------
     const frames = [];
     const intervals = [];
+    const windowListeners = {};
     let frameId = 0;
     const window = {
       devicePixelRatio: 2,
@@ -1607,7 +1763,11 @@ function sectionAsync(title, body) {
       clearInterval: (id) => {
         if (intervals[id - 1]) intervals[id - 1].cleared = true;
       },
-      addEventListener: () => {},
+      // Recorded rather than ignored, so the card's Escape shortcut can be exercised: the page's
+      // keyboard handling lives in one listener on the window.
+      addEventListener: (name, fn) => {
+        (windowListeners[name] = windowListeners[name] || []).push(fn);
+      },
       atob: (text) => Buffer.from(text, 'base64').toString('binary'),
       html2canvas: null,
     };
@@ -1615,14 +1775,27 @@ function sectionAsync(title, body) {
     // --- the fake network ---------------------------------------------------------
     const fetchLog = [];
     let response = {ok: true, status: 200, body: modelPayload};
+    // The place endpoint's answer, replaced by the tests below to exercise the failures too.
+    let placeResponse = {
+      ok: true,
+      status: 200,
+      body: {
+        id: 'a', source: 'poi', name: '卡片里的地点', x: 20, y: 64, z: 20, kind: 'RESOURCE',
+        tags: ['地标', '可停车'], favorite: true,
+        description: '完整的第一行\n完整的第二行', updatedAt: 1,
+      },
+    };
     let networkDown = false;
     const fakeFetch = (url) => {
       fetchLog.push(url);
       if (networkDown) return Promise.reject(new Error('Failed to fetch'));
+      // The map and the place card are different calls: the first is the whole map, the second is
+      // one place's detail, and the app must not confuse them.
+      const chosen = String(url).indexOf('/api/place') === 0 ? placeResponse : response;
       return Promise.resolve({
-        ok: response.ok,
-        status: response.status,
-        json: () => Promise.resolve(response.body),
+        ok: chosen.ok,
+        status: chosen.status,
+        json: () => Promise.resolve(chosen.body),
       });
     };
 
@@ -1881,6 +2054,97 @@ function sectionAsync(title, body) {
       hoverText.indexOf(model.directionLabel('BACKWARD')) < hoverText.indexOf(model.layerLabel(1)) &&
       hoverText.indexOf(model.layerLabel(1)) < hoverText.indexOf('本段'),
       hoverText);
+
+    // --- the place card ---------------------------------------------------------------
+    // Clicking a marker opens the card from the map payload (no request); the full-text button is
+    // the one request it can make. The text comes from the payload, so the fake document would throw
+    // if any of it were assigned as markup.
+    const cardModel = model.normalize({
+      version: 3, generatedAt: 1, world: 'sp_CARD', dimension: 'minecraft:overworld', empty: false,
+      bounds: {minX: 0, minZ: 0, maxX: 100, maxZ: 100},
+      classes: [{id: 'ROAD', color: '#3FD07A', width: 5}],
+      nodes: [], segments: [],
+      places: [{
+        id: 'a', name: '卡片里的地点', x: 20, y: 64, z: 20, kind: 'RESOURCE', source: 'poi',
+        tags: ['地标', '可停车'], favorite: true,
+        description: '第一行摘要\n第二行摘要', descriptionTruncated: true,
+      }],
+      stats: {nodes: 0, segments: 0, lengthBlocks: 0, layers: []},
+    });
+    app.state.model = cardModel;
+    app.state.view = geom.makeView({centerX: 20, centerZ: 20, scale: 4, width: 900, height: 600});
+    const markerAt = geom.worldToScreen(app.state.view, 20, 20);
+    byId['map'].dispatch('pointermove', {clientX: markerAt.x, clientY: markerAt.y, pointerId: 5});
+    const cardHover = byId['status-hover'].textContent;
+    ok('the hover readout keeps a place description on one line, collapsing its breaks',
+      cardHover.indexOf('第一行摘要 第二行摘要') >= 0 && cardHover.indexOf('\n') === -1,
+      JSON.stringify(cardHover));
+    const clickMarker = () => {
+      byId['map'].dispatch('pointerdown',
+        {button: 0, pointerId: 7, clientX: markerAt.x, clientY: markerAt.y});
+      byId['map'].dispatch('pointerup',
+        {button: 0, pointerId: 7, clientX: markerAt.x, clientY: markerAt.y});
+    };
+    clickMarker();
+    ok('clicking a place marker opens its card',
+      byId['place-card'].hidden === false && byId['place-card-name'].textContent === '卡片里的地点',
+      JSON.stringify({hidden: byId['place-card'].hidden, name: byId['place-card-name'].textContent}));
+    ok('the card shows the kind, the source badge and the favourite star',
+      byId['place-card-kind'].textContent === model.placeKindLabel('RESOURCE') &&
+      byId['place-card-source'].textContent === '手动' &&
+      byId['place-card-fav'].hidden === false,
+      JSON.stringify({kind: byId['place-card-kind'].textContent,
+        source: byId['place-card-source'].textContent, fav: byId['place-card-fav'].hidden}));
+    ok('the tags are separate pills, as text rather than markup',
+      byId['place-card-tags'].hidden === false && byId['place-card-tags'].children.length === 2 &&
+      byId['place-card-tags'].children[0].textContent === '地标',
+      JSON.stringify(byId['place-card-tags'].children.map((c) => c.textContent)));
+    ok('the card carries the cut description, lines kept, and offers the full text',
+      byId['place-card-desc'].textContent === '第一行摘要\n第二行摘要' &&
+      byId['place-card-full'].hidden === false,
+      JSON.stringify({desc: byId['place-card-desc'].textContent,
+        full: byId['place-card-full'].hidden}));
+
+    const fetchesBeforeFull = fetchLog.length;
+    byId['place-card-full'].dispatch('click', {});
+    await settle();
+    await settle();
+    ok('查看完整详情 fetches the place endpoint for this source and id',
+      fetchLog.length === fetchesBeforeFull + 1 &&
+      fetchLog[fetchLog.length - 1] === '/api/place?source=poi&id=a',
+      fetchLog[fetchLog.length - 1]);
+    ok('the full text replaces the summary, newlines and all',
+      byId['place-card-desc'].textContent === '完整的第一行\n完整的第二行' &&
+      byId['place-card-full'].hidden === true,
+      JSON.stringify(byId['place-card-desc'].textContent));
+
+    // Escape closes it; the window's own listener is what the page actually registered.
+    for (const listener of windowListeners.keydown || []) listener({key: 'Escape'});
+    ok('Escape closes the card', byId['place-card'].hidden === true);
+
+    // A failed full-text fetch is reported in the card rather than silently leaving the summary.
+    clickMarker();
+    placeResponse = {ok: false, status: 404, body: {error: 'no place poi/a in this dimension'}};
+    byId['place-card-full'].dispatch('click', {});
+    await settle();
+    await settle();
+    ok('a 404 on the full text is shown in the card rather than retried silently',
+      byId['place-card-status'].hidden === false &&
+      byId['place-card-status'].textContent.indexOf('读取完整详情失败') >= 0 &&
+      byId['place-card-status'].textContent.indexOf('no place poi/a') >= 0,
+      byId['place-card-status'].textContent);
+
+    // A click on the map that is not on a marker closes the card.
+    byId['map'].dispatch('pointerdown', {button: 0, pointerId: 8, clientX: 10, clientY: 10});
+    byId['map'].dispatch('pointerup', {button: 0, pointerId: 8, clientX: 10, clientY: 10});
+    ok('clicking empty map closes the card', byId['place-card'].hidden === true);
+
+    // A drag that happens to end on a marker is a pan, not a click.
+    byId['map'].dispatch('pointerdown', {button: 0, pointerId: 9, clientX: 10, clientY: 10});
+    byId['map'].dispatch('pointermove', {pointerId: 9, clientX: 60, clientY: 10});
+    byId['map'].dispatch('pointerup',
+      {button: 0, pointerId: 9, clientX: markerAt.x, clientY: markerAt.y});
+    ok('a pan across the map does not open a card', byId['place-card'].hidden === true);
 
     // --- tidy up ------------------------------------------------------------------
     for (const key of ['document', 'window', 'fetch', 'URL']) delete global[key];

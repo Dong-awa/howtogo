@@ -4,20 +4,31 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.api.ClientScheduler;
 import bili.dongsz.howtogo.client.AddonRoadStore;
+import bili.dongsz.howtogo.client.Destinations;
 import bili.dongsz.howtogo.client.MtrTransit;
+import bili.dongsz.howtogo.client.PlaceDetailStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.client.WorldFiles;
+import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceKeys;
+import bili.dongsz.howtogo.place.PlaceSummary;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
+import bili.dongsz.howtogo.route.Destination;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import net.minecraft.client.Minecraft;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -35,6 +46,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * walks the network. That is the whole of the requirement that the data be read on the game's thread:
  * the HTTP handler never sees a {@link RoadNetwork}, only the flattened snapshot the reader built on
  * the client thread, which is a copy of values and shares nothing with the live network.
+ *
+ * <p>The place endpoint goes through the same hand-off: its reader walks {@code Destinations} and
+ * {@code PlaceDetailStore} on the game's thread and returns one JSON string. A place's full text is
+ * not in the map payload -- one line per place is -- so this is the second reader the source is
+ * built with, not an exception to the rule.
  *
  * <h2>Why the reading is not cached</h2>
  * {@link RoadNetwork#revision()} would be the obvious cache key and is deliberately not used: this
@@ -55,6 +71,35 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class WebMapService {
 
     private static final Object LOCK = new Object();
+
+    /**
+     * How many characters of a place's description the map payload carries.
+     *
+     * <p>The payload is fetched on load, on refresh and on the five-second poll, and a full
+     * description per place would be the largest field in it. What the page carries is the
+     * description cut to this many characters -- with its line breaks kept, because the card can
+     * wrap -- and {@code 查看完整详情} fetches the rest from {@code /api/place} for the one place whose
+     * card is open.
+     */
+    private static final int PLACE_DESCRIPTION_CHARS = 200;
+
+    /**
+     * The source id of a point picked on the map for one trip.
+     *
+     * <p>It is not a registered {@link bili.dongsz.howtogo.route.DestinationSource} and never appears
+     * in {@code Destinations.all()} today, but it is spelled here so that a future source with the
+     * same idea cannot put a target with no details on the map as though it were a place.
+     */
+    private static final String MAP_PIN_SOURCE = "map";
+
+    /**
+     * The serialiser for the place endpoint's body.
+     *
+     * <p>Same reason as the map payload's: {@code disableHtmlEscaping} keeps Chinese readable in a
+     * response a player may inspect in a browser's network tab, and the body is fetched rather than
+     * embedded, so there is nothing for HTML escaping to protect here.
+     */
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
     private static WebMapServer server;
 
@@ -78,7 +123,8 @@ public final class WebMapService {
                 return server.url();
             }
             WebMapServer started = WebMapServer.start(
-                    new MainThreadRoadMapSource(ClientScheduler::nextTick, WebMapService::readRoads),
+                    new MainThreadRoadMapSource(ClientScheduler::nextTick,
+                            WebMapService::readRoads, WebMapService::readPlaceDetail),
                     RoadConfig.webMapPort());
             server = started;
             installShutdownHook();
@@ -179,7 +225,97 @@ public final class WebMapService {
         // served from another thread, and a config value -- or, below, a level and its sky -- is not
         // something to be asking from there.
         return RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension, network,
-                RoadConfig.roadColors(), readOnlyLayers(), pageTheme());
+                RoadConfig.roadColors(), readOnlyLayers(), pageTheme(), readPlaces());
+    }
+
+    /**
+     * The places the browser map is to mark, flattened from the same sources the picker lists.
+     *
+     * <p>Built from {@link Destinations#all()} rather than from {@link Destinations#places()} on
+     * purpose: the in-game map deliberately leaves Xaero's waypoints to Xaero, but the browser map is
+     * a read-only second view of the same places and a waypoint with a description is a place a
+     * player wants to see there. Every entry carries only what the destination and its detail record
+     * already know, so this cannot disagree with the picker about a name or a position.
+     *
+     * <p>Map pins are skipped: a point picked on the map for one trip has no detail record and no
+     * source that could answer for it, so it is a navigation target rather than a place.
+     *
+     * <p>Runs on the game's client thread; {@link PlaceDetailStore} and the sources are not safe to
+     * read anywhere else.
+     */
+    private static List<RoadMapSnapshot.Place> readPlaces() {
+        List<Destination> destinations = Destinations.all();
+        List<RoadMapSnapshot.Place> places = new ArrayList<>(destinations.size());
+        for (Destination destination : destinations) {
+            if (destination == null || MAP_PIN_SOURCE.equals(destination.source())) {
+                continue;
+            }
+            PlaceDetails details = PlaceDetailStore.detailsOf(destination);
+            // The cut payload form of the description rather than the one-line preview: the card
+            // can wrap, so keeping the line breaks means a description that begins with a heading
+            // reads as one, and the flag is what tells the page to offer the full text.
+            PlaceSummary description = details.truncated(PLACE_DESCRIPTION_CHARS);
+            places.add(new RoadMapSnapshot.Place(
+                    PlaceKeys.stableId(destination),
+                    destination.name(),
+                    destination.x(), destination.y(), destination.z(),
+                    kindName(destination),
+                    destination.source(),
+                    details.tags(),
+                    details.favorite(),
+                    description.text(),
+                    description.truncated()));
+        }
+        return places;
+    }
+
+    /**
+     * The full detail of one place, as the {@code /api/place} body, or null when it is not here.
+     *
+     * <p>Read on the game's thread, queued there by the source, exactly as {@link #readRoads()} is.
+     * The place is found by its source and its source-stable id among the current destination list,
+     * which is also the list the map payload was built from -- so a place the page can see is a place
+     * this can answer for, and one that was deleted after the page loaded comes back as null (the
+     * endpoint's 404) rather than as an empty record.
+     *
+     * <p>Runs on the game's client thread; {@link PlaceDetailStore} and the sources are not safe to
+     * read anywhere else.
+     */
+    private static String readPlaceDetail(String source, String id)
+            throws RoadMapUnavailableException {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            throw new RoadMapUnavailableException("no world is loaded in the game client");
+        }
+        for (Destination destination : Destinations.all()) {
+            if (destination == null || source == null || !source.equals(destination.source())) {
+                continue;
+            }
+            if (id == null || !id.equals(PlaceKeys.stableId(destination))) {
+                continue;
+            }
+            PlaceDetails details = PlaceDetailStore.detailsOf(destination);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("id", id);
+            body.put("source", source);
+            body.put("name", destination.name() == null ? "" : destination.name());
+            body.put("x", destination.x());
+            body.put("y", destination.y());
+            body.put("z", destination.z());
+            body.put("kind", kindName(destination));
+            body.put("tags", details.tags());
+            body.put("favorite", details.favorite());
+            body.put("description", details.description());
+            body.put("updatedAt", details.updatedAt());
+            return GSON.toJson(body);
+        }
+        return null;
+    }
+
+    /** A place's kind as the payload spells it, for a destination that somehow has none. */
+    private static String kindName(Destination destination) {
+        PlaceKind kind = destination.kind();
+        return kind == null ? PlaceKind.PLACE.name() : kind.name();
     }
 
     /**

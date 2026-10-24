@@ -60,9 +60,11 @@ public final class MtrStationSource implements DestinationSource {
         List<MtrTransit.Station> stations = MtrTransit.stations();
         List<Destination> result = new ArrayList<>(stations.size());
         for (MtrTransit.Station station : stations) {
+            // MTR's own station id is the stable id: a station keeps its id across sessions and
+            // rebuilds, which is what lets the player's notes about it survive.
             result.add(new Destination(Destinations.stationName(station.name(), station.x(), station.z()),
                     station.x(), station.y(), station.z(), ID, Destination.NO_COLOR,
-                    PlaceKind.STATION));
+                    PlaceKind.STATION, String.valueOf(station.id())));
         }
         return result;
     }
