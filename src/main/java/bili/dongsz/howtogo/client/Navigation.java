@@ -893,6 +893,58 @@ public final class Navigation {
     private static RoadClass classEntered;
     /** The class underfoot on the previous tick, or null while off any road. */
     private static RoadClass classUnderfoot;
+    /** The class the current reading has been suggesting, while it is not the one believed yet. */
+    private static RoadClass classCandidate;
+    /** How many ticks the candidate has held. See {@link #CLASS_CHANGE_HOLD_TICKS}. */
+    private static int classCandidateTicks;
+    /** How far the class the scan returned was from the player, from the last scan. */
+    private static double classReadingDistance = Double.MAX_VALUE;
+    /**
+     * How far the class believed underfoot was from the player in that same scan, or
+     * {@link Double#MAX_VALUE} when nothing of that class was within its tolerance.
+     *
+     * <p>Kept so a change can be judged by how much nearer the new surface is, not merely by it being
+     * the nearest: see {@link #CLASS_CHANGE_MARGIN_BLOCKS}.
+     */
+    private static double believedClassDistance = Double.MAX_VALUE;
+
+    /**
+     * How many ticks a new underfoot class has to hold before it is believed and counted.
+     *
+     * <h2>Why a reading is not enough</h2>
+     * The class underfoot is the class of the nearest road within its tolerance, and near a junction
+     * two roads compete for that title: a highway's own centreline and the ramp or side road running
+     * beside it. Walking or driving along the boundary between them makes the nearest one change
+     * several times a second, and an announcement per flip is a navigation that says "road surface"
+     * over and over while the player has not left the road they are on. This is the same defect the
+     * wrong-way reading has, and the same answer: a reading has to hold before it is believed -- see
+     * {@code WRONG_WAY_TICKS}. Five ticks is a quarter of a second, short enough that a real change
+     * is heard as soon as it happens and long enough that a one-block flicker is never heard at all.
+     */
+    private static final int CLASS_CHANGE_HOLD_TICKS = 5;
+
+    /**
+     * How much nearer the new surface has to be than the one believed underfoot before it counts.
+     *
+     * <h2>Why the nearest road is not always the road underfoot</h2>
+     * A highway is a wide piece of ground with a ramp or a service road beside it, and both are
+     * "within tolerance" at once. Which of the two centrelines is nearer is then a question of
+     * centimetres, answered afresh once per block crossed: a driver holding a lane of a seven-block
+     * carriageway can be two blocks from an adjoining merge lane and three from the centreline he is
+     * actually driving.<!-- --> The class underfoot stays whatever the nearest road says -- speeds,
+     * guidance distances and the wrong-way reading all want that reading -- but the <em>notice</em>
+     * is only spoken when the new surface is clearly the road being travelled: two blocks is wider
+     * than the ambiguity between a carriageway and the road beside it, and narrower than the gap
+     * made by actually leaving one road for another. A player who really has changed road is away
+     * from the old one within a couple of blocks of travel, so the notice still arrives while the
+     * change is fresh; what it no longer does is announce the ramp beside the highway and then the
+     * highway again.
+     *
+     * <p>The hold in {@link #updateRoadClass} deals with the reading flapping from block to block
+     * across a boundary; this deals with the same ambiguity lasting several blocks, as it does where
+     * a ramp runs alongside the road it joins.
+     */
+    private static final double CLASS_CHANGE_MARGIN_BLOCKS = 2.0;
 
     /**
      * Watches the road class underfoot for a change, once per tick.
@@ -900,15 +952,49 @@ public final class Navigation {
      * <p>Off the road is not a change: stepping off and back on to the same surface is the same road
      * as far as the player is concerned, and a notice for it would be wrong. The player also has to
      * be moving -- a player standing on a class boundary would otherwise be told about a change they
-     * cannot see, every time the road data's nearest segment happened to swap under them.
+     * cannot see, every time the road data's nearest segment happened to swap under them. For the
+     * same reason a reading has to hold for {@link #CLASS_CHANGE_HOLD_TICKS} before it is believed:
+     * the tick-by-tick flapping of "nearest road" near a junction is not a change of road, and
+     * announcing it was the fixed answer to a player who never left the highway.
      */
     private static void updateRoadClass() {
-        RoadClass now = currentRoadClass(mode());
-        if (now == null || now == classUnderfoot) {
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player == null || !isMoving(player)) {
+            // Stillness neither changes the road nor arms a notice: see the method's javadoc. The
+            // reading is left as it was, so standing at a boundary cannot produce a change later.
+            classCandidate = null;
+            classCandidateTicks = 0;
             return;
         }
-        LocalPlayer player = Minecraft.getInstance().player;
-        if (classUnderfoot != null && player != null && isMoving(player)) {
+        RoadClass now = currentRoadClass(mode());
+        if (now == null || now == classUnderfoot) {
+            // Off the road is not a change, and neither is staying on the road that was believed.
+            classCandidate = null;
+            classCandidateTicks = 0;
+            return;
+        }
+        if (now != classCandidate) {
+            classCandidate = now;
+            classCandidateTicks = 1;
+            return;
+        }
+        if (++classCandidateTicks < CLASS_CHANGE_HOLD_TICKS) {
+            return;
+        }
+        // Held, but held is not enough: the new surface must also be the road actually being
+        // travelled. A ramp running beside the carriageway can be the nearest piece of ground for a
+        // good many blocks without the player having left the highway, and announcing it and then
+        // announcing the highway back is exactly the "road surface" notice a player who never left
+        // the road reported. See CLASS_CHANGE_MARGIN_BLOCKS.
+        if (classUnderfoot != null
+                && !isClearClassChange(believedClassDistance, classReadingDistance)) {
+            classCandidate = null;
+            classCandidateTicks = 0;
+            return;
+        }
+        classCandidate = null;
+        classCandidateTicks = 0;
+        if (classUnderfoot != null) {
             classChangeCount++;
             classEntered = now;
         }
@@ -919,6 +1005,24 @@ public final class Navigation {
     private static boolean isMoving(LocalPlayer player) {
         Vec3 delta = player.getDeltaMovement();
         return Math.hypot(delta.x, delta.z) >= MovementState.MOVING_SPEED;
+    }
+
+    /**
+     * Whether a change of class underfoot is clearly the road being travelled rather than the
+     * ambiguous reading that two roads side by side produce.
+     *
+     * <p>Pure arithmetic and package-private, so the rule can be checked without a game: a client
+     * cannot be ticked in the regression harness, but "is the new surface clearly nearer than the
+     * one believed underfoot" is the part that was wrong and it is two numbers and a comparison.
+     * See {@link #CLASS_CHANGE_MARGIN_BLOCKS} for why that is the question.
+     *
+     * @param believedDistance how far the class believed underfoot was, or {@link Double#MAX_VALUE}
+     *     when nothing of that class was within its tolerance
+     * @param readingDistance how far the class the scan returned was
+     */
+    static boolean isClearClassChange(double believedDistance, double readingDistance) {
+        return believedDistance == Double.MAX_VALUE
+                || readingDistance + CLASS_CHANGE_MARGIN_BLOCKS <= believedDistance;
     }
 
     /** How many road class changes have been seen this session. */
@@ -1304,11 +1408,21 @@ public final class Navigation {
         return found;
     }
 
-    /** The scan behind {@link #currentRoadClass}: nearest usable class within its own tolerance. */
+    /**
+     * The scan behind {@link #currentRoadClass}: nearest usable class within its own tolerance.
+     *
+     * <p>Also records how far the returned class was and how far the class believed underfoot was,
+     * because whether a change of surface is worth announcing is a question about the two distances
+     * rather than about the classes alone. See {@link #CLASS_CHANGE_MARGIN_BLOCKS}. The distance of
+     * the believed class is measured here for that reason only: the returned class is still the
+     * nearest one, so everything that reads the road underfoot reads exactly what it did before.
+     */
     private static RoadClass scanForRoadClass(TravelMode active, double x, double z) {
         RoadClass nearest = null;
         double nearestDistance = Double.MAX_VALUE;
         underfootSegmentId = RoadSegment.NO_SEGMENT;
+        RoadClass believed = classUnderfoot;
+        double believedDistance = Double.MAX_VALUE;
         // The live view rather than a snapshot: this still runs several times a second, and copying
         // every segment each time would be the expensive part of it.
         for (RoadSegment segment : RoadStore.get().segments()) {
@@ -1316,13 +1430,18 @@ public final class Navigation {
                 continue;
             }
             double distance = distanceToRoad(segment, x, z);
-            if (distance > RoadConfig.onRoadTolerance(segment.roadClass())
-                    || distance >= nearestDistance) {
+            if (distance > RoadConfig.onRoadTolerance(segment.roadClass())) {
                 continue;
             }
-            nearestDistance = distance;
-            nearest = segment.roadClass();
-            underfootSegmentId = segment.id();
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearest = segment.roadClass();
+                underfootSegmentId = segment.id();
+            }
+            if (believed != null && segment.roadClass() == believed
+                    && distance < believedDistance) {
+                believedDistance = distance;
+            }
         }
 
         // Nothing drawn underfoot: the machine-read rails count too, so riding one is called at the pace
@@ -1392,6 +1511,10 @@ public final class Navigation {
                 }
             }
         }
+        // The two distances the notice is judged by; both are read from this one pass so they describe
+        // the same instant. See CLASS_CHANGE_MARGIN_BLOCKS.
+        classReadingDistance = nearest == null ? Double.MAX_VALUE : nearestDistance;
+        believedClassDistance = believedDistance;
         return nearest;
     }
 

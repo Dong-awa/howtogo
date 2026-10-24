@@ -114,6 +114,9 @@ public final class Harness {
         int[] turns = bili.dongsz.howtogo.client.TurnCursorCheck.run();
         checks += turns[0];
         failures += turns[1];
+        int[] surface = bili.dongsz.howtogo.client.ClassChangeCheck.run();
+        checks += surface[0];
+        failures += surface[1];
         int[] addonApi = bili.dongsz.howtogo.api.AddonApiCheck.run();
         checks += addonApi[0];
         failures += addonApi[1];
