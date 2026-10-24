@@ -16,6 +16,7 @@
 /*
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.route.RoutePreference;
@@ -87,6 +88,13 @@ public final class RoadConfig {
 
         @SerializedName("default_travel_mode")
         public String defaultTravelMode = TravelMode.WALK.id();
+
+        // Which style this mod's interfaces are drawn in. Fourth in the file on purpose, mirroring
+        // the row it takes on the NeoForge config screen: near the top, past the tuning values and
+        // before the routing switches, rather than buried at the end. The spelling is the id rather
+        // than the enum name because this arm is hand-edited JSON; see UiTheme.Mode.
+        @SerializedName("ui_theme")
+        public String uiTheme = UiTheme.Mode.AUTO.id();
 
         @SerializedName("route_preference")
         public String routePreference = RoutePreference.FASTEST_TIME.id();
@@ -188,6 +196,9 @@ public final class RoadConfig {
             }
             if (defaultTravelMode == null) {
                 defaultTravelMode = TravelMode.WALK.id();
+            }
+            if (uiTheme == null) {
+                uiTheme = UiTheme.Mode.AUTO.id();
             }
             if (routePreference == null) {
                 routePreference = RoutePreference.FASTEST_TIME.id();
@@ -406,6 +417,19 @@ public final class RoadConfig {
     }
 
 // 
+// * The interface theme in force, or the declared default before the config has been read.
+// *
+// * <p>The file holds the id ("auto", "light", "dark"), so an id that names no mode -- a typo, or
+// * a value written by a newer version -- costs the player the default rather than the whole file.
+// * The default is auto: the white style in daylight and the black one at night, which is the
+// * answer that needs no configuration to make sense.
+// 
+    public static UiTheme.Mode uiTheme() {
+        UiTheme.Mode mode = UiTheme.Mode.byId(values.uiTheme);
+        return mode == null ? UiTheme.Mode.AUTO : mode;
+    }
+
+// 
 // * The routing policy in force, read in one go.
 // *
 // * <p>One read rather than three at each use, so a single plan cannot be costed half by the old
@@ -594,6 +618,7 @@ public final class RoadConfig {
 //? if neoforge {
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.route.RoutePreference;
@@ -729,6 +754,8 @@ public final class RoadConfig {
     private record ParsedColor(String text, int argb) {
     }
 
+    /** The interface theme; see {@link #uiTheme()} and {@code UiTheme}. */
+    private static final ModConfigSpec.EnumValue<UiTheme.Mode> UI_THEME;
     private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
     private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
@@ -813,6 +840,37 @@ public final class RoadConfig {
                     .defineInRange(key, defaultTolerance(roadClass), 1.0, 128.0));
         }
         builder.pop();
+
+        // Fourth in the file, deliberately: after the three lists a player tunes once and before
+        // the routing switches, so it is one of the first rows the config screen shows rather than
+        // something to go looking for. It is a display setting and it sits with the colours.
+        //
+        // An enum rather than a string so the config screen offers the three answers as a button
+        // that cycles through them, instead of a text box in which "auto" has to be typed and a
+        // typo turns the entry red. The file then holds the constant name, which the enum's own
+        // reader accepts in any case; the Fabric arm's JSON holds the id instead, because that file
+        // is written in the spellings a player edits by hand.
+        UI_THEME = builder.comment(
+                        "Which style this mod's interfaces are drawn in.",
+                        "",
+                        "\"dark\" is the black style the mod has always had. \"light\" is the white one:",
+                        "white sheets, near-black text and the blue of Google Maps for anything that can",
+                        "be acted on, which keeps the same simple, flat, text-and-hairline look the dark",
+                        "style has.",
+                        "",
+                        "\"auto\" -- the default -- follows the world: the white style while the sky is",
+                        "bright and the black one once it is dark, and always the black one in the",
+                        "Nether, the End and any other dimension that declares no sky. It asks the game",
+                        "for the same sky-brightness value the sky itself is shaded by, so it turns over",
+                        "when the sun does, and a thunderstorm darkens the interface along with the",
+                        "world.",
+                        "",
+                        "This is a client setting: nothing here is sent to a server and nothing in the",
+                        "world changes. A change takes effect on the next frame drawn, in every screen",
+                        "this mod opens -- including the navigation panel and the destination page on",
+                        "MCphone -- so there is no restart and no need to reload the world.")
+                .translation("howtogo.configuration.ui_theme")
+                .defineEnum("ui_theme", UiTheme.Mode.AUTO);
 
         STATION_SNAP_BLOCKS = builder.comment(
                         "How close to a stop of the journey still counts as being at that stop, in",
@@ -1408,6 +1466,26 @@ public final class RoadConfig {
             return WALK_OFFROAD_BLOCKS.get();
         } catch (IllegalStateException notLoadedYet) {
             return 32.0;
+        }
+    }
+
+    /**
+     * The interface theme in force, or the declared default before the config has been read.
+     *
+     * <p>One read, in one place, so every screen asks the same question and gets the same answer:
+     * the alternative is each screen reading the spec for itself, and two screens disagreeing for
+     * the frame between them. Read through {@code UiTheme}, which turns this mode plus the world's
+     * sky brightness into the pair of palettes its colours come from.
+     *
+     * <p>The declared default is {@link UiTheme.Mode#AUTO} rather than the black style: white by
+     * day and black by night is what a player would design for themselves, and it is the only one
+     * of the three that never looks out of place.
+     */
+    public static UiTheme.Mode uiTheme() {
+        try {
+            return UI_THEME.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return UiTheme.Mode.AUTO;
         }
     }
 

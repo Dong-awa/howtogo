@@ -55,6 +55,7 @@ public final class WebMapCheck {
     public static int[] run() {
         System.out.println("== the browser map's payload ==");
         payloadShape();
+        payloadTheme();
         payloadValues();
         payloadEscaping();
         payloadEmpty();
@@ -121,8 +122,24 @@ public final class WebMapCheck {
     }
 
     static RoadMapSnapshot fixtureSnapshot() {
+        // Dark on purpose: the fixture is handed to the page's own Node harness through
+        // -WriteWebMapFixture, and those checks assert the page's traditional export colours. A
+        // light fixture would exercise the same field and then fail an assertion about the old
+        // style, which is not a property of this payload. The light word is checked below, where it
+        // can be done without a browser.
+        return fixtureSnapshot(RoadMapSnapshot.DARK_THEME);
+    }
+
+    /**
+     * The same fixture in a stated theme.
+     *
+     * <p>The HTTP check uses this to serve a light reading from a second server, which is what shows
+     * that the theme is a property of the reading the source returned rather than a constant of the
+     * server.
+     */
+    static RoadMapSnapshot fixtureSnapshot(String theme) {
         return RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork(),
-                java.util.Map.of(), fixtureReadOnlyLayers());
+                java.util.Map.of(), fixtureReadOnlyLayers(), theme);
     }
 
     /**
@@ -155,12 +172,15 @@ public final class WebMapCheck {
                         && "minecraft:overworld".equals(root.get("dimension").getAsString()));
         expect("it says whether there is anything to draw, and there is",
                 !root.get("empty").getAsBoolean());
+        expect("it names the palette the page is to draw in ("
+                        + root.get("theme").getAsString() + ")",
+                RoadMapSnapshot.DARK_THEME.equals(root.get("theme").getAsString()));
 
         Set<String> keys = root.keySet();
         expect("the root keys are the documented ones, no more ("
                         + new TreeSet<>(keys) + ")",
                 keys.equals(Set.of("version", "generatedAt", "world", "dimension", "empty",
-                        "bounds", "classes", "nodes", "segments", "stats")));
+                        "theme", "bounds", "classes", "nodes", "segments", "stats")));
 
         JsonObject bounds = root.getAsJsonObject("bounds");
         expect("the bounds are four numbers",
@@ -243,6 +263,38 @@ public final class WebMapCheck {
                         && stats.getAsJsonArray("layers").get(2).getAsInt() == 1);
     }
 
+    /**
+     * The palette the page is told to draw in.
+     *
+     * <p>The one field in the payload that is not a fact about the roads: the browser map is a second
+     * surface of the same mod and has to look like the interfaces beside it, so the game's theme
+     * travels with the roads. What is checked here is that the caller's answer reaches the JSON as
+     * the page spells it, and that the shapes a caller without a game can produce -- no theme at all,
+     * a word neither palette is known by -- come out as the dark style rather than as something the
+     * page has to interpret. The page's own tolerance of a missing field is checked by
+     * {@code tools/webmap-test}, whose bundled fixture predates the field.
+     */
+    private static void payloadTheme() {
+        RoadMapSnapshot unstated = RoadMapSnapshot.of("sp_TEST", "minecraft:overworld",
+                fixtureNetwork());
+        expect("a caller with no theme to state gets the dark style, which is what the page had "
+                        + "before the field existed",
+                RoadMapSnapshot.DARK_THEME.equals(unstated.theme()));
+
+        RoadMapSnapshot unknown = RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork(),
+                java.util.Map.of(), List.of(), "sepia");
+        expect("a word neither palette is known by is reduced to the dark style, not passed through",
+                RoadMapSnapshot.DARK_THEME.equals(unknown.theme()));
+
+        RoadMapSnapshot upper = RoadMapSnapshot.of("sp_TEST", "minecraft:overworld", fixtureNetwork(),
+                java.util.Map.of(), List.of(), "LIGHT");
+        expect("and the caller's spelling is normalised, so the payload always carries the page's word",
+                RoadMapSnapshot.LIGHT_THEME.equals(upper.theme()));
+        expect("which is what the JSON shows, in lower case",
+                JsonParser.parseString(upper.toJson(1L)).getAsJsonObject().get("theme").getAsString()
+                        .equals(RoadMapSnapshot.LIGHT_THEME));
+    }
+
     private static void payloadValues() {
         JsonObject root = JsonParser.parseString(fixtureJson()).getAsJsonObject();
         JsonArray segments = root.getAsJsonArray("segments");
@@ -320,6 +372,12 @@ public final class WebMapCheck {
                         && root.getAsJsonObject("bounds").get("maxX").getAsInt() == 0);
         expect("a blank dimension is named unknown rather than left blank",
                 "unknown".equals(RoadMapSnapshot.none("", " ").dimension()));
+        expect("an empty map still says which palette it is to be drawn in, the dark one by default",
+                RoadMapSnapshot.DARK_THEME.equals(empty.theme()));
+        expect("and the light style survives on an empty map too, so the page never draws one in the "
+                        + "wrong palette",
+                RoadMapSnapshot.LIGHT_THEME.equals(RoadMapSnapshot.none("sp_TEST",
+                        "minecraft:overworld", java.util.Map.of(), RoadMapSnapshot.LIGHT_THEME).theme()));
     }
 
     /**

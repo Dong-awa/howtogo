@@ -85,26 +85,7 @@ public final class NavHudRenderer {
     /** Height of one line of the panel's font, for the label boxes. */
     private static final int LABEL_HEIGHT = 9;
 
-    // ------------------------------------------------------------------ palette
-
-    private static final int COLOR_PANEL = 0xE812171C;
-    private static final int COLOR_PANEL_EDGE = 0xFF2C3540;
-    private static final int COLOR_MAP_BACKDROP = 0xFF0B0F13;
-    private static final int COLOR_ACCENT = 0xFF2FD0FF;
-    private static final int COLOR_HEADER_TEXT = 0xFF8FA0B0;
-    private static final int COLOR_PRIMARY_TEXT = 0xFFF2F6FA;
-    private static final int COLOR_SECONDARY_TEXT = 0xFFA8B4C0;
-    private static final int COLOR_WARN = 0xFFFFB454;
-    private static final int COLOR_OK = 0xFF6BE58A;
-    private static final int COLOR_TRACK = 0xFF2C3540;
-
-    private static final int COLOR_ROUTE = 0xFF2FD0FF;
-    private static final int COLOR_ROUTE_DONE = 0xFF6E6E6E;
-    private static final int COLOR_ORIGIN = 0xFF44FF88;
-    private static final int COLOR_DESTINATION = 0xFFFF5555;
-    private static final int COLOR_PLAYER = 0xFFFFFFFF;
-    /** Road names on the mini-map: quieter than the readout, since the map is the backdrop. */
-    private static final int COLOR_MAP_LABEL = 0xFFDCE3EA;
+    // ----------------------------------------------------------------- strokes
 
     private static final double ROAD_THICKNESS = 1.0;
     private static final double ROUTE_THICKNESS = 2.6;
@@ -150,12 +131,13 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int panelX = Math.max(MARGIN, screenWidth - PANEL_WIDTH - MARGIN);
         int panelY = MARGIN;
 
-        // Panel: a dark card with a soft edge, drawn as rounded spans so the corners do not look
-        // like a raw rectangle.
+        // Panel: the theme's sheet colour with a soft edge, drawn as rounded spans so the corners do
+        // not look like a raw rectangle. The sheet is translucent in both styles -- over the world it
+        // has to be, or the panel would be a hole punched in the scene rather than a card on it.
         fillRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
-                CORNER_RADIUS, COLOR_PANEL);
+                CORNER_RADIUS, UiTheme.panel());
         outlineRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
-                CORNER_RADIUS, COLOR_PANEL_EDGE);
+                CORNER_RADIUS, UiTheme.panelEdge());
 
         int contentX = panelX + PADDING;
         int headerY = panelY + PADDING;
@@ -163,8 +145,9 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
         int mapX = contentX;
         int mapY = headerY + HEADER_HEIGHT;
-        graphics.fill(mapX - 1, mapY - 1, mapX + MAP_SIZE + 1, mapY + MAP_SIZE + 1, COLOR_PANEL_EDGE);
-        graphics.fill(mapX, mapY, mapX + MAP_SIZE, mapY + MAP_SIZE, COLOR_MAP_BACKDROP);
+        graphics.fill(mapX - 1, mapY - 1, mapX + MAP_SIZE + 1, mapY + MAP_SIZE + 1,
+                UiTheme.panelEdge());
+        graphics.fill(mapX, mapY, mapX + MAP_SIZE, mapY + MAP_SIZE, UiTheme.mapBackdrop());
         drawMiniMap(graphics, mc, mapX, mapY);
 
         drawInfo(graphics, mc, contentX, mapY + MAP_SIZE + PADDING);
@@ -200,8 +183,8 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         String mode = Navigation.modeLabel();
         int modeWidth = mc.font.width(mode);
         graphics.drawString(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
-                x, y, COLOR_HEADER_TEXT, false);
-        graphics.drawString(mc.font, mode, x + MAP_SIZE - modeWidth, y, COLOR_ACCENT, false);
+                x, y, UiTheme.header(), false);
+        graphics.drawString(mc.font, mode, x + MAP_SIZE - modeWidth, y, UiTheme.accent(), false);
     }
 
     // ------------------------------------------------------------------ mini-map
@@ -296,8 +279,8 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             if (splitAt < 0) {
                 // Past the end of the route (or a route whose segments are all zero length): what is
                 // left to draw is whatever has not been walked, which is nothing once the player has
-                // travelled. Drawing everything in the "ahead" colour was the one place the grey and
-                // the cyan could disagree with where the player actually was.
+                // travelled. Drawing everything in the "ahead" colour was the one place the done
+                // colour and the ahead colour could disagree with where the player actually was.
                 if (travelled > 0) {
                     done.addAll(points);
                 } else {
@@ -313,11 +296,11 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             }
             double half = ROUTE_THICKNESS * 0.5;
             if (done.size() >= 2) {
-                emitPath(last, done, m00, m01, m02, m10, m11, m12, half, COLOR_ROUTE_DONE,
+                emitPath(last, done, m00, m01, m02, m10, m11, m12, half, UiTheme.routeDone(),
                         0xFF, minX, minY, maxX, maxY);
             }
             if (ahead.size() >= 2) {
-                emitPath(last, ahead, m00, m01, m02, m10, m11, m12, half, COLOR_ROUTE,
+                emitPath(last, ahead, m00, m01, m02, m10, m11, m12, half, UiTheme.route(),
                         0xFF, minX, minY, maxX, maxY);
             }
         }
@@ -327,22 +310,23 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (!Double.isNaN(originX)) {
             emitMarker(last, screenX(originX - playerX, originZ - playerZ, cos, sin, scale, centerX),
                     screenY(originX - playerX, originZ - playerZ, cos, sin, scale, centerY),
-                    COLOR_ORIGIN, minX, minY, maxX, maxY);
+                    UiTheme.origin(), minX, minY, maxX, maxY);
         }
         Destination destination = Navigation.target();
         if (destination != null) {
             emitMarker(last,
                     screenX(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerX),
                     screenY(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerY),
-                    COLOR_DESTINATION, minX, minY, maxX, maxY);
+                    UiTheme.destination(), minX, minY, maxX, maxY);
         }
 
         drawPlayerArrow(last, centerX, centerY);
 
         // Every place gets its marker on the mini-map too, so places can be seen while travelling
-        // without opening anything. The same list, colour and shape as the world map, from
-        // Destinations and HudDraw, so the views cannot drift apart -- at this map's smaller size,
-        // because a world-map marker covers a visible share of a panel this size.
+        // without opening anything. The same list and marker shape as the world map, from
+        // Destinations and HudDraw, in the theme's place colour, so the two views read as one map --
+        // at this map's smaller size, because a world-map marker covers a visible share of a panel
+        // this size.
         for (Destination place : Destinations.places()) {
             emitPlaceMarkerClipped(last,
                     screenX(place.x() - playerX, place.z() - playerZ, cos, sin, scale, centerX),
@@ -433,6 +417,9 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
+            // Road names take the map-label colour rather than the readout's: the map is the
+            // backdrop, so a name on it has to sit under the trip text in weight.
+            //
             // A rotated label. 1.21.6 moved the GUI matrix stack from a PoseStack to JOML's
             // Matrix3x2fStack: for a 2D translate-and-rotate the two are the same operation under
             // the new name, and the stack belongs to GuiGraphics either way.
@@ -441,14 +428,14 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             pose.pushMatrix();
             pose.translate((float) x, (float) centreY);
             pose.rotate((float) angle);
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
             pose.popMatrix();
             *///?} else {
             PoseStack pose = graphics.pose();
             pose.pushPose();
             pose.translate(x, centreY, 0.0);
             pose.mulPose(Axis.ZP.rotation(angle));
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
             pose.popPose();
             //?}
         }
@@ -480,12 +467,12 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 cx + size * 0.75, cy + size * 0.75,
                 cx, cy + size * 0.3,
                 cx - size * 0.75, cy + size * 0.75,
-                0xFFFFFFFF);
+                UiTheme.player());
     }
 
     private static void drawNorthMarker(GuiGraphics graphics, Minecraft mc, double x, double y) {
         graphics.drawString(mc.font, "N", (int) Math.round(x) - 2, (int) Math.round(y) - 4,
-                0xFFD0D8E0, false);
+                UiTheme.text(), false);
     }
 
     // ------------------------------------------------------------------- info
@@ -498,15 +485,15 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         }
 
         if (Navigation.showArrival()) {
-            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, COLOR_OK);
+            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, UiTheme.ok());
             graphics.drawString(font, Component.translatable("hud.howtogo.hud_arrived").getString(),
-                    x + READOUT_TEXT_X, y + 6, COLOR_OK, false);
+                    x + READOUT_TEXT_X, y + 6, UiTheme.ok(), false);
             graphics.drawString(font, destination.name(), x + READOUT_TEXT_X, y + 18,
-                    COLOR_SECONDARY_TEXT, false);
+                    UiTheme.textSecondary(), false);
         } else if (!Navigation.route().isPresent()) {
-            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, COLOR_WARN);
+            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, UiTheme.warn());
             graphics.drawString(font, Component.translatable("hud.howtogo.hud_noroute").getString(),
-                    x + READOUT_TEXT_X, y + 6, COLOR_WARN, false);
+                    x + READOUT_TEXT_X, y + 6, UiTheme.warn(), false);
         } else {
             drawRouteReadout(graphics, mc, x, y);
         }
@@ -549,7 +536,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 : ((uturnCall || plainUturn) && Navigation.onHighway());
         double arrowDegrees = (uturnCall || plainUturn) && highway ? Double.NaN
                 : (uturn != null || plainUturn ? 180.0 : maneuverDegrees);
-        drawTurnArrow(graphics, x + 11, y + 12, arrowDegrees, COLOR_ACCENT);
+        drawTurnArrow(graphics, x + 11, y + 12, arrowDegrees, UiTheme.accent());
 
         // The number and the instruction are taken from the same object here and everywhere else that
         // shows them, so the distance can only ever count to the point the words are about. See
@@ -566,7 +553,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 : (distanceAhead <= Navigation.turnNowDistance()
                         ? Component.translatable("hud.howtogo.hud_now").getString()
                         : Route.formatDistance(distanceAhead));
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
+        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, UiTheme.textStrong(), false);
 
         String instruction;
         if (uturnCall || plainUturn) {
@@ -587,7 +574,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         }
         graphics.drawString(font,
                 font.plainSubstrByWidth(instruction, MAP_SIZE - READOUT_TEXT_X - 2),
-                x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
+                x + READOUT_TEXT_X, y + 14, UiTheme.textSecondary(), false);
 
         drawTripProgress(graphics, font, x, y, y + 30);
     }
@@ -608,18 +595,19 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         }
         int markerX = x + 11;
         int markerY = y + 12;
-        graphics.fill(markerX - 4, markerY - 4, markerX + 4, markerY + 4, COLOR_ACCENT);
-        graphics.fill(markerX - 2, markerY - 2, markerX + 2, markerY + 2, 0xFF10161E);
+        graphics.fill(markerX - 4, markerY - 4, markerX + 4, markerY + 4, UiTheme.accent());
+        graphics.fill(markerX - 2, markerY - 2, markerX + 2, markerY + 2,
+                UiTheme.markerBackdrop());
 
         String distance = step.distanceAhead() <= Navigation.turnNowDistance()
                 ? Component.translatable("hud.howtogo.hud_now").getString()
                 : Route.formatDistance(step.distanceAhead());
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, COLOR_PRIMARY_TEXT, false);
+        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, UiTheme.textStrong(), false);
 
         graphics.drawString(font,
                 font.plainSubstrByWidth(Navigation.transitSentence(step),
                         MAP_SIZE - READOUT_TEXT_X - 2),
-                x + READOUT_TEXT_X, y + 14, COLOR_SECONDARY_TEXT, false);
+                x + READOUT_TEXT_X, y + 14, UiTheme.textSecondary(), false);
 
         drawTripProgress(graphics, font, x, y, y + 30);
     }
@@ -634,14 +622,14 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         String remaining = Component.translatable("hud.howtogo.hud_remaining_short",
                 Route.formatDistance(Navigation.remainingLength()),
                 Route.formatDuration(Navigation.remainingSeconds())).getString();
-        int color = Navigation.isOffRoute() ? COLOR_WARN : COLOR_SECONDARY_TEXT;
+        int color = Navigation.isOffRoute() ? UiTheme.warn() : UiTheme.textSecondary();
         graphics.drawString(font, remaining, x, barY + 9, color, false);
 
         // Why this is a walking route when another mode is selected.
         String fallback = Navigation.fallbackHint();
         if (fallback != null) {
             graphics.drawString(font, font.plainSubstrByWidth(fallback, MAP_SIZE),
-                    x, barY + 20, COLOR_WARN, false);
+                    x, barY + 20, UiTheme.warn(), false);
         }
     }
 
@@ -662,7 +650,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int count = Math.min(NARRATOR_HINT_LINES, lines.size());
         for (int i = 0; i < count; i++) {
             graphics.drawString(font, lines.get(i), x, y + i * NARRATOR_HINT_LINE_HEIGHT,
-                    COLOR_WARN, false);
+                    UiTheme.warn(), false);
         }
     }
 
@@ -672,12 +660,12 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         double fraction = total > 1.0E-6
                 ? Math.max(0, Math.min(1, Navigation.travelled() / total))
                 : 0;
-        fillRounded(graphics, x, y, x + width, y + height, height / 2, COLOR_TRACK);
+        fillRounded(graphics, x, y, x + width, y + height, height / 2, UiTheme.track());
         int filled = (int) Math.round(width * fraction);
         if (filled > height) {
-            fillRounded(graphics, x, y, x + filled, y + height, height / 2, COLOR_ACCENT);
+            fillRounded(graphics, x, y, x + filled, y + height, height / 2, UiTheme.accent());
         } else if (filled > 0) {
-            graphics.fill(x, y, x + filled, y + height, COLOR_ACCENT);
+            graphics.fill(x, y, x + filled, y + height, UiTheme.accent());
         }
     }
 
@@ -834,6 +822,6 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             return;
         }
         HudDraw.emitPlaceMarker(out, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
-                HudDraw.COLOR_PLACE);
+                UiTheme.place());
     }
 }

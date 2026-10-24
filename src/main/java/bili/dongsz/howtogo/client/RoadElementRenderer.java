@@ -572,7 +572,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             renderRoute(element, last, vc, fracX, fracY, p10, posePerPixel);
             // The edit UI is appended after this one, so when it is present it owns the HUD and
             // drawing it here too would double up.
-            if (!RoadEditSession.isActive()) {
+            if (!RoadEditSession.isActive() && !panelOverMap()) {
                 renderHud(graphics, pose);
             }
             return true;
@@ -585,7 +585,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             RoadEditSession.updateMouse(info.mouseX, info.mouseZ, Screen.hasAltDown());
             RoadEditSession.updateDrag();
             renderEditOverlay(element, info, last, vc, fracX, fracY, p10, posePerPixel);
-            renderHud(graphics, pose);
+            // The HUD is the map's own control scheme and readout. It is held back while one of this
+            // mod's panels is up for the same reason the labels and marks are: the map keeps drawing
+            // behind the panel, and the hint block sits at the foot of the screen, where the panel
+            // does not reach -- so the key list ends up beside the line editor as if it belonged to
+            // it.
+            if (!panelOverMap()) {
+                renderHud(graphics, pose);
+            }
             return true;
         }
 
@@ -594,9 +601,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // it (the roads) and what is over it (the route, then the lines) are decided by where this
             // element sits in the map's own order. Not while one of this mod's panels is up, for the
             // reason the labels pass gives: this pass draws over the map, and a panel is not the map.
-            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
-            if (!(Screens.of(minecraft) instanceof TransitLineScreen)
-                    && !(Screens.of(minecraft) instanceof RoadNameScreen)) {
+            if (!panelOverMap()) {
                 int markMargin = 64;
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
@@ -614,13 +619,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // map, so an opaque panel is not enough to keep them out of it: a road name lands across a
             // list of stops and reads as part of the list. The map itself still shows through, which is
             // the context these panels want.
-            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             // Where the cursor is, on every frame the map draws and not only while editing: Ctrl+click
             // sets the destination, and the map's own panel is clicked through it. The raw position only:
             // snapping costs a walk of the whole network and is the editor's business.
             RoadEditSession.setMouse(info.mouseX, info.mouseZ);
-            if (!(Screens.of(minecraft) instanceof TransitLineScreen)
-                    && !(Screens.of(minecraft) instanceof RoadNameScreen)) {
+            if (!panelOverMap()) {
                 // Shapes before text, and the lines before the names: a line name drawn under a stop
                 // marker is a name nobody can read. The line names go last of all, after the place
                 // markers renderLabels emits, for the same reason.
@@ -732,6 +735,24 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     // ------------------------------------------------------------- editing UI
+
+    /**
+     * Whether one of this mod's own panels is up over the map.
+     *
+     * <p>The map keeps drawing behind these panels -- a panel is laid over the map, not instead of
+     * it -- so every pass that draws in <em>screen</em> coordinates rather than map coordinates has
+     * to hold back while one is up: a road name across a list of stops, a line's marks under the
+     * line editor, and the map's own HUD at the foot of the screen all read as parts of the panel
+     * they are not. The three passes ask this one question so that they cannot disagree about when
+     * they are hidden.
+     *
+     * <p>The two panels are the ones the map itself opens. The panels opened from the main screen
+     * (the destination picker, the archive screen) are not over the map and do not need this.
+     */
+    private static boolean panelOverMap() {
+        Screen screen = Screens.of(Minecraft.getInstance());
+        return screen instanceof TransitLineScreen || screen instanceof RoadNameScreen;
+    }
 
     private void renderEditOverlay(RoadElement element, ElementRenderInfo info, PoseStack.Pose pose,
                                    VertexConsumer vc, double fracX, double fracY, double p10,

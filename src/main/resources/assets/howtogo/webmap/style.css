@@ -7,10 +7,21 @@
  * styles map content: the roads, markers and labels are painted on the canvas, so what
  * you see on screen and what lands in the PNG cannot drift apart.
  *
+ * The page has the same two palettes as the game's own interfaces. The dark one is what
+ * the page has always looked like, moved into variables and otherwise untouched; the
+ * white one is keyed off :root[data-theme="light"], which app.js sets from the theme in
+ * the roads payload. The white palette is the game's white palette -- Google Maps' light
+ * interface, which is where the in-game one comes from -- so the browser map and the map
+ * drawn over the world are the same picture in the same colours: #F1F3F4 land, #DADCE0
+ * hairlines, #202124 text, #5F6368 for the second rank, #1967D2 for anything that can be
+ * acted on. The dark palette is not restyled by any of this: a second theme is an
+ * addition to the first, not a reason to change it.
+ *
  * The names in this file are the page's own; the map's colours live in js/render.js.
  */
 
 :root {
+  color-scheme: dark;
   --bg: #101418;
   --panel: #161c23;
   --panel-2: #1b2430;
@@ -22,6 +33,59 @@
   --danger: #ff6b6b;
   --warn: #ffc857;
   --font: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+
+  /*
+   * The colours used once or twice below. They are variables for the same reason as the ones
+   * above: the white style has to replace every one of them, and a literal left in a rule is a
+   * rule the white style cannot reach.
+   */
+  --button-hover: #202a35;
+  --hover-tint: rgba(255, 255, 255, 0.04);
+  --toolbar-bg: rgba(16, 20, 24, 0.86);
+  --banner-bg: rgba(16, 20, 24, 0.94);
+  --toast-bg: rgba(22, 28, 35, 0.96);
+  --primary-ink: #e8edf2;
+  --primary-ink-hover: #08110c;
+  --danger-ink: #ffd9d9;
+  --warn-ink: #ffeec4;
+  --swatch-edge: #0b0f14;
+}
+
+/*
+ * The white style.
+ *
+ * Sheets are white on the pale grey page rather than black on near-black, and the hairline is
+ * Google's #DADCE0. Text keeps the ranks the dark style uses -- the page means different things
+ * by them -- but takes Google's greys: #202124 is primary, #5F6368 the second rank. The accent is
+ * Google blue #1967D2 instead of the dark style's green because that is the colour the game's own
+ * white theme uses for anything you can act on, and the darker of Google's two blues is the one
+ * that still reads as eight-pixel text on a white sheet. The primary button's face goes one step
+ * darker still (#174EA6) so its white label has room, with the accent itself as the hover.
+ * Danger and warning are the light theme's red and amber: the neon pair in the dark palette is
+ * legible on near-black and muddy on white.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #F1F3F4;
+  --panel: #FFFFFF;
+  --panel-2: #F1F3F4;
+  --line: #DADCE0;
+  --text: #202124;
+  --muted: #5F6368;
+  --accent: #1967D2;
+  --accent-dim: #174EA6;
+  --danger: #D93025;
+  --warn: #B06000;
+  --button-hover: #E8EAED;
+  --hover-tint: rgba(32, 33, 36, 0.06);
+  --toolbar-bg: rgba(255, 255, 255, 0.92);
+  --banner-bg: rgba(255, 255, 255, 0.97);
+  --toast-bg: rgba(255, 255, 255, 0.98);
+  --primary-ink: #FFFFFF;
+  --primary-ink-hover: #FFFFFF;
+  --danger-ink: #D93025;
+  --warn-ink: #B06000;
+  --swatch-edge: #BDC1C6;
 }
 
 * {
@@ -110,7 +174,7 @@ body {
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(16, 20, 24, 0.86);
+  background: var(--toolbar-bg);
 }
 
 button {
@@ -126,7 +190,7 @@ button {
 
 button:hover:not(:disabled) {
   border-color: var(--accent-dim);
-  background: #202a35;
+  background: var(--button-hover);
 }
 
 button:disabled {
@@ -137,12 +201,13 @@ button:disabled {
 button.primary {
   background: var(--accent-dim);
   border-color: var(--accent);
+  color: var(--primary-ink);
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--accent);
-  color: #08110c;
+  color: var(--primary-ink-hover);
 }
 
 button.wide {
@@ -167,7 +232,7 @@ button.wide {
 }
 
 .toggle:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-tint);
 }
 
 input[type="checkbox"] {
@@ -221,14 +286,14 @@ input[type="checkbox"] {
 }
 
 .row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-tint);
 }
 
 .swatch {
   width: 12px;
   height: 12px;
   flex: 0 0 12px;
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--swatch-edge);
   border-radius: 3px;
 }
 
@@ -279,19 +344,19 @@ input[type="checkbox"] {
   border: 1px solid var(--line);
   border-left-width: 3px;
   border-radius: 8px;
-  background: rgba(16, 20, 24, 0.94);
+  background: var(--banner-bg);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
 .banner-error {
   border-left-color: var(--danger);
-  color: #ffd9d9;
+  color: var(--danger-ink);
 }
 
 .banner-info {
   border-left-color: var(--warn);
-  color: #ffeec4;
+  color: var(--warn-ink);
 }
 
 .banner-ok {
@@ -307,19 +372,19 @@ input[type="checkbox"] {
   padding: 8px 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: rgba(22, 28, 35, 0.96);
+  background: var(--toast-bg);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
 .toast-error {
   border-color: var(--danger);
-  color: #ffd9d9;
+  color: var(--danger-ink);
 }
 
 .toast-warn {
   border-color: var(--warn);
-  color: #ffeec4;
+  color: var(--warn-ink);
 }
 
 .toast-ok {

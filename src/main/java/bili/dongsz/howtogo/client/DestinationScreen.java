@@ -193,35 +193,6 @@ public final class DestinationScreen extends Screen {
 
     private static final int RECENTER_SIZE = 11;
 
-    private static final int COLOR_DIM = 0x90101010;
-    private static final int COLOR_PANEL = 0xF012171C;
-    private static final int COLOR_PANEL_EDGE = 0xFF2C3540;
-    private static final int COLOR_MAP_BACKDROP = 0xFF0B0F13;
-    private static final int COLOR_HEADER = 0xFF8FA0B0;
-    private static final int COLOR_PRIMARY = 0xFFF2F6FA;
-    private static final int COLOR_SECONDARY = 0xFF7E8B98;
-    /**
-     * The grey a source note after a name is drawn in.
-     *
-     * <p>Lighter than {@link #COLOR_SECONDARY}: the note sits on the name's own line, next to a name
-     * that many sources colour, so it has to read as an aside without competing with it.
-     */
-    private static final int COLOR_SOURCE_NOTE = 0xFFAAB4BE;
-    private static final int COLOR_ACCENT = 0xFF2FD0FF;
-    private static final int COLOR_ROW_HOVER = 0x28FFFFFF;
-    private static final int COLOR_ROW_ACTIVE = 0x382FD0FF;
-    private static final int COLOR_BUTTON = 0xFF232B34;
-    private static final int COLOR_BUTTON_HOVER = 0xFF303A45;
-    private static final int COLOR_DANGER = 0xFFB4553F;
-    private static final int COLOR_DANGER_HOVER = 0xFFC96A52;
-    private static final int COLOR_PIN = 0xFFFF5555;
-    private static final int COLOR_ROUTE = 0xFF2FD0FF;
-    private static final int COLOR_ORIGIN = 0xFF44FF88;
-    /** Road names on the picker map. */
-    private static final int COLOR_MAP_LABEL = 0xFFDCE3EA;
-    /** The preview readout when the chosen combination has no route at all. */
-    private static final int COLOR_WARN = 0xFFFFB454;
-
     private final Screen parent;
 
     private List<Destination> all = List.of();
@@ -245,6 +216,10 @@ public final class DestinationScreen extends Screen {
 
     /** Height of one line of the font, for the label boxes. */
     private static final int LABEL_HEIGHT = 9;
+
+    /** The side of a row's colour marker, and the room it and its gap take out of the row's text. */
+    private static final int ROW_MARKER = 6;
+    private static final int ROW_MARKER_STEP = 9;
 
     /** How soon a second click on the same place marker counts as a double click. */
     private static final long PLACE_DOUBLE_CLICK_MS = 400L;
@@ -618,28 +593,35 @@ public final class DestinationScreen extends Screen {
         graphics.drawString(font, shownName, x, y, readableColor(destination), false);
 
         if (noteFits) {
-            graphics.drawString(font, note, x + font.width(shownName), y, COLOR_SOURCE_NOTE, false);
+            // A shade lighter than the row's other text: the note shares the name's line, beside a
+            // name that many sources colour, so it has to read as an aside without competing with it.
+            graphics.drawString(font, note, x + font.width(shownName), y, UiTheme.sourceNote(), false);
         }
     }
 
     /**
-     * The colour to draw a name in: the source's own, when it is light enough to read on this panel.
+     * The colour to draw a name in: the source's own, when it will read on this panel.
      *
-     * <p>The list is drawn on a near-black card, and the colour palette a source may use includes
-     * black and dark grey. Drawn faithfully those would be invisible, which is worse than not
-     * honouring the colour at all -- so a colour too dark to separate from the panel falls back to
-     * the ordinary text colour. The luminance threshold is deliberately low: it only catches the
-     * colours that would genuinely disappear.
+     * <p>The list is drawn on the panel -- near-black in the black style, white in the white one --
+     * and the colour palette a source may use runs from black to white. Drawn faithfully, the end of
+     * that range nearest the panel is invisible, which is worse than not honouring the colour at all,
+     * so a colour too close to the panel falls back to the ordinary text colour.
+     *
+     * <p>Which end is "too close" is the theme's to say, not a single number's: black and the darkest
+     * greys disappear on the black sheet (below 40), white and the pale yellows on the white one
+     * (above 190). A single threshold would fix one theme and break the other -- a mid-grey reads on
+     * both, and that is the range the two thresholds leave alone.
      */
     private static int readableColor(Destination destination) {
         if (!destination.hasColor()) {
-            return COLOR_PRIMARY;
+            return UiTheme.textStrong();
         }
         int color = destination.color();
         int luminance = (299 * ((color >> 16) & 0xFF)
                 + 587 * ((color >> 8) & 0xFF)
                 + 114 * (color & 0xFF)) / 1000;
-        return luminance < 40 ? COLOR_PRIMARY : color;
+        boolean tooClose = UiTheme.light() ? luminance > 190 : luminance < 40;
+        return tooClose ? UiTheme.textStrong() : color;
     }
 
     /**
@@ -731,30 +713,36 @@ public final class DestinationScreen extends Screen {
             if (hovered) {
                 hoveredRow = i;
                 graphics.fill(listPaneX, rowY, listPaneX + listPaneW,
-                        rowBottom - 1, COLOR_ROW_HOVER);
+                        rowBottom - 1, UiTheme.rowHoverTint());
             } else if (isActive || isPreview) {
                 graphics.fill(listPaneX, rowY, listPaneX + listPaneW,
-                        rowBottom - 1, COLOR_ROW_ACTIVE);
+                        rowBottom - 1, UiTheme.rowActiveTint());
             }
 
-            int textX = listPaneX + 6;
+            int textX = listPaneX + 6 + ROW_MARKER_STEP;
             // The distance column sits at the far edge of the list, so it needs its width before
             // the name is measured against what is left; the reserve covers it and the scroll bar.
             String distance = distanceLabel(destination);
             int distanceWidth = font.width(distance);
-            int nameWidth = Math.max(24, listPaneW - 12 - distanceWidth - 6);
+            int nameWidth = Math.max(24, listPaneW - 12 - distanceWidth - 6 - ROW_MARKER_STEP);
             // Two lines inside a row whose height is the band's share: the pair is centred in the row
             // rather than pinned to its top, so stretched rows do not leave their text stranded.
             int nameY = rowY + (rowBottom - rowY - 17) / 2;
+            // The marker is the place's own colour where its source gives one -- a Xaero waypoint's
+            // colour, say -- and the mod's place colour where it does not. Drawn after the row's
+            // background so a hovered or active row does not paint over it, and it is the same mark
+            // the maps draw for a place, sized down to a list.
+            HudDraw.drawRowMarker(graphics, listPaneX + 3, nameY + 2, ROW_MARKER,
+                    destination.hasColor() ? destination.color() : UiTheme.place());
             // No selection flag: the name keeps the source's colour whether or not the row is
             // picked out, and the row's background is what marks it.
             drawNameLine(graphics, destination, textX, nameY, nameWidth);
 
             graphics.drawString(font, destination.coordinates(), textX, nameY + 10,
-                    COLOR_SECONDARY, false);
+                    UiTheme.textMuted(), false);
 
             graphics.drawString(font, distance,
-                    listPaneX + listPaneW - 6 - distanceWidth, nameY, COLOR_SECONDARY, false);
+                    listPaneX + listPaneW - 6 - distanceWidth, nameY, UiTheme.textMuted(), false);
         }
 
         if (shown.size() > visibleRows) {
@@ -764,8 +752,8 @@ public final class DestinationScreen extends Screen {
             int thumbHeight = Math.max(12, (bottom - listTop) * visibleRows / shown.size());
             int thumbY = listTop + (int) ((bottom - listTop - thumbHeight)
                     * ((double) scroll / maxScroll));
-            graphics.fill(trackX, listTop, trackX + 2, bottom, 0x30FFFFFF);
-            graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, 0x80FFFFFF);
+            graphics.fill(trackX, listTop, trackX + 2, bottom, UiTheme.scrollTrack());
+            graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, UiTheme.scrollThumb());
         }
     }
 
@@ -828,14 +816,14 @@ public final class DestinationScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(0, 0, width, height, COLOR_DIM);
+        graphics.fill(0, 0, width, height, UiTheme.dim());
 
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, COLOR_PANEL);
+                CORNER_RADIUS, UiTheme.panel());
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, COLOR_PANEL_EDGE);
+                CORNER_RADIUS, UiTheme.panelEdge());
 
-        graphics.drawString(font, title, panelX + PADDING, panelY + PADDING, COLOR_HEADER, false);
+        graphics.drawString(font, title, panelX + PADDING, panelY + PADDING, UiTheme.header(), false);
 
         drawPickerMap(graphics, mouseX, mouseY);
         drawList(graphics, mouseX, mouseY);
@@ -862,7 +850,7 @@ public final class DestinationScreen extends Screen {
                     Component.translatable(all.isEmpty()
                             ? "screen.howtogo.no_destinations"
                             : "screen.howtogo.no_matches").getString(),
-                    listPaneX + 4, listTop + 4, COLOR_SECONDARY, false);
+                    listPaneX + 4, listTop + 4, UiTheme.textMuted(), false);
             return;
         }
         drawRows(graphics, mouseX, mouseY);
@@ -950,22 +938,22 @@ public final class DestinationScreen extends Screen {
             pose.pushMatrix();
             pose.translate((float) x, (float) centreY);
             pose.rotate((float) angle);
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
             pose.popMatrix();
             *///?} else {
             PoseStack pose = graphics.pose();
             pose.pushPose();
             pose.translate(x, centreY, 0.0);
             pose.mulPose(Axis.ZP.rotation(angle));
-            graphics.drawString(mc.font, name, -width / 2, -4, COLOR_MAP_LABEL, false);
+            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
             pose.popPose();
             //?}
         }
     }
 
     private void drawPickerMap(GuiGraphics graphics, int mouseX, int mouseY) {
-        graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1, COLOR_PANEL_EDGE);
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, COLOR_MAP_BACKDROP);
+        graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1, UiTheme.panelEdge());
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, UiTheme.mapBackdrop());
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
@@ -1027,7 +1015,7 @@ public final class DestinationScreen extends Screen {
         Route route = Navigation.route();
         if (route.isPresent()) {
             HudDraw.emitPath(last, route.points(), m00, 0, m02, 0, m11, m12,
-                    1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
+                    1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
         }
 
         // The preview goes down in the same ink as the live route, so a route looked at before
@@ -1037,37 +1025,39 @@ public final class DestinationScreen extends Screen {
         Navigation.RoutePreview planned = preview;
         if (planned != null && planned.isPresent()) {
             HudDraw.emitPath(last, planned.route().points(), m00, 0, m02, 0, m11, m12,
-                    1.1, COLOR_ROUTE, 0xE0, minX, minY, maxX, maxY);
+                    1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
         }
 
         double originX = Navigation.tripOriginX();
         double originZ = Navigation.tripOriginZ();
         if (!Double.isNaN(originX)) {
             marker(last, centerX + (originX - mapCenterX) * scale,
-                    centerY + (originZ - mapCenterZ) * scale, COLOR_ORIGIN, minX, minY, maxX, maxY);
+                    centerY + (originZ - mapCenterZ) * scale, UiTheme.origin(), minX, minY, maxX, maxY);
         }
         // A preview starts at the player rather than at a pinned trip origin, so without a live
-        // trip its start has to be marked from the preview itself or the cyan line begins nowhere.
+        // trip its start has to be marked from the preview itself or the route line begins nowhere.
         if (Double.isNaN(originX) && planned != null) {
             marker(last, centerX + (planned.originX() - mapCenterX) * scale,
-                    centerY + (planned.originZ() - mapCenterZ) * scale, COLOR_ORIGIN,
+                    centerY + (planned.originZ() - mapCenterZ) * scale, UiTheme.origin(),
                     minX, minY, maxX, maxY);
         }
         Destination target = Navigation.target();
         if (target != null) {
             marker(last, centerX + (target.x() - mapCenterX) * scale,
-                    centerY + (target.z() - mapCenterZ) * scale, COLOR_PIN, minX, minY, maxX, maxY);
+                    centerY + (target.z() - mapCenterZ) * scale, UiTheme.destination(),
+                    minX, minY, maxX, maxY);
         }
         if (pendingPick != null) {
             marker(last, centerX + (pendingPick[0] - mapCenterX) * scale,
-                    centerY + (pendingPick[1] - mapCenterZ) * scale, COLOR_ACCENT, minX, minY, maxX, maxY);
+                    centerY + (pendingPick[1] - mapCenterZ) * scale, UiTheme.accent(),
+                    minX, minY, maxX, maxY);
         }
 
         // The player is drawn only when the whole dot falls inside the map: panning leaves them far
         // off the visible area, and a dot painted regardless ended up on the panel around the map.
         // Every other mark in this method clips for the same reason; this one was the exception.
         emitDiscIfInside(last, centerX + (playerX - mapCenterX) * scale,
-                centerY + (playerZ - mapCenterZ) * scale, 3.0, 0xFFFFFFFF, minX, minY, maxX, maxY);
+                centerY + (playerZ - mapCenterZ) * scale, 3.0, UiTheme.player(), minX, minY, maxX, maxY);
 
         // Every place gets its marker on the preview as well, so the list and the map agree about
         // where the places are: drawn through the same hit list the hover and double click use.
@@ -1086,8 +1076,10 @@ public final class DestinationScreen extends Screen {
         // room for it. Both belong to the map and neither may be painted on the panel around it.
         if (insideMap(mouseX, mouseY)) {
             if (crosshairFits(mouseX, mouseY)) {
-                graphics.fill((int) mouseX - 4, (int) mouseY, (int) mouseX + 5, (int) mouseY + 1, 0x90FFFFFF);
-                graphics.fill((int) mouseX, (int) mouseY - 4, (int) mouseX + 1, (int) mouseY + 5, 0x90FFFFFF);
+                graphics.fill((int) mouseX - 4, (int) mouseY, (int) mouseX + 5, (int) mouseY + 1,
+                        UiTheme.crosshair());
+                graphics.fill((int) mouseX, (int) mouseY - 4, (int) mouseX + 1, (int) mouseY + 5,
+                        UiTheme.crosshair());
             }
 
             double worldX = mapCenterX + (mouseX - centerX) / scale;
@@ -1114,7 +1106,7 @@ public final class DestinationScreen extends Screen {
                     labelX = (int) mouseX - 5 - width;
                 }
                 if (labelX >= minX + 1 && labelX + width <= maxX - 1) {
-                    graphics.drawString(font, label, labelX, labelY, COLOR_PRIMARY, true);
+                    graphics.drawString(font, label, labelX, labelY, UiTheme.textStrong(), true);
                 }
             }
         }
@@ -1122,8 +1114,9 @@ public final class DestinationScreen extends Screen {
         // "Back to me": after panning, the player marker can be far off the visible area.
         int bx = mapX + mapW - RECENTER_SIZE - 2;
         int by = mapY + 2;
-        HudDraw.fillRounded(graphics, bx, by, bx + RECENTER_SIZE, by + RECENTER_SIZE, 2, 0xA010171C);
-        int iconColor = 0xFFC0CCD8;
+        HudDraw.fillRounded(graphics, bx, by, bx + RECENTER_SIZE, by + RECENTER_SIZE, 2,
+                UiTheme.mapButton());
+        int iconColor = UiTheme.icon();
         graphics.fill(bx + 2, by + RECENTER_SIZE / 2, bx + RECENTER_SIZE - 2,
                 by + RECENTER_SIZE / 2 + 1, iconColor);
         graphics.fill(bx + RECENTER_SIZE / 2, by + 2, bx + RECENTER_SIZE / 2 + 1,
@@ -1227,7 +1220,7 @@ public final class DestinationScreen extends Screen {
             return;
         }
         HudDraw.emitPlaceMarker(out, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
-                HudDraw.COLOR_PLACE);
+                UiTheme.place());
     }
 
     /** Whether the whole hover crosshair falls inside the map rect. */
@@ -1276,16 +1269,16 @@ public final class DestinationScreen extends Screen {
      */
     private void drawModeSelector(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.drawString(font, modeCaption(), rowX,
-                modeY + (MODE_ROW_HEIGHT - 8) / 2, COLOR_SECONDARY, false);
+                modeY + (MODE_ROW_HEIGHT - 8) / 2, UiTheme.textMuted(), false);
 
         TravelMode active = Navigation.mode();
         int x = modeButtonsX;
         for (TravelMode mode : TravelMode.values()) {
             boolean selected = mode == active;
             drawButton(graphics, x, modeY, modeButtonWidth, MODE_ROW_HEIGHT, mode.label(),
-                    selected ? COLOR_ROW_ACTIVE : COLOR_BUTTON,
-                    COLOR_BUTTON_HOVER,
-                    selected ? COLOR_ACCENT : COLOR_PRIMARY,
+                    selected ? UiTheme.rowActiveTint() : UiTheme.button(),
+                    UiTheme.buttonHover(),
+                    selected ? UiTheme.accent() : UiTheme.textStrong(),
                     isInside(mouseX, mouseY, x, modeY, modeButtonWidth, MODE_ROW_HEIGHT));
             x += modeButtonWidth + gap;
         }
@@ -1317,7 +1310,7 @@ public final class DestinationScreen extends Screen {
             // empty -- the preview is the whole reason the picker no longer commits on one click.
             graphics.drawString(font, Component.translatable("screen.howtogo.preview_hint")
                             .getString(),
-                    rowX, previewY, COLOR_SECONDARY, false);
+                    rowX, previewY, UiTheme.textMuted(), false);
             return;
         }
         TravelMode active = Navigation.mode();
@@ -1325,7 +1318,7 @@ public final class DestinationScreen extends Screen {
         // still says which one failed -- the reason below it is the router's own sentence.
         graphics.drawString(font, Component.translatable("screen.howtogo.preview_state",
                         active.label()).getString(),
-                rowX, previewY, COLOR_SECONDARY, false);
+                rowX, previewY, UiTheme.textMuted(), false);
 
         boolean present = preview != null && preview.isPresent();
         String text;
@@ -1338,9 +1331,11 @@ public final class DestinationScreen extends Screen {
                     ? Component.translatable("screen.howtogo.preview_none").getString()
                     : preview.note();
         }
+        // A planned route reads as an answer, in the accent colour; a combination with no route at
+        // all reads as a warning.
         graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
                 rowX, previewY + PREVIEW_STATE_HEIGHT,
-                present ? COLOR_ACCENT : COLOR_WARN, false);
+                present ? UiTheme.accent() : UiTheme.warn(), false);
     }
 
     /**
@@ -1357,7 +1352,7 @@ public final class DestinationScreen extends Screen {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
 
         graphics.drawString(font, metricCaption(), rowX,
-                preferenceY + (preferenceRowHeight - 8) / 2, COLOR_SECONDARY, false);
+                preferenceY + (preferenceRowHeight - 8) / 2, UiTheme.textMuted(), false);
 
         control(graphics, mouseX, mouseY, preferenceButtonX(0), preferenceY, preferenceButtonWidth,
                 preferenceRowHeight, preferences.metric().label(), true);
@@ -1378,7 +1373,7 @@ public final class DestinationScreen extends Screen {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
 
         graphics.drawString(font, avoidCaption(), rowX,
-                classY + (classRowHeight - 8) / 2, COLOR_SECONDARY, false);
+                classY + (classRowHeight - 8) / 2, UiTheme.textMuted(), false);
 
         RoadClass[] classes = RoadClass.values();
         for (int i = 0; i < classes.length; i++) {
@@ -1404,7 +1399,7 @@ public final class DestinationScreen extends Screen {
      */
     private void drawTransitControls(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.drawString(font, transitCaption(), rowX,
-                transitY + (transitRowHeight - 8) / 2, COLOR_SECONDARY, false);
+                transitY + (transitRowHeight - 8) / 2, UiTheme.textMuted(), false);
         int[] rect = transitRect();
         control(graphics, mouseX, mouseY, rect[0], rect[1], rect[2], transitRowHeight,
                 boardOnlyCaption(), RoutePreferenceStore.transitBoardOnly());
@@ -1420,8 +1415,8 @@ public final class DestinationScreen extends Screen {
     private void control(GuiGraphics graphics, int mouseX, int mouseY, int x, int y, int w, int h,
                          String label, boolean on) {
         drawButton(graphics, x, y, w, h, font.plainSubstrByWidth(label, w - 4),
-                on ? COLOR_ROW_ACTIVE : COLOR_BUTTON, COLOR_BUTTON_HOVER,
-                on ? COLOR_ACCENT : COLOR_PRIMARY, isInside(mouseX, mouseY, x, y, w, h));
+                on ? UiTheme.rowActiveTint() : UiTheme.button(), UiTheme.buttonHover(),
+                on ? UiTheme.accent() : UiTheme.textStrong(), isInside(mouseX, mouseY, x, y, w, h));
     }
 
     private static String metricCaption() {
@@ -1540,17 +1535,17 @@ public final class DestinationScreen extends Screen {
             // said why it will not help.
             drawButton(graphics, leftX, footerY, buttonWidth,
                     Component.translatable("screen.howtogo.go_here").getString(),
-                    COLOR_ACCENT, 0xFF52DBFF,
+                    UiTheme.accent(), UiTheme.accentHover(), UiTheme.onSelection(),
                     isInside(mouseX, mouseY, leftX, footerY, buttonWidth));
         } else if (navigating) {
             drawButton(graphics, leftX, footerY, buttonWidth,
                     Component.translatable("screen.howtogo.stop").getString(),
-                    COLOR_DANGER, COLOR_DANGER_HOVER,
+                    UiTheme.danger(), UiTheme.dangerHover(), UiTheme.onSelection(),
                     isInside(mouseX, mouseY, leftX, footerY, buttonWidth));
         }
         drawButton(graphics, rightX, footerY, buttonWidth,
                 Component.translatable("gui.cancel").getString(),
-                COLOR_BUTTON, COLOR_BUTTON_HOVER,
+                UiTheme.button(), UiTheme.buttonHover(), UiTheme.onButton(),
                 isInside(mouseX, mouseY, rightX, footerY, buttonWidth));
     }
 
@@ -1564,9 +1559,17 @@ public final class DestinationScreen extends Screen {
         return previewTarget;
     }
 
+    /**
+     * A footer button.
+     *
+     * <p>The label colour follows the face rather than the other way round: a button filled with the
+     * accent or with the danger colour carries white text in both styles, and the neutral cancel
+     * button carries the panel's own text colour, which is what makes it read as neutral rather than
+     * as a second action.
+     */
     private void drawButton(GuiGraphics graphics, int x, int y, int w,
-                            String label, int base, int hover, boolean hovered) {
-        drawButton(graphics, x, y, w, FOOTER_HEIGHT, label, base, hover, COLOR_PRIMARY, hovered);
+                            String label, int base, int hover, int textColor, boolean hovered) {
+        drawButton(graphics, x, y, w, FOOTER_HEIGHT, label, base, hover, textColor, hovered);
     }
 
     private void drawButton(GuiGraphics graphics, int x, int y, int w, int h,

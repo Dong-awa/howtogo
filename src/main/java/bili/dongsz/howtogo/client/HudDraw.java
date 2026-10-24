@@ -383,6 +383,28 @@ public final class HudDraw {
         return Math.max(0, Math.min(radius, Math.min((x2 - x1) / 2, (y2 - y1) / 2)));
     }
 
+    // ------------------------------------------------------------ row markers
+
+    /**
+     * A list row's colour marker: a small square with a hairline around it.
+     *
+     * <p>The lists that hold one kind of thing per row use this to say what that thing is before a
+     * word of it is read -- a place's own colour in the destination picker, a line's kind colour in
+     * the line editor, an archive's origin in the map-data screen. Without it those rows are columns
+     * of grey text and the one fact the row already knows is only in a word further along the line.
+     *
+     * <p>The hairline is not decoration. The colours come from outside -- a source's own place
+     * colour, which may be white, or a line's configured colour -- and a white square on a white
+     * sheet is not a marker. The ring is the theme's icon grey, so the same call reads on both sheets
+     * and on a selected row's blue.
+     *
+     * @param size the marker's side in pixels
+     */
+    public static void drawRowMarker(GuiGraphics graphics, int x, int y, int size, int argb) {
+        graphics.fill(x, y, x + size, y + size, UiTheme.icon());
+        graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, argb);
+    }
+
     private static int cornerInset(int y, int y1, int y2, int r) {
         if (r <= 0) {
             return 0;

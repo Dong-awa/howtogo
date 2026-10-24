@@ -39,13 +39,6 @@ final class MapFilterPanel {
     private static final int ROAD_COLUMNS = 3;
     private static final int PLACE_COLUMNS = 2;
 
-    private static final int BACKGROUND = 0xA0000000;
-    private static final int OUTLINE = 0x60FFFFFF;
-    private static final int TEXT = 0xFFE8E8E8;
-    private static final int TEXT_DIM = 0xFF909AA4;
-    private static final int BOX_EDGE = 0xFF101418;
-    private static final int BOX_OFF = 0xFF20262E;
-
     private MapFilterPanel() {
     }
 
@@ -77,7 +70,7 @@ final class MapFilterPanel {
         for (PlaceKind kind : placeList()) {
             places.add(Component.translatable("screen.howtogo.place_kind."
                     + kind.name().toLowerCase(Locale.ROOT)).getString());
-            placeColours.add(HudDraw.COLOR_PLACE);
+            placeColours.add(UiTheme.place());
         }
 
         int width = Math.max(font.width(title()),
@@ -88,8 +81,8 @@ final class MapFilterPanel {
 
         List<Toggle> boxes = new ArrayList<>();
         int row = MapFilter.panelY() + PAD;
-        boxes.add(new Toggle(left, row, width, ROW_HEIGHT, title(), !MapFilter.isCollapsed(), TEXT,
-                MapFilter::toggleCollapsed));
+        boxes.add(new Toggle(left, row, width, ROW_HEIGHT, title(), !MapFilter.isCollapsed(),
+                UiTheme.text(), MapFilter::toggleCollapsed));
         row += ROW_HEIGHT + 1;
         if (MapFilter.isCollapsed()) {
             return boxes;
@@ -100,7 +93,7 @@ final class MapFilterPanel {
                 index -> MapFilter.toggleRoad(roadList().get(index)));
         row += 1;
         boxes.add(new Toggle(left + PAD, row, BOX + BOX_GAP + font.width(linesLabel()), ROW_HEIGHT,
-                linesLabel(), !MapFilter.linesHidden(), 0xFF8AB4FF, MapFilter::toggleLines));
+                linesLabel(), !MapFilter.linesHidden(), UiTheme.accent(), MapFilter::toggleLines));
         row += ROW_HEIGHT + 1;
         grid(boxes, font, places, placeColours, row, left, PLACE_COLUMNS,
                 index -> MapFilter.isHidden(placeList().get(index)),
@@ -155,22 +148,25 @@ final class MapFilterPanel {
         int top = panelTop(boxes);
         int right = left + panelWidth(boxes);
         int bottom = panelBottom(boxes);
-        graphics.fill(left - 1, top - 1, right + 1, bottom + 1, OUTLINE);
-        graphics.fill(left, top, right, bottom, BACKGROUND);
+        graphics.fill(left - 1, top - 1, right + 1, bottom + 1, UiTheme.overlayEdge());
+        graphics.fill(left, top, right, bottom, UiTheme.overlayPanel());
 
         for (Toggle box : boxes) {
             int boxY = box.y() + (ROW_HEIGHT - BOX) / 2;
-            graphics.fill(box.x(), boxY, box.x() + BOX, boxY + BOX, BOX_EDGE);
+            graphics.fill(box.x(), boxY, box.x() + BOX, boxY + BOX, UiTheme.checkboxEdge());
             graphics.fill(box.x() + 1, boxY + 1, box.x() + BOX - 1, boxY + BOX - 1,
-                    box.on() ? box.colour() : BOX_OFF);
+                    box.on() ? box.colour() : UiTheme.checkboxOff());
             if (box.holds(mouseX, mouseY)) {
-                graphics.fill(box.x() - 1, boxY - 1, box.x() + BOX + 1, boxY + 1, OUTLINE);
-                graphics.fill(box.x() - 1, boxY + BOX, box.x() + BOX + 1, boxY + BOX + 1, OUTLINE);
-                graphics.fill(box.x() - 1, boxY, box.x(), boxY + BOX, OUTLINE);
-                graphics.fill(box.x() + BOX, boxY, box.x() + BOX + 1, boxY + BOX, OUTLINE);
+                graphics.fill(box.x() - 1, boxY - 1, box.x() + BOX + 1, boxY + 1,
+                        UiTheme.overlayHoverEdge());
+                graphics.fill(box.x() - 1, boxY + BOX, box.x() + BOX + 1, boxY + BOX + 1,
+                        UiTheme.overlayHoverEdge());
+                graphics.fill(box.x() - 1, boxY, box.x(), boxY + BOX, UiTheme.overlayHoverEdge());
+                graphics.fill(box.x() + BOX, boxY, box.x() + BOX + 1, boxY + BOX,
+                        UiTheme.overlayHoverEdge());
             }
             graphics.drawString(font, box.label(), box.x() + BOX + BOX_GAP, box.y() + 2,
-                    box.on() ? TEXT : TEXT_DIM, false);
+                    box.on() ? UiTheme.text() : UiTheme.textDim(), false);
         }
     }
 

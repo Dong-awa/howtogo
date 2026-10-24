@@ -175,6 +175,9 @@ public final class WebMapHttpCheck {
         expect("the world and dimension are named, which is what the page's title shows",
                 "sp_TEST".equals(payload.get("world").getAsString())
                         && "minecraft:overworld".equals(payload.get("dimension").getAsString()));
+        expect("and the interface theme is named with them, carried in the roads payload rather than "
+                        + "fetched from an endpoint of its own",
+                RoadMapSnapshot.DARK_THEME.equals(payload.get("theme").getAsString()));
 
         Result status = get(server.url() + "api/status");
         expect("the liveness call answers without touching the roads",
@@ -197,6 +200,26 @@ public final class WebMapHttpCheck {
                 roadsAgain.status == 200
                         && JsonParser.parseString(roadsAgain.body).getAsJsonObject()
                                 .getAsJsonArray("segments").size() == 5);
+
+        // The theme is an answer from the game, not a constant of the server: a source that reads
+        // the light style has to be served the light word. Without this, a server that hard-coded
+        // "dark" would pass every other check here and the page would never turn white.
+        WebMapServer light = null;
+        try {
+            light = WebMapServer.start(
+                    () -> WebMapCheck.fixtureSnapshot(RoadMapSnapshot.LIGHT_THEME), freePort());
+            JsonObject lightPayload = JsonParser.parseString(
+                    get(light.url() + "api/roads").body).getAsJsonObject();
+            expect("a reading taken in the light style is served the light word, so the theme belongs "
+                            + "to the reading and not to the server",
+                    RoadMapSnapshot.LIGHT_THEME.equals(lightPayload.get("theme").getAsString()));
+        } catch (IOException failed) {
+            expect("a server could be started for the theme check (" + failed.getMessage() + ")", false);
+        } finally {
+            if (light != null) {
+                light.stop();
+            }
+        }
 
         expect("no caching anywhere, so a restart cannot leave a stale script next to a live payload",
                 roads.noStore && roads.nosniff);

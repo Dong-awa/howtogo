@@ -4,7 +4,6 @@ import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadSegment;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.screens.Screen;
@@ -16,6 +15,7 @@ import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
+import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -94,6 +94,9 @@ public final class RoadNameScreen extends Screen {
     private int fieldX;
     private int fieldY;
     private int buttonY;
+
+    /** The done and cancel buttons, built in {@link #init()} and drawn and hit-tested by hand. */
+    private List<PanelButton> buttons = List.of();
 
     /** Names only: roads, railways, and anything else with no kind. */
     public RoadNameScreen(Screen parent, String titleKey, String initialValue,
@@ -222,10 +225,16 @@ public final class RoadNameScreen extends Screen {
 
         buttonY = fieldY + FIELD_HEIGHT + PANEL_PAD + extra;
         int half = (FIELD_WIDTH - PANEL_PAD) / 2;
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> accept())
-                .bounds(fieldX, buttonY, half, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), b -> onClose())
-                .bounds(fieldX + half + PANEL_PAD, buttonY, half, BUTTON_HEIGHT).build());
+        // The same two slots, now drawn by this panel rather than handed to the widget list: a
+        // vanilla button is a grey system widget on a sheet that is otherwise this mod's own, which
+        // the white style made the one thing on the panel that did not belong to it. Done is the
+        // action the panel exists for, so it takes the accent; cancel is ordinary.
+        buttons = List.of(
+                new PanelButton(fieldX, buttonY, half, BUTTON_HEIGHT,
+                        Component.translatable("gui.done"), PanelButton.Kind.PRIMARY, this::accept),
+                new PanelButton(fieldX + half + PANEL_PAD, buttonY, half, BUTTON_HEIGHT,
+                        Component.translatable("gui.cancel"), PanelButton.Kind.NEUTRAL,
+                        this::onClose));
     }
 
     private void accept() {
@@ -292,14 +301,14 @@ public final class RoadNameScreen extends Screen {
         int colour;
         if (typed == null) {
             beside = Component.translatable("screen.howtogo.road_layer").getString();
-            colour = 0xFF808A96;
+            colour = UiTheme.textFaint();
         } else if (typed < RoadSegment.MIN_LAYER || typed > RoadSegment.MAX_LAYER) {
             beside = Component.translatable("screen.howtogo.layer.out_of_range",
                     RoadSegment.MIN_LAYER, RoadSegment.MAX_LAYER).getString();
-            colour = 0xFFFF8060;
+            colour = UiTheme.error();
         } else {
             beside = Navigation.roadLayerLabel(typed);
-            colour = 0xFFA8D8FF;
+            colour = UiTheme.accentSoft();
         }
         graphics.drawString(this.font, this.font.plainSubstrByWidth(beside,
                         FIELD_WIDTH - LAYER_FIELD_WIDTH - 4), fieldX + LAYER_FIELD_WIDTH + 4, y + 4,
@@ -319,6 +328,16 @@ public final class RoadNameScreen extends Screen {
         return fieldX + index * (typeWidth() + TYPE_GAP);
     }
 
+    /**
+     * The row of place kinds, the one control on this panel that has a chosen state.
+     *
+     * <p>The faces are the button roles rather than the row roles, because a chip is a control and a
+     * row is not: on the white sheet the old row colour was white on a near-white panel, so an
+     * unselected kind had no face at all -- its label appeared to float on the sheet. The chosen one
+     * takes {@link UiTheme#selectionSoft()} rather than the full {@link UiTheme#selection()} of a
+     * picked list row: four solid accent blocks in one row read as four primary actions, and the one
+     * that is merely the current choice would shout as loudly as the button that commits the edit.
+     */
     private void drawTypes(GuiGraphics graphics, int mouseX, int mouseY) {
         PlaceKind[] kinds = PlaceKind.values();
         for (int i = 0; i < kinds.length; i++) {
@@ -327,7 +346,8 @@ public final class RoadNameScreen extends Screen {
             boolean selected = kinds[i] == selectedKind;
             boolean hovered = mouseX >= x && mouseX < x + typeWidth()
                     && mouseY >= y && mouseY < y + TYPE_HEIGHT;
-            int background = selected ? 0xFF1F6FEB : (hovered ? 0xFF3A4450 : 0xFF242A33);
+            int background = selected ? UiTheme.selectionSoft()
+                    : (hovered ? UiTheme.buttonHover() : UiTheme.button());
             graphics.fill(x, y, x + typeWidth(), y + TYPE_HEIGHT, background);
 
             String label = Component.translatable("screen.howtogo.place_kind." + kinds[i].id())
@@ -335,7 +355,7 @@ public final class RoadNameScreen extends Screen {
             String shown = this.font.plainSubstrByWidth(label, typeWidth() - 2);
             graphics.drawString(this.font, shown,
                     x + Math.max(0, (typeWidth() - this.font.width(shown)) / 2), y + 4,
-                    selected ? 0xFFFFFFFF : 0xFFA8B4C0, false);
+                    selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(), false);
         }
     }
 
@@ -348,6 +368,16 @@ public final class RoadNameScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
+        // The done and cancel buttons are drawn, not widgets, so this is their only chance to see a
+        // click; it comes before the kind row so a press on one of them is never also a change of
+        // kind under it.
+        if (button == 0) {
+            for (PanelButton candidate : buttons) {
+                if (candidate.click(mouseX, mouseY)) {
+                    return true;
+                }
+            }
+        }
         if (isPlaceEditor() && button == 0) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
@@ -429,10 +459,14 @@ public final class RoadNameScreen extends Screen {
             }
         }
 
-        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xE0181818);
+        // A window edge and an opaque sheet rather than a tint over the map: the prompt has to be
+        // readable on top of whatever the map happens to be drawing under it, and the title is the
+        // first thing on it that says what is being named.
+        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
+                UiTheme.windowEdge());
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
         graphics.drawString(this.font, this.title, panelX + PANEL_PAD, panelY + PANEL_PAD,
-                0xFFFFE070, false);
+                UiTheme.title(), false);
 
         super.render(graphics, mouseX, mouseY, partialTick);
         if (isPlaceEditor()) {
@@ -442,7 +476,24 @@ public final class RoadNameScreen extends Screen {
         }
         if (error != null) {
             graphics.drawString(this.font, error.getString(), fieldX, extraRowY() + TYPE_HEIGHT + 1,
-                    0xFFFF6B6B, false);
+                    UiTheme.error(), false);
+        }
+        // The panel's last row, drawn last: the kind row and the error line above it are this class's
+        // own drawing, and a button painted before its own row of chips could have one across it.
+        drawButtons(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The done and cancel buttons.
+     *
+     * <p>Drawn rather than handed to the widget list, which is why {@link #render} has to draw them
+     * itself and {@link #mouseClicked} has to route the click to them: see {@link PanelButton} for the
+     * trade that comes with that. The panel under them is drawn by {@link #render} before the text,
+     * so they land on the sheet rather than under it.
+     */
+    private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (PanelButton button : buttons) {
+            button.render(graphics, this.font, mouseX, mouseY);
         }
     }
 

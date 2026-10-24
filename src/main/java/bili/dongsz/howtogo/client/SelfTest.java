@@ -127,6 +127,7 @@ public final class SelfTest {
         results.add(checkStorage(network, lines));
         results.add(checkArchive());
         results.add(checkWebMap(network));
+        results.add(checkTheme());
         return results;
     }
 
@@ -740,6 +741,36 @@ public final class SelfTest {
             }
         }
         return false;
+    }
+
+    /**
+     * Whether the interface theme resolves the way it promises.
+     *
+     * <p>A palette is a matter of taste and cannot pass or fail; the rule that chooses between the
+     * two palettes can. Auto has to come out white in daylight, black at night, and black in every
+     * dimension that has no sky, which is the whole of what the option says it does. The spellings
+     * are checked too, because the two loaders write the setting differently -- one the id, one the
+     * constant name -- and a mode whose id does not read back as itself is a mode half the players
+     * cannot select; an id that names nothing has to fall back rather than throw.
+     *
+     * <p>The mode actually in force is reported with the verdict: "the theme is wrong" is otherwise
+     * a report nobody can act on, and this check runs in whatever dimension the player is standing
+     * in, which is exactly what auto depends on.
+     */
+    private static Result checkTheme() {
+        boolean day = UiTheme.autoIsLight(true, 0);
+        boolean night = !UiTheme.autoIsLight(true, 11);
+        boolean noSky = !UiTheme.autoIsLight(false, 0);
+        boolean ids = true;
+        for (UiTheme.Mode mode : UiTheme.Mode.values()) {
+            ids &= UiTheme.Mode.byId(mode.id()) == mode;
+        }
+        boolean unknownFallsBack = UiTheme.Mode.byId("not-a-mode") == null;
+        boolean ok = day && night && noSky && ids && unknownFallsBack;
+        String detail = "mode=" + RoadConfig.uiTheme().id() + " light=" + UiTheme.light()
+                + " day=" + day + " night=" + night + " noSky=" + noSky
+                + " ids=" + ids + " unknown=" + unknownFallsBack;
+        return new Result("command.howtogo.selftest.check.theme", ok, detail);
     }
 
     /** One HTTP reply, as the check above reads it. */

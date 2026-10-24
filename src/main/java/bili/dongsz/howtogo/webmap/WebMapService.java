@@ -8,6 +8,7 @@ import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
+import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.client.WorldFiles;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -42,6 +43,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * page, which is a handful a minute, and flattening a network of a few thousand segments costs about
  * as long as the JSON takes to serialise -- so the reading is taken per request and the page is never
  * wrong about a name.
+ *
+ * <h2>Why the page's theme travels in the roads payload</h2>
+ * The browser map follows the game's interface theme, and the theme is not a constant: {@code auto}
+ * asks the dimension whether it has a sky and the sky how bright it is. That is a question for the
+ * game's thread, so it is answered in {@link #readRoads()} beside the class colours and carried in
+ * the same JSON. There is deliberately no second endpoint and no second poll: the page already fetches
+ * the roads on load, on refresh and on its five-second poll, so the theme changes exactly when the
+ * map does and a tab that is not refreshing cannot end up with a palette from another moment.
  */
 public final class WebMapService {
 
@@ -167,9 +176,27 @@ public final class WebMapService {
         RoadNetwork network = RoadStore.get();
         String dimension = minecraft.level.dimension().location().toString();
         // Read here, on the game's thread, rather than left to the flattening: the browser map is
-        // served from another thread, and a config value is not something to be asking from there.
+        // served from another thread, and a config value -- or, below, a level and its sky -- is not
+        // something to be asking from there.
         return RoadMapSnapshot.of(WorldFiles.currentWorldKey(), dimension, network,
-                RoadConfig.roadColors(), readOnlyLayers());
+                RoadConfig.roadColors(), readOnlyLayers(), pageTheme());
+    }
+
+    /**
+     * The palette the browser page is to draw in, as the payload spells it.
+     *
+     * <p>{@link UiTheme#light()} is asked here, on the client thread, because its answer depends on
+     * the player's {@code ui_theme} setting, the dimension (the Nether and the End are always dark)
+     * and the sky's own brightness in the {@code auto} mode, and none of that may be touched from an
+     * HTTP handler. The handler only ever sees the resulting word.
+     *
+     * <p>The theme is folded into the roads payload rather than served from an endpoint of its own,
+     * because the page fetches the roads on load, on refresh and on its poll already; a theme that
+     * arrived on those fetches cannot be a theme the page forgot to ask for, and no second request
+     * can race the roads it belongs with.
+     */
+    private static String pageTheme() {
+        return UiTheme.light() ? RoadMapSnapshot.LIGHT_THEME : RoadMapSnapshot.DARK_THEME;
     }
 
     /**

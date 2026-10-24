@@ -13,7 +13,6 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 // 1.21.9 bundled mouse coordinates and the button into a record.
 //? if >=1.21.9 {
@@ -71,18 +70,10 @@ public final class MainScreen extends Screen {
     private static final double DEFAULT_SCALE = 0.30;
     private static final double ZOOM_STEP = 1.15;
 
-    private static final int COLOR_DIM = 0x90000000;
-    private static final int COLOR_PANEL = 0xF012171C;
-    private static final int COLOR_PANEL_EDGE = 0xFF2C3540;
-    private static final int COLOR_MAP_BACKDROP = 0xFF0B0F13;
-    private static final int COLOR_MAP_EDGE = 0xFF232B33;
-    private static final int COLOR_TITLE = 0xFFFFE070;
-    private static final int COLOR_TEXT = 0xFFD0D8E0;
-    private static final int COLOR_DIM_TEXT = 0xFF7E8B98;
-    private static final int COLOR_ROUTE = 0xFF4FA3FF;
-    private static final int COLOR_PLAYER = 0xFFFFFFFF;
-
     private final List<String> notices = new ArrayList<>();
+
+    /** The two rows of buttons, built in {@link #init()} and drawn and hit-tested by hand. */
+    private final List<PanelButton> buttons = new ArrayList<>();
 
     /** View centre in world blocks, and the zoom. Kept across a resize, not across screens. */
     private double centerX;
@@ -129,7 +120,12 @@ public final class MainScreen extends Screen {
         mapY = panelY + PAD + TITLE_HEIGHT + 2;
         int rowsTop = panelY + panelH - PAD - BUTTON_HEIGHT * 2 - GAP;
         int statusTop = mapY + 4;
-        int mapBottom = rowsTop - LINE_HEIGHT * 4 - GAP;
+        // Five lines between the map and the buttons: the mode, the trip (or the idle line), the
+        // totals, one notice, and the browser map's address when it is running. The address used to
+        // be placed by its own formula at the foot of the panel, which came out on exactly the line
+        // the first notice is drawn on -- so with the browser map running, any notice was painted on
+        // top of the address. Reserving the line here is what keeps the two apart.
+        int mapBottom = rowsTop - LINE_HEIGHT * 5 - GAP;
         mapH = Math.max(60, mapBottom - mapY);
         if (mapH > (panelH * MAP_SHARE) / 100) {
             mapH = (panelH * MAP_SHARE) / 100;
@@ -147,32 +143,50 @@ public final class MainScreen extends Screen {
         int row2Y = panelY + panelH - PAD - BUTTON_HEIGHT;
         int row1Y = row2Y - BUTTON_HEIGHT - GAP;
 
+        buttons.clear();
         int third = (inner - GAP * 2) / 3;
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.destination"), b -> openDestination())
-                .bounds(panelX + PAD, row1Y, third, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.stop"), b -> stopNavigation())
-                .bounds(panelX + PAD + third + GAP, row1Y, third, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.mode"), b -> cycleMode())
-                .bounds(panelX + PAD + (third + GAP) * 2, row1Y, third, BUTTON_HEIGHT).build());
+        buttons.add(new PanelButton(panelX + PAD, row1Y, third, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.main.destination"),
+                PanelButton.Kind.PRIMARY, this::openDestination));
+        buttons.add(new PanelButton(panelX + PAD + third + GAP, row1Y, third, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.main.stop"),
+                PanelButton.Kind.NEUTRAL, this::stopNavigation));
+        buttons.add(new PanelButton(panelX + PAD + (third + GAP) * 2, row1Y, third, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.main.mode"),
+                PanelButton.Kind.NEUTRAL, this::cycleMode));
 
         int quarter = (inner - GAP * 3) / 4;
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.data"), b -> openMapData())
-                .bounds(panelX + PAD, row2Y, quarter, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.selftest"), b -> runSelfTest())
-                .bounds(panelX + PAD + quarter + GAP, row2Y, quarter, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.main.webmap"), b -> toggleWebMap())
-                .bounds(panelX + PAD + (quarter + GAP) * 2, row2Y, quarter, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(panelX + PAD + (quarter + GAP) * 3, row2Y, quarter, BUTTON_HEIGHT).build());
+        buttons.add(new PanelButton(panelX + PAD, row2Y, quarter, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.main.data"),
+                PanelButton.Kind.NEUTRAL, this::openMapData));
+        buttons.add(new PanelButton(panelX + PAD + quarter + GAP, row2Y, quarter, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.main.selftest"),
+                PanelButton.Kind.NEUTRAL, this::runSelfTest));
+        buttons.add(new PanelButton(panelX + PAD + (quarter + GAP) * 2, row2Y, quarter,
+                BUTTON_HEIGHT, Component.translatable("screen.howtogo.main.webmap"),
+                PanelButton.Kind.NEUTRAL, this::toggleWebMap));
+        buttons.add(new PanelButton(panelX + PAD + (quarter + GAP) * 3, row2Y, quarter,
+                BUTTON_HEIGHT, Component.translatable("gui.done"),
+                PanelButton.Kind.NEUTRAL, this::onClose));
 
-        // The status block sits between the map and the buttons; remember where it starts.
-        this.statusY = Math.max(statusTop, row1Y - LINE_HEIGHT * 4 - 2);
+        // The status block sits between the map and the buttons; remember where it starts, and
+        // where the first row of buttons starts, because that is the block's floor.
+        this.firstButtonY = row1Y;
+        this.statusY = Math.max(statusTop, row1Y - LINE_HEIGHT * 5 - 2);
+    }
+
+    /**
+     * The two rows of buttons at the foot of the panel.
+     *
+     * <p>Drawn here rather than handed to the widget list, which is why {@link #render} has to draw
+     * them itself: a vanilla button is a grey system widget in a panel that is otherwise this mod's
+     * own, and the white style made that the one thing on the screen that did not belong to it. See
+     * {@link PanelButton} for the trade that comes with drawing them.
+     */
+    private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (PanelButton button : buttons) {
+            button.render(graphics, font, mouseX, mouseY);
+        }
     }
 
     /** A place name and where it goes on the map, collected in the shape pass and drawn after it. */
@@ -181,6 +195,9 @@ public final class MainScreen extends Screen {
 
     /** Top of the status block under the map, worked out in {@link #init()}. */
     private int statusY;
+
+    /** Top of the first row of buttons: the floor the status block may not draw past. */
+    private int firstButtonY;
 
     // ------------------------------------------------------------------ actions
 
@@ -219,7 +236,9 @@ public final class MainScreen extends Screen {
             // The same manual start as the command: open the page rather than leave a bare address
             // that only a click would turn into a browser, and a click would ask for confirmation.
             OsShell.openUrl(url);
-            notice(Component.translatable("screen.howtogo.main.webmap_running", url).getString());
+            // No notice for the successful start: the address line under the notices is the same
+            // address in the same words, so a notice saying it too would be two identical lines one
+            // under the other. The line appearing is the confirmation.
         } catch (IOException | RuntimeException failed) {
             HowToGo.LOGGER.warn("[HowToGo] webmap | could not start: {}", failed.toString());
             notice(Component.translatable("screen.howtogo.main.webmap_failed",
@@ -264,8 +283,18 @@ public final class MainScreen extends Screen {
         }
     }
 
-    /** Puts one line at the top of the notice block, keeping the block to a readable size. */
+    /**
+     * Puts one line at the top of the notice block, keeping the block to a readable size.
+     *
+     * <p>A line identical to the newest one is dropped rather than stacked: two controls that
+     * report the same thing (the stop button pressed twice, the browser map's address both as a
+     * notice and on its own line) would otherwise put the same words on two consecutive lines, which
+     * reads as a rendering fault rather than as a second answer.
+     */
     private void notice(String line) {
+        if (!notices.isEmpty() && notices.get(0).equals(line)) {
+            return;
+        }
         notices.add(0, line);
         while (notices.size() > 4) {
             notices.remove(notices.size() - 1);
@@ -288,6 +317,16 @@ public final class MainScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
+        // The buttons are drawn, not widgets, so nothing else will route a click to them: this is
+        // their only chance to see it, and it comes before the map so a click on a button is never
+        // also a drag that moves the view under it.
+        if (button == 0) {
+            for (PanelButton candidate : buttons) {
+                if (candidate.click(mouseX, mouseY)) {
+                    return true;
+                }
+            }
+        }
         if (button == 0 && insideMap(mouseX, mouseY)) {
             dragging = true;
             lastMouseX = mouseX;
@@ -406,18 +445,31 @@ public final class MainScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        graphics.fill(0, 0, this.width, this.height, COLOR_DIM);
+        graphics.fill(0, 0, this.width, this.height, UiTheme.dim());
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                COLOR_PANEL_EDGE);
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, COLOR_PANEL);
+                UiTheme.panelEdge());
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panel());
     }
 
+    /**
+     * The frame.
+     *
+     * <p>{@code super.render} first, and not for the widgets: it is what calls
+     * {@link #renderBackground} and so puts the dimming and the sheet on the screen at all. This
+     * screen draws its own map and text over that sheet, which is why it does not look like the other
+     * screens -- but it still has to ask the parent for the background, and a version of this method
+     * that only drew the map and the text left every piece of chrome off the screen: no dimming, no
+     * card, no buttons. (The buttons have since stopped being widgets; the background call is still
+     * what the parent is for.)
+     */
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        super.render(graphics, mouseX, mouseY, partialTick);
         // Shapes first, then every piece of text: drawing a string flushes the vertex buffer this
         // uses, so a shape emitted after one would go through a stale consumer.
         List<MapLabel> labels = drawMap(graphics);
         drawText(graphics, labels);
+        drawButtons(graphics, mouseX, mouseY);
     }
 
     /**
@@ -427,11 +479,11 @@ public final class MainScreen extends Screen {
      */
     private List<MapLabel> drawMap(GuiGraphics graphics) {
         List<MapLabel> labels = new ArrayList<>();
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, COLOR_MAP_BACKDROP);
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + 1, COLOR_MAP_EDGE);
-        graphics.fill(mapX, mapY + mapH - 1, mapX + mapW, mapY + mapH, COLOR_MAP_EDGE);
-        graphics.fill(mapX, mapY, mapX + 1, mapY + mapH, COLOR_MAP_EDGE);
-        graphics.fill(mapX + mapW - 1, mapY, mapX + mapW, mapY + mapH, COLOR_MAP_EDGE);
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, UiTheme.mapBackdrop());
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + 1, UiTheme.mapEdge());
+        graphics.fill(mapX, mapY + mapH - 1, mapX + mapW, mapY + mapH, UiTheme.mapEdge());
+        graphics.fill(mapX, mapY, mapX + 1, mapY + mapH, UiTheme.mapEdge());
+        graphics.fill(mapX + mapW - 1, mapY, mapX + mapW, mapY + mapH, UiTheme.mapEdge());
 
         int minX = mapX;
         int minY = mapY;
@@ -472,7 +524,7 @@ public final class MainScreen extends Screen {
         Route route = Navigation.route();
         if (route.isPresent()) {
             HudDraw.emitPath(sink, route.points(), pathM00(), 0, pathM02(), 0, pathM11(),
-                    pathM12(), 1.6, COLOR_ROUTE, 0xFF, minX, minY, maxX, maxY);
+                    pathM12(), 1.6, UiTheme.route(), 0xFF, minX, minY, maxX, maxY);
         }
 
         // Places, and the labels to draw after the shapes. The names are thinned by the same rule
@@ -486,7 +538,7 @@ public final class MainScreen extends Screen {
                 continue;
             }
             HudDraw.emitPlaceMarker(sink, sx, sy, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
-                    HudDraw.COLOR_PLACE);
+                    UiTheme.place());
             if (!names) {
                 continue;
             }
@@ -510,7 +562,7 @@ public final class MainScreen extends Screen {
             double sx = screenX(target.x());
             double sy = screenY(target.z());
             if (sx >= minX && sx < maxX && sy >= minY && sy < maxY) {
-                HudDraw.emitPlaceMarker(sink, sx, sy, 4.0, 0xFFFF6B6B);
+                HudDraw.emitPlaceMarker(sink, sx, sy, 4.0, UiTheme.destination());
             }
         }
 
@@ -584,19 +636,19 @@ public final class MainScreen extends Screen {
         double leftY = sy - fz * 3 + pz * 3.2;
         double rightX = sx - fx * 3 - px * 3.2;
         double rightY = sy - fz * 3 - pz * 3.2;
-        HudDraw.emitTriangle(sink, tipX, tipY, leftX, leftY, rightX, rightY, COLOR_PLAYER);
+        HudDraw.emitTriangle(sink, tipX, tipY, leftX, leftY, rightX, rightY, UiTheme.player());
     }
 
     /** Every string on the screen, after every shape. */
     private void drawText(GuiGraphics graphics, List<MapLabel> labels) {
         var font = this.font;
 
-        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, COLOR_TITLE, false);
+        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
 
         Destination target = Navigation.target();
         int y = statusY;
         graphics.drawString(font, Component.translatable("screen.howtogo.main.mode_now",
-                Navigation.mode().label()).getString(), panelX + PAD, y, COLOR_TEXT, false);
+                Navigation.mode().label()).getString(), panelX + PAD, y, UiTheme.text(), false);
         y += LINE_HEIGHT;
         if (target != null) {
             String line = Navigation.route().isPresent() && !Navigation.showArrival()
@@ -607,30 +659,37 @@ public final class MainScreen extends Screen {
                     : Component.translatable("screen.howtogo.main.navigating_no_route",
                             target.name()).getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
-                    panelX + PAD, y, COLOR_TEXT, false);
+                    panelX + PAD, y, UiTheme.text(), false);
         } else {
             graphics.drawString(font, Component.translatable("screen.howtogo.main.idle").getString(),
-                    panelX + PAD, y, COLOR_DIM_TEXT, false);
+                    panelX + PAD, y, UiTheme.textMuted(), false);
         }
         y += LINE_HEIGHT;
         graphics.drawString(font, Component.translatable("screen.howtogo.main.stats",
                         RoadStore.get().segmentCount(),
                         RoadWeaverLayer.segments().size(),
                         Destinations.places().size()).getString(),
-                panelX + PAD, y, COLOR_DIM_TEXT, false);
+                panelX + PAD, y, UiTheme.textMuted(), false);
 
+        // The browser map's address has the last line of the status block to itself, and the notices
+        // stop one line above it. Both used to be placed independently -- the notices from the top of
+        // the block, the address from the foot of the panel -- and the two formulas landed on the
+        // same y, so with the browser map running a notice was painted straight over the address.
+        String webmap = WebMapService.url();
+        int addressY = firstButtonY - 2 - LINE_HEIGHT;
+        int lastNoticeY = webmap != null ? addressY - LINE_HEIGHT : firstButtonY - 2 - LINE_HEIGHT;
         for (String notice : notices) {
-            y += LINE_HEIGHT;
-            if (y > panelY + panelH - PAD - BUTTON_HEIGHT * 2 - GAP - LINE_HEIGHT) {
+            if (y + LINE_HEIGHT > lastNoticeY) {
                 break;
             }
+            y += LINE_HEIGHT;
             graphics.drawString(font, font.plainSubstrByWidth(notice, panelW - PAD * 2),
-                    panelX + PAD, y, COLOR_TEXT, false);
+                    panelX + PAD, y, UiTheme.text(), false);
         }
 
         String hint = Component.translatable("screen.howtogo.main.map_hint").getString();
         graphics.drawString(font, hint, mapX + 4,
-                mapY + mapH - LINE_HEIGHT - 2, COLOR_DIM_TEXT, false);
+                mapY + mapH - LINE_HEIGHT - 2, UiTheme.textMuted(), false);
 
         for (MapLabel label : labels) {
             int labelX = (int) Math.round(label.x());
@@ -638,17 +697,15 @@ public final class MainScreen extends Screen {
             if (labelX < mapX || labelX >= mapX + mapW - 4 || labelY < mapY || labelY >= mapY + mapH) {
                 continue;
             }
-            graphics.drawString(font, label.name(), labelX, labelY, 0xFFE8EEF4, false);
+            graphics.drawString(font, label.name(), labelX, labelY, UiTheme.mapLabelStrong(), false);
         }
 
-        String webmap = WebMapService.url();
+        // The browser map's address, on the line reserved for it between the notices and the buttons.
         if (webmap != null) {
             String line = Component.translatable("screen.howtogo.main.webmap_running", webmap)
                     .getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
-                    panelX + PAD, panelY + panelH - PAD - BUTTON_HEIGHT * 2 - GAP - 2
-                            - LINE_HEIGHT,
-                    COLOR_DIM_TEXT, false);
+                    panelX + PAD, addressY, UiTheme.textMuted(), false);
         }
     }
 }

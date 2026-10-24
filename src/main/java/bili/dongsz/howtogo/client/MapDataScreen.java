@@ -4,7 +4,6 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.worlddata.WorldArchive;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 // 1.21.9 bundled mouse coordinates and the button into a record.
 //? if >=1.21.9 {
@@ -59,6 +58,10 @@ public final class MapDataScreen extends Screen {
     private static final int BUTTON_HEIGHT = 18;
     private static final int ROW_HEIGHT = 13;
 
+    /** The side of a row's origin marker, and the room it and its gap take out of the row's text. */
+    private static final int ROW_MARKER = 6;
+    private static final int ROW_MARKER_STEP = 9;
+
     /** Five lines of context above the list: world, directory, export, import, warning. */
     private static final int INFO_LINES = 5;
     private static final int LINE_HEIGHT = 11;
@@ -83,6 +86,9 @@ public final class MapDataScreen extends Screen {
     private int listH;
     private int visibleRows;
     private int listScroll;
+
+    /** The two footer rows, built in {@link #init()} and drawn and hit-tested by hand. */
+    private List<PanelButton> buttons = List.of();
 
     public MapDataScreen(Screen parent) {
         super(Component.translatable(TITLE));
@@ -135,31 +141,37 @@ public final class MapDataScreen extends Screen {
         listH = visibleRows * ROW_HEIGHT;
         listScroll = clampScroll(listScroll);
 
+        // The same six slots, now drawn by this screen rather than handed to the widget list: a
+        // vanilla button is a grey system widget in a panel that is otherwise this mod's own, which
+        // the white style made the one thing on the screen that did not belong to it.
         int innerW = panelW - PAD * 2;
         int half = (innerW - GAP) / 2;
-        addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.mapdata.export"),
-                        b -> export())
-                .bounds(panelX + PAD, row1Y, half, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.mapdata.open_imports"),
-                        b -> MapDataTransfer.openFolder(MapDataTransfer.importsDirectory()))
-                .bounds(panelX + PAD + half + GAP, row1Y, half, BUTTON_HEIGHT).build());
-
         int third = (innerW - GAP * 3) / 4;
-        addRenderableWidget(Button.builder(
+        buttons = List.of(
+                // The archive is what the screen exists for; the five around it open a folder or
+                // close the screen, so they are neutral.
+                new PanelButton(panelX + PAD, row1Y, half, BUTTON_HEIGHT,
+                        Component.translatable("screen.howtogo.mapdata.export"),
+                        PanelButton.Kind.PRIMARY, this::export),
+                new PanelButton(panelX + PAD + half + GAP, row1Y, half, BUTTON_HEIGHT,
+                        Component.translatable("screen.howtogo.mapdata.open_imports"),
+                        PanelButton.Kind.NEUTRAL,
+                        () -> MapDataTransfer.openFolder(MapDataTransfer.importsDirectory())),
+                new PanelButton(panelX + PAD, row2Y, third, BUTTON_HEIGHT,
                         Component.translatable("screen.howtogo.mapdata.open_exports"),
-                        b -> MapDataTransfer.openFolder(MapDataTransfer.exportsDirectory()))
-                .bounds(panelX + PAD, row2Y, third, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
+                        PanelButton.Kind.NEUTRAL,
+                        () -> MapDataTransfer.openFolder(MapDataTransfer.exportsDirectory())),
+                new PanelButton(panelX + PAD + third + GAP, row2Y, third, BUTTON_HEIGHT,
                         Component.translatable("screen.howtogo.mapdata.open_backups"),
-                        b -> MapDataTransfer.openFolder(MapDataTransfer.backupsDirectory()))
-                .bounds(panelX + PAD + third + GAP, row2Y, third, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(
+                        PanelButton.Kind.NEUTRAL,
+                        () -> MapDataTransfer.openFolder(MapDataTransfer.backupsDirectory())),
+                new PanelButton(panelX + PAD + (third + GAP) * 2, row2Y, third, BUTTON_HEIGHT,
                         Component.translatable("screen.howtogo.mapdata.open_data"),
-                        b -> MapDataTransfer.openFolder(MapDataTransfer.dataDirectory()))
-                .bounds(panelX + PAD + (third + GAP) * 2, row2Y, third, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(panelX + PAD + (third + GAP) * 3, row2Y, third, BUTTON_HEIGHT).build());
+                        PanelButton.Kind.NEUTRAL,
+                        () -> MapDataTransfer.openFolder(MapDataTransfer.dataDirectory())),
+                new PanelButton(panelX + PAD + (third + GAP) * 3, row2Y, third, BUTTON_HEIGHT,
+                        Component.translatable("gui.done"), PanelButton.Kind.NEUTRAL,
+                        this::onClose));
     }
 
     // ------------------------------------------------------------------ actions
@@ -227,6 +239,14 @@ public final class MapDataScreen extends Screen {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
         if (button == 0) {
+            // The footer buttons are drawn, not widgets, so nothing else will route a click to them:
+            // this is their only chance to see one, and it comes before the list so a press on a
+            // button is never also a press on the archive row behind it.
+            for (PanelButton candidate : buttons) {
+                if (candidate.click(mouseX, mouseY)) {
+                    return true;
+                }
+            }
             int row = rowAt(mouseX, mouseY);
             if (row >= 0 && row < candidates.size()) {
                 askToImport(candidates.get(row).file);
@@ -290,14 +310,17 @@ public final class MapDataScreen extends Screen {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
 
-        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xF0181818);
+        // The edge and sheet belong to renderBackground so that everything render() draws afterwards --
+        // the buttons and the context lines -- lands on top of the panel rather than behind it.
+        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
+                UiTheme.windowEdge());
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Widgets and the panel first, then text: drawn in this order so a button is never under a
-        // line of context, which is what a panel painted after its own widgets would do.
+        // super.render first, for the sheet it draws through renderBackground; then the context lines;
+        // then the buttons, last, so no line of context can land on a label.
         super.render(graphics, mouseX, mouseY, partialTick);
 
         int x = panelX + PAD;
@@ -305,11 +328,11 @@ public final class MapDataScreen extends Screen {
         int y = panelY + PAD;
 
         listScroll = clampScroll(listScroll);
-        graphics.drawString(this.font, this.title, x, y, 0xFFFFE070, false);
+        graphics.drawString(this.font, this.title, x, y, UiTheme.title(), false);
 
         y += LINE_HEIGHT + 4;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.world",
-                WorldFiles.currentWorldKey()), 0xFFD0D8E0);
+                WorldFiles.currentWorldKey()), UiTheme.text());
         y += LINE_HEIGHT;
         String directory = MapDataTransfer.worldLoaded()
                 ? MapDataTransfer.dataDirectory().getFileName().toString() : "?";
@@ -317,32 +340,50 @@ public final class MapDataScreen extends Screen {
                 ? Component.translatable("screen.howtogo.mapdata.directory_only", directory)
                 : Component.translatable("screen.howtogo.mapdata.directory", directory, stats.files,
                         MapDataTransfer.humanSize(stats.bytes));
-        drawLine(graphics, x, y, room, directoryLine, 0xFFA8B4C0);
+        drawLine(graphics, x, y, room, directoryLine, UiTheme.textSecondary());
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.export_hint"),
-                0xFFA8B4C0);
+                UiTheme.textSecondary());
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.import_hint"),
-                0xFFA8B4C0);
+                UiTheme.textSecondary());
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.overwrite_warning"), 0xFFFFC060);
+                Component.translatable("screen.howtogo.mapdata.overwrite_warning"), UiTheme.note());
 
         int headerY = listY - LINE_HEIGHT - 1;
         drawLine(graphics, x, headerY, room, Component.translatable("screen.howtogo.mapdata.list",
-                candidates.size()), 0xFFA8B4C0);
+                candidates.size()), UiTheme.textSecondary());
         drawList(graphics, mouseX, mouseY);
 
         int statusY = listY + listH + 4;
         if (status != null) {
-            drawLine(graphics, x, statusY, room, status, statusError ? 0xFFFF6B6B : 0xFF7FD08A);
+            drawLine(graphics, x, statusY, room, status,
+                    statusError ? UiTheme.error() : UiTheme.okSoft());
+        }
+        drawButtons(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The footer buttons.
+     *
+     * <p>Drawn rather than handed to the widget list, which is why {@link #render} has to draw them
+     * itself and {@link #mouseClicked} has to route the click to them: see {@link PanelButton} for the
+     * trade that comes with that. They are drawn last in the frame because the context lines above
+     * them are drawn by this class too, and a button painted before those lines would have one of
+     * them across its label.
+     */
+    private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (PanelButton button : buttons) {
+            button.render(graphics, this.font, mouseX, mouseY);
         }
     }
 
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         if (candidates.isEmpty()) {
             drawLine(graphics, listX, listY, listW,
-                    Component.translatable("screen.howtogo.mapdata.no_archives"), 0xFF808A96);
+                    Component.translatable("screen.howtogo.mapdata.no_archives"),
+                    UiTheme.textFaint());
             return;
         }
         int hovered = rowAt(mouseX, mouseY);
@@ -352,19 +393,30 @@ public final class MapDataScreen extends Screen {
             MapDataTransfer.Candidate candidate = candidates.get(index);
             int y = listY + row * ROW_HEIGHT;
             if (index == hovered) {
-                graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, 0xFF1F6FEB);
+                graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, UiTheme.selection());
             }
+            // The marker says where the archive came from before the detail line is read: a backup is
+            // the one entry on this list that does something other than bring a map in, and telling
+            // it apart by colour is what keeps it from being clicked as if it were one.
+            HudDraw.drawRowMarker(graphics, listX + 2, y + 3, ROW_MARKER, originColour(candidate));
 
             String fileName = candidate.file.getFileName().toString();
-            graphics.drawString(this.font, this.font.plainSubstrByWidth(fileName, listW - 4),
-                    listX + 2, y + 2, index == hovered ? 0xFFFFFFFF : 0xFFD0D8E0, false);
-            int nameRoom = Math.min(this.font.width(fileName), listW - 4) + GAP;
-            String detail = detailOf(candidate);
-            int detailColor = index == hovered ? 0xFFD0E0FF
-                    : candidate.origin == MapDataTransfer.Origin.BACKUP ? 0xFFFFC060 : 0xFF808A96;
             graphics.drawString(this.font,
-                    this.font.plainSubstrByWidth(detail, Math.max(8, listW - nameRoom - 4)),
-                    listX + 2 + nameRoom, y + 2, detailColor, false);
+                    this.font.plainSubstrByWidth(fileName, listW - 4 - ROW_MARKER_STEP),
+                    listX + 2 + ROW_MARKER_STEP, y + 2,
+                    index == hovered ? UiTheme.onSelection() : UiTheme.text(), false);
+            int nameRoom = Math.min(this.font.width(fileName), listW - 4 - ROW_MARKER_STEP) + GAP;
+            String detail = detailOf(candidate);
+            // The hovered row is a filled selection, so both of its text ranks swap to the pair that
+            // reads on that fill. Away from the cursor a backup says what it is in the note colour:
+            // "this one would roll the map back" is the one detail on a row that must not be missed.
+            int detailColor = index == hovered ? UiTheme.onSelectionDetail()
+                    : candidate.origin == MapDataTransfer.Origin.BACKUP
+                            ? UiTheme.note() : UiTheme.textFaint();
+            graphics.drawString(this.font,
+                    this.font.plainSubstrByWidth(detail,
+                            Math.max(8, listW - nameRoom - 4 - ROW_MARKER_STEP)),
+                    listX + 2 + ROW_MARKER_STEP + nameRoom, y + 2, detailColor, false);
         }
         graphics.disableScissor();
 
@@ -374,8 +426,25 @@ public final class MapDataScreen extends Screen {
             String count = Math.min(candidates.size(), listScroll + visibleRows) + "/"
                     + candidates.size();
             graphics.drawString(this.font, count, listX + listW - this.font.width(count),
-                    listY - LINE_HEIGHT - 1, 0xFF808A96, false);
+                    listY - LINE_HEIGHT - 1, UiTheme.textFaint(), false);
         }
+    }
+
+    /**
+     * The colour that marks an archive by where it came from.
+     *
+     * <p>The three folders are three different things a row can do: an import is a file the player
+     * put there, an export is their own map coming back, and a backup is the undo for an earlier
+     * import -- the one row on the list that rolls the map back rather than bringing a map in. The
+     * colours come from the theme's meanings rather than from a new set of three: the accent for
+     * something to act on, the ok green for the player's own archive, the note amber for the undo.
+     */
+    private static int originColour(MapDataTransfer.Candidate candidate) {
+        return switch (candidate.origin) {
+            case IMPORTS -> UiTheme.accent();
+            case EXPORTS -> UiTheme.ok();
+            case BACKUP -> UiTheme.note();
+        };
     }
 
     /**

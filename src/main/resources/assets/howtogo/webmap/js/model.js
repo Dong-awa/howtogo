@@ -4,10 +4,10 @@
  *
  * The contract promises a good payload; this file is what happens when it is not
  * quite one. A road with no name, a class the frontend has never heard of, a segment
- * with a single point, an empty network, a 503 body of {"error": "..."} -- all of
- * those arrive here and leave as something the renderer can draw without a single
- * `if` about the payload's mood. Nothing in this file touches the DOM, so the test
- * harness runs the same normalisation the page does.
+ * with a single point, an empty network, a payload from before the theme field existed,
+ * a 503 body of {"error": "..."} -- all of those arrive here and leave as something the
+ * renderer can draw without a single `if` about the payload's mood. Nothing in this file
+ * touches the DOM, so the test harness runs the same normalisation the page does.
  */
 (function (root, factory) {
   const api = factory();
@@ -18,6 +18,18 @@
 
   const LAYER_MIN = -32;
   const LAYER_MAX = 32;
+
+  /*
+   * The page's two palettes, spelled as the payload and the stylesheet spell them.
+   *
+   * The server resolves the theme on the game's own thread -- config, dimension, sky -- and
+   * carries the answer in `/api/roads`; this file only reduces it to one of these two words.
+   * The dark style is the default because it is the look the page has always had: a payload
+   * written before the theme field existed, or one whose theme a newer version renamed, is
+   * drawn the way it was drawn then rather than in a palette nobody asked for.
+   */
+  const THEMES = ['light', 'dark'];
+  const DEFAULT_THEME = 'dark';
 
   /** What the six class ids mean on screen, and the colours the mod already uses. */
   const DEFAULT_CLASSES = [
@@ -114,6 +126,20 @@
     if (typeof value !== 'string') return fallback;
     const text = value.trim().toUpperCase();
     return allowed.indexOf(text) >= 0 ? text : fallback;
+  }
+
+  /**
+   * One of the page's two themes, from whatever the payload carried.
+   *
+   * Tolerant on purpose: the field may be absent (a payload from an older build), null, or a
+   * word a future version added, and in every one of those cases the page must draw rather than
+   * guess. A word outside the table is the dark style -- the value that existed before the field
+   * did -- so an unrecognised theme cannot leave the page in a palette it has no stylesheet for.
+   */
+  function normalizeTheme(value) {
+    if (typeof value !== 'string') return DEFAULT_THEME;
+    const text = value.trim().toLowerCase();
+    return THEMES.indexOf(text) >= 0 ? text : DEFAULT_THEME;
   }
 
   const isKnownClass = (id) => Object.prototype.hasOwnProperty.call(ROAD_CLASS_RANK, id);
@@ -384,6 +410,7 @@
       world: typeof p.world === 'string' ? p.world : '',
       dimension: typeof p.dimension === 'string' ? p.dimension : '',
       empty: p.empty === true || (nodes.length === 0 && segments.length === 0),
+      theme: normalizeTheme(p.theme),
       bounds: resolveBounds(reported, extent),
       reportedBounds: reported,
       extent,
@@ -502,6 +529,8 @@
   return {
     LAYER_MIN,
     LAYER_MAX,
+    THEMES,
+    DEFAULT_THEME,
     DEFAULT_CLASSES,
     UNKNOWN_COLOR,
     UNKNOWN_WIDTH,
@@ -531,5 +560,6 @@
     errorOf,
     sanitiseColor,
     cleanName,
+    normalizeTheme,
   };
 });

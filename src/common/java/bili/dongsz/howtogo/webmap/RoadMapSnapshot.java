@@ -36,11 +36,34 @@ import java.util.TreeSet;
  * sides: {@code tools/routing-harness} asserts the key set and the values of a fixture network, and
  * {@code tools/webmap-test} feeds a payload of the same shape through the page's own parser. Adding a
  * field is therefore a two-place change, which is the point.
+ *
+ * <h2>The one field that is not a fact about the roads</h2>
+ * {@link #theme()} says which of the page's two palettes to draw the map in, because the browser map
+ * is a second surface of this mod and has to look like the interfaces beside it. It is resolved by
+ * the caller on the game's thread -- the config, the dimension and the sky are not questions an HTTP
+ * thread may ask -- and handed in as a word, exactly as the class colours are handed in as numbers.
  */
 public final class RoadMapSnapshot {
 
     /** Bumped when a field's meaning changes; the page reads it to refuse a payload it cannot use. */
     public static final int FORMAT_VERSION = 2;
+
+    /**
+     * The white style, as the page spells it in its {@code data-theme} attribute.
+     *
+     * <p>The words are the page's own -- "light" and "dark", the two its stylesheet and its
+     * normaliser agree on -- rather than a boolean, because the field is a hint to the page and the
+     * page's vocabulary is what decides what the two words mean.
+     */
+    public static final String LIGHT_THEME = "light";
+
+    /**
+     * The black style.
+     *
+     * <p>Also the answer for a caller that has no theme to give, which is the same answer the
+     * in-game theme gives when no world is loaded: see {@link #of(String, String, RoadNetwork)}.
+     */
+    public static final String DARK_THEME = "dark";
 
     /** One graph vertex, flattened. */
     public record Node(int id, int x, int y, int z, String type, String placeKind, String name) {
@@ -96,6 +119,14 @@ public final class RoadMapSnapshot {
 
     private final String world;
     private final String dimension;
+    /**
+     * Which palette the page is to draw in, as the page spells it: {@link #LIGHT_THEME} or
+     * {@link #DARK_THEME}.
+     *
+     * <p>Never null, and never anything else: the factories reduce whatever the caller says to one of
+     * the two words, so the page has one branch and the payload has one possible shape.
+     */
+    private final String theme;
     private final Bounds bounds;
     private final List<Node> nodes;
     private final List<Segment> segments;
@@ -113,11 +144,13 @@ public final class RoadMapSnapshot {
      */
     private final Map<RoadClass, Integer> classColours;
 
-    private RoadMapSnapshot(String world, String dimension, Bounds bounds, List<Node> nodes,
-                            List<Segment> segments, int[] layers, double lengthBlocks,
-                            boolean empty, Map<RoadClass, Integer> classColours) {
+    private RoadMapSnapshot(String world, String dimension, String theme, Bounds bounds,
+                            List<Node> nodes, List<Segment> segments, int[] layers,
+                            double lengthBlocks, boolean empty,
+                            Map<RoadClass, Integer> classColours) {
         this.world = world;
         this.dimension = dimension;
+        this.theme = normaliseTheme(theme);
         this.bounds = bounds;
         this.nodes = List.copyOf(nodes);
         this.segments = List.copyOf(segments);
@@ -146,6 +179,12 @@ public final class RoadMapSnapshot {
      * <p>Must be called on the thread that owns the network: this walks it. The result carries no
      * reference to it.
      *
+     * <p>The page is told the dark style. A caller that does not state a theme is one with no game
+     * to ask -- the standalone demo server, or a self-test that has no world loaded -- and dark is
+     * the same answer the in-game theme gives in that situation; see
+     * {@link #of(String, String, RoadNetwork, Map, List, String)} for the form that carries a real
+     * answer.
+     *
      * @param world        the world the data belongs to, for the page's own title; may be blank
      * @param dimension    the dimension id, e.g. {@code minecraft:overworld}
      * @param classColours the ARGB colour to draw each class in; a class left out keeps its own
@@ -153,7 +192,7 @@ public final class RoadMapSnapshot {
      */
     public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
                                      Map<RoadClass, Integer> classColours) {
-        return of(world, dimension, network, classColours, List.of());
+        return of(world, dimension, network, classColours, List.of(), DARK_THEME);
     }
 
     /**
@@ -169,11 +208,35 @@ public final class RoadMapSnapshot {
      * <p>Must be called on the thread that owns the networks: this walks them. The result carries no
      * reference to any of them.
      *
+     * <p>The page is told the dark style, for the reason given on
+     * {@link #of(String, String, RoadNetwork, Map)}.
+     *
      * @param readOnlyLayers layers to fold in, in draw order (first under, last on top); may be empty
      */
     public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
                                      Map<RoadClass, Integer> classColours,
                                      List<ReadOnlyLayer> readOnlyLayers) {
+        return of(world, dimension, network, classColours, readOnlyLayers, DARK_THEME);
+    }
+
+    /**
+     * Flattens a network, with the colours to draw each class in and the palette to draw the page in.
+     *
+     * <p>This is the form the running game uses: {@code WebMapService} reads the theme on the
+     * client thread, beside the colours and for the same reason, and hands the answer in as one of
+     * the two words above. Nothing is resolved here -- whether the sky is dark, whether the dimension
+     * has a sky at all, and what the player chose in the config are all questions only the game's
+     * thread may answer.
+     *
+     * <p>Must be called on the thread that owns the network: this walks it. The result carries no
+     * reference to it.
+     *
+     * @param theme the palette the page is to draw in, {@link #LIGHT_THEME} or {@link #DARK_THEME};
+     *              null or an unknown word is the dark style
+     */
+    public static RoadMapSnapshot of(String world, String dimension, RoadNetwork network,
+                                     Map<RoadClass, Integer> classColours,
+                                     List<ReadOnlyLayer> readOnlyLayers, String theme) {
         Objects.requireNonNull(network, "network");
         Map<RoadClass, Integer> colours = classColours == null ? Map.of() : classColours;
         List<ReadOnlyLayer> extraLayers = readOnlyLayers == null ? List.of() : readOnlyLayers;
@@ -257,7 +320,21 @@ public final class RoadMapSnapshot {
         }
         return new RoadMapSnapshot(world == null ? "" : world,
                 dimension == null || dimension.isBlank() ? "unknown" : dimension,
-                bounds, nodes, segments, layerArray, length, nothing, colours);
+                theme, bounds, nodes, segments, layerArray, length, nothing, colours);
+    }
+
+    /**
+     * A theme name reduced to one of the two words the page knows.
+     *
+     * <p>Anything that is not "light" becomes the dark style: a caller with no answer, a null, a
+     * word a newer version might have added. That is the same answer the in-game theme gives when no
+     * world is loaded, and it is the page's own default, so a payload carrying it can never be the
+     * reason a page comes up in a palette the player did not expect.
+     */
+    private static String normaliseTheme(String theme) {
+        return theme != null && LIGHT_THEME.equalsIgnoreCase(theme.trim())
+                ? LIGHT_THEME
+                : DARK_THEME;
     }
 
     /** One segment as the page receives it, with its display curve when it has one. */
@@ -308,9 +385,15 @@ public final class RoadMapSnapshot {
     /** The same, with the colours the legend is to be drawn in. */
     public static RoadMapSnapshot none(String world, String dimension,
                                        Map<RoadClass, Integer> classColours) {
+        return none(world, dimension, classColours, DARK_THEME);
+    }
+
+    /** The same, with the palette the page is to draw the empty map in; see {@link #of}. */
+    public static RoadMapSnapshot none(String world, String dimension,
+                                       Map<RoadClass, Integer> classColours, String theme) {
         return new RoadMapSnapshot(world == null ? "" : world,
                 dimension == null || dimension.isBlank() ? "unknown" : dimension,
-                new Bounds(0, 0, 0, 0), List.of(), List.of(), new int[0], 0.0, true,
+                theme, new Bounds(0, 0, 0, 0), List.of(), List.of(), new int[0], 0.0, true,
                 classColours == null ? Map.of() : classColours);
     }
 
@@ -320,6 +403,18 @@ public final class RoadMapSnapshot {
 
     public String dimension() {
         return dimension;
+    }
+
+    /**
+     * The palette the page is to draw in, as the page spells it: {@link #LIGHT_THEME} or
+     * {@link #DARK_THEME}, never null.
+     *
+     * <p>Resolved from the config, the dimension and the sky before this snapshot existed; see
+     * {@link #of(String, String, RoadNetwork, Map, List, String)} for why it is carried rather than
+     * looked up by whoever is writing the JSON.
+     */
+    public String theme() {
+        return theme;
     }
 
     public Bounds bounds() {
@@ -374,6 +469,9 @@ public final class RoadMapSnapshot {
         root.put("world", world);
         root.put("dimension", dimension);
         root.put("empty", empty);
+        // Always present, even though the page tolerates its absence: this build always has an
+        // answer, and a field that is sometimes omitted is a field every reader has to branch on.
+        root.put("theme", theme);
 
         Map<String, Object> extent = new LinkedHashMap<>();
         extent.put("minX", bounds.minX());

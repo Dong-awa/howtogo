@@ -2,10 +2,8 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.worlddata.WorldArchive;
-import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 // 1.21.9 bundled mouse coordinates and the button into a record.
 //? if >=1.21.9 {
@@ -63,6 +61,9 @@ public final class MapImportScreen extends Screen {
 
     private Component error;
 
+    /** The confirm and cancel buttons, built in {@link #init()} and drawn and hit-tested by hand. */
+    private List<PanelButton> buttons = List.of();
+
     private int panelX;
     private int panelY;
     private int panelW;
@@ -96,14 +97,16 @@ public final class MapImportScreen extends Screen {
         int total = confirmWidth + GAP + cancelWidth;
         int startX = panelX + (panelW - total) / 2;
 
-        addRenderableWidget(Button.builder(
-                        Component.translatable("screen.howtogo.import_confirm.confirm")
-                                .withStyle(ChatFormatting.RED),
-                        b -> confirm())
-                .bounds(startX, buttonY, confirmWidth, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"),
-                        b -> Screens.set(cancelTo))
-                .bounds(startX + confirmWidth + GAP, buttonY, cancelWidth, BUTTON_HEIGHT).build());
+        // The same two slots, now drawn by this screen rather than handed to the widget list: see
+        // drawButtons. The confirm carries the danger colour instead of the red label the vanilla
+        // button had, because the meaning is the face of a drawn button rather than the text on it.
+        buttons = List.of(
+                new PanelButton(startX, buttonY, confirmWidth, BUTTON_HEIGHT,
+                        Component.translatable("screen.howtogo.import_confirm.confirm"),
+                        PanelButton.Kind.DANGER, this::confirm),
+                new PanelButton(startX + confirmWidth + GAP, buttonY, cancelWidth, BUTTON_HEIGHT,
+                        Component.translatable("gui.cancel"), PanelButton.Kind.NEUTRAL,
+                        () -> Screens.set(cancelTo)));
     }
 
     /**
@@ -133,6 +136,35 @@ public final class MapImportScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------- input
+
+    @Override
+    //? if >=1.21.9 {
+    /*public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+    *///?} else {
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //?}
+        // The buttons are drawn, not widgets, so nothing else will route a click to them: this is
+        // their only chance to see one. It comes first because there is nothing else on this screen
+        // that a press could be about -- everything above the buttons is a line to read.
+        if (button == 0) {
+            for (PanelButton candidate : buttons) {
+                if (candidate.click(mouseX, mouseY)) {
+                    return true;
+                }
+            }
+        }
+        //? if >=1.21.9 {
+        /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                new MouseButtonInfo(button, 0)), false);
+        *///?} else {
+        return super.mouseClicked(mouseX, mouseY, button);
+        //?}
+    }
+
     @Override
     //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
@@ -140,8 +172,9 @@ public final class MapImportScreen extends Screen {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
 
-        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xF0181818);
+        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
+                UiTheme.windowEdge());
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
     }
 
     @Override
@@ -152,19 +185,19 @@ public final class MapImportScreen extends Screen {
         int room = panelW - PAD * 2;
         int y = panelY + PAD;
 
-        graphics.drawString(this.font, this.title, x, y, 0xFFFFE070, false);
+        graphics.drawString(this.font, this.title, x, y, UiTheme.title(), false);
         y += LINE_HEIGHT + 5;
 
         // The one line that must not be missed: red, on its own, above everything else.
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.overwrite_loud"), 0xFFFF6B6B);
+                Component.translatable("screen.howtogo.mapdata.overwrite_loud"), UiTheme.error());
         y += LINE_HEIGHT + 3;
 
         // A backup is the undo for an earlier import, and importing one rolls the map back. Saying
         // so before the button is what keeps it from being mistaken for a fresh map to bring in.
         if (isBackup()) {
             drawLine(graphics, x, y, room,
-                    Component.translatable("screen.howtogo.import_confirm.backup"), 0xFFFFC060);
+                    Component.translatable("screen.howtogo.import_confirm.backup"), UiTheme.note());
             y += LINE_HEIGHT + 1;
         }
 
@@ -172,35 +205,52 @@ public final class MapImportScreen extends Screen {
         String directory = MapDataTransfer.worldLoaded()
                 ? MapDataTransfer.dataDirectory().getFileName().toString() : "?";
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.import_confirm.current",
-                world), 0xFFD0D8E0);
+                world), UiTheme.text());
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
                 Component.translatable("screen.howtogo.mapdata.directory_only", directory),
-                0xFFA8B4C0);
+                UiTheme.textSecondary());
         y += LINE_HEIGHT + 4;
 
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.import_confirm.archive",
-                archive.getFileName().toString()), 0xFFD0D8E0);
+                archive.getFileName().toString()), UiTheme.text());
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, originLine(), 0xFFA8B4C0);
+        drawLine(graphics, x, y, room, originLine(), UiTheme.textSecondary());
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, contentsLine(), 0xFFA8B4C0);
+        drawLine(graphics, x, y, room, contentsLine(), UiTheme.textSecondary());
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, fileNamesLine(), 0xFF808A96);
+        drawLine(graphics, x, y, room, fileNamesLine(), UiTheme.textFaint());
         y += LINE_HEIGHT + 4;
 
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.name_ignored"), 0xFFFFC060);
+                Component.translatable("screen.howtogo.mapdata.name_ignored"), UiTheme.note());
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.backup_note"), 0xFF7FB0FF);
+                Component.translatable("screen.howtogo.mapdata.backup_note"), UiTheme.accentSoft());
 
         if (error != null) {
             // Just above the buttons rather than after the last line of context: on a short window
             // the context can reach the bottom of the panel, and a reason printed over the button
             // that has to be pressed again is a reason nobody can read.
             int errorY = panelY + panelH - PAD - BUTTON_HEIGHT - LINE_HEIGHT - 4;
-            drawLine(graphics, x, errorY, room, error, 0xFFFF6B6B);
+            drawLine(graphics, x, errorY, room, error, UiTheme.error());
+        }
+        // Last in the frame: the context above can reach the bottom of the panel on a short window,
+        // and a button drawn before it would have a line of it across its own label.
+        drawButtons(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The confirm and cancel buttons.
+     *
+     * <p>Drawn rather than handed to the widget list, which is why {@link #render} has to draw them
+     * itself and {@link #mouseClicked} has to route the click to them: see {@link PanelButton} for the
+     * trade that comes with that. The panel under them is drawn in {@code renderBackground}, so they
+     * land on the sheet rather than under it.
+     */
+    private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (PanelButton button : buttons) {
+            button.render(graphics, this.font, mouseX, mouseY);
         }
     }
 

@@ -16,7 +16,6 @@ import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 // 1.21.9 bundled mouse coordinates and the button into a record.
@@ -59,6 +58,9 @@ public final class TransitLineScreen extends Screen {
     private static final int PAD = 6;
     private static final int GAP = 6;
     private static final int ROW_HEIGHT = 12;
+    /** The side of a row's colour marker, and the room it and its gap take out of the row's text. */
+    private static final int ROW_MARKER = 6;
+    private static final int ROW_MARKER_STEP = 9;
     private static final int HEADER_HEIGHT = 11;
     private static final int BUTTON_HEIGHT = 16;
     private static final int KIND_HEIGHT = 14;
@@ -119,6 +121,16 @@ public final class TransitLineScreen extends Screen {
     private int kindX;
     private int kindY;
     private int kindW;
+
+    /**
+     * The footer row, rebuilt whenever the selection changes.
+     *
+     * <p>Rebuilt rather than built once because the delete button is only there when there is a line
+     * to delete: {@link PanelButton} says a control the player cannot use is better absent than
+     * present and dead, and this is the one button in these screens whose availability depends on
+     * what is selected rather than on what the screen is.
+     */
+    private List<PanelButton> buttons = List.of();
 
     public TransitLineScreen(Screen parent) {
         super(Component.translatable(TITLE));
@@ -193,6 +205,45 @@ public final class TransitLineScreen extends Screen {
         TransitLineStore.markDirty();
         selectedId = copy.id();
         refreshName();
+        buildFooterButtons();
+    }
+
+    /**
+     * Adds an empty line of the default kind and selects it.
+     *
+     * <p>The name starts empty on purpose: the name field is the next thing the player reaches for,
+     * and a line called "new line" would have to be cleared before it could be told apart from the
+     * one after it.
+     */
+    private void newLine() {
+        commitName();
+        TransitLine created = new TransitLine(null, "", RoadClass.ROAD);
+        TransitLineStore.get().add(created);
+        TransitLineStore.markDirty();
+        selectedId = created.id();
+        refreshName();
+        buildFooterButtons();
+    }
+
+    /**
+     * Deletes the line on screen, unless it is MTR's.
+     *
+     * <p>A line read out of MTR is not the player's to delete: it would come back on the next
+     * reading, and the delete would have written to a list that is not the one holding it. The
+     * button is only drawn when there is some line selected, so the imported one is the only case
+     * left for this method to refuse. Rebuilding the row afterwards is what makes delete disappear
+     * with the last line.
+     */
+    private void deleteSelected() {
+        TransitLine doomed = selected();
+        if (doomed != null && !readOnly(doomed)) {
+            TransitLineStore.get().remove(doomed);
+            TransitLineStore.markDirty();
+            List<TransitLine> left = listed();
+            selectedId = left.isEmpty() ? null : left.get(0).id();
+            refreshName();
+        }
+        buildFooterButtons();
     }
 
     @Override
@@ -241,36 +292,43 @@ public final class TransitLineScreen extends Screen {
         listY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + HEADER_HEIGHT + 2;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
-        // Back to four slots: five footer buttons at a small panel width leave too little room for the
-        // labels, which is what "the words are all crammed together" was. The marks switch is not here
-        // any more either -- it sits on the line it belongs to, in the list.
+        // The row depends on the panel's geometry and on which line is selected, so it is built last
+        // here and rebuilt by everything that moves the selection.
+        buildFooterButtons();
+    }
+
+    /**
+     * The footer row: new, delete, copy, done.
+     *
+     * <p>Back to four slots: five footer buttons at a small panel width leave too little room for the
+     * labels, which is what "the words are all crammed together" was. The marks switch is not here
+     * any more either -- it sits on the line it belongs to, in the list.
+     *
+     * <p>Called from {@link #init} and again whenever the selection changes, because the delete
+     * button is left out when there is no line to delete. A fixed row with a greyed delete would be
+     * the other way: a control that does nothing is worse to press than one that is not there.
+     * Everything else in the row is available whatever is selected, which is why the row is rebuilt
+     * rather than rearranged -- the three always-present buttons keep their slots, so nothing jumps
+     * sideways when a line is created and delete appears.
+     */
+    private void buildFooterButtons() {
         int quarter = (panelW - PAD * 2 - GAP * 3) / 4;
         int buttonY = panelY + panelH - PAD - BUTTON_HEIGHT;
-        addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_new"), b -> {
-            commitName();
-            TransitLine created = new TransitLine(null, "", RoadClass.ROAD);
-            TransitLineStore.get().add(created);
-            TransitLineStore.markDirty();
-            selectedId = created.id();
-            refreshName();
-        }).bounds(panelX + PAD, buttonY, quarter, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_delete"), b -> {
-            TransitLine doomed = selected();
-            // A line read out of MTR is not the player's to delete: it would come back on the next
-            // reading, and the delete would have written to a list that is not the one holding it.
-            if (doomed != null && !readOnly(doomed)) {
-                TransitLineStore.get().remove(doomed);
-                TransitLineStore.markDirty();
-                List<TransitLine> left = listed();
-                selectedId = left.isEmpty() ? null : left.get(0).id();
-                refreshName();
-            }
-        }).bounds(buttonX(quarter, 1), buttonY, quarter, BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("screen.howtogo.line_copy"), b ->
-                copySelected()).bounds(buttonX(quarter, 2), buttonY, quarter,
-                BUTTON_HEIGHT).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-                .bounds(buttonX(quarter, 3), buttonY, quarter, BUTTON_HEIGHT).build());
+        List<PanelButton> built = new java.util.ArrayList<>(4);
+        built.add(new PanelButton(panelX + PAD, buttonY, quarter, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.line_new"), PanelButton.Kind.PRIMARY,
+                this::newLine));
+        if (selected() != null) {
+            built.add(new PanelButton(buttonX(quarter, 1), buttonY, quarter, BUTTON_HEIGHT,
+                    Component.translatable("screen.howtogo.line_delete"),
+                    PanelButton.Kind.DANGER, this::deleteSelected));
+        }
+        built.add(new PanelButton(buttonX(quarter, 2), buttonY, quarter, BUTTON_HEIGHT,
+                Component.translatable("screen.howtogo.line_copy"), PanelButton.Kind.NEUTRAL,
+                this::copySelected));
+        built.add(new PanelButton(buttonX(quarter, 3), buttonY, quarter, BUTTON_HEIGHT,
+                Component.translatable("gui.done"), PanelButton.Kind.NEUTRAL, this::onClose));
+        buttons = built;
     }
 
     /** The left edge of the button in slot {@code index} of the footer row. */
@@ -344,7 +402,7 @@ public final class TransitLineScreen extends Screen {
     private void drawRow(GuiGraphics graphics, int columnX, int index, boolean highlighted) {
         int y = listY + index * ROW_HEIGHT;
         if (highlighted) {
-            graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, 0xFF1F6FEB);
+            graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, UiTheme.selection());
         }
     }
 
@@ -370,13 +428,13 @@ public final class TransitLineScreen extends Screen {
     private void drawColumnHeader(GuiGraphics graphics, int columnX, String key, int count,
                                   int scroll) {
         graphics.drawString(this.font, Component.translatable(key).getString(), columnX,
-                listY - HEADER_HEIGHT, 0xFFA8B4C0, false);
+                listY - HEADER_HEIGHT, UiTheme.textSecondary(), false);
         if (count <= visibleRows()) {
             return;
         }
         String shown = Math.min(count, scroll + visibleRows()) + "/" + count;
         graphics.drawString(this.font, shown, columnX + columnW - 2 - this.font.width(shown),
-                listY - HEADER_HEIGHT, 0xFF808A96, false);
+                listY - HEADER_HEIGHT, UiTheme.textFaint(), false);
     }
 
     // ---------------------------------------------------------------- render
@@ -416,9 +474,12 @@ public final class TransitLineScreen extends Screen {
             }
         }
 
-        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1, 0xFF000000);
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, 0xFF181818);
-        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD, 0xFFFFE070, false);
+        // This window is its own screen rather than a sheet over the map, so it draws a full frame:
+        // the outermost pixel is the window edge and the sheet under it is the opaque panel.
+        graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
+                UiTheme.windowEdge());
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
+        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
 
         TransitLine line = selected();
         refreshRideable();
@@ -438,7 +499,7 @@ public final class TransitLineScreen extends Screen {
         if (readOnly(line)) {
             String note = Component.translatable("screen.howtogo.line_from_mtr_note").getString();
             String shown = this.font.plainSubstrByWidth(note, noteRoom);
-            graphics.drawString(this.font, shown, noteX, panelY + PAD, 0xFF7FB0FF, false);
+            graphics.drawString(this.font, shown, noteX, panelY + PAD, UiTheme.accentSoft(), false);
             noteX += this.font.width(shown) + 6;
             noteRoom = Math.max(12, noteRoom - this.font.width(shown) - 6);
         }
@@ -447,19 +508,45 @@ public final class TransitLineScreen extends Screen {
             // and a red stop that says nothing about why would only move the mystery.
             graphics.drawString(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_broken").getString(), noteRoom),
-                    noteX, panelY + PAD, 0xFFFF8060, false);
+                    noteX, panelY + PAD, UiTheme.error(), false);
         } else if (hasUnjudgedPair()) {
             // Not silence, because "the mod cannot tell" is itself worth saying -- a line of a kind the
             // world has no roads of is the case this catches -- and not the red note either, which would
             // be an accusation the network does not support.
             graphics.drawString(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_unjudged").getString(), noteRoom),
-                    noteX, panelY + PAD, 0xFFFFC060, false);
+                    noteX, panelY + PAD, UiTheme.note(), false);
         }
 
         super.render(graphics, mouseX, mouseY, partialTick);
+        // Last in the frame: the columns above can reach the footer on a short window, and a button
+        // drawn before them would have a row of one of them across its label.
+        drawButtons(graphics, mouseX, mouseY);
     }
 
+    /**
+     * The footer row.
+     *
+     * <p>Drawn rather than handed to the widget list, which is why {@link #render} has to draw them
+     * itself and {@link #mouseClicked} has to route the click to them: see {@link PanelButton} for the
+     * trade that comes with that.
+     */
+    private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (PanelButton button : buttons) {
+            button.render(graphics, this.font, mouseX, mouseY);
+        }
+    }
+
+    /**
+     * The row of line kinds, the chips that say what a line runs on.
+     *
+     * <p>The faces are the button roles rather than the row roles, because a chip is a control and a
+     * row is not: on the white sheet the old row colour was white on a near-white panel, so an
+     * unselected kind was a label with no chip around it -- the missing face the player reported. The
+     * chosen one takes {@link UiTheme#selectionSoft()} rather than the full {@link UiTheme#selection()}
+     * of a picked list row: four solid accent blocks in one row read as four primary actions, and the
+     * current choice should not shout as loudly as the button that commits.
+     */
     private void drawKinds(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
         List<RoadClass> kinds = TransitLine.kinds();
         for (int i = 0; i < kinds.size(); i++) {
@@ -467,7 +554,8 @@ public final class TransitLineScreen extends Screen {
             boolean selected = line != null && line.kind() == kinds.get(i);
             boolean hovered = !readOnly(line) && mouseX >= x && mouseX < x + kindW
                     && mouseY >= kindY && mouseY < kindY + KIND_HEIGHT;
-            int background = selected ? 0xFF1F6FEB : (hovered ? 0xFF3A4450 : 0xFF242A33);
+            int background = selected ? UiTheme.selectionSoft()
+                    : (hovered ? UiTheme.buttonHover() : UiTheme.button());
             graphics.fill(x, kindY, x + kindW, kindY + KIND_HEIGHT, background);
 
             // The road class names the mod already has, so the four kinds of line are called what
@@ -478,7 +566,7 @@ public final class TransitLineScreen extends Screen {
             String shown = this.font.plainSubstrByWidth(label, kindW - 2);
             graphics.drawString(this.font, shown,
                     x + Math.max(0, (kindW - this.font.width(shown)) / 2), kindY + 3,
-                    selected ? 0xFFFFFFFF : 0xFFA8B4C0, false);
+                    selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(), false);
         }
     }
 
@@ -488,7 +576,7 @@ public final class TransitLineScreen extends Screen {
         if (lines.isEmpty()) {
             lineScroll = 0;
             drawLabel(graphics, linesX, 0, Component.translatable("screen.howtogo.line_none").getString(),
-                    0xFF808A96);
+                    UiTheme.textFaint());
             return;
         }
         lineScroll = clampScroll(lineScroll, lines.size());
@@ -498,7 +586,14 @@ public final class TransitLineScreen extends Screen {
             int index = lineScroll + row;
             TransitLine candidate = lines.get(index);
             boolean isSelected = candidate.id().equals(selectedId);
+            int rowY = listY + row * ROW_HEIGHT;
             drawRow(graphics, linesX, row, isSelected || index == hovered);
+            // The marker is the kind's own colour -- the same value the map draws the line in, read
+            // from the same section of the config -- so the colour in this list and the colour on
+            // the map are one fact rather than two. It is drawn after the row fill so a selected
+            // row's blue does not paint over it.
+            HudDraw.drawRowMarker(graphics, linesX + 3, rowY + 3, ROW_MARKER,
+                    RoadConfig.transitLineColor(candidate.kind()));
             String kind = Component.translatable(
                             "screen.howtogo.road_class." + candidate.kind().name().toLowerCase(Locale.ROOT))
                     .getString();
@@ -510,9 +605,11 @@ public final class TransitLineScreen extends Screen {
             // The row's own marks switch takes the right-hand end of the row, so the name is cut to
             // leave it: a control drawn over the text it belongs to is worse than a shorter name.
             boolean marked = readOnly(candidate);
-            int room = columnW - 4 - (marked ? TOGGLE_WIDTH + 2 : 0);
-            drawLabel(graphics, linesX, row, source + candidate.label() + "  (" + kind + ")",
-                    isSelected ? 0xFFFFFFFF : 0xFFD0D8E0, room);
+            int room = columnW - 4 - (marked ? TOGGLE_WIDTH + 2 : 0) - ROW_MARKER_STEP;
+            String shown = this.font.plainSubstrByWidth(
+                    source + candidate.label() + "  (" + kind + ")", Math.max(8, room));
+            graphics.drawString(this.font, shown, linesX + 3 + ROW_MARKER_STEP, rowY + 2,
+                    isSelected ? UiTheme.onSelection() : UiTheme.text(), false);
             if (marked) {
                 drawMarksToggle(graphics, mouseX, mouseY, candidate,
                         linesX + columnW - TOGGLE_WIDTH - 1, listY + row * ROW_HEIGHT);
@@ -521,13 +618,18 @@ public final class TransitLineScreen extends Screen {
     }
 
     /**
-     * The marks switch on one imported line's row: a filled dot when the line's track is marked, a
-     * hollow one when it is not.
+     * The marks switch on one imported line's row: the kind's own glyph when the line's track is
+     * marked, an empty box when it is not.
      *
      * <p>Drawn rather than a widget, like the stop controls, so that a window full of MTR lines does not
      * become a window full of buttons. It is on the row because that is the only place the answer can be
      * about the right line: a switch in the footer acts on whatever is selected, and a player who has
      * not selected an MTR line finds it doing nothing at all.
+     *
+     * <p>Its box is a chip and takes the button face for the same reason the kind row does: the row
+     * roles are the colour of a list row, and on the white sheet a white box on a white row left the
+     * glyph floating with no switch under it. The box itself has no chosen face -- which state it is in
+     * is said by the glyph being there at all, not by the fill.
      */
     private void drawMarksToggle(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line,
                                  int x, int y) {
@@ -535,7 +637,7 @@ public final class TransitLineScreen extends Screen {
         boolean hovered = mouseX >= x && mouseX < x + TOGGLE_WIDTH
                 && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
         graphics.fill(x, y, x + TOGGLE_WIDTH - 1, y + ROW_HEIGHT - 1,
-                hovered ? 0xFF3A4450 : 0xFF242A33);
+                hovered ? UiTheme.buttonHover() : UiTheme.button());
         if (!on) {
             // Nothing in the box at all, which is as different from a glyph as two states can be: a dot
             // that differed only in colour was read as "the click did nothing", which is what a control
@@ -555,7 +657,7 @@ public final class TransitLineScreen extends Screen {
         if (line == null || line.stopCount() == 0) {
             stopsScroll = 0;
             drawLabel(graphics, stopsX, 0, Component.translatable("screen.howtogo.line_empty").getString(),
-                    0xFF808A96);
+                    UiTheme.textFaint());
             return;
         }
         stopsScroll = clampScroll(stopsScroll, line.stopCount());
@@ -564,7 +666,7 @@ public final class TransitLineScreen extends Screen {
             int i = stopsScroll + row;
             int y = listY + row * ROW_HEIGHT;
             int nameColour = i > 0 && i - 1 < rideable.length
-                    && rideable[i - 1] == RIDE_BROKEN ? 0xFFFF8060 : 0xFFD0D8E0;
+                    && rideable[i - 1] == RIDE_BROKEN ? UiTheme.error() : UiTheme.text();
             drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
             // Four controls at the right edge: rename, earlier, later, remove. Drawn per row rather than
             // as widgets so that a long line does not create four buttons per stop. The rename one is
@@ -579,9 +681,11 @@ public final class TransitLineScreen extends Screen {
                 boolean hovered = mouseX >= x && mouseX < x + CONTROL_WIDTH
                         && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
                 graphics.fill(x, y, x + CONTROL_WIDTH - 1, y + ROW_HEIGHT - 1,
-                        hovered ? 0xFF3A4450 : 0xFF242A33);
+                        hovered ? UiTheme.buttonHover() : UiTheme.button());
                 String glyph = c == 0 ? "N" : c == 1 ? "^" : c == 2 ? "v" : "x";
-                int colour = c == 3 ? 0xFFFF8080 : 0xFFA8B4C0;
+                // Remove is the one control here that destroys something, so it is the one drawn in
+                // the error colour; the other three are ordinary glyphs on the row.
+                int colour = c == 3 ? UiTheme.error() : UiTheme.textSecondary();
                 graphics.drawString(this.font, glyph, x + 3, y + 2, colour, false);
             }
         }
@@ -594,7 +698,8 @@ public final class TransitLineScreen extends Screen {
         if (offered.isEmpty()) {
             candidatesScroll = 0;
             drawLabel(graphics, candidatesX, 0,
-                    Component.translatable("screen.howtogo.line_no_candidates").getString(), 0xFF808A96);
+                    Component.translatable("screen.howtogo.line_no_candidates").getString(),
+                    UiTheme.textFaint());
             return;
         }
         candidatesScroll = clampScroll(candidatesScroll, offered.size());
@@ -612,7 +717,8 @@ public final class TransitLineScreen extends Screen {
             // not in the list".
             String suffix = stop.editable() ? ""
                     : " " + Component.translatable("screen.howtogo.line_readonly").getString();
-            int colour = already ? 0xFF808A96 : (stop.editable() ? 0xFFD0D8E0 : 0xFF9FB4C8);
+            int colour = already ? UiTheme.textFaint()
+                    : (stop.editable() ? UiTheme.text() : UiTheme.textSecondary());
             drawLabel(graphics, candidatesX, row, stop.label() + suffix, colour);
         }
     }
@@ -979,6 +1085,15 @@ public final class TransitLineScreen extends Screen {
         }
         List<TransitLine> lines = listed();
 
+        // The footer buttons are drawn, not widgets, so nothing else routes a click to them: this is
+        // their only chance to see one. It comes before the columns so a press on a button is never
+        // also a press on the row behind it.
+        for (PanelButton candidate : buttons) {
+            if (candidate.click(mouseX, mouseY)) {
+                return true;
+            }
+        }
+
         int lineRow = rowAt(mouseX, mouseY, linesX, lines.size(), lineScroll);
         if (lineRow >= 0) {
             TransitLine clicked = lines.get(lineRow);
@@ -992,6 +1107,8 @@ public final class TransitLineScreen extends Screen {
             commitName();
             selectedId = clicked.id();
             refreshName();
+            // Delete is offered only while there is a line, so the row follows the selection.
+            buildFooterButtons();
             return true;
         }
 

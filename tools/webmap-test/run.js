@@ -1809,6 +1809,47 @@ function sectionAsync(title, body) {
       /^howtogo-.+\.png$/.test(anchors[anchors.length - 1].download),
       anchors.length ? anchors[anchors.length - 1].download : 'nothing downloaded');
 
+    // --- the interface theme ---------------------------------------------------------
+    // The game resolves the theme on its own thread -- the config, the dimension and, in auto mode,
+    // the sky -- and sends the answer with the roads. What the page owes it is to put the chrome and
+    // the canvas into the same palette, and to keep doing that when the payload changes its mind.
+    ok('the boot put the page into the palette the payload named',
+      document.documentElement.getAttribute('data-theme') === app.state.model.theme &&
+      render.activeTheme() === app.state.model.theme,
+      String(document.documentElement.getAttribute('data-theme')) + '/'
+      + render.activeTheme() + '/model ' + app.state.model.theme);
+
+    response = {ok: true, status: 200, body: Object.assign({}, modelPayload, {theme: 'light'})};
+    byId['btn-refresh'].dispatch('click', {});
+    await settle();
+    await settle();
+    ok('a light payload repaints the page and the map in the light palette',
+      document.documentElement.getAttribute('data-theme') === 'light' &&
+      render.activeTheme() === 'light' && render.BACKGROUND_COLOR === '#F1F3F4' &&
+      app.state.model.theme === 'light',
+      document.documentElement.getAttribute('data-theme') + '/' + render.BACKGROUND_COLOR);
+
+    const lightHosts = created.filter((node) =>
+      String(node.style && node.style.cssText).indexOf('background:#F1F3F4') >= 0).length;
+    await app.exportImage();
+    const lightHostsAfter = created.filter((node) =>
+      String(node.style && node.style.cssText).indexOf('background:#F1F3F4') >= 0).length;
+    ok('an export in the light style frames a light map rather than a dark caption around it',
+      lightHostsAfter > lightHosts,
+      'light export hosts: ' + lightHosts + ' -> ' + lightHostsAfter);
+
+    // A payload from before the theme field existed, spelled the same way the empty-network payload
+    // above is spelled: it must go back to the style the page has always had.
+    response = {ok: true, status: 200, body: Object.assign({}, modelPayload, {theme: undefined})};
+    byId['btn-refresh'].dispatch('click', {});
+    await settle();
+    await settle();
+    ok('a payload with no theme at all is drawn in the dark style the page has always had',
+      document.documentElement.getAttribute('data-theme') === 'dark' &&
+      render.activeTheme() === 'dark' && render.BACKGROUND_COLOR === '#101418' &&
+      app.state.model.theme === 'dark',
+      document.documentElement.getAttribute('data-theme') + '/' + render.BACKGROUND_COLOR);
+
     // --- the hover readout ---------------------------------------------------------
     // A model of its own with one road in it, so which road the cursor is over is not a question: what
     // is being checked is what the readout says about a road, not how it picks one. It goes last

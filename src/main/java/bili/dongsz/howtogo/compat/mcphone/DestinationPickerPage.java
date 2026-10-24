@@ -9,6 +9,7 @@ import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadStore;
+import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
@@ -447,7 +448,7 @@ public final class DestinationPickerPage implements IPhonePage {
                     continue;
                 }
                 HudDraw.emitPlaceMarker(out, px, pz,
-                        HudDraw.PLACE_MARKER_SMALL_PX * 0.5, HudDraw.COLOR_PLACE);
+                        HudDraw.PLACE_MARKER_SMALL_PX * 0.5, UiTheme.place());
             }
             Destination pick = marked;
             if (pick != null) {
@@ -455,20 +456,20 @@ public final class DestinationPickerPage implements IPhonePage {
                 double pz = toScreenZ(pick.z());
                 if (!outside(px, pz, minX, minY, maxX, maxY, HudDraw.PLACE_MARKER_SMALL_PX)) {
                     HudDraw.emitPlaceMarker(out, px, pz,
-                            HudDraw.PLACE_MARKER_SMALL_PX * 0.7, 0xFFFF5555);
+                            HudDraw.PLACE_MARKER_SMALL_PX * 0.7, UiTheme.destination());
                 }
             }
 
             // The player, which is the one mark a map is useless without: everything else here is a
-            // choice, and this is where the choices are being made from. A dark rim under a white dot
-            // so it reads against a road as well as against a field.
+            // choice, and this is where the choices are being made from. A rim under the dot so it
+            // reads against a road as well as against a field.
             Minecraft minecraft = Minecraft.getInstance();
             if (minecraft != null && minecraft.player != null) {
                 double playerX = toScreenX(minecraft.player.getX());
                 double playerZ = toScreenZ(minecraft.player.getZ());
                 if (!outside(playerX, playerZ, minX, minY, maxX, maxY, 8.0)) {
-                    HudDraw.emitDisc(out, playerX, playerZ, 3.6, 0xFF10171C, 0xFF);
-                    HudDraw.emitDisc(out, playerX, playerZ, 2.4, 0xFFFFFFFF, 0xFF);
+                    HudDraw.emitDisc(out, playerX, playerZ, 3.6, UiTheme.playerHalo(), 0xFF);
+                    HudDraw.emitDisc(out, playerX, playerZ, 2.4, UiTheme.player(), 0xFF);
                 }
             }
 
@@ -479,7 +480,7 @@ public final class DestinationPickerPage implements IPhonePage {
                 HudDraw.emitPath(out, planned.route().points(),
                         pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                         0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                        1.1, 0xFF2FD0FF, 0xE0, minX, minY, maxX, maxY);
+                        1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
             }
             // Closed while the scissor is still on: the pre-1.21.6 path flushes here, and flushing
             // after the clip came off would paint the roads and markers over the sheet.
@@ -508,14 +509,14 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawRecentre(GuiGraphics graphics) {
         int[] rect = recentreRect();
-        graphics.fill(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3], 0xA010171C);
+        graphics.fill(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3], UiTheme.mapButton());
         int centreX = rect[0] + rect[2] / 2;
         int centreY = rect[1] + rect[3] / 2;
         // A ring and a dot: the crosshair every map uses for "you are here".
-        graphics.fill(centreX - 3, centreY - 1, centreX + 4, centreY + 2, 0xFFF2F6FA);
-        graphics.fill(centreX - 1, centreY - 3, centreX + 2, centreY + 4, 0xFFF2F6FA);
-        graphics.fill(centreX - 2, centreY - 2, centreX + 3, centreY + 3, 0xFF10171C);
-        graphics.fill(centreX - 1, centreY - 1, centreX + 2, centreY + 2, 0xFFFF5555);
+        graphics.fill(centreX - 3, centreY - 1, centreX + 4, centreY + 2, UiTheme.crosshair());
+        graphics.fill(centreX - 1, centreY - 3, centreX + 2, centreY + 4, UiTheme.crosshair());
+        graphics.fill(centreX - 2, centreY - 2, centreX + 3, centreY + 3, UiTheme.playerHalo());
+        graphics.fill(centreX - 1, centreY - 1, centreX + 2, centreY + 2, UiTheme.destination());
     }
 
     // ------------------------------------------------------------ map labels
@@ -577,7 +578,7 @@ public final class DestinationPickerPage implements IPhonePage {
             if (font.width(name) > chainScreenPx(network, grouping.chainOf(segment))) {
                 continue;
             }
-            drawAlongLine(graphics, font, name, segment, x, z, 0xFFF0F0F0);
+            drawAlongLine(graphics, font, name, segment, x, z, UiTheme.mapLabel());
         }
 
         for (RoadSegment segment : RailTrackStore.segments()) {
@@ -596,7 +597,7 @@ public final class DestinationPickerPage implements IPhonePage {
                     > chainScreenPx(layer, RoadChains.cachedGrouping(layer).chainOf(segment))) {
                 continue;
             }
-            drawAlongLine(graphics, font, name, segment, x, z, 0xFF9FD2FF);
+            drawAlongLine(graphics, font, name, segment, x, z, UiTheme.accentSoft());
         }
     }
 
@@ -657,7 +658,7 @@ public final class DestinationPickerPage implements IPhonePage {
     private int drawNoticeLine(GuiGraphics graphics, Font font, String line, int right, int y) {
         // Shadowed, so it reads on top of whatever the map has underneath at that spot -- a road, a
         // field or water, depending on where the player is standing.
-        graphics.drawString(font, line, right - font.width(line) - 2, y, 0xFFFFB454, true);
+        graphics.drawString(font, line, right - font.width(line) - 2, y, UiTheme.warn(), true);
         return y + 10;
     }
 
@@ -670,8 +671,9 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawSheetBackground(GuiGraphics graphics) {
         graphics.fill(canvasX, sheetTop(), canvasX + canvasWidth, canvasY + canvasHeight,
-                0xF012171C);
-        graphics.fill(canvasX, sheetTop(), canvasX + canvasWidth, sheetTop() + 1, 0xFF2C3540);
+                UiTheme.panel());
+        graphics.fill(canvasX, sheetTop(), canvasX + canvasWidth, sheetTop() + 1,
+                UiTheme.panelEdge());
     }
 
     /** The pull-up affordance: the line a player reads as "this comes up". */
@@ -680,7 +682,8 @@ public final class DestinationPickerPage implements IPhonePage {
         int y = sheetTop() + 4;
         // Wider than it was drawn: the grip is how the sheet announces that it can be pulled, and at
         // eighteen by two pixels it read as a divider rather than as a handle.
-        graphics.fill(midX - 12, y, midX + 12, y + 3, expanded ? 0xFF8FA0B0 : 0xFFF2F6FA);
+        graphics.fill(midX - 12, y, midX + 12, y + 3,
+                expanded ? UiTheme.header() : UiTheme.textStrong());
     }
 
     /** The search box's rectangle, which is also its hit target. */
@@ -692,14 +695,14 @@ public final class DestinationPickerPage implements IPhonePage {
         int left = contentLeft();
         int right = contentRight();
         int y = searchY();
-        graphics.fill(left, y, right, y + SEARCH_H, 0xFF161B22);
-        graphics.fill(left, y, right, y + 1, searchFocused ? 0xFF1F6FEB : 0xFF2C3540);
+        graphics.fill(left, y, right, y + SEARCH_H, UiTheme.searchBox());
+        graphics.fill(left, y, right, y + 1, searchFocused ? UiTheme.accent() : UiTheme.panelEdge());
 
         boolean empty = query.isEmpty();
         String text = (empty ? Component.translatable("screen.howtogo.search_hint").getString()
                 : query) + "_";
         graphics.drawString(font, font.plainSubstrByWidth(text, contentWidth() - 6), left + 3,
-                y + 3, empty ? 0xFF6E7A88 : 0xFFF2F6FA, false);
+                y + 3, empty ? UiTheme.textFaint() : UiTheme.textStrong(), false);
     }
 
     private void drawControls(GuiGraphics graphics, Font font) {
@@ -741,11 +744,13 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawButton(GuiGraphics graphics, Font font, int x, int y, int width, int height,
                             String label, boolean active, boolean lit) {
-        int background = active ? (lit ? 0xFF1F6FEB : 0x40FFFFFF) : 0xFF161B22;
+        int background = active ? (lit ? UiTheme.selection() : UiTheme.buttonOn())
+                : UiTheme.searchBox();
         graphics.fill(x, y, x + width, y + height, background);
         String shown = font.plainSubstrByWidth(label, width - 2);
         graphics.drawString(font, shown, x + Math.max(0, (width - font.width(shown)) / 2), y + 3,
-                active ? 0xFFFFFFFF : 0xFFA8B4C0, false);
+                active ? (lit ? UiTheme.onSelection() : UiTheme.onButtonOn())
+                        : UiTheme.textSecondary(), false);
     }
 
     /**
@@ -778,18 +783,18 @@ public final class DestinationPickerPage implements IPhonePage {
                 Destination place = shown.get(index);
                 int rowY = top + i * ROW_H;
                 if (canvas.hovered(left, rowY, width, ROW_H - 1)) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, 0x30FFFFFF);
+                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.rowHoverTint());
                 }
                 if (place.equals(Navigation.target())) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, 0x40FFD24A);
+                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.placeTint());
                 } else if (place.equals(marked)) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, 0x20FFFFFF);
+                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.rowMarkedTint());
                 }
-                graphics.fill(left + 3, rowY + 7, left + 9, rowY + 13, 0xFFFFD24A);
+                graphics.fill(left + 3, rowY + 7, left + 9, rowY + 13, UiTheme.place());
                 graphics.drawString(font, font.plainSubstrByWidth(place.name(), width - 34),
-                        left + 13, rowY + 2, 0xFFF2F6FA, false);
+                        left + 13, rowY + 2, UiTheme.textStrong(), false);
                 graphics.drawString(font, place.coordinates(), left + 13, rowY + 11,
-                        0xFF8FA0B0, false);
+                        UiTheme.header(), false);
             }
         });
 
@@ -797,8 +802,8 @@ public final class DestinationPickerPage implements IPhonePage {
             int trackH = bottom - top;
             int thumbH = Math.max(6, trackH * rows / shown.size());
             int thumbY = top + (trackH - thumbH) * first / Math.max(1, shown.size() - rows);
-            graphics.fill(right - 1, top, right, bottom, 0x30FFFFFF);
-            graphics.fill(right - 1, thumbY, right, thumbY + thumbH, 0x90FFFFFF);
+            graphics.fill(right - 1, top, right, bottom, UiTheme.scrollTrack());
+            graphics.fill(right - 1, thumbY, right, thumbY + thumbH, UiTheme.scrollThumb());
         }
     }
 
@@ -823,9 +828,11 @@ public final class DestinationPickerPage implements IPhonePage {
             label = marked.name() + "  " + marked.coordinates();
         }
         // Drawn in the place colour when this is the trip already in progress, so the line answers
-        // "am I going here" without a second indicator crammed into the same row.
+        // "am I going here" without a second indicator crammed into the same row. The word form of
+        // the colour, because a name is not a marker.
         boolean active = target != null && previewTarget != null && target.equals(previewTarget);
-        int colour = active ? HudDraw.COLOR_PLACE : (marked == null ? 0xFF8FA0B0 : 0xFFF2F6FA);
+        int colour = active ? UiTheme.placeText()
+                : (marked == null ? UiTheme.header() : UiTheme.textStrong());
         graphics.drawString(font, font.plainSubstrByWidth(label, contentWidth()), contentLeft(),
                 pickLineY(), colour, false);
     }
@@ -868,15 +875,15 @@ public final class DestinationPickerPage implements IPhonePage {
         };
         String label = Component.translatable(key).getString();
         int background = switch (step) {
-            case STOP -> 0xFF7A2E2E;
-            case PREVIEW, START -> 0xFF1F6FEB;
-            case NOTHING -> 0xFF232A33;
+            case STOP -> UiTheme.badgeStop();
+            case PREVIEW, START -> UiTheme.badgeActive();
+            case NOTHING -> UiTheme.badgeIdle();
         };
 
         graphics.fill(left, y, right, y + ROW_H - 1, background);
         String shown = font.plainSubstrByWidth(label, width - 4);
         graphics.drawString(font, shown, left + Math.max(0, (width - font.width(shown)) / 2), y + 6,
-                step == Step.NOTHING ? 0xFF6E7A88 : 0xFFFFFFFF, false);
+                step == Step.NOTHING ? UiTheme.textFaint() : UiTheme.onSelection(), false);
     }
 
     // ------------------------------------------------------------------- input

@@ -7,6 +7,11 @@
  * which of the model's classes and storeys are handed to it. That is what keeps the
  * exported PNG an honest copy of the screen instead of a second implementation of it.
  *
+ * The interface theme is the one thing the page is told rather than working out: the
+ * server resolves it on the game's thread and sends it with the roads, and this file
+ * puts the chrome and the canvas into it together. See applyTheme() for what that costs
+ * a page nobody is refreshing.
+ *
  * Loaded as a classic script from /js/app.js, after the four modules it uses.
  */
 (function (root, factory) {
@@ -27,6 +32,46 @@
   const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif';
 
   const EMPTY_MESSAGE = '暂无道路数据';
+
+  /*
+   * The page's two palettes, as the payload and the stylesheet spell them, and the handful of
+   * colours the PNG export has to repeat by hand.
+   *
+   * The chrome takes its colours from style.css, which keys the white one off
+   * :root[data-theme="light"], and the map takes its own from render.setTheme. The export is the
+   * odd one out: it builds its caption and legend as inline styles and hands the wrapper to
+   * html2canvas, so its colours cannot come from either -- hence the table below. Plain hex,
+   * because html2canvas 1.4.1 throws on oklch() and color-mix() rather than degrading, which is
+   * exactly the failure a themed export would hit if this table used CSS variables or modern colour
+   * functions.
+   */
+  const THEME_LIGHT = 'light';
+  const THEME_DARK = 'dark';
+  const THEME_ATTRIBUTE = 'data-theme';
+
+  const EXPORT_THEME = {
+    dark: {
+      background: '#101418',
+      text: '#e8edf2',
+      title: '#eaf2ff',
+      muted: '#9fb0c0',
+      legend: '#c9d5e0',
+      canvasBorder: '#1b2430',
+      chipBorder: '#0b0f14',
+    },
+    light: {
+      // The map's own light backdrop, so the caption sits on the same pale grey as the picture it
+      // frames. Text is Google's #202124 with the two greys under it, and the hairlines are the
+      // #DADCE0 the light map is drawn with.
+      background: '#F1F3F4',
+      text: '#202124',
+      title: '#202124',
+      muted: '#5F6368',
+      legend: '#3C4043',
+      canvasBorder: '#DADCE0',
+      chipBorder: '#BDC1C6',
+    },
+  };
 
   /*
    * The map modules.
@@ -66,6 +111,7 @@
     cssWidth: 1,
     cssHeight: 1,
     dpr: 1,
+    theme: null,
     hiddenClasses: new Set(),
     hiddenLayers: new Set(),
     showRoadNames: true,
@@ -160,6 +206,48 @@
   }
 
   // -------------------------------------------------------------------------------
+  // The interface theme
+  // -------------------------------------------------------------------------------
+
+  /**
+   * Puts the page and the map into the palette the last payload named, and says whether that was a
+   * change.
+   *
+   * <p>The payload is the only source, and it is enough. The game resolves the theme on its own
+   * thread -- the player's setting, the dimension, and in auto mode the sky itself -- and sends the
+   * answer with the roads, which this page already fetches on load, on refresh and, when the player
+   * ticks the box, every five seconds. So a theme change arrives with a map change, and neither the
+   * page nor the server needs a second endpoint or a second poll for it.
+   *
+   * <p>What that does not buy is a page nobody refreshes: with the poll off, a browser tab left open
+   * across sunset keeps the palette it loaded with, because nothing here watches the clock or the
+   * sky. The next load or refresh picks the new theme up, and that is the deliberate trade -- the
+   * alternative is the page asking the game for its theme on a timer of its own, which is the second
+   * poll this design exists to avoid.
+   *
+   * <p>The stylesheet is keyed off :root[data-theme=...] and the canvas palette is the renderer's
+   * own, so both are set here: the chrome and the map are one picture and must not disagree.
+   * Repainting is left to the caller, because paint() is the one place that decides when a frame is
+   * due.
+   */
+  function applyTheme(theme) {
+    const wanted = theme === THEME_LIGHT ? THEME_LIGHT : THEME_DARK;
+    if (wanted === state.theme) return false;
+    state.theme = wanted;
+    if (typeof document !== 'undefined' && document.documentElement
+      && typeof document.documentElement.setAttribute === 'function') {
+      document.documentElement.setAttribute(THEME_ATTRIBUTE, wanted);
+    }
+    render.setTheme(wanted);
+    return true;
+  }
+
+  /** The export's colours for the palette in force; the dark one when nothing has said otherwise. */
+  function exportTheme() {
+    return EXPORT_THEME[state.theme] || EXPORT_THEME.dark;
+  }
+
+  // -------------------------------------------------------------------------------
   // Loading
   // -------------------------------------------------------------------------------
 
@@ -189,6 +277,9 @@
       setBanner('读取道路数据失败：' + state.loadError + '（请确认游戏正在运行，且本地服务已启动）', 'error');
       if (!state.model) {
         state.model = model.normalize(null);
+        // A payload that never arrived still has a palette: the page's own default, which is what
+        // model.normalize(null) says and what the page has always looked like.
+        applyTheme(state.model.theme);
         resizeCanvas();
         fitToBounds(false);
         requestRender();
@@ -204,6 +295,9 @@
     const wasEmpty = !state.model || state.model.empty;
     state.loadError = null;
     state.model = model.normalize(payload);
+    // Before the paint below, so the first frame of a changed theme is already the new one. The
+    // theme travels with the roads, so this is also the only moment it can have changed.
+    applyTheme(state.model.theme);
     state.hasLoaded = true;
     resizeCanvas();
     if (!state.view || (wasEmpty && !state.model.empty)) fitToBounds(false);
@@ -532,9 +626,16 @@
    * computed styles of everything it renders, and oklch()/color-mix() make it throw
    * rather than degrade. The canvas is left at its natural size -- the point of the 2x
    * offscreen render is lost if CSS scales it back down.
+   *
+   * The colours come from EXPORT_THEME rather than from the stylesheet. The wrapper is built
+   * detached from the page and handed to html2canvas, and whether a CSS variable resolves inside
+   * html2canvas's clone of the document is not a property worth depending on: a light export whose
+   * caption was styled through :root[data-theme] would be a dark caption around a light map. Inline
+   * hex cannot fail that way.
    */
   function buildExportHost(canvas) {
     const m = state.model;
+    const ink = exportTheme();
     const host = document.createElement('div');
     host.style.cssText = [
       'position:fixed',
@@ -543,19 +644,19 @@
       'width:' + (canvas.width + 32) + 'px',
       'box-sizing:border-box',
       'padding:14px 16px 16px',
-      'background:#101418',
-      'color:#e8edf2',
+      'background:' + ink.background,
+      'color:' + ink.text,
       'font-family:' + FONT_STACK,
       'font-size:13px',
       'line-height:1.5',
     ].join(';');
 
     const title = document.createElement('div');
-    title.style.cssText = 'font-size:17px;font-weight:600;color:#eaf2ff;margin:0 0 2px';
+    title.style.cssText = 'font-size:17px;font-weight:600;color:' + ink.title + ';margin:0 0 2px';
     title.textContent = 'HowToGo 浏览器地图' + (m.world ? ' · ' + m.world : '');
 
     const meta = document.createElement('div');
-    meta.style.cssText = 'font-size:12px;color:#9fb0c0;margin:0 0 10px';
+    meta.style.cssText = 'font-size:12px;color:' + ink.muted + ';margin:0 0 10px';
     meta.textContent = [
       m.dimension || '未知维度',
       model.formatTime(Date.now()),
@@ -565,17 +666,19 @@
       '生成于 ' + model.formatTime(m.generatedAt),
     ].join('  ·  ');
 
-    canvas.style.cssText = 'display:block;border:1px solid #1b2430';
+    canvas.style.cssText = 'display:block;border:1px solid ' + ink.canvasBorder;
 
     const legend = document.createElement('div');
-    legend.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:#c9d5e0';
+    legend.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:'
+      + ink.legend;
     for (const klass of m.classes) {
       const count = m.classCounts[klass.id] || 0;
       if (!count && state.hiddenClasses.has(klass.id)) continue;
       const item = document.createElement('span');
       item.style.cssText = 'display:inline-flex;align-items:center;gap:6px';
       const chip = document.createElement('span');
-      chip.style.cssText = 'display:inline-block;width:11px;height:11px;border:1px solid #0b0f14;background:' + klass.color;
+      chip.style.cssText = 'display:inline-block;width:11px;height:11px;border:1px solid '
+        + ink.chipBorder + ';background:' + klass.color;
       const text = document.createElement('span');
       text.textContent = model.classLabel(klass.id) + ' ' + count;
       if (state.hiddenClasses.has(klass.id)) {
@@ -587,7 +690,7 @@
       legend.appendChild(item);
     }
     const layers = document.createElement('span');
-    layers.style.cssText = 'display:inline-flex;align-items:center;gap:6px;color:#9fb0c0';
+    layers.style.cssText = 'display:inline-flex;align-items:center;gap:6px;color:' + ink.muted;
     layers.textContent = '道路层 ' + (m.stats.layers.length ? m.stats.layers.map(model.layerLabel).join('、') : '无');
     legend.appendChild(layers);
 
@@ -650,7 +753,13 @@
         await nextFrame();
         if (typeof window.html2canvas === 'function') {
           try {
-            output = await window.html2canvas(host, {scale: 1, backgroundColor: '#101418', logging: false});
+            // The same background the map was painted on, so a light export is light all the way
+            // to its edges and a dark one is unchanged.
+            output = await window.html2canvas(host, {
+              scale: 1,
+              backgroundColor: exportTheme().background,
+              logging: false,
+            });
             composed = true;
           } catch (err) {
             // html2canvas is a nicety, not the export: the map is already drawn.
@@ -817,6 +926,10 @@
 
     if (!refs.canvas) return;
     wire();
+    // The dark style until a payload says otherwise, made explicit rather than left to the
+    // stylesheet's default so that data-theme always describes the frame being drawn. The first
+    // successful fetch replaces it, which is what makes a light-theme page light.
+    applyTheme(THEME_DARK);
     rebuildPanel();
     resizeCanvas();
     fitToBounds(false);

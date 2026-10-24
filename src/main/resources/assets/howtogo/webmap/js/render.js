@@ -48,18 +48,75 @@
   'use strict';
 
   // --- palette -------------------------------------------------------------------
-  // CASING_COLOR and MARKER_OUTLINE are deliberately different shades of near-black:
-  // the harness tells the passes apart by stroke colour, and an outline sharing the
-  // casing's colour would look like a road.
-  const BACKGROUND_COLOR = '#101418';
-  const GRID_COLOR = '#1b2430';
-  const AXIS_COLOR = '#2c3a4a';
-  const CASING_COLOR = '#0b0f14';
-  const MARKER_OUTLINE = '#05070a';
-  const ARROW_COLOR = '#0b0f14';
-  const LABEL_ROAD_COLOR = '#E8F1FA';
-  const LABEL_PLACE_COLOR = '#FFE7A8';
-  const MESSAGE_COLOR = '#9FB0C0';
+  //
+  // Two palettes, one set of roles. Everything here is a colour the map uses to be *read* -- the
+  // backdrop, the grid, the casing that separates crossing roads, the ink of a label, an arrow or
+  // a message, the fill and ring of a marker -- and those are exactly the things whose right value
+  // depends on what they sit on. Road class colours are deliberately not here: they are the
+  // player's configured colours, carried in the payload, and a theme that recoloured them would be
+  // overwriting data.
+  //
+  // The dark palette is the one the map has always drawn, literal for literal, because the white
+  // style is an addition to it rather than a reason to restyle it. The light palette is Google
+  // Maps' light map -- land #F1F3F4, hairline #DADCE0, road names #5F6368, place names #3C4043 --
+  // which is where the game's own white theme comes from, so a browser map in the light style is
+  // the same map the game draws on its own screens.
+  //
+  // Plain hex on both sides, because of the export: html2canvas 1.4.1, which the PNG download
+  // runs on, parses these into its own colour parser and throws on oklch()/color-mix() rather than
+  // degrading.
+  //
+  // CASING_COLOR and MARKER_OUTLINE are deliberately different shades in the dark palette: the
+  // harness tells the drawing passes apart by stroke colour, and an outline sharing the casing's
+  // colour would look like a road. The light palette keeps them apart for the same reason -- a
+  // casing is a hairline against the pale land, while an outline is the ring that separates a
+  // marker from whatever is under it, which on a light map is white.
+  const PALETTES = {
+    dark: {
+      background: '#101418',
+      grid: '#1b2430',
+      axis: '#2c3a4a',
+      casing: '#0b0f14',
+      markerOutline: '#05070a',
+      // The fill of a road end's dot. Near-black in both palettes, but not the same role's
+      // near-black: the dark map has always filled it with the outline colour, and the light map
+      // cannot, because a white dot on #F1F3F4 land is not a dot. There it takes the text grey.
+      endpoint: '#05070a',
+      arrow: '#0b0f14',
+      labelRoad: '#E8F1FA',
+      labelPlace: '#FFE7A8',
+      message: '#9FB0C0',
+      marker: '#E8EDF2',
+    },
+    light: {
+      background: '#F1F3F4',
+      grid: '#DADCE0',
+      // One step darker than the grid: the grid is a hint where a coordinate falls, the world
+      // origin is a line the eye has to find.
+      axis: '#BDC1C6',
+      casing: '#DADCE0',
+      markerOutline: '#FFFFFF',
+      endpoint: '#3C4043',
+      // Darker than the light palette's casing on purpose: an arrow sits on a road's own
+      // saturated data colour, where a pale hairline would vanish, not on the pale land.
+      arrow: '#3C4043',
+      labelRoad: '#5F6368',
+      labelPlace: '#3C4043',
+      message: '#5F6368',
+      marker: '#3C4043',
+    },
+  };
+
+  /*
+   * The palette in force.
+   *
+   * A module-level variable rather than a drawing option, because the theme is not a property of
+   * one drawing: it is what the map is currently drawing in, and drawMap is called again on every
+   * pan, zoom, resize and export with options that have nothing to say about it. setTheme swaps the
+   * variable and the next drawing picks it up, which is the whole of the mechanism.
+   */
+  let palette = PALETTES.dark;
+
   const MESSAGE_FONT_PX = 15;
 
   const BASE_LABEL_FONT_PX = 13;
@@ -73,7 +130,6 @@
   const JUNCTION_RADIUS_PX = 2.6;
   const ENDPOINT_RADIUS_PX = 1.5;
   const POI_RADIUS_PX = 5.5;
-  const MARKER_COLOR = '#E8EDF2';
 
   const ARROW_SPACING_PX = 56;
   const ARROW_MIN_PATH_PX = 22;
@@ -169,6 +225,27 @@
     return new Set();
   }
 
+  /**
+   * Switches the palette, and says whether it changed.
+   *
+   * Called by app.js with the theme the last `/api/roads` payload named. Nothing is painted here:
+   * the renderer is handed a context and owns no canvas, so the caller schedules the repaint -- which
+   * is also what keeps a theme change from painting over an export in progress. A word the palette
+   * table does not know means the dark style, so a payload the page cannot interpret can never leave
+   * it with no palette at all.
+   */
+  function setTheme(theme) {
+    const next = theme === 'light' ? PALETTES.light : PALETTES.dark;
+    if (next === palette) return false;
+    palette = next;
+    return true;
+  }
+
+  /** The palette in force, spelled as the payload and the page's data-theme attribute spell it. */
+  function activeTheme() {
+    return palette === PALETTES.light ? 'light' : 'dark';
+  }
+
   function fontString(px, bold) {
     return (bold ? '600 ' : '') + px + 'px ' + FONT_STACK;
   }
@@ -184,7 +261,7 @@
     // per block, because those constants would stay the size they are on a 1x screen.
     const resolutionScale = num(o.resolutionScale, 1) > 0 ? num(o.resolutionScale, 1) : 1;
     return {
-      background: typeof o.background === 'string' ? o.background : BACKGROUND_COLOR,
+      background: typeof o.background === 'string' ? o.background : palette.background,
       grid: o.grid !== false,
       showRoadNames: o.showRoadNames !== false,
       showPlaces: o.showPlaces !== false,
@@ -197,7 +274,7 @@
       labelFontPx: BASE_LABEL_FONT_PX * fontScale * resolutionScale,
       labelHaloPx: LABEL_HALO_PX * fontScale * resolutionScale,
       labelPaddingPx: LABEL_PADDING_PX * fontScale * resolutionScale,
-      markerColor: typeof o.markerColor === 'string' ? o.markerColor : MARKER_COLOR,
+      markerColor: typeof o.markerColor === 'string' ? o.markerColor : palette.marker,
       message: typeof o.message === 'string' && o.message ? o.message : null,
       // Set by the harness to prove the two entry points really are one function.
       onPass: typeof o.onPass === 'function' ? o.onPass : null,
@@ -373,9 +450,11 @@
     const px = num(resolutionScale, 1) > 0 ? num(resolutionScale, 1) : 1;
     const marks = arrowPlacements(segment, view, model, px);
     if (!marks.length) return;
-    // Dark, like the casing: an arrowhead in the road's own colour would be invisible
-    // on the road it is painted on.
-    ctx.fillStyle = ARROW_COLOR;
+    // Dark ink, like the casing in the dark palette: an arrowhead in the road's own colour would be
+    // invisible on the road it is painted on. The light palette's casing is a pale hairline that
+    // would vanish on a saturated road fill too, so there the arrow takes the near-black text grey
+    // instead -- it sits on the road's data colour, not on the pale land.
+    ctx.fillStyle = palette.arrow;
     for (const mark of marks) {
       const rad = mark.angle * Math.PI / 180;
       const dx = Math.cos(rad);
@@ -410,7 +489,7 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const seg of sorted) {
-      strokeRoad(ctx, seg, view, CASING_COLOR,
+      strokeRoad(ctx, seg, view, palette.casing,
         roadStrokePx(seg.klass.width, view.scale, opts.px) + CASING_EXTRA_PX * opts.px);
     }
     for (const seg of sorted) {
@@ -451,7 +530,7 @@
         ctx.moveTo(0, sy);
         ctx.lineTo(view.width, sy);
       }
-      ctx.strokeStyle = GRID_COLOR;
+      ctx.strokeStyle = palette.grid;
       ctx.lineWidth = 1 * opts.px;
       ctx.stroke();
     }
@@ -470,7 +549,7 @@
         ctx.moveTo(0, origin.y);
         ctx.lineTo(view.width, origin.y);
       }
-      ctx.strokeStyle = AXIS_COLOR;
+      ctx.strokeStyle = palette.axis;
       ctx.lineWidth = 1 * opts.px;
       ctx.stroke();
     }
@@ -483,7 +562,7 @@
     ctx.closePath();
     ctx.fillStyle = colour;
     ctx.fill();
-    ctx.strokeStyle = MARKER_OUTLINE;
+    ctx.strokeStyle = palette.markerOutline;
     ctx.lineWidth = 1 * px;
     ctx.stroke();
   }
@@ -498,7 +577,7 @@
     ctx.closePath();
     ctx.fillStyle = colour;
     ctx.fill();
-    ctx.strokeStyle = MARKER_OUTLINE;
+    ctx.strokeStyle = palette.markerOutline;
     ctx.lineWidth = 1.2 * px;
     ctx.stroke();
   }
@@ -524,7 +603,7 @@
       const s = G.worldToScreen(view, node.x, node.z);
       if (!onScreen(s)) continue;
       if (node.type === 'ENDPOINT') {
-        drawDot(ctx, s.x, s.y, ENDPOINT_RADIUS_PX * px, MARKER_OUTLINE, px);
+        drawDot(ctx, s.x, s.y, ENDPOINT_RADIUS_PX * px, palette.endpoint, px);
       } else {
         drawDot(ctx, s.x, s.y, JUNCTION_RADIUS_PX * px, opts.markerColor, px);
       }
@@ -933,7 +1012,7 @@
       ctx.lineWidth = opts.labelHaloPx * (fontPx / baseFont);
       ctx.strokeStyle = opts.background;
       ctx.strokeText(label.text, 0, 0);
-      ctx.fillStyle = label.kind === 'place' ? LABEL_PLACE_COLOR : LABEL_ROAD_COLOR;
+      ctx.fillStyle = label.kind === 'place' ? palette.labelPlace : palette.labelRoad;
       ctx.fillText(label.text, 0, 0);
       ctx.restore();
     }
@@ -953,7 +1032,7 @@
     ctx.lineWidth = opts.labelHaloPx * 1.6;
     ctx.strokeStyle = opts.background;
     ctx.strokeText(opts.message, view.width / 2, view.height / 2);
-    ctx.fillStyle = MESSAGE_COLOR;
+    ctx.fillStyle = palette.message;
     ctx.fillText(opts.message, view.width / 2, view.height / 2);
     ctx.restore();
   }
@@ -999,21 +1078,28 @@
   }
 
   return {
-    BACKGROUND_COLOR,
-    GRID_COLOR,
-    AXIS_COLOR,
-    CASING_COLOR,
-    MARKER_OUTLINE,
-    ARROW_COLOR,
-    LABEL_ROAD_COLOR,
-    LABEL_PLACE_COLOR,
-    MESSAGE_COLOR,
+    /*
+     * The palette in force, under the names the harness has always used. Getters rather than copied
+     * values so a caller that reads after setTheme() -- which is how the Node harness reads them --
+     * gets the palette in force rather than a snapshot of the dark one. The page itself takes its
+     * colours through drawMap and never through these exports, which is why the browser's shared
+     * namespace flattening them at load (Object.assign reads the getters once) changes nothing.
+     */
+    get BACKGROUND_COLOR() { return palette.background; },
+    get GRID_COLOR() { return palette.grid; },
+    get AXIS_COLOR() { return palette.axis; },
+    get CASING_COLOR() { return palette.casing; },
+    get MARKER_OUTLINE() { return palette.markerOutline; },
+    get ARROW_COLOR() { return palette.arrow; },
+    get LABEL_ROAD_COLOR() { return palette.labelRoad; },
+    get LABEL_PLACE_COLOR() { return palette.labelPlace; },
+    get MESSAGE_COLOR() { return palette.message; },
+    get MARKER_COLOR() { return palette.marker; },
     BASE_LABEL_FONT_PX,
     LABEL_HALO_PX,
     LABEL_PADDING_PX,
     CASING_EXTRA_PX,
     MIN_ROAD_PX,
-    MARKER_COLOR,
     POI_RADIUS_PX,
     LABEL_SPACING_PX,
     MAX_LABELS_PER_ROAD,
@@ -1026,6 +1112,8 @@
     ARROW_HALF_WIDTH_PX,
     PLACE_DIRECTIONS,
     GRID_STEPS,
+    setTheme,
+    activeTheme,
     drawMap,
     buildLabelItems,
     roadLabelFontPx,
