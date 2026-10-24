@@ -11,6 +11,8 @@
 // one of the three this tree uses that runs on both Gradle 8 and Gradle 9. It was the Forge
 // side that forced Gradle 8 on the whole tree; see MIGRATION.md.
 
+import java.util.zip.ZipFile
+
 // Declares this node's loader for the //? if fabric conditions in the shared source.
 // Declares the loader this node builds for, for the `//? if <loader>` conditions in the shared
 // source. All three are declared on every node, not just the true one: a condition naming a
@@ -77,13 +79,50 @@ repositories {
     flatDir { dirs(rootProject.file("libs")) }
 }
 
-dependencies {
-    // The node's NAME is the logical version; the Minecraft version it compiles against can be a
-// patch of it -- the 26.1 node's is 26.1.2. A NeoForge node gets this for free, because
-// ModDevGradle derives the Minecraft version from the NeoForge version it is given; a Fabric node
-// has to be told, so deps.minecraft_version overrides it where the two differ.
+// The Minecraft artifact version, hoisted out of the dependency block below so the minimap gate can
+// select its jar by the same version. The node's NAME is the logical version; the version it
+// compiles against can be a patch of it -- the 26.1 node's is 26.1.2 -- and a NeoForge node gets
+// this for free, because ModDevGradle derives the Minecraft version from the NeoForge version it is
+// given; a Fabric node has to be told, so deps.minecraft_version overrides it where the two differ.
 val minecraftArtifactVersion = findProperty("deps.minecraft_version")?.toString() ?: minecraftVersion
-minecraft("com.mojang:minecraft:$minecraftArtifactVersion")
+
+// The Xaero's Minimap navigation overlay compiles against the minimap's element-render API. That is
+// an abstract class to subclass, not an interface to reflect over, so this integration cannot be
+// reached the way MTR, Create and RoadWeaver are: the overlay's own sources can only be compiled on
+// a node whose libs/ holds a minimap jar for that node's Minecraft generation.
+//
+// So the jar's presence decides what is compiled, exactly as it does for the NeoForge nodes: with a
+// jar the package is compiled against it (see the dependency block), without one it is excluded from
+// the source set and the node builds unchanged. What such a node loses is exactly one feature -- the
+// map_display_mode=xaero_minimap overlay -- and not silently: the display-mode router is an
+// always-compiled reflective bridge that notices the missing class and falls back to the in-HUD map
+// with one log line explaining why.
+//
+// Deliberately NOT a declared or hard dependency, unlike Xaero's World Map, which every road and
+// route already renders through; the minimap is only an alternative place to draw the same route.
+//
+// Selected by this node's Minecraft version -- the file name carries it -- and recognised by the
+// class the overlay must subclass rather than by file name alone, so a stray jar from another
+// generation is treated as absent instead of failing javac with a version mismatch. Xaero names its
+// Fabric jars two ways; only the loader-first one is the minimap's spelling, so only it is accepted.
+val minimapApiJar = fileTree(rootProject.file("libs")) {
+    include("xaerominimap-fabric-$minecraftArtifactVersion-*.jar")
+}.find { f ->
+    try {
+        // ZipFile, not java.util.zip.ZipFile: in a Kotlin build script `java` is the Java plugin
+        // extension and shadows the package root.
+        ZipFile(f).getEntry("xaero/hud/minimap/element/render/MinimapElementRenderer.class") != null
+    } catch (ignored: Exception) {
+        false
+    }
+}
+
+if (minimapApiJar == null) {
+    sourceSets.main.get().java.exclude("**/xaero/minimap/**")
+}
+
+dependencies {
+    minecraft("com.mojang:minecraft:$minecraftArtifactVersion")
     // Official Mojang mappings, NOT Yarn. The whole codebase is written against net.minecraft.*
     // official names -- 33k lines of it, shared with the NeoForge and Forge nodes -- so moving to
     // Yarn would be a rename pass with no functional gain, and would be the one thing that made
@@ -114,8 +153,11 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
 }
 
     // Xaero's World Map, as the FABRIC build of it -- the NeoForge jar is a different artifact
-    // and its classes will not load here. Only the world map is a compile input: MTR, Create and
-    // Xaero's Minimap are reached by reflection, so they are runtime mods and deliberately absent.
+    // and its classes will not load here. Only the world map is a compile input from the
+    // always-compiled source: MTR, Create and Xaero's Minimap are reached by reflection from it, so
+    // they are runtime mods and deliberately absent. Xaero's Minimap's one non-reflective piece --
+    // the route overlay, which has to subclass its element renderer -- is compiled only when this
+    // node supplied its jar, as the gate above says.
     //
     // Loom remaps this jar to the official names on the way in, which is why the file name does
     // not have to say so; see libs/README.md.
@@ -133,6 +175,12 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
     // whoever has to replace it.
     include("xaeroworldmap-fabric-$minecraftArtifactVersion-*.jar",
             "XaerosWorldMap_*_Fabric_$minecraftArtifactVersion.jar") })
+
+    // The Xaero's Minimap overlay's API jar, when this node supplied one: see the note above the
+    // exclusion for why it is optional, compile-only and selected by name. XaeroLib, whose types the
+    // minimap jar's signatures mention, is not added here -- the deps.xaerolib wiring just above
+    // already adds this node's extracted jar, and a second copy of the same classes says nothing new.
+    minimapApiJar?.let { modCompileOnly(files(it)) }
 }
 
 // The access widener is chosen per version generation, because an entry naming a member that does

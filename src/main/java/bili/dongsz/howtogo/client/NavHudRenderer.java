@@ -28,7 +28,6 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.RenderStateShard;
 //?}
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 //? if neoforge {
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
@@ -48,6 +47,15 @@ import java.util.List;
  * <p>The mini-map is drawn from this mod's own road data rather than borrowing Xaero's rendering:
  * the Minimap is an optional dependency and may not be installed at all, so there would otherwise
  * be nothing to draw into.
+ *
+ * <h2>The two layouts</h2>
+ * The panel is one of two ways the HUD can look. In {@code hud} display mode -- see
+ * {@link MapDisplayMode} -- it draws the map and the readout together, as it always has. In
+ * {@code xaero_minimap} mode the map half is Xaero's and this class draws no map at all: what is left
+ * is {@link NavCompactHud}, a small card with the readout only. Both layouts take one
+ * {@link NavHudReadout}, read once at the top of the frame, so switching display modes cannot make
+ * the trip read differently, and the arrow, the stop marker and the progress bar live in
+ * {@link NavHudShapes} for the same reason.
  */
 public final class NavHudRenderer {
 
@@ -124,9 +132,32 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     // -------------------------------------------------------------------- panel
 
+    /**
+     * Which layout this frame gets, and the readout both of them draw.
+     *
+     * <p>The decision is taken once, here, rather than inside either layout: the panel and the compact
+     * card are alternatives, and a frame that started drawing one must not change its mind halfway
+     * down. {@link NavMapMode#effective()} is also the only thing that knows why the answer might not
+     * be the configured one -- Xaero's Minimap missing, or not yet registered -- so the fallback is
+     * not re-derived here and its log line is not duplicated.
+     */
     private static void draw(GuiGraphics graphics, Minecraft mc) {
+        // Which layout is possible at all is the same question the Xaero overlay asks, and it is
+        // answered in one place so the two can never disagree about whether a map is being drawn.
+        MapDisplayMode mode = NavMapMode.effective();
+        // Read before the branch: both layouts need it, and one value means the arrow, the words and
+        // the progress bar describe the same instant whichever layout draws them.
+        NavHudReadout readout = NavHudReadout.of();
+        if (mode == MapDisplayMode.HUD) {
+            drawPanel(graphics, mc, readout);
+        } else {
+            NavCompactHud.draw(graphics, mc, readout);
+        }
+    }
+
+    private static void drawPanel(GuiGraphics graphics, Minecraft mc, NavHudReadout readout) {
         int screenWidth = mc.getWindow().getGuiScaledWidth();
-        int panelHeight = panelHeight();
+        int panelHeight = panelHeight(readout);
         // Floored at MARGIN so a very narrow window cannot push the panel off the left edge.
         int panelX = Math.max(MARGIN, screenWidth - PANEL_WIDTH - MARGIN);
         int panelY = MARGIN;
@@ -141,7 +172,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
         int contentX = panelX + PADDING;
         int headerY = panelY + PADDING;
-        drawHeader(graphics, mc, contentX, headerY);
+        drawHeader(graphics, mc, contentX, headerY, readout);
 
         int mapX = contentX;
         int mapY = headerY + HEADER_HEIGHT;
@@ -150,7 +181,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         graphics.fill(mapX, mapY, mapX + MAP_SIZE, mapY + MAP_SIZE, UiTheme.mapBackdrop());
         drawMiniMap(graphics, mc, mapX, mapY);
 
-        drawInfo(graphics, mc, contentX, mapY + MAP_SIZE + PADDING);
+        drawInfo(graphics, mc, contentX, mapY + MAP_SIZE + PADDING, readout);
     }
 
     /**
@@ -160,27 +191,27 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
      * holds. Only the narrator hint's two rows are ever in doubt -- they are up when the speech
      * engine failed and down the rest of the time -- so the panel is the shape it has always been
      * unless that hint is being shown, rather than carrying two empty rows under the journey line
-     * for the whole session.
+     * for the whole session. The readout carries that fact so the height and the note itself cannot
+     * disagree about whether the rows exist.
      */
-    private static int panelHeight() {
-        int readout = Narration.unavailable() ? READOUT_HINT_HEIGHT : READOUT_HEIGHT;
-        return PADDING * 2 + HEADER_HEIGHT + MAP_SIZE + readout;
+    private static int panelHeight(NavHudReadout readout) {
+        int readoutHeight = readout.narratorHint() != null ? READOUT_HINT_HEIGHT : READOUT_HEIGHT;
+        return PADDING * 2 + HEADER_HEIGHT + MAP_SIZE + readoutHeight;
     }
 
-    private static void drawHeader(GuiGraphics graphics, Minecraft mc, int x, int y) {
-        Destination destination = Navigation.target();
-        if (destination == null) {
+    private static void drawHeader(GuiGraphics graphics, Minecraft mc, int x, int y,
+                                   NavHudReadout readout) {
+        if (readout.destinationName() == null) {
             return;
         }
         // Always the destination. Leading with the road the player is standing on reads as the
         // panel reporting a position the player never asked about, and the road being entered is
         // already named on the instruction line below, so nothing is lost by dropping it here.
-        String label = Component.translatable("hud.howtogo.hud_destination",
-                destination.name()).getString();
+        String label = readout.headerLabel();
         // The mode shares this row rather than the readout below: the readout is already tight on
         // width at this panel size, and the mode belongs next to the heading, not buried at the end
         // of a sentence that may not fit.
-        String mode = Navigation.modeLabel();
+        String mode = readout.modeLabel();
         int modeWidth = mc.font.width(mode);
         graphics.drawString(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
                 x, y, UiTheme.header(), false);
@@ -477,156 +508,88 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     // ------------------------------------------------------------------- info
 
-    private static void drawInfo(GuiGraphics graphics, Minecraft mc, int x, int y) {
+    /**
+     * The readout under the map, drawn from the value both layouts share.
+     *
+     * <p>The three branches are the readout's three answers, in the order they have always been asked:
+     * the arrival banner, then the absence of a route, then the live trip. The two dead readings draw
+     * a straight arrow in their status colour -- the arrow keeps the marker in the same cell so the
+     * block does not move when the state changes, and the colour is the one the readout picked for
+     * both the marker and the line.
+     */
+    private static void drawInfo(GuiGraphics graphics, Minecraft mc, int x, int y,
+                                 NavHudReadout readout) {
         Font font = mc.font;
-        Destination destination = Navigation.target();
-        if (destination == null) {
+        if (readout.destinationName() == null) {
             return;
         }
 
-        if (Navigation.showArrival()) {
-            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, UiTheme.ok());
-            graphics.drawString(font, Component.translatable("hud.howtogo.hud_arrived").getString(),
-                    x + READOUT_TEXT_X, y + 6, UiTheme.ok(), false);
-            graphics.drawString(font, destination.name(), x + READOUT_TEXT_X, y + 18,
+        if (readout.arrived()) {
+            NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
+                    readout.arrowDegrees(), readout.arrowColor());
+            graphics.drawString(font, readout.arrivalLine(),
+                    x + READOUT_TEXT_X, y + 6, readout.arrowColor(), false);
+            graphics.drawString(font, readout.destinationName(), x + READOUT_TEXT_X, y + 18,
                     UiTheme.textSecondary(), false);
-        } else if (!Navigation.route().isPresent()) {
-            drawTurnArrow(graphics, x + 11, y + 12, Double.NaN, UiTheme.warn());
-            graphics.drawString(font, Component.translatable("hud.howtogo.hud_noroute").getString(),
-                    x + READOUT_TEXT_X, y + 6, UiTheme.warn(), false);
+        } else if (!readout.hasRoute()) {
+            NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
+                    readout.arrowDegrees(), readout.arrowColor());
+            graphics.drawString(font, readout.noRouteLine(),
+                    x + READOUT_TEXT_X, y + 6, readout.arrowColor(), false);
         } else {
-            drawRouteReadout(graphics, mc, x, y);
+            drawRouteReadout(graphics, mc, x, y, readout);
         }
 
         // Last, and text, so nothing follows it through the quad consumer the arrow opened.
-        drawNarratorHint(graphics, font, x, y + READOUT_HINT_Y);
-    }
-
-    /** The turn, the distance, the progress bar and the remaining line: the live trip readout. */
-    private static void drawRouteReadout(GuiGraphics graphics, Minecraft mc, int x, int y) {
-        Font font = mc.font;
-        // While there is a line to be on -- walking up to the stop of a boarding, or riding one -- the
-        // readout is the transit one: which line and which way, or which stop is coming and how many
-        // are left. Walking to and from the vehicle keeps the ordinary turn readout, because that is
-        // what those legs are. See Navigation#transitStep.
-        if (Navigation.transitStep() != null) {
-            drawTransitReadout(graphics, font, x, y);
-            return;
-        }
-        // The wrong-way call takes the readout over when it is up: a player going the wrong way has
-        // no use for the turn the route was going to give them next, and turning round at the next
-        // junction is the instruction that actually gets them moving again.
-        //
-        // The wrong-way READING takes it over whether or not it could name a junction. Falling through
-        // to the route's next turn when it could not is what produced "continue straight" for a player
-        // travelling against the route; the plain U-turn, with no junction and no distance, is the
-        // honest answer to not knowing where they can turn round.
-        Navigation.Uturn uturn = Navigation.wrongWayUturn();
-        boolean wrongWay = Navigation.wrongWay();
-        Navigation.Instruction maneuver = wrongWay ? null : Navigation.nextManeuver();
-
-        double maneuverDegrees = maneuver == null ? Double.NaN : maneuver.turnDegrees();
-        // A U-turn is a U-turn whether the route asked for it or the player has turned round into
-        // one, and on a highway neither can be called as one: there is nowhere to turn, so the same
-        // junction is called as carrying on to it, and the arrow has to agree with the words rather
-        // than with the angle the route came in at.
-        boolean uturnCall = uturn != null || Navigation.isUturn(maneuverDegrees);
-        boolean plainUturn = wrongWay && uturn == null;
-        boolean highway = uturn != null ? uturn.highway()
-                : ((uturnCall || plainUturn) && Navigation.onHighway());
-        double arrowDegrees = (uturnCall || plainUturn) && highway ? Double.NaN
-                : (uturn != null || plainUturn ? 180.0 : maneuverDegrees);
-        drawTurnArrow(graphics, x + 11, y + 12, arrowDegrees, UiTheme.accent());
-
-        // The number and the instruction are taken from the same object here and everywhere else that
-        // shows them, so the distance can only ever count to the point the words are about. See
-        // Navigation's note on that rule. With no junction named there is no point to count to, so the
-        // slot shows nothing rather than a number from somewhere else.
-        double distanceAhead = uturn != null ? uturn.distanceAhead()
-                : (maneuver == null ? Double.NaN : maneuver.distanceAhead());
-
-        // Distance to the turn is the number that matters, so it gets the large treatment. "Now" is
-        // asked of Navigation rather than compared against a constant, so the panel flips to it at
-        // the same distance the spoken announcement does.
-        String distance = Double.isNaN(distanceAhead)
-                ? "--"
-                : (distanceAhead <= Navigation.turnNowDistance()
-                        ? Component.translatable("hud.howtogo.hud_now").getString()
-                        : Route.formatDistance(distanceAhead));
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, UiTheme.textStrong(), false);
-
-        String instruction;
-        if (uturnCall || plainUturn) {
-            // No road named: a U-turn is not a turn onto anything, it is going back the way they came.
-            instruction = Navigation.uturnAction(highway);
-        } else if (maneuver == null) {
-            instruction = Component.translatable("hud.howtogo.hud_straight").getString();
-        } else if (!maneuver.namesTheRoad()) {
-            // The turn is real, the name is not worth saying: it is the road they are already on.
-            instruction = Navigation.turnPhrase(maneuverDegrees);
-        } else {
-            // Always name the road being entered, so the sentence never quietly loses its object.
-            String road = maneuver.roadName() != null && !maneuver.roadName().isBlank()
-                    ? maneuver.roadName()
-                    : Navigation.unnamedRoad();
-            instruction = Component.translatable("hud.howtogo.turn_onto",
-                    Navigation.turnPhrase(maneuverDegrees), road).getString();
-        }
-        graphics.drawString(font,
-                font.plainSubstrByWidth(instruction, MAP_SIZE - READOUT_TEXT_X - 2),
-                x + READOUT_TEXT_X, y + 14, UiTheme.textSecondary(), false);
-
-        drawTripProgress(graphics, font, x, y, y + 30);
+        drawNarratorHint(graphics, font, x, y + READOUT_HINT_Y, readout);
     }
 
     /**
-     * The readout for a transit cue: the line and the way it runs, or the stop being run to and what
-     * is left of the ride.
+     * The turn, the distance, the progress bar and the remaining line: the live trip readout.
      *
-     * <p>A square in place of the turn arrow, because an arrow would be a claim about a junction and
-     * there is no junction being asked about -- the marker says "a stop" and nothing more. The words
-     * come from the same {@code TransitStep} the voice reads, so what is heard and what is seen cannot
-     * be about different lines or different stops.
+     * <p>Transit and turn used to be two methods because each found its own words and its own number.
+     * That work is in {@link NavHudReadout} now, and the only difference left between the two readings
+     * is the marker at the left: a stop square for a transit cue, a turn arrow otherwise. One method
+     * draws both from one row layout, so the two cannot drift into different spacing -- which is what
+     * the panel's two readouts were one small edit away from doing.
      */
-    private static void drawTransitReadout(GuiGraphics graphics, Font font, int x, int y) {
-        Navigation.TransitStep step = Navigation.transitStep();
-        if (step == null) {
-            return;
+    private static void drawRouteReadout(GuiGraphics graphics, Minecraft mc, int x, int y,
+                                         NavHudReadout readout) {
+        Font font = mc.font;
+        if (readout.transit()) {
+            // A square rather than an arrow: an arrow would be a claim about a junction, and there is
+            // no junction being asked about -- the marker says "a stop" and nothing more.
+            NavHudShapes.drawTransitMarker(graphics, x + 11, y + 12);
+        } else {
+            NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
+                    readout.arrowDegrees(), readout.arrowColor());
         }
-        int markerX = x + 11;
-        int markerY = y + 12;
-        graphics.fill(markerX - 4, markerY - 4, markerX + 4, markerY + 4, UiTheme.accent());
-        graphics.fill(markerX - 2, markerY - 2, markerX + 2, markerY + 2,
-                UiTheme.markerBackdrop());
 
-        String distance = step.distanceAhead() <= Navigation.turnNowDistance()
-                ? Component.translatable("hud.howtogo.hud_now").getString()
-                : Route.formatDistance(step.distanceAhead());
-        graphics.drawString(font, distance, x + READOUT_TEXT_X, y + 2, UiTheme.textStrong(), false);
-
+        // Distance to the turn is the number that matters, so it gets the large treatment. "Now" has
+        // already been decided by the readout, at the same distance the spoken announcement uses.
+        graphics.drawString(font, readout.distance(), x + READOUT_TEXT_X, y + 2,
+                UiTheme.textStrong(), false);
         graphics.drawString(font,
-                font.plainSubstrByWidth(Navigation.transitSentence(step),
-                        MAP_SIZE - READOUT_TEXT_X - 2),
+                font.plainSubstrByWidth(readout.instruction(), MAP_SIZE - READOUT_TEXT_X - 2),
                 x + READOUT_TEXT_X, y + 14, UiTheme.textSecondary(), false);
 
-        drawTripProgress(graphics, font, x, y, y + 30);
+        drawTripProgress(graphics, font, x, y, y + 30, readout);
     }
 
     /**
      * The progress bar, the remaining line and the walking-fallback note: everything under the
-     * instruction, shared by the two readouts so the two cannot report the trip differently.
+     * instruction, drawn from the one readout value so the live readings cannot report the trip
+     * differently.
      */
-    private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY) {
-        drawProgressBar(graphics, x, barY, MAP_SIZE, 5);
+    private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY,
+                                         NavHudReadout readout) {
+        NavHudShapes.drawProgressBar(graphics, x, barY, MAP_SIZE, 5, readout.progress());
 
-        String remaining = Component.translatable("hud.howtogo.hud_remaining_short",
-                Route.formatDistance(Navigation.remainingLength()),
-                Route.formatDuration(Navigation.remainingSeconds())).getString();
-        int color = Navigation.isOffRoute() ? UiTheme.warn() : UiTheme.textSecondary();
-        graphics.drawString(font, remaining, x, barY + 9, color, false);
+        int color = readout.offRoute() ? UiTheme.warn() : UiTheme.textSecondary();
+        graphics.drawString(font, readout.remaining(), x, barY + 9, color, false);
 
         // Why this is a walking route when another mode is selected.
-        String fallback = Navigation.fallbackHint();
+        String fallback = readout.fallbackHint();
         if (fallback != null) {
             graphics.drawString(font, font.plainSubstrByWidth(fallback, MAP_SIZE),
                     x, barY + 20, UiTheme.warn(), false);
@@ -639,158 +602,21 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
      * <p>Only a speech engine that failed to load can cause this, so it is rare -- but a toggle that
      * looks on and produces nothing reads as a broken feature, and the log is not where a player
      * looks. Wrapped rather than clipped: it is worded to fit one line at the panel's width, and the
-     * second line is there so a translation that runs longer cannot be cut in half.
+     * second line is there so a translation that runs longer cannot be cut in half. The note is part
+     * of the readout value because the panel's height depends on whether the rows exist; the wrapping
+     * stays here because it is the panel's width that decides where they break.
      */
-    private static void drawNarratorHint(GuiGraphics graphics, Font font, int x, int y) {
-        if (!Narration.unavailable()) {
+    private static void drawNarratorHint(GuiGraphics graphics, Font font, int x, int y,
+                                         NavHudReadout readout) {
+        if (readout.narratorHint() == null) {
             return;
         }
-        List<FormattedCharSequence> lines = font.split(
-                Component.translatable("hud.howtogo.narrator_unavailable"), MAP_SIZE);
+        List<FormattedCharSequence> lines = font.split(readout.narratorHint(), MAP_SIZE);
         int count = Math.min(NARRATOR_HINT_LINES, lines.size());
         for (int i = 0; i < count; i++) {
             graphics.drawString(font, lines.get(i), x, y + i * NARRATOR_HINT_LINE_HEIGHT,
                     UiTheme.warn(), false);
         }
-    }
-
-    /** Thin trip progress bar: filled by the fraction of the route already walked. */
-    private static void drawProgressBar(GuiGraphics graphics, int x, int y, int width, int height) {
-        double total = Navigation.route().totalLength();
-        double fraction = total > 1.0E-6
-                ? Math.max(0, Math.min(1, Navigation.travelled() / total))
-                : 0;
-        fillRounded(graphics, x, y, x + width, y + height, height / 2, UiTheme.track());
-        int filled = (int) Math.round(width * fraction);
-        if (filled > height) {
-            fillRounded(graphics, x, y, x + filled, y + height, height / 2, UiTheme.accent());
-        } else if (filled > 0) {
-            graphics.fill(x, y, x + filled, y + height, UiTheme.accent());
-        }
-    }
-
-    // ---------------------------------------------------------------- turn arrow
-
-    /**
-     * A navigation arrow: a shaft that bends toward the turn, ending in a solid triangular head.
-     *
-     * <p>Drawn from geometry rather than shipped as a texture, so it needs no asset and scales with
-     * the UI. The head is a filled triangle rather than two swept barbs -- barbs read as a fork.
-     *
-     * <p>A U-turn is not drawn by this shape at all: it has its own, because a single bend cannot
-     * express one. Pointing the head straight down sent the returning leg back along the shaft it had
-     * just come up, so the icon was one line drawn twice over itself with the head buried in the
-     * middle. See {@link #drawUturnArrow}.
-     *
-     * @param degrees signed turn angle, or NaN for "no turn ahead" (drawn as straight on)
-     */
-    private static void drawTurnArrow(GuiGraphics graphics, double cx, double cy,
-                                      double degrees, int color) {
-        HudDraw.Drawing arrow = HudDraw.beginBlock(graphics);
-        HudDraw.VertexSink last = arrow.sink;
-        double thickness = 1.7;
-
-        if (!Double.isNaN(degrees) && Math.abs(degrees) > 135) {
-            drawUturnArrow(last, cx, cy, thickness, color);
-            HudDraw.endBlock(graphics, arrow);
-            return;
-        }
-
-        double bend = arrowDirection(degrees);
-        double dirX = Math.cos(bend);
-        double dirY = Math.sin(bend);
-
-        // The shaft always runs vertically up from the bottom, then bends into the turn.
-        double cornerX = cx;
-        double cornerY = cy - 1;
-        double shaftBottomY = cy + 8;
-
-        // Kept short so a left arrow still fits between the panel edge and the text column.
-        double legLength = 4.0;
-        double headLength = 5.5;
-        double headHalf = 4.0;
-
-        double tipX = cornerX + dirX * (legLength + headLength);
-        double tipY = cornerY + dirY * (legLength + headLength);
-        double baseX = tipX - dirX * headLength;
-        double baseY = tipY - dirY * headLength;
-
-        emitLine(last, cornerX, shaftBottomY, cornerX, cornerY, thickness, color, 0xFF);
-        emitDisc(last, cornerX, cornerY, thickness, color, 0xFF);
-        emitLine(last, cornerX, cornerY, baseX, baseY, thickness, color, 0xFF);
-
-        double perpX = -dirY;
-        double perpY = dirX;
-        emitTriangle(last,
-                tipX, tipY,
-                baseX + perpX * headHalf, baseY + perpY * headHalf,
-                baseX - perpX * headHalf, baseY - perpY * headHalf, color);
-
-        HudDraw.endBlock(graphics, arrow);
-    }
-
-    /**
-     * A U-turn arrow: up one side, over the top, down the other side, head at the bottom.
-     *
-     * <h2>Why a U-turn cannot use the bend shape</h2>
-     * The bend draws a shaft up from the bottom and then a leg out toward the turn. At 180 degrees
-     * that leg runs straight back down along the shaft, so the two lines coincide exactly and the icon
-     * becomes a line drawn over itself. Which way the arrow points is the whole content of the icon,
-     * and a shape that retraces itself cannot show a direction at all.
-     *
-     * <p>Sized to the same cell as the bend arrow -- about fifteen pixels tall and seven wide -- so
-     * swapping between the two does not shift the readout beside them. The two shoulders stand in for
-     * the curve, because every primitive here is a straight line.
-     */
-    private static void drawUturnArrow(HudDraw.VertexSink out,
-                                       double cx, double cy, double thickness, int color) {
-        double half = 3.5;
-        double topY = cy - 6.0;
-        double shoulderY = cy - 3.0;
-        double rightBottomY = cy + 7.0;
-        double headBaseY = cy + 1.0;
-        double tipY = cy + 7.0;
-
-        emitLine(out, cx + half, rightBottomY, cx + half, shoulderY, thickness, color, 0xFF);
-        emitLine(out, cx + half, shoulderY, cx, topY, thickness, color, 0xFF);
-        emitLine(out, cx, topY, cx - half, shoulderY, thickness, color, 0xFF);
-        emitLine(out, cx - half, shoulderY, cx - half, headBaseY, thickness, color, 0xFF);
-        emitDisc(out, cx + half, rightBottomY, thickness, color, 0xFF);
-        // Round joins at every corner. Without them the three shoulders meet at sharp wedges with a
-        // notch on the outside, which is the same artefact roads would have without joints -- see the
-        // round caps in the road renderer's stroke.
-        emitDisc(out, cx + half, shoulderY, thickness, color, 0xFF);
-        emitDisc(out, cx, topY, thickness, color, 0xFF);
-        emitDisc(out, cx - half, shoulderY, thickness, color, 0xFF);
-        emitDisc(out, cx - half, headBaseY, thickness, color, 0xFF);
-
-        emitTriangle(out, 
-                cx - half, tipY,
-                cx - half * 2.0, headBaseY,
-                cx, headBaseY, color);
-    }
-
-    /**
-     * Screen-space direction the arrow head points, in radians, for a signed turn angle.
-     *
-     * <p>Straight on is up; positive angles are right turns, following Minecraft's axes.
-     */
-    private static double arrowDirection(double degrees) {
-        if (Double.isNaN(degrees)) {
-            return -Math.PI / 2;
-        }
-        double magnitude = Math.abs(degrees);
-        if (magnitude <= 25) {
-            return -Math.PI / 2;
-        }
-        // Nothing above 135 degrees arrives here: a U-turn is drawn by drawUturnArrow, which is the
-        // only shape that can express one. It used to answer "straight down" for that case, and the
-        // caller then drew a leg back along the shaft it had just come up.
-        boolean right = degrees > 0;
-        if (magnitude > 50) {
-            return right ? 0 : Math.PI;
-        }
-        return right ? -Math.PI / 4 : -Math.PI * 3 / 4;
     }
 
     // ---------------------------------------------------------------- geometry

@@ -11,6 +11,7 @@ import bili.dongsz.howtogo.client.MtrClientData;
 import bili.dongsz.howtogo.client.PlaceDetailStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.MapFilterOverlay;
+import bili.dongsz.howtogo.client.NavMapMode;
 import bili.dongsz.howtogo.client.MtrOverlayToggles;
 import bili.dongsz.howtogo.client.RoadEditHandler;
 import bili.dongsz.howtogo.client.RoadEditSession;
@@ -113,6 +114,10 @@ public final class HowToGo {
         // RoadLayer polls from the client tick instead of doing it during initialisation.
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             RoadLayer.onClientTick();
+            // The display mode's own tick job: it polls Xaero's Minimap for the overlay's
+            // registration and writes the one log line that says which mode is in force and, when
+            // the answer is not what the player asked for, why. See NavMapMode.
+            NavMapMode.onClientTick();
             // The addon API's two tick jobs, and in this order: the deferred queue is drained before
             // the registration event is posted, so work queued by a registration handler waits for the
             // next tick and ClientScheduler's promise -- "the tick after the one that queued it" --
@@ -174,6 +179,10 @@ public final class HowToGo {
         // Registration into Xaero's render pipeline has to wait until Xaero has built its
         // handler, so we poll from the client tick instead of doing it here.
         HowToGoTicks.onClientTick(RoadLayer::onClientTick);
+        // The display mode's own tick job: it polls Xaero's Minimap for the overlay's registration
+        // and writes the one log line that says which mode is in force and, when the answer is not
+        // what the player asked for, why. See NavMapMode.
+        HowToGoTicks.onClientTick(NavMapMode::onClientTick);
         // The addon API's two tick jobs, and in this order: the deferred queue is drained before the
         // registration event is posted, so work queued by a registration handler waits for the next
         // tick and ClientScheduler's promise -- "the tick after the one that queued it" -- holds for

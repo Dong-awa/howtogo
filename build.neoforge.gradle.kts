@@ -254,6 +254,42 @@ if (mcphoneApiJar == null) {
     sourceSets.main.get().resources.exclude("META-INF/services/com.november.mcphone.api.client.app.IPhoneApp")
 }
 
+// The Xaero's Minimap navigation overlay compiles against the minimap's element-render API. That is
+// an abstract class to subclass, not an interface to reflect over, so this integration cannot be
+// reached the way MTR, Create and RoadWeaver are: the overlay's own sources can only be compiled on
+// a node whose libs/ holds a minimap jar for that node's Minecraft generation.
+//
+// So, like the mcphone integration just above, the jar's presence decides what is compiled: with a
+// jar the package is compiled against it (see the dependency block), without one it is excluded from
+// the source set and the node builds unchanged. What such a node loses is exactly one feature -- the
+// map_display_mode=xaero_minimap overlay -- and not silently: the display-mode router is an
+// always-compiled reflective bridge that notices the missing class and falls back to the in-HUD map
+// with one log line explaining why.
+//
+// Deliberately NOT a declared or hard dependency, unlike Xaero's World Map, which every road and
+// route already renders through; the minimap is only an alternative place to draw the same route,
+// and requiring it would force every player to install a second Xaero mod for a mode they may never
+// turn on.
+//
+// Selected by this node's Minecraft version for the same two reasons the mcphone jar is (see above),
+// and recognised by the class the overlay must subclass rather than by file name alone, so a stray
+// jar from another generation is treated as absent instead of failing javac with a version mismatch.
+val minimapApiJar = fileTree(rootProject.file("libs")) {
+    include("xaerominimap-neoforge-$minecraftVersion-*.jar")
+}.find { f ->
+    try {
+        // ZipFile, not java.util.zip.ZipFile: in a Kotlin build script `java` is the Java
+        // plugin extension and shadows the package root.
+        ZipFile(f).getEntry("xaero/hud/minimap/element/render/MinimapElementRenderer.class") != null
+    } catch (ignored: Exception) {
+        false
+    }
+}
+
+if (minimapApiJar == null) {
+    sourceSets.main.get().java.exclude("**/xaero/minimap/**")
+}
+
 repositories {
     // moddev injects two maven.neoforged.net repositories at apply time and sorts them first.
     // That host is unreachable here and stalls every resolution until timeout, so drop them;
@@ -348,6 +384,11 @@ dependencies {
     if (xaerolibJar.isNotEmpty()) {
         compileOnly(fileTree(libs) { include(xaerolibJar) })
     }
+    // The Xaero's Minimap overlay's API jar, when this node supplied one: see the note above the
+    // exclusion for why it is optional, compile-only and selected by name. XaeroLib, whose types the
+    // minimap jar's signatures mention, is not added here -- the deps.xaerolib wiring above already
+    // adds this node's extracted jar, and a second copy of the same classes says nothing new.
+    minimapApiJar?.let { compileOnly(files(it)) }
     // The mcphone integration, when its jar has been supplied. Deliberately not version-gated:
     // the exclusion above keys off the jar's presence, which is the only thing that matters.
     compileOnly(fileTree(libs) { include("mcphone-*.jar") })

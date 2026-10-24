@@ -17,6 +17,8 @@ libs/xaerolib-neoforge-26.3-1.8.3.jar
 libs/xaerolib-fabric-26.3-1.8.3.jar
 # optional, NeoForge only -- needed only to compile the mcphone integration:
 libs/mcphone-1.10.2-1.21.1-neoforge.jar
+# optional -- needed only to compile the Xaero's Minimap overlay, one per node that wants it:
+libs/xaerominimap-neoforge-1.21.1-26.6.0.jar
 ```
 
 A node whose Xaero jar is missing fails with an unresolved-reference error. That is expected, not a
@@ -83,3 +85,25 @@ the world map and XaeroLib are `compileOnly`; at run time the world map provides
 - MCphone: the app API is versioned and MCphone logs `MCphoneApi.VERSION`. It also logs an
   `App 已登记: howtogo:navigator` line when the integration registers — if that line is missing while
   MCphone is installed, the service file or the app class is the place to look.
+
+## Xaero's Minimap: optional, and gated by the jar's presence
+
+The minimap overlay (`src/main/java/bili/dongsz/howtogo/client/xaero/minimap/`, see
+[`docs/map-display-mode.md`](../docs/map-display-mode.md)) is the one integration in this tree that is
+*neither* required (the world map) *nor* purely reflective (MTR, Create, RoadWeaver, MCphone). It has
+to be compiled against the minimap's element-render API — an abstract class cannot be implemented by
+reflection — and that API is version-specific, so each build script looks for
+`xaerominimap-<loader>-<mc>-*.jar` in this directory and:
+
+- **when it is there**, adds it as `compileOnly` / `modCompileOnly` and compiles the overlay;
+- **when it is not**, excludes the package from the source set, so the node builds and the display-mode
+  router falls back to the in-HUD map with one log line.
+
+Two consequences worth knowing before swapping jars:
+
+- The overlay is compiled for the Xaero generation whose jar is present; a jar from another Minecraft
+  generation does not compile against this source and needs its own node, exactly like the world map's.
+- On the 26.x nodes the minimap jar's element API still names `GuiGraphics` while the vanilla class was
+  renamed to `GuiGraphicsExtractor`; the build's replacement rules would rewrite it. No 26.x node has a
+  minimap jar today, so this has not been tested — supply one only together with the source changes it
+  needs.

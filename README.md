@@ -33,11 +33,17 @@ The mod provides Minecraft with a complete road network system, allowing players
 | 模组                | 必要性    | 说明             |
 |-------------------|--------|----------------|
 | Xaero's World Map | **必需** | 所有道路与路线都画在它上面  |
-| Xaero's Minimap   | 可选     | 读取小地图路标点作为目的地  |
+| Xaero's Minimap   | 可选     | 读取小地图路标点作为目的地；也可当作导航地图的显示位置（见下）  |
 | Create（机械动力）      | 可选     | 读取轨道，把铁路映射进路网  |
 | MTR（我的世界铁路）       | 可选     | 读取车站与线路        |
 | MCPhone           | 可选     | 手机里多一个「问道导航」应用 |
 | RoadWeaver        | 可选     | 读取它的路网数据       |
+
+装了 Xaero's Minimap 时，可以选择把导航的地图部分画到它上面：配置项 `map_display_mode`
+（游戏内：`config/howtogo-client.toml` 的 NeoForge 配置界面）设为 `xaero_minimap` 即可。
+路线、转向标记与终点会画在小地图上，本模组只留一张精简卡片显示转向箭头、剩余里程与时间、
+进度条。它没装、或者这个构建没有针对它编译时，会自动退回 HUD 面板并写一行日志说明。
+详见 [docs/map-display-mode.md](docs/map-display-mode.md)。
 
 ## 构建
 

@@ -16,6 +16,8 @@
 /*
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.client.HudAnchor;
+import bili.dongsz.howtogo.client.MapDisplayMode;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -95,6 +97,24 @@ public final class RoadConfig {
         // than the enum name because this arm is hand-edited JSON; see UiTheme.Mode.
         @SerializedName("ui_theme")
         public String uiTheme = UiTheme.Mode.AUTO.id();
+
+        // Where the map half of navigation is drawn: the navigation panel's own mini-map, or Xaero's
+        // Minimap with only the readout left in this mod's HUD. An id rather than the enum name, for
+        // the same reason as ui_theme above: this arm is a hand-edited JSON file. See MapDisplayMode.
+        @SerializedName("map_display_mode")
+        public String mapDisplayMode = MapDisplayMode.defaultMode().id();
+
+        // The corner the small readout-only card hangs from, and how far inside it to sit. Only the
+        // compact card has a corner to choose: the full panel is a fixed top-right card, while the
+        // compact one shares the screen with Xaero's Minimap, whose own default is the top-left.
+        @SerializedName("compact_hud_anchor")
+        public String compactHudAnchor = HudAnchor.defaultAnchor().id();
+
+        @SerializedName("compact_hud_offset_x")
+        public int compactHudOffsetX;
+
+        @SerializedName("compact_hud_offset_y")
+        public int compactHudOffsetY;
 
         @SerializedName("route_preference")
         public String routePreference = RoutePreference.FASTEST_TIME.id();
@@ -202,6 +222,12 @@ public final class RoadConfig {
             }
             if (uiTheme == null) {
                 uiTheme = UiTheme.Mode.AUTO.id();
+            }
+            if (mapDisplayMode == null) {
+                mapDisplayMode = MapDisplayMode.defaultMode().id();
+            }
+            if (compactHudAnchor == null) {
+                compactHudAnchor = HudAnchor.defaultAnchor().id();
             }
             if (routePreference == null) {
                 routePreference = RoutePreference.FASTEST_TIME.id();
@@ -433,6 +459,34 @@ public final class RoadConfig {
     }
 
 // 
+// * Where the map half of navigation is drawn, or the declared default before the file has been read.
+// *
+// * <p>An id read through {@link MapDisplayMode#byId}, so an entry that names no mode -- a typo, or a
+// * value a newer version wrote -- costs the player the default rather than the whole file. The
+// * declared default is the mod's own panel, which is the behaviour every existing player has.
+// 
+    public static MapDisplayMode mapDisplayMode() {
+        MapDisplayMode mode = MapDisplayMode.byId(values.mapDisplayMode);
+        return mode == null ? MapDisplayMode.defaultMode() : mode;
+    }
+
+// The corner the readout-only card hangs from, defaulting to the bottom-left before the file loads.
+    public static HudAnchor compactHudAnchor() {
+        HudAnchor anchor = HudAnchor.byId(values.compactHudAnchor);
+        return anchor == null ? HudAnchor.defaultAnchor() : anchor;
+    }
+
+// The horizontal offset inside that corner, in pixels; see {@link #compactHudAnchor()}.
+    public static int compactHudOffsetX() {
+        return values.compactHudOffsetX;
+    }
+
+// The vertical offset inside that corner, in pixels; see {@link #compactHudAnchor()}.
+    public static int compactHudOffsetY() {
+        return values.compactHudOffsetY;
+    }
+
+// 
 // * The routing policy in force, read in one go.
 // *
 // * <p>One read rather than three at each use, so a single plan cannot be costed half by the old
@@ -626,6 +680,8 @@ public final class RoadConfig {
 //? if neoforge {
 package bili.dongsz.howtogo;
 
+import bili.dongsz.howtogo.client.HudAnchor;
+import bili.dongsz.howtogo.client.MapDisplayMode;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -764,6 +820,21 @@ public final class RoadConfig {
 
     /** The interface theme; see {@link #uiTheme()} and {@code UiTheme}. */
     private static final ModConfigSpec.EnumValue<UiTheme.Mode> UI_THEME;
+    /**
+     * Where the map half of navigation is drawn: this mod's own panel, or Xaero's Minimap.
+     *
+     * <p>See {@link #mapDisplayMode()} for the fallback rule and {@link MapDisplayMode} for what the
+     * two answers mean. Declared as an enum rather than a string so the config screen offers the two
+     * as a cycling button -- there is no spelling to get wrong, and the file then holds the constant
+     * name, which the enum's own reader accepts in any case.
+     */
+    private static final ModConfigSpec.EnumValue<MapDisplayMode> MAP_DISPLAY_MODE;
+    /** The corner the readout-only card hangs from; see {@link #compactHudAnchor()}. */
+    private static final ModConfigSpec.EnumValue<HudAnchor> COMPACT_HUD_ANCHOR;
+    /** How far inside that corner it sits, in pixels; see {@link #compactHudOffsetX()}. */
+    private static final ModConfigSpec.IntValue COMPACT_HUD_OFFSET_X;
+    /** The same, vertically; see {@link #compactHudOffsetY()}. */
+    private static final ModConfigSpec.IntValue COMPACT_HUD_OFFSET_Y;
     private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
     private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
@@ -880,6 +951,62 @@ public final class RoadConfig {
                         "MCphone -- so there is no restart and no need to reload the world.")
                 .translation("howtogo.configuration.ui_theme")
                 .defineEnum("ui_theme", UiTheme.Mode.AUTO);
+
+        MAP_DISPLAY_MODE = builder.comment(
+                        "Where the map half of navigation is drawn.",
+                        "",
+                        "\"hud\" -- the default -- draws it in this mod's own navigation panel: a card",
+                        "in the corner of the screen holding a small rotating map with the roads, the",
+                        "route, the turn markers and the destination on it, and the trip readout under",
+                        "it. This is the panel the mod has always had, and it works with nothing else",
+                        "installed.",
+                        "",
+                        "\"xaero_minimap\" draws the map half on Xaero's Minimap instead: the route, the",
+                        "turn markers and the destination are drawn over its map, and this mod's HUD",
+                        "keeps only a small card carrying what a map cannot show -- the turn arrow, the",
+                        "distance to the turn, what is left of the trip and the progress bar.",
+                        "",
+                        "The second answer needs Xaero's Minimap (id \"xaerominimap\") installed and",
+                        "this build compiled against it. If either is missing, or if registering with",
+                        "it fails, the first answer is used instead and one line in the log says what",
+                        "was missing -- so a player who selects it and sees the panel keep its map can",
+                        "find out why.",
+                        "",
+                        "This is a client setting: nothing here is sent to a server and nothing in the",
+                        "world changes. On NeoForge a change takes effect on the next frame; the Fabric",
+                        "file is read at startup, as every value in it is.")
+                .translation("howtogo.configuration.map_display_mode")
+                .defineEnum("map_display_mode", MapDisplayMode.defaultMode());
+
+        COMPACT_HUD_ANCHOR = builder.comment(
+                        "Which corner the small readout-only card hangs from, in the",
+                        "xaero_minimap display mode.",
+                        "",
+                        "The default is \"bottom_left\": Xaero's Minimap's own default corner is the",
+                        "top-left, so putting the card at the bottom of the screen keeps the two off",
+                        "each other, and the bottom edge is out of the way of everything at eye level.",
+                        "A player whose chat history is long, or who has moved Xaero's Minimap to that",
+                        "corner, can move the card with this and the two offsets below.",
+                        "",
+                        "The two offsets below move the card further in from its corner, in pixels at",
+                        "the current GUI scale. Leaving them at zero keeps it at the standard margin,",
+                        "which is what most installs want.")
+                .translation("howtogo.configuration.compact_hud_anchor")
+                .defineEnum("compact_hud_anchor", HudAnchor.defaultAnchor());
+
+        COMPACT_HUD_OFFSET_X = builder.comment(
+                        "How far the small readout card sits from its corner's edge, in pixels.",
+                        "Zero is the standard screen margin. Positive values move it further from",
+                        "that edge, into the screen. See compact_hud_anchor for which corner.")
+                .translation("howtogo.configuration.compact_hud_offset_x")
+                .defineInRange("compact_hud_offset_x", 0, -200, 200);
+
+        COMPACT_HUD_OFFSET_Y = builder.comment(
+                        "How far the small readout card sits from its corner's top or bottom edge,",
+                        "in pixels. Zero is the standard screen margin; positive values move it",
+                        "further from that edge, into the screen. See compact_hud_anchor.")
+                .translation("howtogo.configuration.compact_hud_offset_y")
+                .defineInRange("compact_hud_offset_y", 0, -200, 200);
 
         STATION_SNAP_BLOCKS = builder.comment(
                         "How close to a stop of the journey still counts as being at that stop, in",
@@ -1514,6 +1641,50 @@ public final class RoadConfig {
             return UI_THEME.get();
         } catch (IllegalStateException notLoadedYet) {
             return UiTheme.Mode.AUTO;
+        }
+    }
+
+    /**
+     * Where the map half of navigation is drawn, or the declared default before the config is read.
+     *
+     * <p>The declared default is {@link MapDisplayMode#HUD}: the panel that draws its own map is the
+     * behaviour every existing player has, and it is the one mode that cannot be defeated by another
+     * mod being missing. What the other answer means when it cannot be honoured is not decided here --
+     * this method reports what the player asked for, and {@code NavMapMode} decides what is possible
+     * and writes the fallback line when the two differ.
+     */
+    public static MapDisplayMode mapDisplayMode() {
+        try {
+            return MAP_DISPLAY_MODE.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return MapDisplayMode.defaultMode();
+        }
+    }
+
+    /** Which corner the readout-only card hangs from, or the declared default before the config loads. */
+    public static HudAnchor compactHudAnchor() {
+        try {
+            return COMPACT_HUD_ANCHOR.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return HudAnchor.defaultAnchor();
+        }
+    }
+
+    /** How far inside that corner's horizontal edge the card sits, in pixels. */
+    public static int compactHudOffsetX() {
+        try {
+            return COMPACT_HUD_OFFSET_X.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 0;
+        }
+    }
+
+    /** How far inside that corner's vertical edge the card sits, in pixels. */
+    public static int compactHudOffsetY() {
+        try {
+            return COMPACT_HUD_OFFSET_Y.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 0;
         }
     }
 

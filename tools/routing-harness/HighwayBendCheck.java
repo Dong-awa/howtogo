@@ -10,16 +10,24 @@ import bili.dongsz.howtogo.route.TravelMode;
 import java.util.List;
 
 /**
- * A highway never asks a driver to bend more than a hundred degrees.
+ * A highway never asks a driver to bend more than a hundred degrees on the highway itself.
  *
  * <h2>The rule</h2>
  * A highway is a road built to be driven along and it has no way to turn round on it -- the mod's own
  * guidance says so, where a highway U-turn is re-worded as carrying on to the next junction. That was
  * wording on top of routes that had already been allowed to plan the hairpin, so a player could be
  * sent up a highway and told to double back on it. This holds the rule itself: no planned route bends
- * more than {@code HIGHWAY_BEND_LIMIT_DEGREES} where a highway is involved, and the bend the driver
- * would actually have to make is read back off the route's own polyline rather than trusted to the
- * search.
+ * more than {@code HIGHWAY_BEND_LIMIT_DEGREES} where <em>two highways</em> meet, and no highway piece
+ * bends past it between its own vertices, and the bend the driver would actually have to make is read
+ * back off the route's own polyline rather than trusted to the search.
+ *
+ * <h2>Where the rule does not apply: getting on and off a highway</h2>
+ * A junction between a highway and a road of another class is an on-ramp or an off-ramp. Its shape
+ * belongs to the ramp -- a slip road doubling back under the carriageway it joins is ordinary road
+ * design -- and the turn made there is an ordinary turn, so it is exempt from the limit. Only two
+ * highway pieces meeting at a node are held to it. The checks below pin both halves of that: the
+ * {@code onRamp} and {@code offRamp} networks are turns past the limit that must now plan, and the
+ * hairpin networks are the same shape between two highways, which must still be refused.
  *
  * <h2>What must not change</h2>
  * A hundred degrees is not "no turning on a highway": a right-angled junction is ninety and stays, a
@@ -94,6 +102,35 @@ public final class HighwayBendCheck {
                 "a divided highway round its turning loop is planned");
 
         // ---------------------------------------------------------------------------------------
+        // Getting on and off a highway is not a highway bend.
+        //
+        // Both of these are turns past the hundred-degree limit at a junction between a highway and
+        // an ordinary road: a ramp doubling back under the carriageway it serves, which is how ramps
+        // are drawn in practice. They are not the U-turn a highway forbids -- nothing about them is
+        // done on the highway except arriving at or leaving the junction -- so the limit must not
+        // apply, and before this rule was scoped to highway-to-highway junctions neither trip could
+        // be planned at all: there is no other way round, and a drive may not leave the road.
+        // ---------------------------------------------------------------------------------------
+
+        // Joining: a road meets a highway at a node in its middle, at a hundred and four degrees.
+        RoadNetwork onRamp = new RoadNetwork();
+        addRoad(onRamp, RoadClass.HIGHWAY, 0, 0, 0, 200);
+        addRoad(onRamp, RoadClass.HIGHWAY, 0, 200, 0, 400);
+        addRoad(onRamp, RoadClass.ROAD, -400, 300, 0, 200);
+        checkPlan(onRamp, -400, 300, 0, 400, true,
+                "a road joining a highway at a bend past the limit is planned");
+
+        // Leaving: a highway hands over to a road at a node, at the same hundred and four degrees.
+        RoadNetwork offRamp = new RoadNetwork();
+        addRoad(offRamp, RoadClass.HIGHWAY, 0, 0, 0, 200);
+        addRoad(offRamp, RoadClass.ROAD, 0, 200, 400, 100);
+        checkPlan(offRamp, 0, 0, 400, 100, true,
+                "a highway leaving onto a road at a bend past the limit is planned");
+
+        // The other side of the same line: the identical shapes with both pieces highways are the
+        // hairpins the rule is for, so they are still refused (see the last cases below).
+
+        // ---------------------------------------------------------------------------------------
         // The shapes that were still planned after the rule was put in, and why each one is here.
         //
         // The first three are hairpins that no beeline can stand in for: both ends of each trip are
@@ -141,8 +178,8 @@ public final class HighwayBendCheck {
 
         // Every planned route over the networks that are allowed to plan is read back for the bend it
         // really contains, off the drawn line rather than out of the search that made it.
-        for (RoadNetwork net : new RoadNetwork[]{square, viaRoad, tee, divided, fallback, folded,
-                through, curves}) {
+        for (RoadNetwork net : new RoadNetwork[]{square, viaRoad, tee, divided, onRamp, offRamp,
+                fallback, folded, through, curves}) {
             turnsAreWithinTheLimit(net);
         }
 
@@ -188,12 +225,17 @@ public final class HighwayBendCheck {
     }
 
     /**
-     * The sharpest bend along a route where a highway is involved, in degrees.
+     * The sharpest bend along a route that the rule is about, in degrees.
      *
      * <p>Measured on the drawn line: consecutive steps of the polyline are the headings the driver is
      * actually asked to hold, so the angle between them is the bend the driver has to make -- the same
      * reading {@code RoadRouter.turnDegrees} takes, taken from the outside where it cannot agree with
      * the search by construction.
+     *
+     * <p>A bend only counts where the rule applies, which is where both steps are on a highway: that
+     * is a highway-to-highway junction, or a bend between two vertices of one highway piece. A bend
+     * with only one highway step is an on-ramp or an off-ramp, exempt by design -- counting it here
+     * would assert the rule that was deliberately removed.
      */
     private static double worstBend(RoadNetwork net, Route route) {
         List<double[]> points = route.points();
@@ -209,9 +251,9 @@ public final class HighwayBendCheck {
             if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
                 continue;
             }
-            boolean highway = nearHighway(net, a[0], a[1], b[0], b[1])
-                    || nearHighway(net, b[0], b[1], c[0], c[1]);
-            if (!highway) {
+            boolean arrivingOnHighway = nearHighway(net, a[0], a[1], b[0], b[1]);
+            boolean leavingOnHighway = nearHighway(net, b[0], b[1], c[0], c[1]);
+            if (!arrivingOnHighway || !leavingOnHighway) {
                 continue;
             }
             double delta = Math.toDegrees(Math.atan2(

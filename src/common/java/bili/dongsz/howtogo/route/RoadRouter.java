@@ -1700,6 +1700,12 @@ public final class RoadRouter {
      * does not: the hairpin, the doubling back, and the reversal. A right-angled junction is ninety
      * and stays.
      *
+     * <p>The limit is a rule about <em>highways</em>, so it is asked where two highways meet, and
+     * inside a highway's own polyline. It is deliberately not asked where a highway meets a road of
+     * another class: getting on and off a highway is a junction whose shape belongs to the ramp, and
+     * a ramp that doubles back under the carriageway it serves is ordinary road design. See
+     * {@link #highwayBendAllowed} for where the two are told apart.
+     *
      * <p>Refused in the <em>graph</em> rather than priced in the cost, because this is a rule about
      * what a highway is and not a preference about which way is nicer: a trip that can only be made
      * by doubling back on a highway is one this mod does not have an answer for, and the failure it
@@ -1743,6 +1749,12 @@ public final class RoadRouter {
      * <p>{@code arrived} is null for the first piece out of the source, which is not a turn: leaving
      * the node a trip starts at is what a trip is. That is the one place a route may set off along a
      * highway without having come down one.
+     *
+     * <p>Two pieces are enough to answer with, and the answer is "only when both of them are
+     * highways": a highway turning onto another highway has no way to turn round, while a road
+     * joining a highway, or a highway leaving onto a road, is an on-ramp or an off-ramp -- an
+     * ordinary turn whose shape belongs to the ramp. The search needs no third piece to tell those
+     * apart, which is why the rule can live here at all.
      */
     private static boolean highwayBendAllowed(RoadSegment arrived, int current, RoadSegment next) {
         // A bend inside the piece being taken is asked first, and before the "nothing arrived" case
@@ -1753,12 +1765,15 @@ public final class RoadRouter {
         if (bendsPastTheLimitInside(next)) {
             return false;
         }
-        // A highway is only restricted where a highway is involved: a driver who has come down a road
-        // and turns onto a highway has made an ordinary turn, and a walker on a highway's verge is
-        // not driving one.
+        // The rule is for a highway junction, not for a highway meeting anything else. A driver who
+        // comes down a road and turns onto a highway -- or leaves one down a ramp -- is making an
+        // ordinary turn, and its angle is whatever the ramp's geometry is: a slip road that doubles
+        // back under the carriageway it joins is a normal piece of road design, not the U-turn a
+        // highway forbids. So the restriction is asked of both pieces at once, and applies only where
+        // the piece left and the piece taken are both highways.
         if (arrived == null
-                || (arrived.roadClass() != RoadClass.HIGHWAY
-                        && next.roadClass() != RoadClass.HIGHWAY)) {
+                || arrived.roadClass() != RoadClass.HIGHWAY
+                || next.roadClass() != RoadClass.HIGHWAY) {
             return true;
         }
         // Doubling back on a highway is refused on its own terms rather than through an angle: going

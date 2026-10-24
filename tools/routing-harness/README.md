@@ -44,6 +44,7 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | A goal whose nearest road is a fragment nothing routes to | Nothing, unless the node fallback happened to pick the same endpoints -- it now does so in one multi-source search instead of up to 144 separate ones |
 | A T junction drawn a block short | A route, off the road, because a near miss used to be cut into a junction. It is not one: a drive is refused, a walk crosses the field to the side road instead of turning onto it, and the same shape with a node at the meeting point drives through |
 | Two roads drawn across each other | A route through the crossing, because a crossing used to be cut into a junction. It is not one either -- a crossing and a bridge are the same drawing on a map with no height -- so a drive is refused and the walk is the straight line across the field |
+| A highway and a road meeting at a ramp past the hundred-degree limit | No route at all: the highway's no-U-turn limit was asked of every junction with a highway on either side, so getting on or off a highway down a slip road that doubles back under it -- ordinary road design -- was refused along with the hairpin the rule is for. The limit now applies only where two highways meet |
 | Two railways crossing, with a line calling either side | A ride, for the same reason. The honest answer is no journey; the same rails with a node at the crossing do carry the ride |
 | A road crossing another at a different height | Must stay two roads: a walk over the bridge is a straight hop across the field, not a turn at the crossing, and a drive is refused outright |
 | Two road ends a block apart on one storey, and the same ends with one of them a storey up | The first is one road a car drives along and the second is two roads, which is what a storey is for -- and two roads sharing a node are joined whatever storey either is on |
@@ -119,6 +120,14 @@ and anything else is held to the hundred-degree limit. The checks pin a right-an
 a divided highway round its turning loop as still plannable, and sweep every pair of endpoints on each
 network, reading the bend back off the route's own drawn line rather than out of the search that made
 it.
+
+The limit is a rule about highways, so it is asked where two highways meet and inside a highway's own
+polyline -- not where a highway meets a road of another class. Getting on and off a highway is an
+ordinary turn whose shape belongs to the ramp, and a slip road doubling back under the carriageway it
+joins is ordinary road design; holding it to the highway's limit refused exactly those trips, with no
+other way round. The check pins both halves: an on-ramp and an off-ramp at a hundred and four degrees
+must plan, and the same shape between two highway pieces is still the hairpin the rule is for. The
+sweep counts a bend only where both of its steps are on a highway, which is the scope of the rule.
 
 `RoutePreferenceCheck.java` covers the routing taste, which has to steer the route and nothing else.
 Two things were wrong with it. "Prefer major roads" was one penalty laid on footpaths -- a class a car
