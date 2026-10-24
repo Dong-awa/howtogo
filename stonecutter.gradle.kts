@@ -125,7 +125,7 @@ stonecutter parameters {
         // A rule rather than a condition because it is purely a spelling: same annotation, same id,
         // and the restriction it expressed did not exist to lose. The alternative was a version
         // condition on the class declaration, which sits inside the loader fence in HowToGo and
-        // HowToGoServer and would nest.
+        // would nest.
         regex(eval(current.version, "<1.20.5")) {
             // One replace per block -- the second call is rejected with "the value for property
             // 'fromPattern' cannot be changed any further" -- so the two dist values alternate.

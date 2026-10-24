@@ -170,29 +170,15 @@ public final class RoadEditHandler {
     /*public static void registerKeys() {
         KeyBindingHelper.registerKeyBinding(TOGGLE_EDIT);
         KeyBindingHelper.registerKeyBinding(LINES);
+        // K is the mod's only way into its screens now that it registers no item, so it is offered
+        // on both loaders rather than left to whichever one happened to get a handler first.
+        KeyBindingHelper.registerKeyBinding(MAIN_MENU);
     }
     *///?} else {
     public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(TOGGLE_EDIT);
         event.register(LINES);
         event.register(MAIN_MENU);
-    }
-
-    /**
-     * Consumes the main screen's key.
-     *
-     * <p>Called from the client tick, which is where a {@link KeyMapping} is allowed to be read: with
-     * no screen open the key press is recorded by the game's own handler and nothing else ever looks
-     * at it. The guard means the screen only opens over the world -- not over the map, not over chat,
-     * and not on the title screen.
-     */
-    public static void tickMainMenuKey() {
-        Minecraft minecraft = Minecraft.getInstance();
-        while (MAIN_MENU.consumeClick()) {
-            if (Screens.current() == null && minecraft.level != null && minecraft.player != null) {
-                Screens.set(new MainScreen());
-            }
-        }
     }
 
     /**
@@ -209,6 +195,23 @@ public final class RoadEditHandler {
         }
     }
     //?}
+
+    /**
+     * Consumes the main screen's key.
+     *
+     * <p>Called from the client tick on both loaders, which is where a {@link KeyMapping} is allowed
+     * to be read: with no screen open the key press is recorded by the game's own handler and
+     * nothing else ever looks at it. The guard means the screen only opens over the world -- not
+     * over the map, not over chat, and not on the title screen.
+     */
+    public static void tickMainMenuKey() {
+        Minecraft minecraft = Minecraft.getInstance();
+        while (MAIN_MENU.consumeClick()) {
+            if (Screens.current() == null && minecraft.level != null && minecraft.player != null) {
+                Screens.set(new MainScreen());
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ mouse
 

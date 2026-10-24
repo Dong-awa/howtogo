@@ -145,7 +145,7 @@ public final class HowToGoCommand {
     }
 
 // 
-// * Opens the destination picker, which is the terminal the navigator item opens.
+// * Opens the destination picker, the same screen the main screen (K) opens from its button.
 // *
 // * <p>The parent screen is asked for on the tick the screen is built and not here, so that whatever
 // * the player is looking at when the command runs is the screen it comes back to.
@@ -520,7 +520,7 @@ public final class HowToGoCommand {
     }
 
     /**
-     * Opens the destination picker, which is the terminal the navigator item opens.
+     * Opens the destination picker, the same screen the main screen (K) opens from its button.
      *
      * <p>The parent screen is asked for on the tick the screen is built and not here, so that whatever
      * the player is looking at when the command runs is the screen it comes back to.

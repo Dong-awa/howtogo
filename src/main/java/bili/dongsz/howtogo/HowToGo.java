@@ -17,7 +17,7 @@ import bili.dongsz.howtogo.client.RoadLayer;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
 import bili.dongsz.howtogo.client.TransitLineStore;
-import bili.dongsz.howtogo.item.ModItems;
+import bili.dongsz.howtogo.mtr.MtrSync;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.webmap.WebMapService;
 import com.mojang.logging.LogUtils;
@@ -60,10 +60,10 @@ import org.slf4j.Logger;
  * <p>So the class declaration and the entry point are written once per loader, and everything else
  * in the file -- the id, the logger and {@link #diagnostic} -- is shared and sits between them.
  */
-// The two halves are whole declarations rather than conditions inside one, for the same reason as
-// HowToGoServer: the loaders disagree about what an entry point is, so a shared shell with the
-// differences inside would be more scaffolding than code. The javadoc above stays outside, because a
-// `/** ... */` inside the `/* ... */` a condition is written with would close it early.
+// The two halves are whole declarations rather than conditions inside one: the loaders disagree
+// about what an entry point is, so a shared shell with the differences inside would be more
+// scaffolding than code. The javadoc above stays outside, because a `/** ... */` inside the
+// `/* ... */` a condition is written with would close it early.
 //? if fabric {
 /*public final class HowToGo implements ClientModInitializer {
 *///?} else {
@@ -123,6 +123,10 @@ public final class HowToGo {
             RailTrackStore.tick();
             MtrClientData.tick();
             RoadEditSession.tick();
+            // The main screen's key, read from the tick because it is a key for the world rather
+            // than for a screen; see RoadEditHandler.tickMainMenuKey. The K key is the mod's only
+            // way in now, so it is registered and read on both loaders.
+            RoadEditHandler.tickMainMenuKey();
             // The browser map's server, when the config asks for it to start itself: it waits for a
             // world to be loaded, because a page opened onto a 503 is worse than a socket opened a
             // moment later.
@@ -151,6 +155,9 @@ public final class HowToGo {
         // RoadEditHandler.
         RoadEditHandler.registerKeys();
         RoadEditHandler.registerScreenHandlers();
+        // The MTR sync's client half: the payload types and receiver. The hello is sent later, from
+        // the client tick, so that it can wait for a world -- see MtrClientSync.
+        MtrSync.onClientInit();
         // The map's switches: a screen overlay rather than part of the map, so that nothing the map
         // draws can end up over them. See MapFilterOverlay.
         MapFilterOverlay.register();
@@ -243,7 +250,6 @@ public final class HowToGo {
             Navigation.loadConfiguredMode();
             RoutePreferenceStore.load();
         });
-        ModItems.register(modEventBus);
         HowToGoConfig.registerClient(modContainer);
 
         LOGGER.info("[HowToGo] constructed");

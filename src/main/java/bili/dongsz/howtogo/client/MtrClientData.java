@@ -330,33 +330,57 @@ public final class MtrClientData {
      * diagnostic is a diagnostic that fills the log -- which is what this mod's own rail report did
      * once a second until it was noticed.
      *
-     * <p>Two readings become one here: the window MTR has sent this client, and -- through
-     * {@link MtrWholeMap} -- the whole railway the local server is simulating, when the player is the
-     * one hosting it. The window is what has the rails in it, so it is still what the marks are cut
-     * from; the whole map is what has every station and every line, so it is what the picker, the map
-     * and the planner are offered.
+     * <p>Three readings become one here: the window MTR has sent this client, the whole railway the
+     * local server is simulating when the player is hosting it (through {@link MtrWholeMap}), and --
+     * when the server runs this mod -- the whole railway it read and sent (through
+     * {@code MtrClientSync}). The window is what has the rails in it, so it is still what the marks
+     * are cut from; the other two are what have every station and every line, so they are what the
+     * picker, the map and the planner are offered.
      *
-     * <p>A third reading joins them when {@code mtrmap} is installed -- see {@link MtrMapOverlay} --
-     * and it is the one that answers for a server somebody else is running, where there is no local
-     * simulation to read: MTR Map Overlay fetches the whole railway from the server itself. It is
-     * offered the same way the whole map is, and preferred over it where both have something to say,
-     * because it is the one taken from the authoritative copy rather than from a copy of it.
+     * <p>A fourth reading joins them only when neither of the whole ones is available: MTR Map
+     * Overlay's fetched snapshot, see {@link MtrMapOverlay}. It exists for a server somebody else is
+     * running, where there is no local simulation to read and no server-side copy of this mod to ask,
+     * and it is the fallback rather than an equal voice -- with a reading of our own, the overlay's
+     * copy is not read at all. That is what "prefer our own" means here: the server that simulated the
+     * railway is more authoritative than another mod's snapshot of it, and reading both would offer
+     * the same stations twice through two readers that can disagree.
      */
     public static void tick() {
+        if (!RoadConfig.mtrTransit()) {
+            // Switched off means forgotten rather than merely not read again: a reading left lying
+            // about would go on being offered after the player asked for it not to.
+            MtrClientSync.reset();
+            return;
+        }
+        // The server sync's handshake runs on the same client tick as the rest of the MTR path: it is
+        // the only part of the sync that needs a tick at all, and this one already exists. Called
+        // before the re-read cadence check, because its own hello cadence is counted in ticks.
+        MtrClientSync.tick();
         if (++ticks % REREAD_TICKS != 0) {
             return;
         }
-        if (!mtrLoaded() || !RoadConfig.mtrTransit()) {
-            return;
+        boolean local = mtrLoaded();
+        Snapshot whole = Snapshot.EMPTY;
+        Snapshot window = Snapshot.EMPTY;
+        Snapshot overlay = Snapshot.EMPTY;
+        if (local) {
+            if (!RoadConfig.mtrFullMap()) {
+                // Switched off means forgotten rather than merely not read again, as above.
+                MtrWholeMap.reset();
+            } else {
+                MtrWholeMap.poll();
+            }
+            whole = MtrWholeMap.snapshot();
+            window = read();
+            // The overlay is read only when neither own reading exists -- see the note above.
+            if (whole.isEmpty() && MtrClientSync.snapshot().isEmpty()) {
+                overlay = MtrMapOverlay.read();
+            }
         }
-        if (!RoadConfig.mtrFullMap()) {
-            // Switched off means forgotten rather than merely not read again: a reading of the whole
-            // railway left lying about would go on being offered after the player asked for it not to.
-            MtrWholeMap.reset();
-        } else {
-            MtrWholeMap.poll();
-        }
-        Snapshot reading = merge(read(), MtrWholeMap.snapshot(), MtrMapOverlay.read());
+        // The server's reading is used whether or not MTR is installed here: it is a complete reading
+        // in this mod's own terms, so a player on a server that has both MTR and this mod does not need
+        // MTR on their own client to see, pick and plan over the railway.
+        Snapshot reading = merge(window, whole, MtrClientSync.snapshot(), overlay);
         String signature = signatureOf(reading);
         if (signature.equals(reported)) {
             return;
@@ -375,17 +399,21 @@ public final class MtrClientData {
      *
      * <p>By MTR's own ids, so the same thing cannot be told apart twice: a station in two of them is
      * one station. Which of them is kept where they disagree is decided per kind, and deliberately.
-     * The order the three arrive in is the order of their authority, weakest first, so each rule
-     * below is read off the parameter names rather than off a chain of ifs:
+     * The order the readings arrive in is the order of their authority, weakest first, so the rules
+     * below are read off the parameter names rather than off a chain of ifs:
      * <ul>
      *   <li><b>the window</b> -- what MTR sent this client, which is the part of the railway around
-     *       the player and is the only one of the three that carries rails with their real heights
-     *       and their transport modes;</li>
+     *       the player and is the only one that carries rails with their real heights and their
+     *       transport modes;</li>
      *   <li><b>the whole map</b> -- the railway this process is simulating, when the player hosts the
      *       world. Every station and every line, and no rails at all;</li>
-     *   <li><b>the fetched snapshot</b> -- the whole railway MTR Map Overlay asked the server for.
-     *       Every station, every line, and the rails of the whole network, though flattened into X
-     *       and Z. See {@link MtrMapOverlay}.</li>
+     *   <li><b>the server's sync</b> -- the whole railway the server read out of its own simulation and
+     *       sent, when it runs this mod. Every station, every line and every rail, with the heights the
+     *       simulation has;</li>
+     *   <li><b>the fetched snapshot</b> -- the whole railway MTR Map Overlay asked the server for. Every
+     *       station, every line, and the rails of the whole network, though flattened into X and Z. See
+     *       {@link MtrMapOverlay}. The caller passes this as empty whenever one of the two own readings
+     *       exists; it is the fallback for a server neither this mod nor the local simulation is on.</li>
      * </ul>
      *
      * <p>What each kind keeps, and why:
@@ -405,10 +433,11 @@ public final class MtrClientData {
      *       railway the player has never been near gets its track drawn at all.</li>
      * </ul>
      */
-    static Snapshot merge(Snapshot window, Snapshot whole, Snapshot overlay) {
+    static Snapshot merge(Snapshot window, Snapshot whole, Snapshot synced, Snapshot overlay) {
         boolean noWhole = whole.isEmpty();
+        boolean noSynced = synced.isEmpty();
         boolean noOverlay = overlay.isEmpty();
-        if (noWhole && noOverlay) {
+        if (noWhole && noSynced && noOverlay) {
             return window;
         }
         // Per-call collections rather than shared ones, because this runs once a second at most --
@@ -420,7 +449,7 @@ public final class MtrClientData {
         Map<Long, Line> lines = new LinkedHashMap<>();
         Map<String, Track> rails = new LinkedHashMap<>();
         List<Track> unnamedRails = new ArrayList<>();
-        for (Snapshot source : List.of(window, whole, overlay)) {
+        for (Snapshot source : List.of(window, whole, synced, overlay)) {
             for (Station station : source.stations()) {
                 stations.put(station.id(), station);
             }
@@ -452,14 +481,22 @@ public final class MtrClientData {
     }
 
     /**
-     * The same merge without the fetched snapshot, for a caller that has only the other two.
+     * The same merge without the server-synced reading, for a caller that has only the three older
+     * readings -- the regression harness's three-way checks reach it this way.
+     */
+    static Snapshot merge(Snapshot window, Snapshot whole, Snapshot overlay) {
+        return merge(window, whole, Snapshot.EMPTY, overlay);
+    }
+
+    /**
+     * The same merge for a caller that has no server-synced reading.
      *
-     * <p>Kept because the two-reading case is the one the conversion has always been checked
-     * against, and a check that has to name an empty third reading to reach it says less about what
-     * it is checking.
+     * <p>Kept because the older two-reading case is the one the conversion has always been checked
+     * against, and a check that has to name two empty readings to reach it says less about what it is
+     * checking.
      */
     static Snapshot merge(Snapshot window, Snapshot whole) {
-        return merge(window, whole, Snapshot.EMPTY);
+        return merge(window, whole, Snapshot.EMPTY, Snapshot.EMPTY);
     }
 
     /**

@@ -1,6 +1,6 @@
 package bili.dongsz.howtogo;
 
-import bili.dongsz.howtogo.item.ModItems;
+import bili.dongsz.howtogo.mtr.MtrSync;
 //? if fabric {
 /*import net.fabricmc.api.ModInitializer;
 *///?} else {
@@ -11,55 +11,42 @@ import net.neoforged.fml.common.Mod;
 //?}
 
 /**
- * The entry point that runs on both sides, and it exists for one reason: the item.
+ * The entry point that runs on a server, which exists for the MTR sync.
  *
- * <h2>Why a client-side mod needs one</h2>
- * Nothing this mod does for a player happens on a server: roads are the client's own data, the routing
- * runs on the client, every pixel is drawn by Xaero on the client. Installing it on a server is
- * therefore pointless -- and the mod says so in its README.
+ * <h2>Why a client-side mod has one</h2>
+ * Nothing this mod draws, plans or measures happens on a server: the roads are the client's own data,
+ * the routing runs on the client, and every pixel is drawn by Xaero there. What a server <em>can</em>
+ * do is hold MTR's whole railway in memory, and a client that is neither hosting the world nor running
+ * MTR Map Overlay cannot see it. This class is where that becomes a feature: on a server with both MTR
+ * and this mod, the railway is read here and sent to the clients that ask for it -- see
+ * {@code MtrServerSync}. On the client side the same reading is preferred over the overlay's snapshot,
+ * and the overlay is fallen back to only when no server of ours answered.
  *
- * <p>What it is <em>not</em> is free to be absent, and that is what this class is about. A recipe is a
- * data pack file, and a dedicated server reads the same data packs a client does: without an item
- * registered on that side, {@code data/howtogo/recipe/navigator.json} fails to parse and the server logs
- * an error about an unknown registry key every time it starts. Worse for the player, the server owns the
- * inventory in multiplayer, so an item only the client knows about cannot be crafted, held or dropped --
- * the navigator would be a single-player-only item.
- *
- * <p>So the item is registered here too, and nothing else is: no config (the client's config is a client
- * config), no event listeners, no rendering, no data. What the item <em>does</em> is still the client's
- * business -- see {@code NavigatorClient} and {@code NavigatorItem}, where every client-only line sits
- * behind a side check.
+ * <p>What is registered here is exactly that: the network channel and the server tick that checks MTR.
+ * Nothing else runs on a server, and with MTR absent nothing happens at all.
  *
  * <h2>How the two loaders express "exactly one of these runs"</h2>
  * NeoForge gives the author two {@code @Mod} classes, one {@code dist = CLIENT} and one
- * {@code dist = DEDICATED_SERVER}, and constructs exactly one of them -- and a {@code dist}-annotated
- * class is the one thing the loader promises not to touch on the other side, so a promise is doing the
- * work here rather than a hand-written check.
- *
- * <p>Fabric's equivalent is the entrypoint list in {@code fabric.mod.json}: this class is the
- * {@code main} entrypoint, which runs on a dedicated server <em>and</em> on a physical client, and
- * {@link HowToGo} is the {@code client} entrypoint, which Fabric skips on a dedicated server. Item
- * registration therefore happens exactly once on each side -- the same guarantee, expressed in the
- * loader's own vocabulary instead of in an annotation.
- *
- * <p>One consequence worth stating plainly, because it is a property of the design rather than of
- * either port: the mod is declared for both environments, so a server that has it installed will have
- * the item and a server that does not have it will not -- identically on both loaders.
+ * {@code dist = DEDICATED_SERVER}, and constructs exactly one of them. Fabric's equivalent is the
+ * entrypoint list in {@code fabric.mod.json}: this class is the {@code main} entrypoint, which runs on
+ * a dedicated server <em>and</em> on a physical client, and {@link HowToGo} is the {@code client}
+ * entrypoint, which Fabric skips on a dedicated server. Registering a payload type twice would be an
+ * error, so on Fabric each entrypoint registers only its own half -- see {@code MtrSync}.
  */
 // The class is written twice rather than conditioned inside, because the two loaders disagree about
-// what an entry point *is*: NeoForge constructs a class with a constructor it hands the mod bus to,
-// Fabric calls a no-argument method on a class it instantiates itself. The body is two lines either
-// way, so a shared shell with the differences inside would be more scaffolding than code.
-//
-// The javadoc above stays outside the condition: a `/** ... */` inside the `/* ... */` a condition is
-// written with would close that comment early -- the trap MIGRATION.md records.
+// what an entry point *is*: NeoForge constructs a class and hands it the mod bus, Fabric calls a
+// no-argument method on a class it instantiates itself. The javadoc above stays outside the condition:
+// a `/** ... */` inside the `/* ... */` a condition is written with would close that comment early.
 //? if fabric {
 /*public final class HowToGoServer implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        ModItems.register();
-        HowToGo.LOGGER.info("[HowToGo] constructed (common entry point: item registration only)");
+        // The main entrypoint runs on a dedicated server and on a client that hosts a world, so this
+        // is where the server half of the sync comes up on Fabric -- and where an integrated server
+        // gets it too, which is what makes a LAN world sync without anybody installing anything extra.
+        MtrSync.onServerInit();
+        HowToGo.LOGGER.info("[HowToGo] constructed (common entry point: MTR sync only)");
     }
 }
 *///?} else {
@@ -67,8 +54,12 @@ import net.neoforged.fml.common.Mod;
 public final class HowToGoServer {
 
     public HowToGoServer(IEventBus modEventBus, ModContainer modContainer) {
-        ModItems.register(modEventBus);
-        HowToGo.LOGGER.info("[HowToGo] constructed (dedicated server: item registration only)");
+        // The payload types and the server tick are attached to the buses by annotation in MtrNet,
+        // which FML scans for on its own; nothing has to be subscribed from here. Constructing this
+        // class is what makes a dedicated server load the mod at all -- and what makes the log say so
+        // rather than leaving an installed server looking like it did nothing.
+        MtrSync.onServerInit();
+        HowToGo.LOGGER.info("[HowToGo] constructed (dedicated server: MTR sync only)");
     }
 }
 //?}

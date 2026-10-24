@@ -34,7 +34,10 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Destination picker opened by the navigator item: search, a pickable map, and the saved places.
+ * Destination picker: search, a pickable map, and the saved places.
+ *
+ * <p>The screen the main screen's destination button (K) and {@code /howtogo terminal} open, and the
+ * one the old navigator item used to open before the mod stopped registering items.
  *
  * <p>The map is drawn from this mod's own road data and can be clicked to choose a point, the way
  * tapping a map works in a navigation app. Picking is two-step -- a click drops a pin, a second

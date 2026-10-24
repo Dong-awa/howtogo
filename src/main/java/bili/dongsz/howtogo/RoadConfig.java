@@ -141,6 +141,9 @@ public final class RoadConfig {
         @SerializedName("mtr_map_overlay")
         public boolean mtrMapOverlay = true;
 
+        @SerializedName("mtr_server_sync")
+        public boolean mtrServerSync = true;
+
         @SerializedName("mtr_station_merge_blocks")
         public int mtrStationMergeBlocks = 256;
 
@@ -487,6 +490,11 @@ public final class RoadConfig {
         return values.mtrMapOverlay;
     }
 
+// Whether the server's own reading of MTR is asked for and used, on before the config loads. 
+    public static boolean mtrServerSync() {
+        return values.mtrServerSync;
+    }
+
 // 
 // * How far apart two of MTR's stations may be and still be one place here, in blocks.
 // *
@@ -784,6 +792,7 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue MTR_TRANSIT;
     private static final ModConfigSpec.BooleanValue MTR_FULL_MAP;
     private static final ModConfigSpec.BooleanValue MTR_MAP_OVERLAY;
+    private static final ModConfigSpec.BooleanValue MTR_SERVER_SYNC;
     private static final ModConfigSpec.IntValue MTR_STATION_MERGE_BLOCKS;
     private static final ModConfigSpec.BooleanValue MTR_AUTO_ROUTE_MARKS;
     private static final ModConfigSpec.BooleanValue ROADWEAVER_ROADS;
@@ -1061,23 +1070,42 @@ public final class RoadConfig {
 
         MTR_MAP_OVERLAY = builder.comment(
                         "Whether the whole railway MTR Map Overlay has fetched from the server is read",
-                        "and offered as this mod's own. That mod (id \"mtrmap\") asks the server for a",
-                        "snapshot of every line, station and rail of MTR's network and keeps it on the",
-                        "client, so with it installed -- and with it installed on the server too, which",
-                        "is what the snapshot needs -- the whole railway is known here whatever the",
-                        "player is connected to. mtr_full_map can only reach the copy of the network",
-                        "this process happens to be simulating, which is nothing at all on somebody",
-                        "else's server; this is the answer for that case, and the two are independent.",
-                        "It is also the only reading that says which rails each line runs along, so it",
-                        "is the only one that draws a line along its railway rather than between its",
-                        "stations -- and a line drawn from it is drawn that way across the whole",
-                        "network, not only where the player has been.",
+                        "as a fallback and offered as this mod's own. That mod (id \"mtrmap\") asks the",
+                        "server for a snapshot of every line, station and rail of MTR's network and keeps",
+                        "it on the client, so with it installed -- and with it installed on the server",
+                        "too, which is what the snapshot needs -- the whole railway is known here whatever",
+                        "the player is connected to.",
+                        "It is read only when this mod has no fuller reading of its own: the railway the",
+                        "server sent (mtr_server_sync, which needs this mod on the server) or the one this",
+                        "process is simulating (mtr_full_map, single player). Those are taken from the",
+                        "simulation itself rather than from another mod's snapshot of it, so they win",
+                        "whenever they exist -- and when they do, this reading is not taken at all, so the",
+                        "same stations cannot be offered twice through two readers that disagree.",
+                        "It is also the only reading that says which rails each line runs along, so as a",
+                        "fallback it is the one that draws a line along its railway rather than between",
+                        "its stations, and across the whole network rather than only where the player has",
+                        "been.",
                         "Read reflectively, so with the mod absent nothing here does anything at all and",
                         "no dependency is needed in either direction; a server that does not have it",
-                        "leaves the client's own copy of the mod with nothing but the radius-limited",
-                        "data MTR already sends, which this ignores rather than reads twice.")
+                        "leaves the client with nothing but the radius-limited data MTR already sends,",
+                        "which this ignores rather than reads twice.")
                 .translation("howtogo.configuration.mtr_map_overlay")
                 .define("mtr_map_overlay", true);
+
+        MTR_SERVER_SYNC = builder.comment(
+                        "Whether the server's own reading of MTR is asked for and used. On, the client",
+                        "says hello when it joins, and a server running this mod answers with the whole",
+                        "railway it is simulating -- every station, line and rail of every dimension, read",
+                        "on MTR's own thread and sent in parts. It is preferred over MTR Map Overlay's",
+                        "snapshot, which is then not read at all, and over MTR's own radius-limited window.",
+                        "Off, the client asks for nothing and behaves exactly as it did before this sync",
+                        "existed. The server has no switch: it only ever answers a client that asked, and",
+                        "a client that has not asked is sent nothing.",
+                        "This is a client setting -- it decides what this client asks for. A server with",
+                        "this mod sends nothing to a client without it, and a client with this mod asks",
+                        "nothing of a server without it.")
+                .translation("howtogo.configuration.mtr_server_sync")
+                .define("mtr_server_sync", true);
 
         MTR_STATION_MERGE_BLOCKS = builder.comment(
                         "How far apart two of MTR's stations may be and still be one station here,",
@@ -1572,6 +1600,23 @@ public final class RoadConfig {
     public static boolean mtrMapOverlay() {
         try {
             return MTR_MAP_OVERLAY.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
+     * Whether the server's own reading of MTR is asked for and used.
+     *
+     * <p>On, the client says hello when it joins and offers whatever the server sends as its own full
+     * reading -- preferred over MTR Map Overlay's snapshot, which is then not read at all. Off, the
+     * client asks for nothing and behaves exactly as it did before the sync existed. The server side
+     * has no switch: it only ever answers a client that asked, and a client that has not asked is sent
+     * nothing.
+     */
+    public static boolean mtrServerSync() {
+        try {
+            return MTR_SERVER_SYNC.get();
         } catch (IllegalStateException notLoadedYet) {
             return true;
         }

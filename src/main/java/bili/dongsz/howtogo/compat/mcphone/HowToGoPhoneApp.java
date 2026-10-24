@@ -38,10 +38,12 @@ public final class HowToGoPhoneApp implements IPhoneApp {
     public static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath("howtogo", "navigator");
 
     /**
-     * The icon, reusing the navigator item's own texture.
+     * The icon: the mod's own navigator texture.
      *
-     * <p>Not a second copy of the art: the phone icon and the item in the player's hand being the
-     * same picture is the point, and a separate asset would be one more thing to keep in step.
+     * <p>Not a second copy of the art: the phone icon and the pack icon in {@code fabric.mod.json}
+     * are the same picture, and a separate asset would be one more thing to keep in step. The
+     * texture outlived the navigation item it was drawn for -- the item is gone, the art stayed --
+     * which is why it still lives under {@code textures/item/}.
      */
     private static final ResourceLocation ICON =
             ResourceLocation.fromNamespaceAndPath("howtogo", "textures/item/navigator.png");
