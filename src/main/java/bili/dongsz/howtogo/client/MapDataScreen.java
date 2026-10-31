@@ -272,7 +272,7 @@ public final class MapDataScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             // The footer buttons are drawn, not widgets, so nothing else will route a click to them:
             // this is their only chance to see one, and it comes before the list so a press on a
             // button is never also a press on the archive row behind it.
@@ -359,6 +359,11 @@ public final class MapDataScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         // super.render first, for the sheet it draws through renderBackground; then the context lines;
         // then the buttons, last, so no line of context can land on a label.
+        // 1.20.2 is where the game started drawing that background from Screen.render itself; 1.20.1
+        // has no such call, so there the screen asks for it before the parent.
+        //? if <1.20.2 {
+        /*renderBackground(graphics);
+        *///?}
         super.render(graphics, mouseX, mouseY, partialTick);
 
         int x = panelX + PAD;

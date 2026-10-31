@@ -322,7 +322,7 @@ final class SettingsScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
@@ -457,6 +457,11 @@ final class SettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
+        // 1.20.1 has no such call, so a screen that wants the dimming and the sheet asks for it here.
+        //? if <1.20.2 {
+        /*renderBackground(graphics);
+        *///?}
         super.render(graphics, mouseX, mouseY, partialTick);
         pointerX = mouseX;
         pointerY = mouseY;

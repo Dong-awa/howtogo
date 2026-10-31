@@ -494,7 +494,7 @@ public final class RoadNameScreen extends Screen {
         // The done and cancel buttons are drawn, not widgets, so this is their only chance to see a
         // click; it comes before the kind row so a press on one of them is never also a change of
         // kind under it.
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
@@ -504,7 +504,7 @@ public final class RoadNameScreen extends Screen {
                 return true;
             }
         }
-        if (isPlaceEditor() && button == 0) {
+        if (isPlaceEditor() && button == MouseButton.LEFT) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
                 int x = typeX(i);

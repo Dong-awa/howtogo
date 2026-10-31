@@ -1877,7 +1877,7 @@ public final class DestinationScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button != 0) {
+        if (button != MouseButton.LEFT) {
             //? if >=1.21.9 {
             /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
                     new MouseButtonInfo(button, 0)), false);
@@ -2153,7 +2153,7 @@ public final class DestinationScreen extends Screen {
     *///?} else {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
     //?}
-        if (button == 0 && mapPressed) {
+        if (button == MouseButton.LEFT && mapPressed) {
             // Move the centre opposite to the drag, so the map follows the cursor.
             double scale = mapW / (viewRadius * 2.0);
             mapCenterX -= dragX / scale;
@@ -2177,7 +2177,7 @@ public final class DestinationScreen extends Screen {
     *///?} else {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
     //?}
-        if (button == 0 && mapPressed) {
+        if (button == MouseButton.LEFT && mapPressed) {
             mapPressed = false;
             double moved = Math.hypot(mouseX - mapPressX, mouseY - mapPressY);
             if (moved < 3 && insideMap(mouseX, mouseY)) {

@@ -1090,7 +1090,7 @@ public final class TransitLineScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button != 0) {
+        if (button != MouseButton.LEFT) {
             //? if >=1.21.9 {
             /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
                     new MouseButtonInfo(button, 0)), false);

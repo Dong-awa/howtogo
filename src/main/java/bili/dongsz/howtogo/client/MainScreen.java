@@ -549,21 +549,21 @@ public final class MainScreen extends Screen {
         // The details card is on top of the map, so it sees the click before the map does: a press
         // inside the card is a press on the card's empty space or on one of its controls, never the
         // beginning of a drag that would move the map under it.
-        if (button == 0 && selectedPlace != null && detailPanel.contains(mouseX, mouseY)) {
+        if (button == MouseButton.LEFT && selectedPlace != null && detailPanel.contains(mouseX, mouseY)) {
             clickDetailPanel(mouseX, mouseY);
             return true;
         }
         // The buttons are drawn, not widgets, so nothing else will route a click to them: this is
         // their only chance to see it, and it comes before the map so a click on a button is never
         // also a drag that moves the view under it.
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
                 }
             }
         }
-        if (button == 0 && insideMap(mouseX, mouseY)) {
+        if (button == MouseButton.LEFT && insideMap(mouseX, mouseY)) {
             dragging = true;
             lastMouseX = mouseX;
             lastMouseY = mouseY;
@@ -592,7 +592,7 @@ public final class MainScreen extends Screen {
     *///?} else {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
     //?}
-        if (dragging && button == 0) {
+        if (dragging && button == MouseButton.LEFT) {
             // A gesture that moved is a pan, not a click: recording it would make dragging the map
             // open whatever was under the first press.
             if (Math.hypot(mouseX - pressX, mouseY - pressY) > CLICK_SLOP_PX) {
@@ -621,7 +621,7 @@ public final class MainScreen extends Screen {
     *///?} else {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
     //?}
-        if (dragging && button == 0) {
+        if (dragging && button == MouseButton.LEFT) {
             dragging = false;
             Destination pressed = pressedPlace;
             pressedPlace = null;
@@ -718,6 +718,11 @@ public final class MainScreen extends Screen {
      */
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
+        // 1.20.1 has no such call, so a screen that wants the dimming and the sheet asks for it here.
+        //? if <1.20.2 {
+        /*renderBackground(graphics);
+        *///?}
         super.render(graphics, mouseX, mouseY, partialTick);
         // Shapes first, then every piece of text: drawing a string flushes the vertex buffer this
         // uses, so a shape emitted after one would go through a stale consumer.

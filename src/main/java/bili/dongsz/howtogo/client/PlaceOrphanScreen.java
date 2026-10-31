@@ -159,7 +159,7 @@ public final class PlaceOrphanScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             // The footer is drawn, not a widget, so nothing else will route a click to it: this is
             // its only chance to see one.
             for (PanelButton candidate : buttons) {
@@ -267,6 +267,11 @@ public final class PlaceOrphanScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
+        // 1.20.1 has no such call, so a screen that wants the edge and sheet asks for it here.
+        //? if <1.20.2 {
+        /*renderBackground(graphics);
+        *///?}
         super.render(graphics, mouseX, mouseY, partialTick);
 
         listScroll = clampScroll(listScroll);

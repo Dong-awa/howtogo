@@ -9,13 +9,8 @@ import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 *///?} else {
 import net.neoforged.neoforge.client.event.ScreenEvent;
 //?}
-// 1.21.9 reads mouse buttons from the SDL-backed platform layer, so the GLFW constants moved to
-// InputConstants. Same values.
-//? if >=1.21.9 {
-/*import com.mojang.blaze3d.platform.InputConstants;
-*///?} else {
-import org.lwjgl.glfw.GLFW;
-//?}
+// The left button is asked for through MouseButton: the number behind it changed at 26.3, and a
+// literal 0 there meant "no button at all". See that class for the whole story.
 
 /**
  * The map's switches, drawn as part of the map screen rather than inside the map.
@@ -52,16 +47,10 @@ public final class MapFilterOverlay {
     /**
      * The left mouse button.
      *
-     * <p>Named once here because the constant it stands for moved: 1.21.9 reads mouse buttons from the
-     * SDL-backed platform layer, where it is {@code InputConstants.MOUSE_BUTTON_LEFT}, and before that
-     * it was {@code GLFW.GLFW_MOUSE_BUTTON_LEFT}. Both are the same number, and the two tests below
-     * are the only uses, so the condition sits here rather than at each.
+     * <p>Read from {@link MouseButton} rather than spelled out. The two tests below are the only uses,
+     * so this is the one place in this file that had to move with it -- and on 26.3 it is 1, not 0.
      */
-    //? if >=1.21.9 {
-    /*private static final int MOUSE_LEFT = com.mojang.blaze3d.platform.InputConstants.MOUSE_BUTTON_LEFT;
-    *///?} else {
-    private static final int MOUSE_LEFT = GLFW.GLFW_MOUSE_BUTTON_LEFT;
-    //?}
+    private static final int MOUSE_LEFT = MouseButton.LEFT;
 
     /** Where the panel was grabbed, as an offset from its corner, while its title is held. */
     private static double grabX;

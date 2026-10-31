@@ -402,7 +402,7 @@ public final class PlaceDetailScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        if (button == 0) {
+        if (button == MouseButton.LEFT) {
             // The drawn buttons first: they are not widgets, so this is their only chance at the click,
             // and a press on one must not also move the caret under it.
             for (PanelButton candidate : buttons) {

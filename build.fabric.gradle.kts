@@ -202,6 +202,78 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
     minimapApiJar?.let { modCompileOnly(files(it)) }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 26.x: the runtime Fabric API is the release jar, not the one Loom remaps
+//
+// On every other node Loom's dev jars of Fabric API are the right thing to run against: Loom remaps
+// them to the mapping target namespace, which is the namespace the dev client runs in.
+//
+// The 26.x nodes break that equivalence, and nothing in this project can repair it from here. Their
+// Minecraft jars are not obfuscated, so the identity mappings this build uses record no entries at
+// all -- and fabric-loader decides the dev runtime namespace from the mappings it is handed:
+// `MappingConfiguration.computeRuntimeNamespace` answers `named` only when the mapping set is
+// non-empty and the game is running in a development environment, and `official` otherwise. An empty
+// identity mapping is the second case, so the client runs in `official` while Loom rewrote every dev
+// jar's class tweaker header to the mapping target, `named`. The loader then refuses to start:
+//
+//   ClassTweakerFormatException: Namespace (named) does not match current runtime namespace (official)
+//
+// The failing files belong to Fabric API's own modules (fabric-transitive-access-wideners-v1 on 26.1,
+// fabric-renderer-indigo on 26.3, and whoever else the release decides to widen), so this mod's own
+// access widener cannot fix it -- that one is already delivered with an `official` header below.
+//
+// What does work is the shape a real launcher has: the PRODUCTION Fabric API in the run directory's
+// mods/ folder, where fabric-loader treats it as an ordinary third-party mod and remaps it -- class
+// tweakers included -- to the namespace the runtime is actually in. So the dev-remapped API stays as
+// the compile input and is excluded from the runtime classpath, and the release jar is copied into
+// run/mods before the client starts. Verified end to end on all three 26.x nodes: the audit runs in
+// build/audit passed their in-game self-test (9-10 checks each) with exactly this arrangement.
+val productionFabricApi by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    // The release jar bundles its modules inside the jar, so nothing has to come along with it.
+    isTransitive = false
+}
+dependencies {
+    add(productionFabricApi.name, "net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
+}
+val copyProductionFabricApi = tasks.register<Copy>("copyProductionFabricApi") {
+    group = "fabric"
+    description = "Puts the release Fabric API into this node's run/mods, where a 26.x client needs it."
+    // Only the 26.x nodes run it: everywhere else the dev jar is correct and a second copy of the mod
+    // in run/mods would be a duplicate mod id.
+    onlyIf { stonecutter.eval(minecraftVersion, ">=26.1") }
+    val runMods = layout.projectDirectory.dir("run/mods").asFile
+    // One fabric-api jar only. The run directory is machine-local and may already hold a copy -- from
+    // the release the user downloaded by hand, or from an earlier wiring of this task -- and the loader
+    // refuses to start with two copies of the same mod id.
+    doFirst {
+        runMods.mkdirs()
+        runMods.listFiles { f -> f.isFile && f.name.startsWith("fabric-api") && f.name.endsWith(".jar") }
+            ?.forEach { stale ->
+                if (stale.delete()) {
+                    logger.lifecycle("run/mods: replaced ${stale.name} with the release Fabric API")
+                }
+            }
+    }
+    from(productionFabricApi) {
+        include("*.jar")
+        rename { "fabric-api-$fabricApiVersion.jar" }
+    }
+    into(runMods)
+}
+
+// The two halves of that decision, applied to the runtime classpath: the dev-remapped modules go,
+// and the release jar reaches the run directory. Excluding them by group is what the audit runs used
+// (build/audit/fabric-prodapi-generic.gradle); the group is Loom's, not Fabric's.
+if (stonecutter.eval(minecraftVersion, ">=26.1")) {
+    configurations.configureEach {
+        if (name.startsWith("modRuntimeClasspath")) {
+            exclude(group = "remapped.net.fabricmc.fabric-api")
+        }
+    }
+}
+
 // The access widener is chosen per version generation, because an entry naming a member that does
 // not exist on the node being built is a build failure rather than a no-op:
 //
@@ -273,6 +345,15 @@ loom {
     // file's contents are read, so an empty widener fails identically.
     if (needsAccessWidener) {
         accessWidenerPath = awTemplate
+    }
+    // The in-game test rig opens a world for the player so the mod's own screens can be tried without
+    // walking the menus first -- the same switch build.neoforge.gradle.kts offers, because the rig is
+    // the same script for every node. Loom's run config is where the argument has to go: Gradle's
+    // --args would replace the launcher's own arguments rather than add to them.
+    if (rootProject.hasProperty("htgQuickPlay")) {
+        runs.named("client") {
+            programArgs("--quickPlaySingleplayer", rootProject.property("htgQuickPlay").toString())
+        }
     }
 }
 
@@ -389,6 +470,9 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
         doLast { patchOfficialAccessWidener(archiveFile.get().asFile) }
     }
     tasks.named("runClient") {
+        // The release Fabric API in run/mods is what the runtime loads on this node; see the
+        // productionFabricApi block above for why the dev-remapped modules cannot be used.
+        dependsOn(copyProductionFabricApi)
         doFirst {
             val aw = file("build/resources/main/howtogo.accesswidener")
             if (aw.isFile) {

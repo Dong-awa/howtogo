@@ -4,6 +4,7 @@ import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.client.Destinations;
 import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
+import bili.dongsz.howtogo.client.MouseButton;
 import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
@@ -890,7 +891,7 @@ public final class DestinationPickerPage implements IPhonePage {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) {
+        if (button != MouseButton.LEFT) {
             return false;
         }
 
