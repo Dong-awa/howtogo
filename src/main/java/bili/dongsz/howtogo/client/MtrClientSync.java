@@ -27,10 +27,10 @@ import java.util.Map;
  *
  * <h2>The handshake, and why there is one</h2>
  * A server that has this mod must not send anything to a client that does not: the payload classes
- * would be unknown there. So the client says {@link MtrWire#HELLO} while it has no reading, and
- * repeats it once a second; a server sends to nobody else. That also covers the other order -- a
- * client that joins before the server has finished reading -- without either side needing to know
- * when the other is ready.
+ * would be unknown there. So the client says {@link MtrWire#HELLO} while the sync is enabled, and
+ * repeats it once a second as a heartbeat; a server sends to nobody else. That also covers the
+ * other order -- a client that joins before the server has finished reading -- without either side
+ * needing to know when the other is ready.
  *
  * <h2>Assembly</h2>
  * The reading arrives in parts, by session. A session is the server's number for one snapshot; parts
@@ -39,10 +39,10 @@ import java.util.Map;
  */
 public final class MtrClientSync {
 
-    /** How often the hello is repeated while nothing has arrived, in client ticks. One second. */
+    /** How often the client heartbeat is repeated, in client ticks. One second. */
     private static final int HELLO_TICKS = 20;
 
-    /** The most one assembled reading may inflate to; a whole railway is far under this. */
+    /** The most one assembled reading may inflate to; the server caps a session at 2048 x 30 kB. */
     private static final long MAX_ASSEMBLED_BYTES = 64L << 20;
 
     private static volatile MtrSnapshotData.Snapshot latest = MtrSnapshotData.Snapshot.EMPTY;
@@ -68,12 +68,12 @@ public final class MtrClientSync {
 
     /** The reading the server sent, in MTR's own records; empty until the first complete one. */
     public static MtrSnapshotData.Snapshot raw() {
-        return latest;
+        return RoadConfig.mtrServerSync() ? latest : MtrSnapshotData.Snapshot.EMPTY;
     }
 
     /** Whether anything has arrived that the merge can use. */
     public static boolean received() {
-        return !latest.isEmpty();
+        return RoadConfig.mtrServerSync() && !latest.isEmpty();
     }
 
     /**
@@ -98,10 +98,16 @@ public final class MtrClientSync {
             announced = false;
             ticks = 0;
         }
-        if (!RoadConfig.mtrServerSync() || minecraft.player == null) {
+        if (!RoadConfig.mtrServerSync()) {
+            reset();
             return;
         }
-        if (latest.isEmpty() && ++ticks % HELLO_TICKS == 0) {
+        if (minecraft.player == null) {
+            return;
+        }
+        // Heartbeat even after a reading has arrived: this keeps the server queue alive and lets
+        // a queue expire after the client turns the sync off.
+        if (++ticks % HELLO_TICKS == 0) {
             MtrSync.sendHello();
         }
     }
@@ -113,6 +119,10 @@ public final class MtrClientSync {
      * network thread.
      */
     public static void onPart(byte[] body) {
+        if (!RoadConfig.mtrServerSync()) {
+            reset();
+            return;
+        }
         MtrWire.Frame frame = MtrWire.decode(body);
         if (frame == null || !frame.isSnapshot()) {
             return;
@@ -164,6 +174,8 @@ public final class MtrClientSync {
         converted = MtrClientData.Snapshot.EMPTY;
         convertedFor = null;
         convertedFrom = null;
+        ticks = 0;
+        announced = false;
     }
 
     /**
@@ -174,6 +186,9 @@ public final class MtrClientSync {
      * so the player's dimension is compared in that spelling rather than in the registry's.
      */
     public static MtrClientData.Snapshot snapshot() {
+        if (!RoadConfig.mtrServerSync()) {
+            return MtrClientData.Snapshot.EMPTY;
+        }
         MtrSnapshotData.Snapshot reading = latest;
         if (reading.isEmpty()) {
             return MtrClientData.Snapshot.EMPTY;
@@ -207,9 +222,9 @@ public final class MtrClientSync {
                 return dimension;
             }
         }
-        // No name to match -- a server whose simulator does not say which dimension it is -- is
-        // usable when there is exactly one dimension to choose from, and ambiguous otherwise.
-        return count == 1 ? only : null;
+        // No name to match is usable only when the sole dimension is unnamed; a named one that
+        // does not match is a different dimension and must not be guessed at.
+        return count == 1 && only != null && only.id() == null ? only : null;
     }
 
     private static MtrClientData.Snapshot convert(MtrSnapshotData.Dimension dimension) {

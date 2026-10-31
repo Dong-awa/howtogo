@@ -131,12 +131,23 @@ public final class HowToGo {
             PlaceDetailStore.tick();
             TransitLineStore.tick();
             RailTrackStore.tick();
+            // RoadWeaver's roads: read from its client map snapshot, or from its own road store while the
+            // player hosts the world. After the stores above so a layer rebuilt this tick sees the same
+            // world they did. See RoadWeaverLayer.
+            RoadWeaverLayer.tick();
             MtrClientData.tick();
+            // Addon layers: one version comparison per registered source per tick, and a re-read only when
+            // that number has moved. After the stores above so that a layer rebuilt this tick sees the same
+            // world they did. See AddonRoadStore.
+            AddonRoadStore.tick();
             RoadEditSession.tick();
             // The main screen's key, read from the tick because it is a key for the world rather
             // than for a screen; see RoadEditHandler.tickMainMenuKey. The K key is the mod's only
             // way in now, so it is registered and read on both loaders.
             RoadEditHandler.tickMainMenuKey();
+            // MTR Map Overlay resets its two map toggles every session (it only ever sets them at
+            // runtime), so their last state is remembered here and put back once the world is open.
+            MtrOverlayToggles.tick();
             // The browser map's server, when the config asks for it to start itself: it waits for a
             // world to be loaded, because a page opened onto a 503 is worse than a socket opened a
             // moment later.

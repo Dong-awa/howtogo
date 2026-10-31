@@ -26,6 +26,7 @@ import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.webmap.WebMapService;
+import bili.dongsz.howtogo.worlddata.WorldArchive;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -39,6 +40,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -114,6 +116,14 @@ public final class HowToGoCommand {
                         .executes(HowToGoCommand::stop))
                 .then(ClientCommandManager.literal("selftest")
                         .executes(HowToGoCommand::selfTest))
+                .then(ClientCommandManager.literal("data")
+                        .executes(HowToGoCommand::mapData))
+                .then(ClientCommandManager.literal("export")
+                        .executes(HowToGoCommand::mapExport))
+                .then(ClientCommandManager.literal("import")
+                        .executes(HowToGoCommand::mapImportOpen)
+                        .then(ClientCommandManager.argument("archive", StringArgumentType.greedyString())
+                                .executes(HowToGoCommand::mapImportFile)))
                 .then(ClientCommandManager.literal("webmap")
                         .executes(HowToGoCommand::webMapStart)
                         .then(ClientCommandManager.literal("start")
@@ -140,7 +150,7 @@ public final class HowToGoCommand {
         // subcommand out in full, and a shortfall here does not strip the extra placeholders, it
         // makes the whole line fail to format and the player read the raw pattern instead.
         String root = "/" + ROOT;
-        say(context, Component.translatable("command.howtogo.help", root, root, root, root, root));
+        say(context, Component.translatable("command.howtogo.help", root, root, root, root, root, root, root, root));
         return 1;
     }
 
@@ -157,6 +167,75 @@ public final class HowToGoCommand {
         };
         say(context, Component.translatable("command.howtogo.terminal"));
         return 1;
+    }
+
+    // Opens the map transfer screen: export this world's map, or import one over it.
+    private static int mapData(CommandContext<FabricClientCommandSource> context) {
+        pending = () -> {
+            Minecraft minecraft = Minecraft.getInstance();
+            Screens.set(new MapDataScreen(Screens.of(minecraft)));
+        };
+        say(context, Component.translatable("command.howtogo.mapdata"));
+        return 1;
+    }
+
+    // `/howtogo import` without a file: the same screen, which is the one that lists archives.
+    private static int mapImportOpen(CommandContext<FabricClientCommandSource> context) {
+        pending = () -> {
+            Minecraft minecraft = Minecraft.getInstance();
+            Screens.set(new MapDataScreen(Screens.of(minecraft)));
+        };
+        say(context, Component.translatable("command.howtogo.import.open"));
+        return 1;
+    }
+
+    // Exports the current world's map immediately, and reports where the archive went.
+    private static int mapExport(CommandContext<FabricClientCommandSource> context) {
+        try {
+            WorldArchive.Packed packed = MapDataTransfer.exportNow();
+            Component folder = Component.translatable("command.howtogo.export.open_folder")
+                    .withStyle(Style.EMPTY
+                            .withColor(ChatFormatting.AQUA)
+                            .withUnderlined(true)
+                            .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE,
+                                    MapDataTransfer.exportsDirectory().toAbsolutePath().toString())));
+            say(context, Component.translatable("command.howtogo.export.done",
+                    packed.file.getFileName().toString(), packed.files,
+                    MapDataTransfer.humanSize(packed.bytes), folder));
+            return 1;
+        } catch (IOException | RuntimeException failed) {
+            HowToGo.LOGGER.warn("[HowToGo] map export failed: {}", failed.toString());
+            context.getSource().sendError(
+                    Component.translatable("command.howtogo.export.failed", MapDataTransfer.describe(failed)));
+            return 0;
+        }
+    }
+
+    // Reads an archive named on the command line and opens the overwrite warning for it.
+    private static int mapImportFile(CommandContext<FabricClientCommandSource> context) {
+        String typed = StringArgumentType.getString(context, "archive");
+        Path archive = Path.of(typed);
+        if (!archive.isAbsolute()) {
+            archive = Minecraft.getInstance().gameDirectory.toPath().resolve(archive);
+        }
+        archive = archive.normalize();
+        try {
+            WorldArchive.Contents contents = MapDataTransfer.inspect(archive);
+            Path finalArchive = archive;
+            pending = () -> {
+                Minecraft minecraft = Minecraft.getInstance();
+                Screens.set(new MapImportScreen(Screens.of(minecraft), Screens.of(minecraft),
+                        finalArchive, contents));
+            };
+            say(context, Component.translatable("command.howtogo.import.confirm"));
+            return 1;
+        } catch (IOException | RuntimeException failed) {
+            HowToGo.LOGGER.warn("[HowToGo] could not read map archive {}: {}", archive,
+                    failed.toString());
+            context.getSource().sendError(Component.translatable("command.howtogo.import.failed",
+                    MapDataTransfer.describe(failed)));
+            return 0;
+        }
     }
 
 // 

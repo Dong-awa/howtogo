@@ -20,15 +20,15 @@ import java.util.UUID;
  * A client that has this mod sends {@link MtrWire#HELLO} when it joins a world. From then on it is on
  * this class's list, and is sent the reading -- every station, line and rail of every dimension MTR is
  * simulating -- as {@link MtrWire#SNAPSHOT} parts. The reading is re-taken every ten seconds, but only
- * encoded and sent when MTR's own counts have moved, so a server whose railway has not changed costs a
- * handful of collection sizes per ten seconds and no traffic at all.
+ * encoded and sent when MTR's own full fingerprint has moved, so a server whose railway has not changed
+ * pays one full read every ten seconds and no traffic at all.
  *
  * <h2>Why the read happens on MTR's thread, and the encode with it</h2>
  * A {@code Simulator} mutates its sets on its own thread; {@link MtrServerData#read} is queued onto
  * that thread with MTR's own {@code run(Runnable)}. A server may have one simulator per dimension, so
  * one task is queued on each and the last one to finish encodes the combined reading -- still on an
- * MTR thread, which is the price of not copying the object graph first. The cost is paid only when the
- * railway has actually changed.
+ * MTR thread, which is the price of not copying the object graph first. Encoding and traffic are paid
+ * only when the railway has actually changed.
  *
  * <h2>Why parts, and why a budget</h2>
  * A whole railway is every rail's geometry, which is more than one packet may carry and more than one
@@ -43,10 +43,10 @@ public final class MtrServerSync {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    /** How often the cheap change check runs, in server ticks. Ten seconds. */
+    /** How often the full fingerprint is taken, in server ticks. Ten seconds. */
     private static final int POLL_TICKS = 200;
 
-    /** How many parts one player is sent per tick; 8 x 30 kB is a few hundred kB a second. */
+    /** How many parts one player is sent per tick; 8 x 30 kB is about 4.8 MB/s at 20 tps. */
     private static final int PARTS_PER_TICK = 8;
 
     /**
@@ -58,10 +58,16 @@ public final class MtrServerSync {
      */
     private static final long READ_TIMEOUT_MILLIS = 60_000L;
 
+    /** How long a client may go without a hello before its queue is dropped. */
+    private static final long HELLO_TIMEOUT_MILLIS = 5_000L;
+
     /** What this class is talking to, so a change of server or of MTR's main object is noticed. */
     private static Object boundMain;
 
     private static final Map<UUID, ArrayDeque<byte[]>> queues = new LinkedHashMap<>();
+
+    /** Last hello from each queued player; a silent client is dropped after HELLO_TIMEOUT_MILLIS. */
+    private static final Map<UUID, Long> lastHellos = new LinkedHashMap<>();
 
     private static volatile List<byte[]> currentFrames = List.of();
     private static volatile int currentSession;
@@ -71,11 +77,13 @@ public final class MtrServerSync {
     private static int pendingSession;
     private static long pendingHash = Long.MIN_VALUE;
     private static boolean pending;
+    private static boolean pendingEmpty;
 
     private static MtrSnapshotData.Dimension[] cachedDimensions = new MtrSnapshotData.Dimension[0];
     private static long[] cachedSignatures = new long[0];
 
     private static volatile boolean reading;
+    private static volatile Reading activeReading;
     private static long readingSince;
     private static long lastBroadcastHash = Long.MIN_VALUE;
     private static int ticks;
@@ -87,44 +95,69 @@ public final class MtrServerSync {
     private MtrServerSync() {
     }
 
-    /** A client said hello: put it on the list and give it the reading, reading it first if needed. */
+    /** A client said hello: put it on the list and start a fresh read if it is new. */
     public static void hello(ServerPlayer player) {
         if (player == null) {
             return;
         }
+        UUID playerId = player.getUUID();
+        boolean fresh;
         synchronized (queues) {
-            queues.computeIfAbsent(player.getUUID(), ignored -> new ArrayDeque<>());
-        if (!greeted) {
-            greeted = true;
-            LOGGER.info("[HowToGo] MTR sync | a client asked for MTR's network");
-        }
-            resendTo(player.getUUID());
-        }
-        requestRead(player.server, true);
-    }
-
-    /** A client left; its queue goes with it. */
-    public static void goodbye(ServerPlayer player) {
-        if (player != null) {
-            synchronized (queues) {
-                queues.remove(player.getUUID());
+            long now = System.currentTimeMillis();
+            boolean first = !queues.containsKey(playerId);
+            Long previous = lastHellos.put(playerId, now);
+            fresh = first || previous == null || now - previous > HELLO_TIMEOUT_MILLIS;
+            ArrayDeque<byte[]> queue = queues.computeIfAbsent(playerId, ignored -> new ArrayDeque<>());
+            if (fresh && !first) {
+                queue.clear();
+            }
+            if (first && !greeted) {
+                greeted = true;
+                LOGGER.info("[HowToGo] MTR sync | a client asked for MTR's network");
             }
         }
+        if (fresh) {
+            // A new or expired client must not receive a cached reading before the forced read:
+            // that reading may predate this client or belong to a world it has already left.
+            requestRead(player.server, true);
+        }
     }
 
-    /** Server tick: check for changes every ten seconds, and drain a few parts per player. */
+    /** A real goodbye, when a loader offers one; heartbeat timeout covers the usual disconnect. */
+    public static void goodbye(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        synchronized (queues) {
+            UUID playerId = player.getUUID();
+            queues.remove(playerId);
+            lastHellos.remove(playerId);
+        }
+    }
+
+    /** Server tick: expire silent clients, poll MTR every ten seconds, and drain parts per player. */
     public static void tick(MinecraftServer server) {
         if (server == null) {
             return;
         }
         applyPending();
+        long now = System.currentTimeMillis();
         synchronized (queues) {
-            queues.keySet().removeIf(uuid -> server.getPlayerList().getPlayer(uuid) == null);
+            queues.entrySet().removeIf(entry -> {
+                UUID playerId = entry.getKey();
+                ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                Long last = lastHellos.get(playerId);
+                if (player == null || last == null || now - last > HELLO_TIMEOUT_MILLIS) {
+                    lastHellos.remove(playerId);
+                    return true;
+                }
+                return false;
+            });
             if (queues.isEmpty()) {
                 return;
             }
         }
-        if (++ticks % 20 == 0) {
+        if (++ticks % POLL_TICKS == 0) {
             requestRead(server, false);
         }
         flush(server);
@@ -137,41 +170,48 @@ public final class MtrServerSync {
 
     // ------------------------------------------------------------------- sending
 
-    /**
-     * Puts the current reading at the front of one player's queue.
-     *
-     * <p>The same frame bytes are shared by every player: they never change once built, and building
-     * a reading's frames once rather than once per player is the difference between one copy of a
-     * railway in memory and one per player.
-     */
-    /** Hands a reading finished on MTR's thread to every waiting player, from the server thread. */
+    /** Hands a completed reading to every waiting player, from the server thread. */
     private static void applyPending() {
-        List<byte[]> frames;
-        int session;
-        long hash;
         synchronized (queues) {
             if (!pending) {
                 return;
             }
-            frames = pendingFrames;
-            session = pendingSession;
-            hash = pendingHash;
+            List<byte[]> frames = pendingFrames;
+            int session = pendingSession;
+            long hash = pendingHash;
+            boolean empty = pendingEmpty;
             pendingFrames = List.of();
             pending = false;
+            pendingEmpty = false;
             currentSession = session;
-            currentFrames = frames;
             lastBroadcastHash = hash;
-            for (UUID player : queues.keySet()) {
-                resendTo(player);
+            if (empty) {
+                currentFrames = List.of();
+                for (UUID player : queues.keySet()) {
+                    replaceQueue(player, frames);
+                }
+            } else {
+                currentFrames = frames;
+                for (UUID player : queues.keySet()) {
+                    resendTo(player);
+                }
             }
         }
     }
 
+    /** Replaces one player's queue with the current reading, or clears it when there is none. */
     private static void resendTo(UUID player) {
         List<byte[]> frames = currentFrames;
-        if (frames.isEmpty()) {
+        ArrayDeque<byte[]> queue = queues.get(player);
+        if (queue == null) {
             return;
         }
+        queue.clear();
+        queue.addAll(frames);
+    }
+
+    /** Replaces one player's queue with a complete set of frames, without caching them as a reading. */
+    private static void replaceQueue(UUID player, List<byte[]> frames) {
         ArrayDeque<byte[]> queue = queues.get(player);
         if (queue == null) {
             return;
@@ -215,68 +255,76 @@ public final class MtrServerSync {
     // ------------------------------------------------------------------- reading
 
     /**
-     * Queues one read, or does nothing when one is already running or nothing has changed.
+     * Queues one read, or does nothing when one is already running.
      *
-     * @param force re-read even when the counts have not moved, which is what a fresh hello asks for:
-     *              the snapshot may predate anything this player was sent
+     * @param force re-read even when the fingerprint has not moved; used for a fresh client
      */
     private static void requestRead(MinecraftServer server, boolean force) {
         if (reading && System.currentTimeMillis() - readingSince < READ_TIMEOUT_MILLIS) {
+            if (force && activeReading != null) {
+                activeReading.force();
+            }
             return;
         }
         if (reading) {
-            // The queued task never ran -- MTR was paused or stopped -- so it is written off rather
-            // than allowed to block every future read.
+            Reading stale = activeReading;
             reading = false;
+            activeReading = null;
+            if (stale != null) {
+                stale.cancel();
+            }
         }
         if (!MtrServerData.available()) {
+            clearCachedReading();
+            publishEmpty();
             return;
         }
         Object main = MtrServerData.main();
         if (main == null) {
+            clearCachedReading();
+            publishEmpty();
             return;
         }
         List<Object> simulators = MtrServerData.simulators(main);
         if (simulators.isEmpty()) {
+            clearCachedReading();
+            publishEmpty();
             return;
         }
-        if (main != boundMain) {
-            // A different MTR server (or the first one): nothing cached applies to it.
+        if (main != boundMain || cachedDimensions.length != simulators.size()) {
+            // A different MTR server or simulator set: nothing cached applies to it.
             boundMain = main;
             cachedDimensions = new MtrSnapshotData.Dimension[simulators.size()];
             cachedSignatures = new long[simulators.size()];
             lastBroadcastHash = Long.MIN_VALUE;
-            force = true;
-        }
-        if (cachedDimensions.length != simulators.size()) {
-            cachedDimensions = new MtrSnapshotData.Dimension[simulators.size()];
-            cachedSignatures = new long[simulators.size()];
-            lastBroadcastHash = Long.MIN_VALUE;
+            clearFramesAndQueues();
             force = true;
         }
 
         Reading reading = new Reading(simulators.size(), force);
-        boolean queuedAny = false;
+        activeReading = reading;
         for (int index = 0; index < simulators.size(); index++) {
             Object simulator = simulators.get(index);
             int slot = index;
-            boolean queued = MtrServerData.runOn(simulator, () -> {
-                long signature = MtrServerData.signatureOf(simulator);
-                MtrSnapshotData.Dimension dimension = null;
-                synchronized (MtrServerSync.class) {
-                    if (reading.force || signature != cachedSignatures[slot]
-                            || cachedDimensions[slot] == null) {
-                        dimension = MtrServerData.read(simulator);
-                    }
-                }
-                reading.done(slot, dimension, signature);
-            });
-            queuedAny |= queued;
+            if (!MtrServerData.runOn(simulator, () -> readSimulator(reading, slot, simulator))) {
+                // MTR refused this task: account for it now so the read cannot hang until timeout.
+                reading.done(slot, null, 0L);
+            }
         }
-        if (!queuedAny) {
-            // Nothing was queued -- MTR refused every task -- so no task will ever call done().
-            MtrServerSync.reading = false;
+    }
+
+    /** Runs on one simulator thread: reads once, fingerprints that same read, and keeps the cache. */
+    private static void readSimulator(Reading reading, int slot, Object simulator) {
+        MtrServerData.Sample sample = MtrServerData.readWithSignature(simulator);
+        MtrSnapshotData.Dimension dimension = null;
+        long signature = sample == null ? 0L : sample.signature();
+        synchronized (MtrServerSync.class) {
+            if (sample != null && (reading.force || signature != cachedSignatures[slot]
+                    || cachedDimensions[slot] == null)) {
+                dimension = sample.dimension();
+            }
         }
+        reading.done(slot, dimension, signature);
     }
 
     /**
@@ -289,10 +337,12 @@ public final class MtrServerSync {
     private static final class Reading {
 
         private final int total;
-        private final boolean force;
+        private volatile boolean force;
         private final MtrSnapshotData.Dimension[] dimensions;
         private final long[] signatures;
         private int remaining;
+        private boolean cancelled;
+        private boolean finished;
 
         Reading(int total, boolean force) {
             this.total = total;
@@ -304,21 +354,34 @@ public final class MtrServerSync {
             readingSince = System.currentTimeMillis();
         }
 
+        synchronized void force() {
+            force = true;
+        }
+
+        synchronized void cancel() {
+            cancelled = true;
+        }
+
         synchronized void done(int slot, MtrSnapshotData.Dimension dimension, long signature) {
-            if (slot >= 0 && slot < total) {
-                if (dimension != null) {
-                    dimensions[slot] = dimension;
-                    signatures[slot] = signature;
-                }
+            if (cancelled || finished) {
+                return;
+            }
+            if (slot >= 0 && slot < total && dimension != null) {
+                dimensions[slot] = dimension;
+                signatures[slot] = signature;
             }
             if (--remaining > 0) {
                 return;
             }
+            finished = true;
             finish(this);
         }
     }
 
     private static synchronized void finish(Reading reading) {
+        if (reading.cancelled) {
+            return;
+        }
         try {
             List<MtrSnapshotData.Dimension> collected = new ArrayList<>();
             for (int i = 0; i < reading.total; i++) {
@@ -333,13 +396,16 @@ public final class MtrServerSync {
                 }
             }
             MtrSnapshotData.Snapshot snapshot = new MtrSnapshotData.Snapshot(collected);
-            if (snapshot.isEmpty()) {
+            boolean empty = snapshot.isEmpty();
+            if (empty) {
+                currentFrames = List.of();
                 if (!emptyReported) {
                     emptyReported = true;
-                    LOGGER.info("[HowToGo] MTR sync | nothing to send yet: MTR has no railway in this "
-                            + "world");
+                    LOGGER.info("[HowToGo] MTR sync | no railway in this world; sending an empty "
+                            + "snapshot so clients clear the old reading");
                 }
-                return;
+            } else {
+                emptyReported = false;
             }
             byte[] encoded = MtrSnapshotData.encode(snapshot);
             long hash = MtrSnapshotData.hashOf(encoded);
@@ -354,18 +420,18 @@ public final class MtrServerSync {
                 if (frames.isEmpty()) {
                     LOGGER.warn("[HowToGo] MTR reading is too large for one session ({} bytes "
                             + "encoded); it is not sent", encoded.length);
+                    clearAndPublishEmpty();
                     return;
                 }
                 // Finished on MTR's thread, so nothing is sent from here: the parts are handed to the
-                // server tick, which is the only thread allowed to send on a player's connection. A
-                // read takes several ticks of queueing to complete, so waiting one more tick costs
-                // nothing.
+                // server tick, which is the only thread allowed to send on a player's connection.
                 pendingFrames = frames;
                 pendingSession = session;
                 pendingHash = hash;
+                pendingEmpty = empty;
                 pending = true;
             }
-            if (!reported) {
+            if (!reported && !empty) {
                 reported = true;
                 LOGGER.info("[HowToGo] MTR is synced from the server ({} dimension(s), {} kB, {} part(s))",
                         collected.size(), encoded.length / 1024, frames.size());
@@ -373,9 +439,80 @@ public final class MtrServerSync {
         } catch (RuntimeException | java.io.IOException e) {
             LOGGER.warn("[HowToGo] could not encode the MTR reading for the clients ({}); they keep "
                     + "the windowed reading", e.toString());
+            clearAndPublishEmpty();
         } finally {
-            MtrServerSync.reading = false;
+            if (activeReading == reading) {
+                activeReading = null;
+                MtrServerSync.reading = false;
+            }
         }
+    }
+
+    /**
+     * Sends an empty snapshot to every current client and clears the cached reading. Used when MTR
+     * is unavailable or has no simulator: the old railway must not stay on clients indefinitely.
+     */
+    private static void publishEmpty() {
+        try {
+            byte[] encoded = MtrSnapshotData.encode(MtrSnapshotData.Snapshot.EMPTY);
+            long hash = MtrSnapshotData.hashOf(encoded);
+            synchronized (queues) {
+                pending = false;
+                pendingFrames = List.of();
+                pendingSession = 0;
+                pendingHash = Long.MIN_VALUE;
+                pendingEmpty = false;
+                if (hash == lastBroadcastHash && currentFrames.isEmpty()) {
+                    return;
+                }
+                int session = ++sessionCounter;
+                List<byte[]> frames = MtrWire.split(session, hash, encoded);
+                if (frames.isEmpty()) {
+                    clearFramesAndQueues();
+                    return;
+                }
+                currentSession = session;
+                currentFrames = List.of();
+                lastBroadcastHash = hash;
+                for (UUID player : queues.keySet()) {
+                    replaceQueue(player, frames);
+                }
+            }
+        } catch (RuntimeException | java.io.IOException e) {
+            LOGGER.warn("[HowToGo] could not encode the empty MTR snapshot ({})", e.toString());
+            clearFramesAndQueues();
+        }
+    }
+
+    /** Clears the cached reading and every pending queue. Used when no reading can be trusted. */
+    private static void clearFramesAndQueues() {
+        synchronized (queues) {
+            currentFrames = List.of();
+            currentSession = 0;
+            lastBroadcastHash = Long.MIN_VALUE;
+            pendingFrames = List.of();
+            pendingSession = 0;
+            pendingHash = Long.MIN_VALUE;
+            pending = false;
+            pendingEmpty = false;
+            for (ArrayDeque<byte[]> queue : queues.values()) {
+                queue.clear();
+            }
+        }
+    }
+
+    /** Clears the cached reading and tells clients it is empty, rather than leaving stale data. */
+    private static void clearAndPublishEmpty() {
+        clearFramesAndQueues();
+        publishEmpty();
+    }
+
+    /** Drops the per-simulator cache after MTR has gone away or changed its main object. */
+    private static void clearCachedReading() {
+        boundMain = null;
+        cachedDimensions = new MtrSnapshotData.Dimension[0];
+        cachedSignatures = new long[0];
+        lastBroadcastHash = Long.MIN_VALUE;
     }
 
     /** The session the last broadcast used, for diagnostics and tests. */

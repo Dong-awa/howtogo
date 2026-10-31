@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.api;
 import bili.dongsz.howtogo.HowToGo;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -67,7 +68,7 @@ public final class RoadDataSources {
 
     /** Every registered layer, in registration order. Never null. */
     public static List<Entry> all() {
-        return REGISTERED;
+        return Collections.unmodifiableList(REGISTERED);
     }
 
     /** How many layers have been registered. */

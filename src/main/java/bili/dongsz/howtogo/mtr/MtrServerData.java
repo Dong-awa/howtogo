@@ -253,27 +253,57 @@ public final class MtrServerData {
     }
 
     /**
-     * A cheap fingerprint of a simulator's network, for deciding whether a full read is worth it.
+     * Reads one simulator once and returns both the dimension and its full fingerprint.
      *
-     * <p>Counts and ids only: no geometry and no names. A reading is expensive -- every rail's curve is
-     * sampled -- and a server whose railway has not changed should not pay for one every ten seconds.
-     * A rename costs one rebuild that the ids alone would miss, which is the same bargain
-     * {@code MtrClientData.signatureOf} makes on the client.
-     *
-     * <p>Runs on the simulator's own thread, like {@link #read}.
+     * <p>Runs on the simulator thread. MtrServerSync uses this instead of calling read() and
+     * signatureOf() separately, so the fingerprint and the cached dimension describe one read.
+     */
+    public static Sample readWithSignature(Object simulator) {
+        MtrSnapshotData.Dimension dimension = read(simulator);
+        return dimension == null ? null : new Sample(dimension, signatureOf(dimension));
+    }
+
+    /**
+     * Full fingerprint of a simulator's network: every station/platform/line field and every rail
+     * curve. This is deliberately not a count-only check; it runs only on the ten-second poll, never
+     * once a second. The old count-only fingerprint could not see a rename, colour or geometry edit.
      */
     public static long signatureOf(Object simulator) {
-        if (simulator == null || !available()) {
-            return 0L;
-        }
+        MtrSnapshotData.Dimension dimension = read(simulator);
+        return dimension == null ? 0L : signatureOf(dimension);
+    }
+
+    /** A dimension and the full fingerprint of the same read. */
+    public record Sample(MtrSnapshotData.Dimension dimension, long signature) {
+    }
+
+    private static long signatureOf(MtrSnapshotData.Dimension dimension) {
         long hash = 17;
-        hash = hash * 31 + countOf(stationsField, simulator);
-        hash = hash * 31 + countOf(platformsField, simulator);
-        hash = hash * 31 + countOf(routesField, simulator);
-        hash = hash * 31 + countOf(railsField, simulator);
+        hash = hash * 31 + textHash(dimension.id());
+        hash = hash * 31 + dimension.stations().size();
+        hash = hash * 31 + dimension.platforms().size();
+        hash = hash * 31 + dimension.lines().size();
+        hash = hash * 31 + dimension.tracks().size();
+        hash = hash * 31 + dimension.stations().hashCode();
+        hash = hash * 31 + dimension.platforms().hashCode();
+        hash = hash * 31 + dimension.lines().hashCode();
+        for (MtrSnapshotData.Track track : dimension.tracks()) {
+            hash = hash * 31 + textHash(track.hexId());
+            hash = hash * 31 + textHash(track.mode());
+            hash = hash * 31 + track.y();
+            hash = hash * 31 + arrayHash(track.xs());
+            hash = hash * 31 + arrayHash(track.zs());
+        }
         return hash;
     }
 
+    private static int textHash(String value) {
+        return value == null ? 0 : value.hashCode();
+    }
+
+    private static int arrayHash(double[] values) {
+        return values == null ? 0 : java.util.Arrays.hashCode(values);
+    }
     /**
      * Every station, platform, line and rail a simulator holds, as a value that can leave MTR's thread.
      *
@@ -486,16 +516,6 @@ public final class MtrServerData {
 
     private static Object field(Field field, Object target) throws ReflectiveOperationException {
         return field == null ? null : field.get(target);
-    }
-
-    private static int countOf(Field field, Object target) {
-        Object value;
-        try {
-            value = field(field, target);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            return 0;
-        }
-        return value instanceof Collection<?> items ? items.size() : 0;
     }
 
     private static Iterable<?> elements(Object collection) {

@@ -67,7 +67,8 @@ pluginManagement {
 
 plugins {
     id("dev.kikugie.stonecutter") version "0.7.11"
-    // Lets Gradle find the Zulu JDKs under D:\java, which auto-detection misses.
+    // Allows Gradle to resolve missing toolchains via Foojay. If the required JDKs are already
+    // installed outside Gradle's search path, pass -Porg.gradle.java.installations.paths=...
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
@@ -101,10 +102,8 @@ stonecutter {
         neoforge("26.2")
         neoforge("26.3")
 
-        // Fabric is registered one node at a time as its loader glue lands, because a fabric node
-        // whose source has no `//? if fabric` branches yet does not compile and would take
-        // chiseledBuild down with it. The rest of the list is the same eleven versions the
-        // NeoForge half covers plus the three older ones.
+        // Fabric is registered for every node whose loader glue is present, including the 26.x
+        // nodes. Those require the Gradle JVM itself to be Java 25; see the toolchain note below.
         fabric("1.20.1")
         fabric("1.20.4")
         fabric("1.20.6")
@@ -134,18 +133,16 @@ stonecutter {
         // workaroundable from here: a corrected POM in the workspace mirror plus a repository
         // content filter so the good one is consulted first.
 
-        // 26.x Fabric is NOT registered. Two walls, in order:
+        // 26.x Fabric IS registered above. Two constraints shaped the setup:
         //
         //  1. Loom requires the Gradle JVM itself to be the Java the Minecraft version needs
         //     ("Minecraft 26.1 requires Java 25 but Gradle is using 21"), which is why the tree
-        //     is on Gradle 9.5.1 with Java 25 rather than 8.14.6. Gradle 9 is fine for
-        //     everything this tree needs.
-        //  2. Mojang publishes NO client_mappings or server_mappings for 26.1.2, 26.2 or 26.3
-        //     -- both keys are absent from the version JSON. Loom's officialMojangMappings()
-        //     has nothing to fetch, so a Fabric node cannot be given Mojang names at all.
+        //     is on Gradle 9.5.1 with Java 25 rather than 8.14.6.
+        //  2. Mojang publishes NO client_mappings or server_mappings for 26.1.2, 26.2 or 26.3.
+        //     The identity mapping and corrected intermediary POM described above handle that.
         //
         // NeoForge is unaffected because ModDevGradle takes its names from the NeoForge
-        // artifact, which carries them. Their gradle.properties are in place.
+        // artifact, which carries them.
 
 
         // The newest supported version. VCS-facing: it is the state src/ is kept in, so what

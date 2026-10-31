@@ -30,7 +30,7 @@
     "java": ">=${java_version}"
   },
   "suggests": {
-    "xaeroworldmap": ">=1.40.0",
+    "xaeroworldmap": "${xaero_range}",
     "xaerominimap": "*",
     "mtr": "*",
     "create": "*"

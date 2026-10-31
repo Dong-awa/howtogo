@@ -520,6 +520,9 @@ public final class RoadWeaverLayer {
                 publish(new Reading(network, segments, boundsOf(segments), structures,
                         "client map snapshot"), expectedEpoch, request, false);
             } catch (ReflectiveOperationException | RuntimeException failed) {
+                // Forget the failed snapshot so the next tick retries it instead of treating it as
+                // already converted. A transient reflection failure must not hide the layer forever.
+                lastCacheSnapshot = null;
                 reportFailure("client map snapshot", failed);
             } finally {
                 cacheConversionBusy = false;

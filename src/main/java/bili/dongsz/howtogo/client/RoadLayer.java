@@ -6,18 +6,15 @@ import bili.dongsz.howtogo.HowToGo;
 *///?} else {
 import net.neoforged.fml.ModList;
 //?}
-//? if neoforge {
-//?}
-import xaero.map.WorldMap;
-import xaero.map.element.MapElementRenderHandler;
 
 /**
  * Wires the road layer into Xaero's world map.
  *
- * <p>{@code WorldMap.mapElementRenderHandler} is a public static field and
- * {@code MapElementRenderHandler.add} is public, so no mixin or access transformer is needed.
- * The only trick is timing: the handler does not exist until Xaero has initialised, so we poll
- * from the client tick until it shows up.
+ * <p>This class deliberately has no Xaero type in its signature or method body. The class that does
+ * is {@link RoadLayerXaero}; it is loaded only after the loader check here has succeeded. That
+ * separation is what makes a missing Xaero a soft failure: loading this class cannot resolve
+ * {@code ElementRenderer}, so the first client tick reports the missing mod instead of throwing
+ * {@code NoClassDefFoundError}.
  */
 public final class RoadLayer {
 
@@ -26,14 +23,8 @@ public final class RoadLayer {
     private RoadLayer() {
     }
 
-    // The two loaders hand a tick callback different things: NeoForge passes an event object the
-    // handler may ignore, Fabric passes the client and this one is registered as a lambda that
-    // drops it. Neither is used here, so only the signature differs.
-    //? if fabric {
-    /*public static void onClientTick() {
-    *///?} else {
+    /** Polls until Xaero has built its render handler, then installs the layer once. */
     public static void onClientTick() {
-    //?}
         if (attempted) {
             return;
         }
@@ -42,23 +33,14 @@ public final class RoadLayer {
         *///?} else {
         if (!ModList.get().isLoaded("xaeroworldmap")) {
         //?}
-            // Should not happen (declared as a required dependency), but fail soft rather than
-            // spamming the log every tick.
             attempted = true;
             HowToGo.LOGGER.error("[HowToGo] Xaero's World Map is not loaded; road layer disabled");
             return;
         }
         try {
-            MapElementRenderHandler handler = WorldMap.mapElementRenderHandler;
-            if (handler == null) {
-                return; // Xaero has not finished initialising yet.
+            if (RoadLayerXaero.install()) {
+                attempted = true;
             }
-            handler.add(new RoadElementRenderer(
-                    new RoadRenderContext(),
-                    new RoadElementProvider(),
-                    new RoadElementReader()));
-            attempted = true;
-            HowToGo.LOGGER.info("[HowToGo] road layer registered with Xaero's World Map");
         } catch (Throwable t) {
             attempted = true;
             HowToGo.LOGGER.error("[HowToGo] failed to register road layer", t);

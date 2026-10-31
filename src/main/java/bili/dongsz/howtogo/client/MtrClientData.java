@@ -821,27 +821,36 @@ public final class MtrClientData {
     // ------------------------------------------------------------------- report
 
     private static String signatureOf(Snapshot reading) {
-        StringBuilder signature = new StringBuilder();
-        signature.append(reading.stations().size()).append('/')
-                .append(reading.platforms().size()).append('/')
-                .append(reading.lines().size()).append('/')
-                .append(reading.tracks().size());
-        // Which stations and which platforms, not only how many: the whole railway arriving at once
-        // changes the answer without changing the count of anything, and a reading that is not noticed
-        // is a reading that is not offered. Names are left out on purpose -- a reading is compared to
-        // decide whether to rebuild, and a rename costs one rebuild that the ids alone would miss, which
-        // the station count would catch anyway.
+        long hash = 17;
+        hash = hash * 31 + reading.stations().size();
+        hash = hash * 31 + reading.platforms().size();
+        hash = hash * 31 + reading.lines().size();
+        hash = hash * 31 + reading.tracks().size();
+        // The records hash every component; Line includes stops and rails, Stop includes both names.
         for (Station station : reading.stations()) {
-            signature.append(',').append(station.id());
+            hash = hash * 31 + station.hashCode();
         }
         for (Platform platform : reading.platforms()) {
-            signature.append(',').append(platform.id()).append(':').append(platform.stationId());
+            hash = hash * 31 + platform.hashCode();
         }
         for (Line line : reading.lines()) {
-            signature.append('|').append(line.id()).append(':').append(line.stops().size())
-                    .append(':').append(line.mode());
+            hash = hash * 31 + line.hashCode();
         }
-        return signature.toString();
+        for (Track track : reading.tracks()) {
+            hash = hash * 31 + (track.hexId() == null ? 0 : track.hexId().hashCode());
+            hash = hash * 31 + (track.mode() == null ? 0 : track.mode().hashCode());
+            hash = hash * 31 + track.y();
+            // Record arrays are content-hashed explicitly here so geometry cannot be missed.
+            hash = hash * 31 + arrayHash(track.xs());
+            hash = hash * 31 + arrayHash(track.zs());
+        }
+        return reading.stations().size() + "/" + reading.platforms().size() + "/"
+                + reading.lines().size() + "/" + reading.tracks().size() + "/"
+                + Long.toHexString(hash);
+    }
+
+    private static int arrayHash(double[] values) {
+        return values == null ? 0 : java.util.Arrays.hashCode(values);
     }
 
     private static String summaryOf(Snapshot reading) {

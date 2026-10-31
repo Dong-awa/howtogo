@@ -12,21 +12,23 @@ The mod provides Minecraft with a complete road network system, allowing players
 
 ## 支持版本
 
-|         | Fabric | NeoForge | Forge |
-|---------|--------|----------|-------|
-| 1.20.1  | ✔      | -        | ✖     |
-| 1.20.4  | ✔      | ✔        | ✖     |
-| 1.20.6  | ✔      | ✔        | -     |
-| 1.21.1  | ✔      | ✔        | -     |
-| 1.21.4  | ✔      | ✔        | -     |
-| 1.21.6  | ✔      | ✔        | -     |
-| 1.21.8  | ✔      | ✔        | -     |
-| 1.21.11 | ✔      | ✔        | -     |
-| 26.1    | ✔      | ✔        | -     |
-| 26.2    | ✔      | ✔        | -     |
-| 26.3    | ✔      | ✔        | -     |
+|         | Fabric | NeoForge |
+|---------|--------|----------|
+| 1.20.1  | ✔      | -        |
+| 1.20.4  | ✔      | ✔        |
+| 1.20.6  | ✔      | ✔        |
+| 1.21.1  | ✔      | ✔        |
+| 1.21.4  | ✔      | ✔        |
+| 1.21.6  | ✔      | ✔        |
+| 1.21.8  | ✔      | ✔        |
+| 1.21.11 | ✔      | ✔        |
+| 26.1    | ✔      | ✔        |
+| 26.2    | ✔      | ✔        |
+| 26.3    | ✔      | ✔        |
 
-`✔` = 已支持，`✖` = 计划支持，`-` = 不计划支持。
+`✔` = 已支持，`-` = 不计划支持。
+
+Forge 已从仓库移除，不再计划支持；原因见 `MIGRATION.md` 的 Forge: removed from the repository 一节。
 
 ## 前置
 
@@ -52,6 +54,9 @@ The mod provides Minecraft with a complete road network system, allowing players
 ```
 JAVA_HOME=<jdk-25> gradle :1.21.8-neoforge:build
 ```
+
+如果 Gradle 没有自动发现 JDK 17/21/25，追加
+`-Porg.gradle.java.installations.paths=<jdk-17>,<jdk-21>,<jdk-25>`。
 
 ## 许可
 

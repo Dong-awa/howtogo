@@ -56,8 +56,8 @@ public final class MtrWire {
      */
     public static final int MAX_PART_BYTES = 30_000;
 
-    /** The most parts one session may have; a reading bigger than this is not sent at all. */
-    public static final int MAX_PARTS = 4096;
+    /** The most parts one session may have; 2048 x 30,000 bytes is ~61.4 MB, under the 64 MiB client cap. */
+    public static final int MAX_PARTS = 2048;
 
     private MtrWire() {
     }

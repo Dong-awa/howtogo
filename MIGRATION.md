@@ -41,9 +41,10 @@ unchanged -- if the editor is stale after a switch, Reload All Gradle Projects.
 ## Commands
 
 ```powershell
-# The env vars are mandatory: JDK 21 runs Gradle, the 26.x nodes compile with the JDK 25
-# toolchain, and the workspace mirror is where the blocked-here NeoForge artifacts live.
-$env:JAVA_HOME = "D:\java\zulu21"
+# The env vars are mandatory: the Gradle JVM must be JDK 25 because the 26.x nodes require it,
+# while the 17/21 toolchains are selected per node. If those toolchains are not auto-detected,
+# pass -Porg.gradle.java.installations.paths=<jdk-17>,<jdk-21>,<jdk-25>.
+$env:JAVA_HOME = "<JDK 25>"
 $env:GRADLE_USER_HOME = "E:\Projects\Minecraft\Mods\howtogo\.gradle-home"
 $gradle = "E:\Projects\Minecraft\Mods\howtogo\.gradle-dist\gradle-9.7.1\bin\gradle.bat"
 $lm = "-PhtgLocalMaven=E:/Projects/Minecraft/Mods/howtogo/.recon/maven-local"

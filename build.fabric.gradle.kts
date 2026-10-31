@@ -11,7 +11,9 @@
 // one of the three this tree uses that runs on both Gradle 8 and Gradle 9. It was the Forge
 // side that forced Gradle 8 on the whole tree; see MIGRATION.md.
 
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 // Declares this node's loader for the //? if fabric conditions in the shared source.
 // Declares the loader this node builds for, for the `//? if <loader>` conditions in the shared
@@ -37,6 +39,10 @@ val minecraftVersion = stonecutter.current.version
 // properties are in scope, so it is declared in settings.gradle.kts pluginManagement instead.
 val loaderVersion = property("deps.fabric_loader") as String
 val fabricApiVersion = property("deps.fabric_api") as String
+// The per-node Modrinth coordinate is the fallback when libs/ has no matching Xaero jar.
+val xaeroCoordinate = property("deps.xaero") as String
+// Fabric VersionPredicate syntax, not Maven range syntax. The 1.39.x nodes override this.
+val xaeroRange = findProperty("deps.xaero_range")?.toString() ?: ">=1.40.0"
 val modVersion = rootProject.property("mod_version") as String
 
 version = "$modVersion+$minecraftVersion"
@@ -76,6 +82,12 @@ repositories {
     maven("https://maven.fabricmc.net/") { name = "Fabric" }
     // Xaero's own developer Maven. The shipped jar works too and is what libs/ holds.
     maven("https://chocolateminecraft.com/maven") { name = "ChocolateMinecraft" }
+    // Fallback for checkouts without a matching libs/ Xaero jar. Loom remaps this
+    // Modrinth artifact exactly as it remaps the local jar.
+    maven("https://api.modrinth.com/maven") {
+        name = "Modrinth"
+        content { includeGroup("maven.modrinth") }
+    }
     flatDir { dirs(rootProject.file("libs")) }
 }
 
@@ -169,12 +181,19 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
     if (xaerolib.isNotEmpty()) {
         modCompileOnly(fileTree(rootProject.file("libs")) { include(xaerolib) })
     }
-    modCompileOnly(fileTree(rootProject.file("libs")) { // Xaero names its Fabric jars two ways: "xaeroworldmap-fabric-<mc>-<ver>.jar" from 1.21.8 on, and
-    // "XaerosWorldMap_<ver>_Fabric_<mc>.jar" before that. Both are accepted rather than renaming the
-    // download, because a local file whose name is not the one upstream publishes is a trap for
-    // whoever has to replace it.
-    include("xaeroworldmap-fabric-$minecraftArtifactVersion-*.jar",
-            "XaerosWorldMap_*_Fabric_$minecraftArtifactVersion.jar") })
+    val xaeroJar = fileTree(rootProject.file("libs")) {
+        // Xaero names its Fabric jars two ways: "xaeroworldmap-fabric-<mc>-<ver>.jar" from
+        // 1.21.8 on, and "XaerosWorldMap_<ver>_Fabric_<mc>.jar" before that. Both are accepted
+        // rather than renaming the download.
+        include("xaeroworldmap-fabric-$minecraftArtifactVersion-*.jar",
+                "XaerosWorldMap_*_Fabric_$minecraftArtifactVersion.jar")
+    }
+    if (xaeroJar.isEmpty) {
+        // No local jar: resolve the node's Modrinth coordinate. Loom remaps it for us.
+        modCompileOnly(xaeroCoordinate)
+    } else {
+        modCompileOnly(xaeroJar)
+    }
 
     // The Xaero's Minimap overlay's API jar, when this node supplied one: see the note above the
     // exclusion for why it is optional, compile-only and selected by name. XaeroLib, whose types the
@@ -194,9 +213,9 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
 // The two do not overlap, so two files cover the range. The chosen one is renamed to
 // howtogo.accesswidener, which is the name fabric.mod.json asks for; the templates themselves are
 // excluded from the jar.
-// Three generations, not two: the 26.x nodes need the same members as modern but declared in the
-// intermediary namespace, because their jars are unobfuscated and Loom will not remap a "named"
-// widener onto an identity mapping.
+// Three generations, not two: the 26.x nodes need the same members as modern, but their jars are
+// unobfuscated and the runtime namespace is official; the post-processing below rewrites the
+// delivered copy to an official header for Fabric Loader.
 val awGeneration = when {
     stonecutter.eval(minecraftVersion, ">=26.1") -> "modern-intermediary"
     stonecutter.eval(minecraftVersion, ">=1.21.6") -> "modern"
@@ -206,9 +225,42 @@ val awGeneration = when {
 // them out of the jar also matches the copy this adds back, because the exclude is tested against the
 // source name before the rename -- which silently removed the access widener from the jar entirely.
 val awTemplate = rootProject.file("src/fabric/aw/$awGeneration.accesswidener")
+// Loom needs a `named` header to remap the 26.x widener, but the runtime namespace is
+// `official`. Keep the Loom input named and rewrite only the delivered/dev copies.
+
 // Computed OUTSIDE the loom block on purpose. Written inline it did not compile:
 // "Unresolved reference 'not' for operator '!'" -- the loom extension shadows `stonecutter`
 // inside its own scope, so the negation has to happen here where the plugin's is in view.
+
+// Loom needs the widener header to be `named` while it remaps, but 26.x runs in the
+// official namespace. Keep the build input named and rewrite only the delivered/dev copies.
+fun patchOfficialAccessWidener(file: File) {
+    if (!file.isFile) return
+    val tmp = File(file.parentFile, file.name + ".aw")
+    ZipFile(file).use { zin ->
+        ZipOutputStream(tmp.outputStream()).use { out ->
+            val entries = zin.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                val bytes = zin.getInputStream(entry).use { it.readBytes() }
+                val patched = if (entry.name == "howtogo.accesswidener") {
+                    String(bytes, Charsets.UTF_8)
+                        .replaceFirst("accessWidener v2 named", "accessWidener v2 official")
+                        .toByteArray(Charsets.UTF_8)
+                } else {
+                    bytes
+                }
+                val copy = ZipEntry(entry.name)
+                copy.time = entry.time
+                out.putNextEntry(copy)
+                out.write(patched)
+                out.closeEntry()
+            }
+        }
+    }
+    tmp.copyTo(file, overwrite = true)
+    tmp.delete()
+}
 val needsAccessWidener = true
 
 loom {
@@ -288,6 +340,7 @@ tasks.named<ProcessResources>("processResources") {
         "version" to version.toString(),
         "minecraft_version" to minecraftVersion,
         "java_version" to requiredJava.majorVersion.toString(),
+        "xaero_range" to xaeroRange,
         // The accessWidener key is templated because 26.x must not declare one at all. Loom reads
         // this key independently of accessWidenerPath, so leaving it out of the loom block was not
         // enough -- the widener was still being applied, and still failing the same remap.
@@ -328,21 +381,19 @@ tasks.named<ProcessResources>("processResources") {
     // MIT requires the notice to travel with every copy, and the copy people receive is the jar.
     from(rootProject.file("LICENSE")) { into("META-INF") }
 
-    // The data pack, assembled for this node -- same three-way choice the NeoForge script makes,
-    // and for the same reasons. See the long comment there; the short version is that the data
-    // directory is plural before 1.21.1, the ingredient is an object before 1.21.4, and 1.20.5
-    // renamed the result's "item" to "id". Stonecutter does not touch resources, so the choice has
-    // to be made at copy time.
-    val recipeEra = when {
-        stonecutter.eval(minecraftVersion, ">=1.21.4") -> "recipe-modern"
-        stonecutter.eval(minecraftVersion, ">=1.20.5") -> "recipe-mid"
-        else -> "recipe-legacy"
+    // No data-pack copy here: src/main/datapack does not exist; the jars deliberately contain no data/**.
+}
+
+if (stonecutter.eval(minecraftVersion, ">=26.1")) {
+    tasks.named<net.fabricmc.loom.task.RemapJarTask>("remapJar") {
+        doLast { patchOfficialAccessWidener(archiveFile.get().asFile) }
     }
-    val singular = stonecutter.eval(minecraftVersion, ">=1.21.1")
-    from(rootProject.file("src/main/datapack/$recipeEra")) {
-        into("data/howtogo/" + if (singular) "recipe" else "recipes")
-    }
-    from(rootProject.file("src/main/datapack/advancement")) {
-        into("data/howtogo/" + if (singular) "advancement/recipes" else "advancements/recipes")
+    tasks.named("runClient") {
+        doFirst {
+            val aw = file("build/resources/main/howtogo.accesswidener")
+            if (aw.isFile) {
+                aw.writeText(aw.readText().replaceFirst("accessWidener v2 named", "accessWidener v2 official"))
+            }
+        }
     }
 }
