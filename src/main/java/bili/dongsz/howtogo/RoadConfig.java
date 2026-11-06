@@ -129,6 +129,9 @@ public final class RoadConfig {
         @SerializedName("fall_back_to_walking_when_slower")
         public boolean fallBackToWalkingWhenSlower = true;
 
+        @SerializedName("transit_mixed")
+        public boolean transitMixed = true;
+
         @SerializedName("transit_wait_seconds")
         public double transitWaitSeconds = 60.0;
 
@@ -351,9 +354,14 @@ public final class RoadConfig {
         values.fallBackToWalkingWhenSlower = on;
     }
 
-// How far a walking trip may leave the network, in blocks.
+// Whether public transport mixes walking and lines rather than keeping the two apart.
+    public static void setTransitMixed(boolean on) {
+        values.transitMixed = on;
+    }
+
+// How far a walker may cross open country between two road ends, in blocks; the first and last hop of a walking trip is always walked.
     public static void setWalkOffroadBlocks(double blocks) {
-        values.walkOffroadBlocks = clamp(blocks, 0.0, 4096.0);
+        values.walkOffroadBlocks = clamp(blocks, 0.0, 256.0);
     }
 
 // How close to a stop of the journey counts as being at that stop, in blocks.
@@ -498,6 +506,11 @@ public final class RoadConfig {
 // Whether a slower-than-walking trip is replanned on foot, on before the config loads. 
     public static boolean fallBackToWalkingWhenSlower() {
         return values.fallBackToWalkingWhenSlower;
+    }
+
+// Whether public transport may mix walking and lines, on before the config loads.
+    public static boolean transitMixed() {
+        return values.transitMixed;
     }
 
 // 
@@ -716,7 +729,8 @@ public final class RoadConfig {
         return ColorHex.parse(text, defaultTransitLineColor(kind));
     }
 
-    // How far a walking trip may leave the network, in blocks.
+    // How far a walker may cross open country between two road ends, in blocks. Not the reach of
+    // the first and last hop: those are always walked, see TravelMode.
     public static double walkOffroadBlocks() {
         return values.walkOffroadBlocks;
     }
@@ -947,6 +961,7 @@ public final class RoadConfig {
     private static final ModConfigSpec.ConfigValue<List<? extends String>> AVOID_ROAD_CLASSES;
     private static final ModConfigSpec.BooleanValue PREFER_MAJOR_ROADS;
     private static final ModConfigSpec.BooleanValue FALL_BACK_TO_WALKING_WHEN_SLOWER;
+    private static final ModConfigSpec.BooleanValue TRANSIT_MIXED;
     private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
     private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
@@ -956,14 +971,15 @@ public final class RoadConfig {
     private static final ModConfigSpec.IntValue CREATE_TRACK_SCAN_RADIUS;
     private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
     /**
-     * How far a walking trip may leave the network, in blocks.
+     * How far a walker may cross open country that no road covers, in blocks.
      *
-     * <p>Walking may step off a road and cross a field, but not for ever: past this the straight hop
-     * is a beeline across the map rather than a step off the path, and the answer becomes "no road
-     * route". It is also the furthest two road ends a walker may cross between, and only on the
-     * surface. A car and a ride have their own rules in {@link bili.dongsz.howtogo.route.TravelMode},
-     * because their numbers are not about taste: a car may only be as far from its road's centre as
-     * the road is wide, and a ride may only be as far from its track as a station platform is from it.
+     * <p>The first and last hop of a walking trip is walked whatever this says -- a player standing
+     * in a field is a walk from the road, not a routing failure. This number bounds the middle of a
+     * trip: the furthest a walker may step from the end of one road across the ground to the next
+     * when the two do not quite meet, and only on the surface. A car and a ride have their own rules
+     * in {@link bili.dongsz.howtogo.route.TravelMode}, because their numbers are not about taste: a
+     * car may only be as far from its road's centre as the road is wide, and a ride may only be as
+     * far from its track as a station platform is from it.
      */
     private static final ModConfigSpec.DoubleValue WALK_OFFROAD_BLOCKS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
@@ -1123,23 +1139,29 @@ public final class RoadConfig {
                         "at, the player is treated as being at the station rather than off the route,",
                         "which is what keeps a platform, a car park and a connecting footbridge from",
                         "reading as a wrong turn. It is also the radius the station announcements are",
-                        "measured against.")
+                        "measured against, and it decides how far from a road or track a place may stand",
+                        "and still be markable as a station -- a place nobody can reach from the track",
+                        "would be a stop no journey calls at.")
                 .translation("howtogo.configuration.station_snap_blocks")
                 .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
 
         WALK_OFFROAD_BLOCKS = builder.comment(
-                        "How far a walking trip may leave the road network, in blocks.",
-                        "Walking can cross open country, but not for ever: past this distance the",
-                        "straight hop is no longer 'stepping off the path' but a beeline across the",
-                        "map, and the answer is that there is no road route from here.",
-                        "It is also the furthest two road ends a walker may cross between: only ends on",
-                        "the surface (storey 0) can be joined this way, because a footpath on a bridge",
-                        "and the one under it are not the same ground.",
+                        "How far a walker may cross open country that no road covers, in blocks.",
+                        "The first and last hop of a walking trip is walked whatever this says: a",
+                        "player standing in a field is forty blocks from the road, not unroutable.",
+                        "This number is the middle of a trip: the longest step from the end of one",
+                        "road to the next when they do not quite meet. Only road ends can be left",
+                        "this way, and only on the surface (storey 0), because a footpath on a bridge",
+                        "and the one under it are not the same ground. Two ends of one road are not",
+                        "joined this way: that road already connects them, and the straight chord",
+                        "would cut across its own curve.",
+                        "The upper bound is 256: a crossing longer than that is no longer a step off",
+                        "the road, it is a route across the map, and the router does not look for one.",
                         "A car and a ride do not use this number. A car may only be as far from its",
                         "road's centre as the road is wide, and a ride may only be as far from its",
                         "track as a station platform is from it (station_snap_blocks).")
                 .translation("howtogo.configuration.walk_offroad_blocks")
-                .defineInRange("walk_offroad_blocks", 32.0, 0.0, 4096.0);
+                .defineInRange("walk_offroad_blocks", 32.0, 0.0, 256.0);
 
         DEFAULT_TRAVEL_MODE = builder.comment(
                         "Travel mode navigation starts in, and the one the estimates are made for.",
@@ -1183,6 +1205,20 @@ public final class RoadConfig {
                         "is offered as an alternative, not as a substitution.")
                 .translation("howtogo.configuration.fall_back_to_walking_when_slower")
                 .define("fall_back_to_walking_when_slower", true);
+
+        TRANSIT_MIXED = builder.comment(
+                        "Whether public transport mixes walking and lines.",
+                        "On, a journey may walk between two lines' stops that do not form an",
+                        "interchange -- a few hundred blocks along the walking network -- and the",
+                        "middle of that walk is planned the way walking navigation plans it, never a",
+                        "straight line between the two stops.",
+                        "The mode stays line-first: a journey that rides at least one line is kept",
+                        "even when walking the whole way would be quicker, because that is the mode",
+                        "the player asked for. Walking the whole way is the fallback only when no",
+                        "line can carry the trip. Off, a journey changes lines only where the two",
+                        "stops stand at one interchange.")
+                .translation("howtogo.configuration.transit_mixed")
+                .define("transit_mixed", true);
 
         TRANSIT_WAIT_SECONDS = builder.comment(
                         "Seconds spent waiting for a service, charged once at every boarding -- the",
@@ -1650,6 +1686,15 @@ public final class RoadConfig {
         }
     }
 
+    /** Whether public transport may mix walking and lines, on before the config loads. */
+    public static boolean transitMixed() {
+        try {
+            return TRANSIT_MIXED.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
     /**
      * Seconds of waiting one boarding of a service costs, or the declared default before the config
      * has been read.
@@ -1722,7 +1767,7 @@ public final class RoadConfig {
         }
     }
 
-    // How far a walking trip may leave the network, in blocks.
+    // How far a walker may cross open country between two road ends, in blocks; the first and last hop of a walking trip is always walked.
     public static double walkOffroadBlocks() {
         try {
             return WALK_OFFROAD_BLOCKS.get();
@@ -2049,9 +2094,14 @@ public final class RoadConfig {
         write(FALL_BACK_TO_WALKING_WHEN_SLOWER, on);
     }
 
-// How far a walking trip may leave the network, in blocks.
+// Whether public transport mixes walking and lines rather than choosing one or the other.
+    public static void setTransitMixed(boolean on) {
+        write(TRANSIT_MIXED, on);
+    }
+
+// How far a walker may cross open country between two road ends, in blocks; the first and last hop of a walking trip is always walked.
     public static void setWalkOffroadBlocks(double blocks) {
-        write(WALK_OFFROAD_BLOCKS, clamp(blocks, 0.0, 4096.0));
+        write(WALK_OFFROAD_BLOCKS, clamp(blocks, 0.0, 256.0));
     }
 
 // How close to a stop of the journey counts as being at that stop, in blocks.

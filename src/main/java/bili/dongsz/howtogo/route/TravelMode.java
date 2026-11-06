@@ -29,13 +29,15 @@ public enum TravelMode {
      * <p>A made road is fast on foot because a player can sprint along it without watching every
      * step, which a footpath does not allow.
      *
-     * <h2>How far a walk may leave the network</h2>
-     * A straight line across open country is what a person does when there is no road, but it is
-     * still a choice: past {@code walk_offroad_blocks} (thirty-two by default, and configurable) the
-     * hop stops being "stepping off the path" and becomes a beeline across the map, and the answer is
-     * that there is no road route. The same number is the furthest a walker may cross between two
-     * road ends that do not quite meet -- and that only on the surface, because a footpath over a
-     * bridge and the one under it are different ground.
+     * <h2>Why walking has no connector distance to speak of</h2>
+     * The first and last hop of every trip is walked, and a walker standing forty blocks from the
+     * nearest road is not a routing failure -- they simply walk those forty blocks. Refusing the trip
+     * because the start or the destination is a little off the network answered "no route" to a place
+     * plainly in sight, which is the one answer the player cannot act on: the trip is still exactly
+     * what they asked for, with a longer walk at that end. So walking's reach is a practical infinity
+     * here; what {@code walk_offroad_blocks} limits is the middle of a trip, where a walker crosses
+     * between two road ends that do not quite meet, and a beeline there would be an invented shortcut
+     * rather than an honest last step. See {@code RoadRouter}'s coincident-node pass.
      */
     WALK("walk", 2.0, Map.of(
             RoadClass.HIGHWAY, 5.612,
@@ -49,9 +51,19 @@ public enum TravelMode {
      * start parked anywhere on the carriageway or beside it, but it does not cross the field next to
      * the road. A drive whose first or last hop would leave the road that far is refused rather than
      * drawn as a straight line, and the player is offered the walk instead.
+     *
+     * <h2>Why a highway is faster than a road</h2>
+     * These two classes used to share a pace here, which quietly made "fastest time" mean "shortest
+     * distance" for every driver: two routes of the same class cost exactly the same per block, so
+     * the shorter line won and a highway that is a little longer but much quicker was never offered.
+     * That is the reported bug -- a highway detour losing to a winding mountain road because it was
+     * a few blocks longer. A highway is built to be driven along and a road is not, so the table now
+     * says so: the same blocks are worth a quarter less time on a highway, and a highway may be up to
+     * a third longer than a road and still win under "fastest". "Shortest distance" is untouched and
+     * still follows the shorter line, because that is what its name promises.
      */
     DRIVE("drive", 12.0, Map.of(
-            RoadClass.HIGHWAY, 9.0,
+            RoadClass.HIGHWAY, 12.0,
             RoadClass.ROAD, 9.0)),
     /**
      * Public transport: the rail, water and ice lines, which are no use to anyone not riding them.
@@ -94,6 +106,18 @@ public enum TravelMode {
      * a minecart or a gallop would flatter every route whose ends are far from a road.
      */
     private static final double CONNECTOR_SPEED = 4.317;
+
+    /**
+     * Walking's reach at either end of a trip, in blocks.
+     *
+     * <p>Effectively no limit, and deliberately so: the player is already standing where they are,
+     * and the last step to a destination nobody drew a road to is still a step. The number stays
+     * finite only so a coordinate nobody meant to type does not become a route to the edge of the
+     * world -- the old value was four thousand ninety-six and nothing that matters changed when it
+     * was lowered and raised again. A walker's *middle* crossing between two road ends is a different
+     * question and is bounded by {@code walk_offroad_blocks}; see the class comment.
+     */
+    private static final double WALK_CONNECTOR_REACH = 4096.0;
 
     private final String id;
     private final double offRoadCostFactor;
@@ -144,15 +168,15 @@ public enum TravelMode {
      * connector past the cap is not a hop onto the network, it is a straight line across open
      * country pretending to be a road trip.
      *
-     * <p>Only walking's number is a preference, so only it has a config key: {@code
-     * walk_offroad_blocks}. A car's allowance is the width of the road it may use, and a ride's is
-     * the platform's reach ({@code station_snap_blocks}) -- neither is something a player should be
-     * able to widen into a field. Read through the config on every call so an edit takes effect on
-     * the next plan rather than after a restart.
+     * <p>Only the middle of a walking trip is a preference, so {@code walk_offroad_blocks} is not
+     * read here: walking's two ends are always reachable, see {@link #WALK_CONNECTOR_REACH}. A car's
+     * allowance is the width of the road it may use, and a ride's is the platform's reach
+     * ({@code station_snap_blocks}) -- neither is something a player should be able to widen into a
+     * field.
      */
     public double maxConnectorDistance() {
         return switch (this) {
-            case WALK -> RoadConfig.walkOffroadBlocks();
+            case WALK -> WALK_CONNECTOR_REACH;
             // A car may not leave its road: the only distance it gets is the road's own half-width,
             // so standing anywhere on the carriageway still starts a drive and standing in the field
             // beside it does not. Not a config value because it is not a preference -- it is how wide

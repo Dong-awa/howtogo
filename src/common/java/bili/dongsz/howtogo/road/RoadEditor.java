@@ -303,8 +303,42 @@ public final class RoadEditor {
         return firstTouchesSecond ? first.toNode() : first.fromNode();
     }
 
-    /** Creates a point of interest and selects it. */
+    /**
+     * How far apart, in blocks vertically, two places put down on the same block may be and still be
+     * the same place.
+     *
+     * <p>A place is created at the height the player's feet were at, which is not the height of the
+     * ground under the cursor, so two presses on one spot -- before and after a step, a jump or a
+     * small fall -- can differ by a couple of blocks. The horizontal position is exact because that
+     * is what the player pointed at; only the height is rounded in this generous a way.
+     */
+    private static final int SAME_PLACE_HEIGHT = 2;
+
+    /**
+     * Creates a point of interest and selects it.
+     *
+     * <p>A second press on the same block selects the place that is already there rather than putting
+     * another one on top of it. Two places at one block are indistinguishable on the map and in the
+     * destination list, and only one of them can be the one a player renames to a station: with two,
+     * the edit lands on one node while the line editor keeps searching the other, which is exactly
+     * the "my place is not on the network however I set it" the duplicate caused. Merging on the way
+     * in means a save can never grow a second place where one already stands.
+     *
+     * <p>The existing place is kept and the press is treated as selecting it, so a double press is a
+     * no-op: no new undo step, no second record in the place-details store, nothing to clean up.
+     */
     public int addPoi(int x, int y, int z) {
+        for (RoadNode existing : network.nodesSnapshot()) {
+            if (existing.type() == RoadNode.Type.POI
+                    && existing.x() == x
+                    && existing.z() == z
+                    && Math.abs(existing.y() - y) <= SAME_PLACE_HEIGHT) {
+                selectedNodeId = existing.id();
+                selectedSegmentId = RoadSegment.NO_SEGMENT;
+                chainNodeId = RoadSegment.NO_NODE;
+                return existing.id();
+            }
+        }
         pushUndo();
         RoadNode node = network.addNode(x, y, z, RoadNode.Type.POI, null);
         selectedNodeId = node.id();

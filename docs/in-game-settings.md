@@ -23,8 +23,9 @@ reading the config file's comments". That leaves five groups:
 | Navigation HUD | Compact HUD vertical offset | `compact_hud_offset_y` | `0` | the same, vertically |
 | Routing and travel | Default travel mode | `default_travel_mode` | `walk` | mode a session starts in |
 | Routing and travel | Walk when chosen mode is slower | `fall_back_to_walking_when_slower` | `true` | foot route as fallback |
+| Routing and travel | Mix walking into public transport | `transit_mixed` | `true` | transit may walk between lines (walks follow the roads); a journey that rides a line is kept even if walking is quicker |
 | Routing and travel | Transit wait per boarding | `transit_wait_seconds` | `60` | average wait used in estimates |
-| Routing and travel | Walk off-road distance | `walk_offroad_blocks` | `32` | how far a walk may leave the roads |
+| Routing and travel | Walk off-road distance | `walk_offroad_blocks` | `32` | how far a walk may cross between two different roads' ends |
 | Routing and travel | Station snap distance | `station_snap_blocks` | `32` | how close counts as at the stop |
 | Map data sources | Read Create train tracks | `create_train_tracks` | `true` | Create's tracks/stations layer |
 | Map data sources | Read MTR stations and lines | `mtr_transit` | `true` | MTR as transit data |
@@ -79,7 +80,7 @@ screen or the game after an edit loses nothing. There is no Apply button.
 | --- | --- |
 | theme, map display mode, compact corner/offsets | next frame |
 | Create / MTR / RoadWeaver read switches | next client tick (the layers are read per tick) |
-| fallback, walk off-road, station snap, transit wait | next route plan or guidance decision |
+| fallback, transit mixed, walk off-road, station snap, transit wait | next route plan or guidance decision |
 | default travel mode | immediately if the player has not switched mode this session; otherwise it is the default next session (the session's choice is not taken away) |
 | browser map auto-start | next world load; turning it off does not stop a server that is already running |
 
@@ -93,7 +94,7 @@ re-reads the latched travel mode after a save.
 
 - The screen is client-side only and is opened over a world (the main screen itself has no title-screen
   entry); nothing it writes is sent to a server.
-- Reset restores the 15 rows above, not the whole config file.
+- Reset restores the 16 rows above, not the whole config file.
 - On Fabric the config JSON is normally loaded at startup, so a hand edit of the file still needs a
   restart; changes made **through this screen** update the in-memory values immediately. RoadWeaver's
   layer is not ticked on the Fabric arm at all yet (a pre-existing gap), so its read switch does
@@ -109,7 +110,7 @@ re-reads the latched travel mode after a save.
 | `client/MainScreen` | the K-key screen; the title-line Settings button opens this screen |
 | `client/SettingsScreen` | the whole editor: grouped rows, controls, scrolling, reset, theme |
 | `client/PanelButton`, `client/HudDraw`, `client/PlaceText`, `client/UiTheme` | the style it reuses |
-| `RoadConfig` (both arms) | 15 typed setters, `save()`, `applyRuntimeChanges()`, range clamps |
+| `RoadConfig` (both arms) | 16 typed setters, `save()`, `applyRuntimeChanges()`, range clamps |
 | `assets/howtogo/lang/en_us.json`, `zh_cn.json` | names, descriptions, group titles, chrome |
 
 ## Verifying it

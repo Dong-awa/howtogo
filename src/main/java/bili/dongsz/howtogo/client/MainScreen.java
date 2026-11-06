@@ -728,7 +728,7 @@ public final class MainScreen extends Screen {
         // uses, so a shape emitted after one would go through a stale consumer.
         List<MapLabel> labels = drawMap(graphics);
         drawText(graphics, labels, mouseX, mouseY);
-        // The details card last and alone: it is an opaque sheet floating over one corner of the map,
+        // The details card last and alone: it is an opaque sheet standing over the map's right edge,
         // so every label the map drew under it has to come first. It opens its own drawing blocks
         // internally, which is also why it cannot be called inside the map's block above.
         drawDetailPanel(graphics, mouseX, mouseY);
@@ -932,12 +932,17 @@ public final class MainScreen extends Screen {
     }
 
     /**
-     * The details card of the selected place, docked in the map's bottom-right corner.
+     * The details card of the selected place, standing down the map's right side.
      *
      * <p>Inside the map and not beside it: the card belongs to the place under it, and the map is
-     * what the player is reading. The height is what the content asks for, clamped to the room the
-     * map has, so a small window shortens the card rather than pushing it over the buttons. Nothing
-     * here writes: a favourite toggle or a delete is reported by the card and routed by this screen.
+     * what the player is reading. It is a column now rather than a bar: the height is the map frame's
+     * own height less {@link #DETAIL_PANEL_MARGIN} at the top and bottom, so the card is a second
+     * frame beside the first, slightly shorter than the map and flush with its right edge -- the
+     * corner strip it used to be was as wide as this and only as tall as its content, which read as a
+     * band laid across the map's foot instead of a panel of its own. The width still is what the
+     * content asks for, clamped to the map, and a window too short for the card leaves the map alone.
+     * Nothing here writes: a favourite toggle or a delete is reported by the card and routed by this
+     * screen.
      */
     private void drawDetailPanel(GuiGraphics graphics, int mouseX, int mouseY) {
         if (selectedPlace == null) {
@@ -953,15 +958,17 @@ public final class MainScreen extends Screen {
         selectedPlace = place;
         PlaceDetails details = PlaceDetailStore.detailsOf(place);
         int width = Math.min(DETAIL_PANEL_WIDTH, mapW - DETAIL_PANEL_MARGIN * 2);
-        int height = Math.min(PlaceDetailPanel.preferredHeight(font, width, details),
-                mapH - DETAIL_PANEL_MARGIN * 2);
+        // The map's height, less the same margin top and bottom: as tall as the frame it stands in
+        // without touching it. The content no longer decides the height -- a place with no
+        // description used to get an 84-pixel card, which is what made the old card a strip.
+        int height = mapH - DETAIL_PANEL_MARGIN * 2;
         if (width <= 0 || height <= 0) {
             // A window too small to hold even a card: the map is the only thing worth drawing, and
             // the card comes back as soon as there is room for it.
             return;
         }
         int x = mapX + mapW - DETAIL_PANEL_MARGIN - width;
-        int y = mapY + mapH - DETAIL_PANEL_MARGIN - height;
+        int y = mapY + DETAIL_PANEL_MARGIN;
         detailPanel.render(graphics, font, x, y, width, height, place, details,
                 PlaceDetailPanel.Options.STANDARD, false, mouseX, mouseY);
     }

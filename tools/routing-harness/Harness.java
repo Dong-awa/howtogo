@@ -37,11 +37,15 @@ public final class Harness {
         scenarioCrossingRoads();
         scenarioCrossingRailsCarryARide();
         scenarioBridgeIsNotAJunction();
+        scenarioHighwayForkIsNotABend();
+        scenarioWalkCrossesGapBetweenRoadEnds();
         scenarioWalkReachesOffNetworkDestinations();
         scenarioJoinSurvivesAHeightDifference();
         scenarioTrackShapedNetworkIsQuick();
         scenarioLargeNetworkIsQuick();
         scenarioTransferBeatsDetour();
+        scenarioMixedTransitWalksBetweenLines();
+        scenarioTransitWalksArePlanned();
         scenarioInterchangeIsOnePlace();
         scenarioWholeRailwayPlanIsQuick();
         scenarioOneWayIsRespected();
@@ -60,6 +64,9 @@ public final class Harness {
         int[] direction = RouteDirectionCheck.run();
         checks += direction[0];
         failures += direction[1];
+        int[] placeMerge = PoiCheck.run();
+        checks += placeMerge[0];
+        failures += placeMerge[1];
         int[] bend = HighwayBendCheck.run();
         checks += bend[0];
         failures += bend[1];
@@ -330,17 +337,20 @@ public final class Harness {
      * the same thing: the trip leaves from the split node beside the player, runs the long road, and
      * takes the connector at the far end.
      *
-     * <p>The stub stands well clear of the long road on purpose. Closer than the join distance it would
-     * be repaired into a junction by the conflation pass, which is the right answer and not the one
-     * being tested here.
+     * <p>The stub stands well clear of the long road on purpose, and one storey above it: a walker
+     * may now step from the end of one surface road across a short gap to the next, which would join
+     * this stub to the long road and make the fallback unnecessary. An elevated fragment is still a
+     * fragment to every mode, so the question this case is about -- which endpoint the fallback
+     * chooses when the nearest road is one it cannot reach -- survives.
      */
     private static void scenarioFallbackPicksItsOwnEndpoints() {
         System.out.println("== fallback picks its own endpoints ==");
         RoadNetwork net = new RoadNetwork();
         // The connected fragment: a road east then away north-east, with a node at its far end.
         addRoad(net, RoadClass.ROAD, 0, 0, 100, 0, 55, 215);
-        // A one block stub beside the destination, belonging to nothing.
-        addRoad(net, RoadClass.ROAD, 40, 200, 41, 200);
+        // A one block stub beside the destination, belonging to nothing and a storey up.
+        RoadSegment stub = road(net, RoadClass.ROAD, 40, 200, 41, 200);
+        stub.setLayer(1);
 
         Route route = RoadRouter.findRoute(net, 10, 0, 40, 200, "stub", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
@@ -505,9 +515,11 @@ public final class Harness {
      * under it rather than a junction. What must not happen is a route that turns from one onto the
      * other at the crossing -- a walker going over the bridge has not found a junction.
      *
-     * <p>Walking is refused as well: the bridge is more than the walking off-road allowance from the
-     * road below it, and a walker may only step off the path as far as that allowance -- the old
-     * straight hop across the whole gap is exactly what the cap now refuses.
+     * <p>Walking is refused as well, and for its own reason: the two roads share no node and their
+     * nearest ends are a hundred and eleven blocks apart, well past the ground a walker may cross
+     * between one road end and the next. The goal is on the upper road, not beside it, so this is a
+     * disconnection rather than an off-road end -- and a walk that claimed it would be inventing a
+     * road that is not there.
      */
     private static void scenarioBridgeIsNotAJunction() {
         System.out.println("== a bridge is not a junction ==");
@@ -517,7 +529,7 @@ public final class Harness {
 
         Route walk = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("a walk is refused too: the bridge is more than the walking allowance away",
+        expect("a walk is refused too: the two roads are a hundred blocks apart",
                 !walk.isPresent());
         Route drive = RoadRouter.findRoute(net, 0, 0, 100, 50, "up on the bridge", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
@@ -527,10 +539,12 @@ public final class Harness {
     /**
      * A destination a long way from any road.
      *
-     * <p>Walking may step off a road, but only as far as its own off-road allowance: a destination
-     * three hundred blocks out in a field is not a step off the path, it is a beeline, and the answer
-     * is that there is no road route from here. A drive is refused for its own reason -- there is no
-     * road out there to drive on -- and the same is true of a ride.
+     * <p>Walking is the mode that can leave the road, and the first and last hop of a walking trip
+     * is always walked: a destination three hundred blocks out in a field is a long walk, not an
+     * unroutable place. The old answer refused it, which left the player standing in the field being
+     * told there was no route from where they already were -- the one answer with nothing to do
+     * next. A drive is refused for its own reason -- there is no road out there to drive on -- and
+     * the navigation offers the walk in its place.
      */
     private static void scenarioWalkReachesOffNetworkDestinations() {
         System.out.println("== a destination off the network ==");
@@ -539,11 +553,119 @@ public final class Harness {
 
         Route walk = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field", TravelMode.WALK,
                 RoutePreferences.DEFAULTS);
-        expect("the walk is refused: the destination is past walking's off-road allowance",
-                !walk.isPresent());
+        expect("the walk reaches a destination far off the network", walk.isPresent());
+        if (walk.isPresent()) {
+            expectNear("ninety blocks along the road, then three hundred across the field",
+                    walk.totalLength(), 390, 5);
+            expectNear("and the field is the last hop", walk.goalConnector(), 300, 2);
+        }
         Route drive = RoadRouter.findRoute(net, 10, 0, 100, 300, "out in the field",
                 TravelMode.DRIVE, RoutePreferences.DEFAULTS);
         expect("and the drive is refused: there is no road out there", !drive.isPresent());
+
+        // Two off-network ends whose nearest road point is the same node: the honest route is the
+        // walk between them, not out to that node and back. The old unlimited-reach answer was the
+        // detour -- five hundred blocks to the road and eight hundred back -- for a three hundred
+        // block walk, and its estimate said the same.
+        RoadNetwork sameNode = new RoadNetwork();
+        addRoad(sameNode, RoadClass.ROAD, 0, 0, 1000, 0);
+        Route between = RoadRouter.findRoute(sameNode, 0, 500, 0, 800, "across the field",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("two off-network ends are walked to each other rather than out to the road and back",
+                between.isPresent());
+        if (between.isPresent()) {
+            expectNear("the three hundred block straight walk", between.totalLength(), 300, 5);
+            expectNear("with no road part in it", between.roadLength(), 0, 1);
+        }
+    }
+
+    /**
+     * A sharp turn at a highway fork is the junction's shape, not a bend in the highway.
+     *
+     * <p>The reported shape: a player's own highway loop, whose fork meets at a hundred and sixteen
+     * degrees. The hundred-degree rule was written for a highway doubling back on itself, but it was
+     * asked of every junction with two highway pieces -- so an ordinary fork was refused and a trip
+     * that only goes through it came back as no route. A junction is a choice, and a choice may be at
+     * any angle; what the rule is about is a highway <em>carrying on</em>, where there is no second
+     * way out of the node. The same angle with no third arm is still a kink and is still refused.
+     */
+    private static void scenarioHighwayForkIsNotABend() {
+        System.out.println("== a highway fork is a junction, not a hairpin ==");
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.HIGHWAY, 0, 0, 200, 0);
+        addRoad(net, RoadClass.HIGHWAY, 200, 0, 400, 0);
+        // A hundred and sixteen degrees off the eastbound approach, which is what a fork is.
+        addRoad(net, RoadClass.HIGHWAY, 200, 0, 100, -200);
+        Route fork = RoadRouter.findRoute(net, 0, 0, 100, -200, "down the fork", TravelMode.DRIVE,
+                RoutePreferences.DEFAULTS);
+        expect("a trip through the fork's sharp arm is planned", fork.isPresent());
+        if (fork.isPresent()) {
+            System.out.println("   " + round(fork.totalLength()) + " blocks");
+            expectNear("200 to the fork and 224 down the arm", fork.totalLength(), 423.6, 5);
+        }
+
+        // The same bend with no third arm: the highway merely carries on, and the limit applies.
+        RoadNetwork kink = new RoadNetwork();
+        addRoad(kink, RoadClass.HIGHWAY, 0, 0, 200, 0);
+        addRoad(kink, RoadClass.HIGHWAY, 200, 0, 100, -200);
+        Route pushed = RoadRouter.findRoute(kink, 0, 0, 100, -200, "round the kink",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("the same bend with no junction at it is still a highway kink and is refused",
+                !pushed.isPresent());
+
+        // A reversal is still a U-turn however many arms the junction has: the wider junction limit
+        // is not no limit. Without the stub this is the two-arm kink above; the stub makes the node a
+        // junction, which must not make a hundred-and-seventy-seven degree reversal a road.
+        RoadNetwork reversal = new RoadNetwork();
+        addRoad(reversal, RoadClass.HIGHWAY, 0, 0, 200, 0);
+        addRoad(reversal, RoadClass.HIGHWAY, 200, 0, 0, -10);
+        addRoad(reversal, RoadClass.ROAD, 200, 0, 200, 100);
+        Route uturn = RoadRouter.findRoute(reversal, 0, 0, 0, -10, "back the way we came",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("a reversal at a highway junction is still a U-turn and is refused",
+                !uturn.isPresent());
+    }
+
+    /**
+     * A walker crosses a short gap between two road ends, and only a short one, and only a walker.
+     *
+     * <p>{@code walk_offroad_blocks} has always been described as the furthest a walker may step
+     * from the end of one road across the ground to the next, but only the three-block coincident
+     * join was implemented: two surface roads seven blocks apart were two fragments to every mode,
+     * and a player standing where they plainly nearly meet was told there was no path. A walker may
+     * cross; a car may not, because a car does not leave its road; and a gap past the allowance is
+     * still two roads.
+     */
+    private static void scenarioWalkCrossesGapBetweenRoadEnds() {
+        System.out.println("== a walker crosses a gap between road ends ==");
+        RoadNetwork net = new RoadNetwork();
+        // A main road with a node at (60, 0), and a side road whose end stands seven blocks from it.
+        addRoad(net, RoadClass.ROAD, -200, 0, 60, 0);
+        addRoad(net, RoadClass.ROAD, 60, 0, 100, 0);
+        addRoad(net, RoadClass.ROAD, 60, 7, 60, 100);
+
+        Route walk = RoadRouter.findRoute(net, -200, 0, 60, 100, "up the side road",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("the walk crosses the seven block gap", walk.isPresent());
+        if (walk.isPresent()) {
+            System.out.println("   " + round(walk.totalLength()) + " blocks, connectors "
+                    + round(walk.startConnector()) + " in, " + round(walk.goalConnector()) + " out");
+            expectNear("260 along the main road, 7 across and 93 up the side road",
+                    walk.totalLength(), 360, 5);
+            expectNear("the destination is the road end itself", walk.goalConnector(), 0, 1);
+        }
+        Route drive = RoadRouter.findRoute(net, -200, 0, 60, 100, "up the side road",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("a drive is refused: a car does not leave its road", !drive.isPresent());
+
+        // The same shape with a gap past walking's allowance: two roads, and no path.
+        RoadNetwork farApart = new RoadNetwork();
+        addRoad(farApart, RoadClass.ROAD, -200, 0, 60, 0);
+        addRoad(farApart, RoadClass.ROAD, 60, 0, 100, 0);
+        addRoad(farApart, RoadClass.ROAD, 60, 40, 60, 100);
+        Route tooFar = RoadRouter.findRoute(farApart, -200, 0, 60, 100, "up the side road",
+                TravelMode.WALK, RoutePreferences.DEFAULTS);
+        expect("a gap past the allowance is still two roads", !tooFar.isPresent());
     }
 
     /**
@@ -715,6 +837,221 @@ public final class Harness {
             expect("and it rides both lines (rides=" + rides + ")", rides >= 2);
             expect("and changes lines once, at the place as one place (changes=" + changes + ")",
                     changes == 1);
+        }
+    }
+
+    /**
+     * Public transport mixes walking and lines: a change of lines may be a walk through the streets.
+     *
+     * <p>An interchange is two stops within twenty-four blocks, and before this the only walking in a
+     * transit journey was at the two ends and at those interchanges. A mixed journey is a different
+     * shape: ride one line, walk along the walking network to where another line calls, ride that.
+     * The walk is planned by the walking router rather than drawn as a straight line, so the checks
+     * read its length back off the journey: the two stops are a hundred blocks apart, but the road
+     * between them bows out to a hundred and forty, and the leg has to be the road's length rather
+     * than the straight one. A gap past the mixed reach is still two lines.
+     */
+    private static void scenarioMixedTransitWalksBetweenLines() {
+        System.out.println("== public transport mixes walking and lines ==");
+
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.RAIL, 0, 0, 300, 0);
+        addRoad(net, RoadClass.RAIL, 400, 0, 700, 0);
+        // The walk between the two lines is not the straight line: it goes out and back around.
+        addRoad(net, RoadClass.ROAD, 300, 0, 350, 100, 400, 0);
+        // A patch of road at each end so the player can board and alight.
+        addRoad(net, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(net, RoadClass.ROAD, 680, 0, 720, 0);
+
+        List<TransitLine> lines = new ArrayList<>();
+        lines.add(line("A", RoadClass.RAIL, stop("A1", 0, 0), stop("A2", 300, 0)));
+        lines.add(line("B", RoadClass.RAIL, stop("B1", 400, 0), stop("B2", 700, 0)));
+
+        Trip trip = TransitPlanner.plan(net, lines, 5, 0, 695, 0, "the other side",
+                RoutePreferences.DEFAULTS);
+        expect("a journey changing from one line to the other on foot is found", trip.isPresent());
+        if (trip.isPresent()) {
+            long rides = trip.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
+            double onFoot = 0;
+            double middle = 0;
+            for (Trip.Leg leg : trip.legs()) {
+                if (leg.mode() == TravelMode.WALK) {
+                    onFoot += leg.route().totalLength();
+                    // The change of lines is the longest walk: the two end hops are five blocks.
+                    middle = Math.max(middle, leg.route().totalLength());
+                }
+            }
+            System.out.println("   " + trip.legs().size() + " legs, " + round(onFoot)
+                    + " blocks walked, longest walk " + round(middle));
+            expect("both lines are ridden (rides=" + rides + ")", rides >= 2);
+            expect("the change of lines is made on foot", middle > 150);
+            expect("and it is the road's length, not the straight hundred blocks", middle > 180);
+            expect("while it is still the walk between those two stops", middle < 300);
+        }
+
+        // The same shape four hundred blocks apart: past the mixed walking reach, so no journey.
+        RoadNetwork apart = new RoadNetwork();
+        addRoad(apart, RoadClass.RAIL, 0, 0, 300, 0);
+        addRoad(apart, RoadClass.RAIL, 700, 0, 1000, 0);
+        addRoad(apart, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(apart, RoadClass.ROAD, 980, 0, 1020, 0);
+        List<TransitLine> farLines = new ArrayList<>();
+        farLines.add(line("FA", RoadClass.RAIL, stop("FA1", 0, 0), stop("FA2", 300, 0)));
+        farLines.add(line("FB", RoadClass.RAIL, stop("FB1", 700, 0), stop("FB2", 1000, 0)));
+        Trip far = TransitPlanner.plan(apart, farLines, 5, 0, 995, 0, "too far apart",
+                RoutePreferences.DEFAULTS);
+        expect("a gap past the mixed walking reach is still two lines", !far.isPresent());
+
+        // Walking navigation between these two stops is a straight connector with a road at one end
+        // and nothing under it: the mixed middle must not be that invented line, so the lines are
+        // not joined however close the stops are.
+        RoadNetwork noWalk = new RoadNetwork();
+        addRoad(noWalk, RoadClass.RAIL, 0, 0, 300, 0);
+        addRoad(noWalk, RoadClass.RAIL, 400, 0, 700, 0);
+        // A patch of road at each end of the journey, so boarding and alighting still work.
+        addRoad(noWalk, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(noWalk, RoadClass.ROAD, 680, 0, 720, 0);
+        // One road whose end is the second line's stop: the nearest the first stop can reach is a
+        // hundred-block connector, so the "walk" between them has no road under it.
+        addRoad(noWalk, RoadClass.ROAD, 400, 0, 400, 100);
+        List<TransitLine> noWalkLines = new ArrayList<>();
+        noWalkLines.add(line("NA", RoadClass.RAIL, stop("NA1", 0, 0), stop("NA2", 300, 0)));
+        noWalkLines.add(line("NB", RoadClass.RAIL, stop("NB1", 400, 0), stop("NB2", 700, 0)));
+        Trip invented = TransitPlanner.plan(noWalk, noWalkLines, 5, 0, 695, 0, "across the field",
+                RoutePreferences.DEFAULTS);
+        expect("a middle join that is only a straight connector is not invented", !invented.isPresent());
+
+        // The budget trap found by the verifier: a dead-end line of stops every twenty blocks out in
+        // open country used to eat the whole mixed walking budget planning walks with no road under
+        // them, before the search reached the one pair of stops the roads do join. The journey must
+        // survive the decoy.
+        RoadNetwork decoy = new RoadNetwork();
+        addRoad(decoy, RoadClass.RAIL, 0, 0, 700, 0);
+        addRoad(decoy, RoadClass.RAIL, 860, 0, 1420, 300);
+        addRoad(decoy, RoadClass.RAIL, 0, 200, 700, 200);
+        // The only walkable road between the two lines, and the patches at each end of the trip.
+        addRoad(decoy, RoadClass.ROAD, 700, 0, 860, 0);
+        addRoad(decoy, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(decoy, RoadClass.ROAD, 1400, 280, 1440, 320);
+        List<TransitLine> decoyLines = new ArrayList<>();
+        List<LineStop> eastStops = new ArrayList<>();
+        for (int i = 0; i <= 35; i++) {
+            eastStops.add(stop("EA" + i, i * 20, 0));
+        }
+        decoyLines.add(line("east", RoadClass.RAIL, eastStops.toArray(new LineStop[0])));
+        decoyLines.add(line("bridge", RoadClass.RAIL, stop("BR1", 860, 0), stop("BR2", 1420, 300)));
+        List<LineStop> decoyStops = new ArrayList<>();
+        for (int i = 0; i <= 35; i++) {
+            decoyStops.add(stop("DD" + i, i * 20, 200));
+        }
+        decoyLines.add(line("decoy", RoadClass.RAIL, decoyStops.toArray(new LineStop[0])));
+        Trip trap = TransitPlanner.plan(decoy, decoyLines, 5, 0, 1425, 300, "past the decoy",
+                RoutePreferences.DEFAULTS);
+        expect("a crowd of nearby stops with no road does not hide the one real mixed link",
+                trap.isPresent());
+        if (trap.isPresent()) {
+            long rides = trap.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
+            expect("and the journey still rides both lines (rides=" + rides + ")", rides >= 2);
+        }
+    }
+
+    /**
+     * The walks inside a public transport journey are planned walking routes, and the journey is a
+     * ride even when walking it would be quicker.
+     *
+     * <p>Three failures this pins, all reported from play as one: the walk to the first stop, the
+     * change between lines and the walk to the destination were drawn as straight lines; and the
+     * journey could come back as no journey at all when a stop near the destination made walking to
+     * it cheaper than riding anywhere.
+     */
+    private static void scenarioTransitWalksArePlanned() {
+        System.out.println("== a journey rides a line, and its walks are walking routes ==");
+
+        // Walking to the stop beside the destination and on from it is cheaper than any ride, so the
+        // old search returned that path, rejected it for having no ride, and answered no journey.
+        // The ride that does exist is what public transport mode must offer.
+        RoadNetwork cheapWalk = new RoadNetwork();
+        addRoad(cheapWalk, RoadClass.ROAD, 0, 0, 50, 0, 50, 100, 0, 100);
+        addRoad(cheapWalk, RoadClass.ROAD, 100, 0, 100, 100);
+        addRoad(cheapWalk, RoadClass.RAIL, 0, 100, 100, 100);
+        List<TransitLine> cheapLines = new ArrayList<>();
+        cheapLines.add(line("CH", RoadClass.RAIL, stop("CHA", 0, 100), stop("CHB", 100, 100)));
+        Trip rides = TransitPlanner.plan(cheapWalk, cheapLines, 0, 0, 100, 0, "the near stop",
+                RoutePreferences.DEFAULTS);
+        expect("a journey over a line is found even when walking the whole way would be cheaper",
+                rides.isPresent());
+        if (rides.isPresent()) {
+            long ridesTaken = rides.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
+            System.out.println("   " + rides.legs().size() + " legs, rides=" + ridesTaken);
+            expect("and it rides at least one line (rides=" + ridesTaken + ")", ridesTaken >= 1);
+        }
+
+        // The walk to the first stop is three times the straight line: the road may be refused no
+        // longer, because the walk a player would make is that road and not the line over the fields.
+        RoadNetwork detour = new RoadNetwork();
+        addRoad(detour, RoadClass.ROAD, 0, 0, 100, 0, 100, 100, 0, 100);
+        addRoad(detour, RoadClass.ROAD, 1000, 100, 1000, 0);
+        addRoad(detour, RoadClass.RAIL, 0, 100, 1000, 100);
+        List<TransitLine> detourLines = new ArrayList<>();
+        detourLines.add(line("DET", RoadClass.RAIL, stop("D1", 0, 100), stop("D2", 1000, 100)));
+        Trip boarded = TransitPlanner.plan(detour, detourLines, 0, 0, 1000, 0, "round the road",
+                RoutePreferences.DEFAULTS);
+        expect("the walk to the first stop is found", boarded.isPresent());
+        if (boarded.isPresent() && !boarded.legs().isEmpty()) {
+            Trip.Leg first = boarded.legs().get(0);
+            System.out.println("   boarding walk " + round(first.route().totalLength()) + " blocks, "
+                    + first.route().points().size() + " points");
+            expect("it is the road's three hundred blocks, not the straight hundred",
+                    first.mode() == TravelMode.WALK && Math.abs(first.route().totalLength() - 300) < 1);
+            expect("and it is drawn as the road, not a straight hop", first.route().points().size() >= 4);
+        }
+
+        // A winding road is one segment, and its two ends are only thirty blocks apart. The walking
+        // gap pass used to join a road's own ends with a straight chord, so the road's curve -- and
+        // every walk along it -- came out as a line across the inside of the bend.
+        RoadNetwork curve = new RoadNetwork();
+        addRoad(curve, RoadClass.ROAD, 0, 0, 0, 20, 30, 20, 30, 0);
+        Route along = RoadRouter.findRoute(curve, 0, 0, 30, 0, "round the bend", TravelMode.WALK,
+                RoutePreferences.DEFAULTS);
+        expect("a walk from one end of a winding road to the other is found", along.isPresent());
+        if (along.isPresent()) {
+            System.out.println("   along the bend " + round(along.totalLength()) + " blocks, "
+                    + along.points().size() + " points");
+            expect("it follows the road's seventy blocks, not the thirty-block chord",
+                    Math.abs(along.totalLength() - 70) < 1);
+            expect("and it is the road, not a straight line", along.points().size() >= 4);
+        }
+
+        // Two lines meeting across a street: the change is a walk along the road between the two
+        // platforms, not the straight line over whatever is between them.
+        RoadNetwork interchange = new RoadNetwork();
+        addRoad(interchange, RoadClass.RAIL, 0, 0, 0, 1000);
+        addRoad(interchange, RoadClass.RAIL, 20, 1000, 20, 2000);
+        addRoad(interchange, RoadClass.ROAD, 0, 1000, 0, 1030, 20, 1030, 20, 1000);
+        List<TransitLine> interchangeLines = new ArrayList<>();
+        interchangeLines.add(line("I1", RoadClass.RAIL, stop("IA", 0, 0), stop("IX", 0, 1000)));
+        interchangeLines.add(line("I2", RoadClass.RAIL, stop("IX2", 20, 1000), stop("IB", 20, 2000)));
+        Trip changed = TransitPlanner.plan(interchange, interchangeLines, 0, 0, 20, 2000,
+                "the other line", RoutePreferences.DEFAULTS);
+        expect("a journey changing lines is found", changed.isPresent());
+        if (changed.isPresent()) {
+            long ridesTaken = changed.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
+            expect("and it rides both lines (rides=" + ridesTaken + ")", ridesTaken >= 2);
+            Trip.Leg middle = null;
+            for (Trip.Leg leg : changed.legs()) {
+                if (leg.mode() == TravelMode.WALK && leg.route().totalLength() > 10) {
+                    middle = leg;
+                }
+            }
+            if (middle == null) {
+                expect("the change of lines is a walk", false);
+            } else {
+                System.out.println("   interchange walk " + round(middle.route().totalLength())
+                        + " blocks, " + middle.route().points().size() + " points");
+                expect("the change of lines follows the road's eighty blocks, not the straight twenty",
+                        Math.abs(middle.route().totalLength() - 80) < 1);
+                expect("and it is drawn as the road", middle.route().points().size() >= 4);
+            }
         }
     }
 

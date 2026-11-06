@@ -48,13 +48,21 @@ public final class RoutePreferenceCheck {
         System.out.println("== the routing preference steers the route and nothing else ==");
 
         // Two ways between the same two places: a road straight along z=0, and a highway bowing out
-        // to z=30 and back. The highway is the longer of the two, so a router with no taste takes the
-        // road -- which is what makes the switch's effect visible.
-        RoadNetwork both = new RoadNetwork();
-        addRoad(both, RoadClass.ROAD, 0, 0, 300, 0);
-        addRoad(both, RoadClass.ROAD, 300, 0, 600, 0);
-        addRoad(both, RoadClass.HIGHWAY, 0, 0, 300, 30);
-        addRoad(both, RoadClass.HIGHWAY, 300, 30, 600, 0);
+        // to the given height and back. The highway is the longer of the two, so a router with no
+        // taste takes the road under "shortest"; the bow is chosen per metric so that "prefer major
+        // roads" has room to move the route in each of them without the highway winning on pace.
+        //
+        // The paces matter now that a highway is quicker to drive than a road: the two metrics put
+        // the flip at different bow lengths, so one network cannot hold both cases.
+        //  * fastest: the direct road wins with the switch off while the highway is up to a third
+        //    longer (12 against 9 blocks a second), and loses once the road's 1.25 weight is applied
+        //    (which reaches a sixth past that). A 1.5 ratio sits inside both.
+        //  * shortest: only the 1.25 weight is in play, so the highway must be under a quarter longer
+        //    for the switch to reach it. 1.1 does.
+        int fastestBow = 335;
+        int shortestBow = 138;
+        RoadNetwork fastest = bowNetwork(fastestBow);
+        RoadNetwork shortest = bowNetwork(shortestBow);
 
         // The same journey with no highway to prefer, so the switch has nothing to choose between and
         // must leave the route exactly where it was.
@@ -63,6 +71,7 @@ public final class RoutePreferenceCheck {
 
         for (RoutePreference metric : RoutePreference.values()) {
             String name = metric.id();
+            RoadNetwork both = metric == RoutePreference.FASTEST_TIME ? fastest : shortest;
             Route plain = plan(both, metric, false);
             Route preferred = plan(both, metric, true);
 
@@ -97,6 +106,31 @@ public final class RoutePreferenceCheck {
                     preferred.isPresent() ? Math.round(preferred.estimatedSeconds()) + " against "
                             + Math.round(geometrySeconds(preferred)) : "no route");
         }
+
+        // -----------------------------------------------------------------------------------------
+        // The reported bug: a highway a little longer than the mountain road it beats, recommended
+        // as the mountain road. "Fastest time" used to weigh both driving classes at 9 blocks a
+        // second, so the two routes cost the same per block and the shorter line always won -- the
+        // highway could never be the answer however quick it was.
+        // -----------------------------------------------------------------------------------------
+        RoadNetwork close = bowNetwork(199); // 720 blocks of highway against 600 of road
+        Route closeFastest = plan(close, RoutePreference.FASTEST_TIME, false);
+        Route closeShortest = plan(close, RoutePreference.SHORTEST_DISTANCE, false);
+        record("fastest time takes the longer highway when it is quicker",
+                closeFastest.isPresent() && highwayBlocks(close, closeFastest) > 100,
+                closeFastest.isPresent() ? Math.round(highwayBlocks(close, closeFastest))
+                        + " blocks over a highway" : "no route");
+        record("shortest distance still takes the shorter road",
+                closeShortest.isPresent() && highwayBlocks(close, closeShortest) < 1,
+                closeShortest.isPresent() ? Math.round(highwayBlocks(close, closeShortest))
+                        + " blocks over a highway" : "no route");
+        record("and the highway route really is the quicker of the two",
+                closeFastest.isPresent() && closeShortest.isPresent()
+                        && closeFastest.estimatedSeconds() < closeShortest.estimatedSeconds(),
+                closeFastest.isPresent() && closeShortest.isPresent()
+                        ? Math.round(closeFastest.estimatedSeconds()) + "s against "
+                                + Math.round(closeShortest.estimatedSeconds()) + "s"
+                        : "one of them is missing");
 
         Route onlyPlain = plan(roadOnly, RoutePreference.FASTEST_TIME, false);
         Route onlyPreferred = plan(roadOnly, RoutePreference.FASTEST_TIME, true);
@@ -177,6 +211,16 @@ public final class RoutePreferenceCheck {
             seconds += length / Math.max(0.05, TravelMode.WALK.speedOn(kind));
         }
         return seconds;
+    }
+
+    /** The direct road and a highway bowing out to {@code bow} blocks and back. */
+    private static RoadNetwork bowNetwork(int bow) {
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.ROAD, 0, 0, 300, 0);
+        addRoad(net, RoadClass.ROAD, 300, 0, 600, 0);
+        addRoad(net, RoadClass.HIGHWAY, 0, 0, 300, bow);
+        addRoad(net, RoadClass.HIGHWAY, 300, bow, 600, 0);
+        return net;
     }
 
     private static Route plan(RoadNetwork net, RoutePreference metric, boolean preferMajor) {

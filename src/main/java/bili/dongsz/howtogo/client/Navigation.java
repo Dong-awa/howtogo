@@ -1956,7 +1956,9 @@ public final class Navigation {
      * it explains itself in the HUD when it fires; a preview is the opposite situation -- the
      * player is choosing between modes and needs to see what the mode they picked would actually
      * do. Previewing the walk instead would make every mode look identical and the choice
-     * meaningless.
+     * meaningless. A public transport journey is shown as the journey even when a walk would be
+     * quicker: the mode is what was asked for, and the mix of riding and walking inside the journey
+     * is the mode's own business.
      *
      * @param destination where the prospective trip would end
      * @param planMode    the mode to plan for, or null to use the mode in force
@@ -1989,6 +1991,11 @@ public final class Navigation {
             // the HUD then guides along. Without it, a public transport preview with no line journey
             // reported "no usable road connection" while pressing the button produced a walking route:
             // the picker calling the journey impossible and the navigation doing it anyway.
+            //
+            // Only when there is no journey at all: a public transport journey that exists is never
+            // previewed as a walk, however much quicker that walk would be. The mode is a promise
+            // about how to travel, and a line that can carry any part of the trip is what was asked
+            // for -- the walk is the fallback for a trip no line can carry.
             planned = RoadRouter.findRoute(RailTrackStore.forRouting(TravelMode.WALK, policy), x, z,
                     destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
             planned = timedForRequested(planned, active);

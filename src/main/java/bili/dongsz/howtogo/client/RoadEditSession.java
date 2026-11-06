@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.place.PlaceDetails;
 import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.PlaceKind;
@@ -721,14 +722,43 @@ public final class RoadEditSession {
         return found;
     }
 
-    /** Drops a named place at the cursor. */
+    /**
+     * Drops a named place at the cursor.
+     *
+     * <p>The place goes exactly where the cursor snapped, so a press over a road is a press on the
+     * road: the snapped point is on the road's polyline, which is what the station rule (distance to
+     * the road) and any later navigation to the place both read. It deliberately does not split the
+     * road underneath: a place is not a junction, nothing routes through it, and cutting its piece of
+     * road in two would be an edit the player did not ask for -- one that would then need its own
+     * undo after the place was taken back. The place itself is still the one node the router anchors
+     * to when the trip's goal is the place.
+     *
+     * <p>Snapping to an existing node or a road keeps that road's height, so a place dropped on an
+     * elevated road sits at the road rather than at the player's feet. A free press in a field keeps
+     * the player's height, which is what a place on open ground has always meant.
+     */
     public static void placePoi() {
         if (!mouseValid) {
             return;
         }
-        int x = (int) Math.round(lastSnap.x());
-        int z = (int) Math.round(lastSnap.z());
-        int nodeId = editor().addPoi(x, groundHeight(), z);
+        RoadEditor ed = editor();
+        RoadSnapper.Result snap = lastSnap;
+        int x = (int) Math.round(snap.x());
+        int z = (int) Math.round(snap.z());
+        int y = groundHeight();
+        if (snap.kind() == RoadSnapper.Kind.NODE) {
+            RoadNode node = RoadStore.get().node(snap.nodeId());
+            if (node != null) {
+                y = node.y();
+            }
+        } else if (snap.kind() == RoadSnapper.Kind.SEGMENT
+                && snap.segmentId() != RoadSegment.NO_SEGMENT) {
+            RoadSegment segment = RoadStore.get().segment(snap.segmentId());
+            if (segment != null) {
+                y = segment.y();
+            }
+        }
+        int nodeId = ed.addPoi(x, y, z);
         RoadStore.markDirty();
         // The same prompt an existing place is renamed through, so a place made now and one renamed
         // later cannot end up with different titles or different storage.
@@ -778,8 +808,22 @@ public final class RoadEditSession {
         };
     }
 
-    /** How far beside a railway a station may stand and still count as being on it, in blocks. */
-    private static final double STATION_TRACK_TOLERANCE = 8.0;
+    /**
+     * How far beside a road or a railway a station may stand and still count as being on it, in
+     * blocks.
+     *
+     * <p>Read from {@code station_snap_blocks}, the same number the transit planner uses for the
+     * platform's reach: a station is a place and not a point, and a passenger reaching it from the
+     * track is what makes it a station. A place farther away could be marked here but never boarded
+     * by a journey -- the line would keep a stop it cannot be served at -- so the editor asks the
+     * planner's own number rather than one of its own. It used to be a fixed eight, which refused a
+     * place the player had put down on a station platform a dozen blocks from the track's centreline;
+     * and a place that cannot be marked as a station never appears in the line editor at all, so the
+     * line had no stops to be given.
+     */
+    private static double stationTrackTolerance() {
+        return RoadConfig.stationSnapBlocks();
+    }
 
     /**
      * Whether a station may stand at this place.
@@ -806,12 +850,12 @@ public final class RoadEditSession {
         // the node is free-standing, so the degree test says zero, and the player is told their station
         // is not on a road while looking straight at one.
         for (RoadSegment segment : RoadStore.get().segments()) {
-            if (distanceToSegment(segment, node.x(), node.z()) <= STATION_TRACK_TOLERANCE) {
+            if (distanceToSegment(segment, node.x(), node.z()) <= stationTrackTolerance()) {
                 return true;
             }
         }
         for (RoadSegment segment : RailTrackStore.network().segments()) {
-            if (distanceToSegment(segment, node.x(), node.z()) <= STATION_TRACK_TOLERANCE) {
+            if (distanceToSegment(segment, node.x(), node.z()) <= stationTrackTolerance()) {
                 return true;
             }
         }

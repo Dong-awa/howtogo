@@ -887,33 +887,19 @@ public final class Route {
         }
 
         /**
-         * Records one road piece at the pace it will actually be travelled, penalties included.
+         * Records one road piece at the pace it will actually be travelled, and on the class of road
+         * it was planned over.
          *
-         * <p>The pace rather than a class, because the pace is what the router costed the piece at;
-         * storing the class would let the estimate and the choice drift apart.
-         *
-         * <p>The class is read back out of the pace here rather than handed in beside it, so that the
-         * router goes on handing over the one number it decides and nothing else. The reading is
-         * exact: a leg's pace is this mode's own table entry for the class it was planned on, so the
-         * pace names the class it came from -- and where two classes of one mode share a pace (a
-         * walker's highway and road, a train's rail and water), the mode travels the two identically
-         * in every mode, so which of them is named can change no time this route is ever given.
+         * <p>The class is handed in rather than read back out of the pace, which is what this used to
+         * do. That reading assumed two classes of one mode never share a pace unless the mode travels
+         * them identically -- true of walking's highway and road, and true of driving's two classes
+         * only while they were both 9 blocks a second. Giving a highway its own pace made the reading
+         * ambiguous in exactly the case it was relied on: a walking piece on an ordinary road was
+         * labelled a highway, and re-timing that line as a drive then timed it at the highway's pace.
+         * The router knows the class it just costed; it says so.
          */
-        void addRoadLeg(double length, double blocksPerSecond) {
-            legs.add(new Leg(length, blocksPerSecond, classForPace(blocksPerSecond)));
-        }
-
-        /** The class of road a pace was looked up from, or null when the table has no such pace. */
-        private RoadClass classForPace(double blocksPerSecond) {
-            if (!(blocksPerSecond > 0)) {
-                return null;
-            }
-            for (RoadClass roadClass : RoadClass.values()) {
-                if (travelMode.speedOn(roadClass) == blocksPerSecond) {
-                    return roadClass;
-                }
-            }
-            return null;
+        void addRoadLeg(double length, double blocksPerSecond, RoadClass roadClass) {
+            legs.add(new Leg(length, blocksPerSecond, roadClass));
         }
 
         void setStartConnector(double value) {

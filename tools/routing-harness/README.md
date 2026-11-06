@@ -42,11 +42,16 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | Standing exactly on a bend | No route: the anchor was read as the far end of the road, the connector was past the mode's distance cap, and the whole anchored attempt was discarded |
 | A destination that is itself a stop on the line | No journey: the walk from the stop to the destination is zero blocks long, a route needs two points to be a route, so the stop could not be alighted at and the search found nothing |
 | A goal whose nearest road is a fragment nothing routes to | Nothing, unless the node fallback happened to pick the same endpoints -- it now does so in one multi-source search instead of up to 144 separate ones |
-| A T junction drawn a block short | A route, off the road, because a near miss used to be cut into a junction. It is not one: a drive is refused, a walk crosses the field to the side road instead of turning onto it, and the same shape with a node at the meeting point drives through |
+| A T junction drawn a block short | A route, off the road, because a near miss used to be cut into a junction. It is not one: a drive is refused, and a walk is refused too unless the side road's own end is near enough for a walker to step off the main road and cross to it -- the two roads share no node, so nothing joins them |
 | Two roads drawn across each other | A route through the crossing, because a crossing used to be cut into a junction. It is not one either -- a crossing and a bridge are the same drawing on a map with no height -- so a drive is refused and the walk is the straight line across the field |
 | A highway and a road meeting at a ramp past the hundred-degree limit | No route at all: the highway's no-U-turn limit was asked of every junction with a highway on either side, so getting on or off a highway down a slip road that doubles back under it -- ordinary road design -- was refused along with the hairpin the rule is for. The limit now applies only where two highways meet |
+| A highway fork whose arm leaves at a hundred and sixteen degrees, and the same angle where the highway merely carries on | No route through the fork: the bend limit was asked of every node with two highway pieces, so an ordinary fork was refused and a trip that only goes through it came back as "no route". A junction is a choice and may be at any angle; the limit belongs to a highway carrying on through a node with no other way out, and that same angle there is still a kink and is still refused |
+| A highway a little longer than the road it competes with | The mountain road, under "fastest time": driving's two classes both weighed nine blocks a second, so the two routes cost the same per block and the shorter line always won. A highway is a quarter quicker now, and a highway up to a third longer wins on time while "shortest distance" still follows the shorter road |
+| Two surface road ends seven blocks apart | Two fragments to every mode, and no route for a walker standing where the roads plainly nearly meet: only the three-block coincident join was implemented, although `walk_offroad_blocks` has always been described as the furthest a walker may cross between road ends. A walker crosses; a car does not leave its road; a gap past the allowance is still two roads |
+| A start and a destination a little off the road | No route: walking's first and last hop was capped at `walk_offroad_blocks`, so standing forty blocks from any road answered "no path" from where the player already was. Those two hops are walked whatever the setting says; the setting now bounds only the middle of a trip |
+| A place put down twice on one block | Two place nodes at one square, one of which the line editor never offers and the other of which is the one the player names as a station. The second press selects the first place and is not an edit; a place dropped on a road sits on the road's own polyline at the snapped point, which is what the station distance and a later routing to it read |
 | Two railways crossing, with a line calling either side | A ride, for the same reason. The honest answer is no journey; the same rails with a node at the crossing do carry the ride |
-| A road crossing another at a different height | Must stay two roads: a walk over the bridge is a straight hop across the field, not a turn at the crossing, and a drive is refused outright |
+| A road crossing another at a different height | Must stay two roads: a drive is refused, and a walk is refused too -- the two are separate fragments with no node between them, not two ends a walker can cross to |
 | Two road ends a block apart on one storey, and the same ends with one of them a storey up | The first is one road a car drives along and the second is two roads, which is what a storey is for -- and two roads sharing a node are joined whatever storey either is on |
 | A destination far from any road | Walked to -- 90 blocks of road and then 300 across the field -- while a drive is refused, because there is no road out there. Walking used to be capped at 64 blocks from the road, so this answered "no route" to a place plainly in sight |
 | A drive to a destination the drivable network does not reach | The walker's line, whole, timed at walking pace -- the road the car would drive included -- so a destination with a short walk at the end read as a much longer trip than it is. The line is the walker's still; only its time is the car's up to the last road and the walker's from there |
@@ -54,7 +59,10 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | Two road ends a block apart but eight blocks apart vertically | Must still join: a hand-drawn network's heights are whatever the ground was under each click, and refusing those joins disconnected networks that had been routing for as long as they existed. This is a repair taking a route away, which is the one thing it must never do |
 | A railway read out of the world: eight parallel polylines, a vertex every block | Was quadratic -- every edge of such a polyline shares cells with thousands of its own neighbours and each was a candidate pair to build and reject. A plan over 4800 such edges is now well under a fifth of a second |
 | A 3120 segment network | Guards the cost of all of the above: the network is copied and repaired once per plan, on the client thread, so a plan must stay well under a fifth of a second |
-| One line that goes 2500 blocks around against two lines that change at a 20 block walk | The 2500 block single-line journey: transfers were searched in a second pass that only ran when the first found nothing |
+| A single line going 2500 blocks around, against two lines that change at a 20 block walk | The single-line long way round: a journey that could change lines came second to one that did not, because the transfer search only ran when the first search found nothing |
+| A change of lines a hundred blocks apart, with a road that bows out to a hundred and forty between them | No journey: a change of lines was only a walk where two stops stood within the 24 block interchange radius. Public transport now mixes walking and lines, and the middle leg is planned by the walking router, so the checks read the leg back off the journey and require the road's length rather than the straight hundred blocks. A gap past the mixed reach is still two lines |
+| A stop near the destination that makes walking the whole way cheaper than riding | No journey at all: the search found the cheapest path, which was walk to that stop and walk on, refused it for riding nothing, and answered "no journey" -- so public transport mode fell back to a walk. The search now runs over two states per stop, before and after the first ride, and only the second may finish, so the best journey that rides a line is what comes out |
+| A winding road drawn as one segment, and the three walks inside a journey | Every walk along that road came out as a straight line over the inside of the bend: the walking gap pass joined the road's own two ends with a straight chord, and a chord is shorter than the curve so it always won. A road's own ends are left to the road. The walks to the first stop, between lines and to the destination are planned walking routes now, including the walk between two lines' platforms; only a walk the router cannot find at all is a straight connector |
 | A journey whose last leg is a 200 block off-road hop | Flattened route time and length short by that hop, because only the first part's start connector and the last part's goal connector were carried into the joined route |
 | A turn at a fork, and the countdown read off the route at three points along it | Guards the arithmetic behind "in 200 metres" and "now": a turn's distance is measured from the route's own start and the countdown is that less what has been travelled, so a mistake shows as the wrong number rather than as a missing route |
 | A trip with three turns and a bend after the second, driven to the destination | The turn already made shown again as the next instruction, at zero distance, and the turn actually being approached skipped in the same step -- the junction was remembered in one slot the walk over the route overwrote, because that walk restarts at the route's first junction every tick. 3932 of the 6856 guided trips over a saved network did it |
@@ -129,6 +137,18 @@ other way round. The check pins both halves: an on-ramp and an off-ramp at a hun
 must plan, and the same shape between two highway pieces is still the hairpin the rule is for. The
 sweep counts a bend only where both of its steps are on a highway, which is the scope of the rule.
 
+And it is a rule about a highway **carrying on**, not about every fork: at a node with a third way out,
+the player drew a junction, and turning sharply onto another highway there is what the junction is for.
+Measured on a player's own highway loop, holding every junction to the limit refused ordinary forks --
+one arm leaving at a hundred and one degrees, a loop's two arms meeting at a hundred and twenty-eight --
+and a trip that only went through the junction came back as no route while the trip to the junction and
+the trip from it both planned. `Harness` pins that shape as a fork that plans, the same angle with no
+third arm as a kink that is still refused, and a hundred-and-seventy-seven degree reversal at a junction
+as a U-turn that is still refused: a junction gets a wider limit (a hundred and fifty), not no limit.
+`HighwayBendCheck`'s hairpins are all continuations, so they still fail. The pass that decides this is
+`RoadRouter.highwayContinuations`, and it counts the arms this mode could actually take: a footpath
+hanging off a highway is not a way out for a driver.
+
 `RoutePreferenceCheck.java` covers the routing taste, which has to steer the route and nothing else.
 Two things were wrong with it. "Prefer major roads" was one penalty laid on footpaths -- a class a car
 may not travel -- so driving's two classes were left at the same pace and the switch changed no route
@@ -141,6 +161,32 @@ used to be folded into the pace, so the search minimised a weighted speed while 
 real one, and they agreed only because the weighted value happened never to reach the route's legs.
 The check works the estimate out again from the drawn line, for a policy off and on and in both
 metrics, so a return of that mistake is caught rather than believed.
+
+The two metrics now put the switch's flip at different bow lengths, so each gets its own network: with
+a highway a quarter quicker to drive, "fastest" already takes the highway up to a third longer than a
+road even with the switch off, while "shortest" takes the road until the 1.25 weight is applied. A
+separate, closer bow pins the reported bug: a highway 1.2 times the road's length must win "fastest
+time" (it is quicker) and lose "shortest distance" (it is longer) -- and the two estimates must say so.
+The leg's class travels with the route, so re-timing a walking line as a drive cannot mistake an
+ordinary road for a highway now that their paces differ.
+
+The two ends of a walking trip are a different question from the middle of one, and this is where the
+old cap was wrong: both hops are walked whatever `walk_offroad_blocks` says, because a player standing
+in a field is a walk from the road rather than an unroutable place. The setting now bounds only a
+walker's crossing between two road ends that do not quite meet -- `Harness` pins a seven-block surface
+gap crossed on foot and the same shape forty blocks apart still refused, with the car refused in both.
+The fallback's own endpoint candidates are bounded by that same distance through
+`RoadRouter.endpointReach`, so an unlimited first hop cannot make two fragments one through a
+connector-only "route". What can happen with two ends off the network whose nearest road point is the
+same node is that out-to-the-road-and-back line; when no road is used at all and the straight line is
+shorter, `RoadRouter.preferDirectWalk` answers with the walk between the two places instead, which is
+also what the harness pins.
+
+`PoiCheck.java` covers the place merge: a second press on one block selects the place already there,
+the id, name and kind survive it, a merged press is not an extra undo step, and a place put down on a
+road vertex leaves the vertex alone. It also pins that a height difference of a couple of blocks is the
+same place -- a place is created at the player's feet, not the ground under the cursor -- and that
+another floor above is its own place.
 
 `TurnCursorCheck.java` covers the other half of the guidance: **which** junction the readout is on.
 `TurnCursor` is that state machine on its own, with no Minecraft in it, so it can be driven here.
@@ -256,6 +302,29 @@ walking legs before it are long, the alighting is that plus the ride, the stage 
 board, alight or walking accordingly, and the flattened route is the same length as the legs put
 together. An off-by-one-leg mistake here is invisible until it is heard at the wrong station, which
 is why the numbers are held rather than the sentences.
+
+Public transport can also *mix* walking and lines (`transit_mixed`, on by default, in the client
+config and the settings screen). An interchange is a short walk between two platforms and was the only
+walking inside a journey besides its two ends; a mixed journey may ride one line, walk through the
+streets to where another calls, and ride that. The middle leg is planned by the walking router, never
+drawn as a straight line: `Harness`'s `scenarioMixedTransitWalksBetweenLines` puts two lines a hundred
+blocks apart with a road that bows out to a hundred and forty between them, and reads the walked leg
+back off the journey -- it has to be the road's length, not the straight one -- pins that a gap past
+the mixed reach is still two lines, and pins that a walk which would be nothing but a straight
+connector is not used as the middle either. Mixing does not turn the mode into walking: a journey that
+rides a line is the answer even when walking the whole way would be quicker, and a whole walk is only
+the fallback when no line can carry the trip -- the harness's journeys all assert a ride. The walk
+plans are budgeted, and the budget is reported once in the log when it runs out, for the same reason
+rides are: a pathological network must not hang the client.
+
+The walks on the other three places -- to the first stop, between two lines' platforms, and from the
+last stop to the destination -- are planned walking routes too, which is what
+`scenarioTransitWalksArePlanned` pins: a road route three times the straight line is the boarding
+walk, a walk from one end of a winding road to the other follows the curve rather than the chord its
+own ends used to be joined by, and the change between two lines follows the street between their
+platforms. The neighbouring checks also require the journey to ride at least one line even when every
+walk in the candidate is cheaper: the search runs over two states per stop, one before the first ride
+and one after it, and only the second may finish a journey.
 
 `TrackRunsCheck.java` covers how a line's track becomes the polylines the map draws, which is the one
 place a network of pieces can still come out as a straight line: a track known in several places is

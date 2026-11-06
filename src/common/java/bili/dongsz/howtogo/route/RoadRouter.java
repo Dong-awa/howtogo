@@ -131,6 +131,15 @@ public final class RoadRouter {
         private int graphDirections = Integer.MIN_VALUE;
         /** @see #sourceLayers -- the graph's version of the storeys, for the same reason. */
         private int graphLayers = Integer.MIN_VALUE;
+        /**
+         * The walker's gap reach the graph was built with.
+         *
+         * <p>The coincident pass makes walking-only links up to {@code walk_offroad_blocks} long, so
+         * the graph is a reading of that setting as well as of the geometry -- and the setting can be
+         * changed in the settings screen without touching the network. Not in the revision because a
+         * config value is not an edit: this is the fourth thing the version is made of.
+         */
+        private double graphWalkGapReach = Double.NaN;
 
         public Workspace(RoadNetwork source) {
             this.source = source;
@@ -202,13 +211,15 @@ public final class RoadRouter {
             int version = network.segmentCount();
             int directions = RoadSegment.directionChanges();
             int layers = RoadSegment.layerChanges();
+            double walkGapReach = walkGapReach();
             if (graph == null || graphRevision != version || graphDirections != directions
-                    || graphLayers != layers
+                    || graphLayers != layers || graphWalkGapReach != walkGapReach
                     || graphMode != mode || !graphPreferences.equals(preferences)) {
                 graph = buildGraph(network, mode, preferences);
                 graphRevision = version;
                 graphDirections = directions;
                 graphLayers = layers;
+                graphWalkGapReach = walkGapReach;
                 graphMode = mode;
                 graphPreferences = preferences;
             }
@@ -455,6 +466,24 @@ public final class RoadRouter {
     }
 
     /**
+     * How far from a place the nearest node may be for it to be an endpoint of a fallback trip, in
+     * blocks.
+     *
+     * <p>Not {@link TravelMode#maxConnectorDistance()} for walking, which is a practical infinity:
+     * that number says how far a walker will walk to reach the road at the start or the end of a
+     * trip, and the anchored route already uses it. This one is the reach of a <em>candidate</em>
+     * endpoint, and a candidate on the far side of a gap is not an endpoint of this trip at all --
+     * it is the beeline across the map the off-road allowance exists to refuse. Keeping it at the
+     * walker's own off-road distance is what keeps two fragments two fragments while still letting a
+     * walker begin and end a mile from any road.
+     */
+    private static double endpointReach(TravelMode mode) {
+        return mode == TravelMode.WALK
+                ? Math.max(COINCIDENT_DISTANCE, walkGapReach())
+                : mode.maxConnectorDistance();
+    }
+
+    /**
      * The nodes one place could be travelling from or to: the node it was just anchored as, and every
      * routable node within the mode's own connector reach of it.
      *
@@ -471,7 +500,7 @@ public final class RoadRouter {
             nodes.add(anchor);
         }
         nodes.addAll(nearestNodesWithin(network, graph, x, z, START_CANDIDATES,
-                mode.maxConnectorDistance()));
+                endpointReach(mode)));
         return nodes;
     }
 
@@ -499,13 +528,18 @@ public final class RoadRouter {
     private static Route plan(Workspace workspace, double startX, double startZ, double goalX,
                               double goalZ, String destinationName, TravelMode mode,
                               RoutePreferences preferences) {
+        // Worked out once for both attempts. It is a reading of the saved network the two attempts
+        // share, not of the workspace's copy: splitting a road at an anchor adds a node of its own,
+        // and that node is an end of this trip rather than a junction the route turns at.
+        Set<Integer> continuations =
+                highwayContinuations(workspace.routingNetwork(), mode, preferences);
         Route anchored = findAnchoredRoute(workspace, startX, startZ, goalX, goalZ, destinationName,
-                mode, preferences);
+                mode, preferences, continuations);
         if (anchored != null) {
             return anchored;
         }
         return findNodeRoute(workspace, startX, startZ, goalX, goalZ,
-                destinationName, mode, preferences);
+                destinationName, mode, preferences, continuations);
     }
 
     /**
@@ -529,7 +563,8 @@ public final class RoadRouter {
      */
     private static Route findAnchoredRoute(Workspace workspace, double startX, double startZ,
                                            double goalX, double goalZ, String destinationName,
-                                           TravelMode mode, RoutePreferences preferences) {
+                                           TravelMode mode, RoutePreferences preferences,
+                                           Set<Integer> continuations) {
         RoadNetwork network = workspace.mutable();
         RoadEditor editor = workspace.editor();
         RoadPoint startRoad = nearestRoadPoint(network, startX, startZ, mode, preferences);
@@ -562,17 +597,62 @@ public final class RoadRouter {
             return null;
         }
         if (startNode == goalNode) {
-            return buildRoute(network, workspace.grouping(), startNode, goalNode, List.of(),
-                    startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+            return preferDirectWalk(
+                    buildRoute(network, workspace.grouping(), startNode, goalNode, List.of(),
+                            startX, startZ, goalX, goalZ, destinationName, mode, preferences),
+                    startX, startZ, goalX, goalZ, destinationName, mode);
         }
 
         Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
-        List<RoadSegment> path = search(graph, network, startNode, goalNode, mode, preferences);
+        List<RoadSegment> path = search(graph, network, startNode, goalNode, mode, preferences,
+                continuations);
         if (path == null) {
             return null;
         }
-        return buildRoute(network, workspace.grouping(), startNode, goalNode, path,
-                startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+        return preferDirectWalk(
+                buildRoute(network, workspace.grouping(), startNode, goalNode, path,
+                        startX, startZ, goalX, goalZ, destinationName, mode, preferences),
+                startX, startZ, goalX, goalZ, destinationName, mode);
+    }
+
+    /**
+     * The walker's own line, when the road the trip anchored to is not on the way.
+     *
+     * <h2>What this refuses</h2>
+     * Two points off the network whose nearest road point is the same node make a connector-only
+     * route: out to the road and back. At its worst -- both a long way from the same road -- the
+     * answer was a line that doubled back on itself, hundreds of blocks longer than the straight
+     * walk between the two places, and its estimate was the same hundreds of blocks of walking. A
+     * walker who is 500 blocks from the road at one end and 800 at the other, 300 blocks apart, is
+     * not making a 1300-block detour to touch the road: they walk to each other. So when the route
+     * uses no road at all and the straight line is shorter, the straight line is the route.
+     *
+     * <p>Only walking: a drive or a ride is a line the vehicle follows, and a car beside a road is
+     * parked rather than about to drive across the field. Those keep the route they were given, which
+     * for a drive is already refused past its own connector cap.
+     */
+    private static Route preferDirectWalk(Route route, double startX, double startZ, double goalX,
+                                          double goalZ, String destinationName, TravelMode mode) {
+        if (mode != TravelMode.WALK || route == null || !route.isPresent()
+                || route.roadLength() > 1.0E-9) {
+            return route;
+        }
+        double direct = Math.hypot(goalX - startX, goalZ - startZ);
+        if (direct <= 1.0E-6 || direct >= route.totalLength() - 1.0E-6) {
+            return route;
+        }
+        Route.Builder builder = new Route.Builder();
+        builder.setDestinationName(destinationName);
+        builder.setTravelMode(TravelMode.WALK);
+        builder.setOffRoadSpeedFactor(OFF_ROAD_SPEED);
+        double tolerance = RoadConfig.onRoadTolerance(RoadClass.ROAD);
+        builder.addPoint(startX, startZ, tolerance, 0, null, false);
+        // The whole line is the walked hop, so it goes on the first connector: that is the same
+        // accounting every other route gives its walk off the network, and it keeps the estimate the
+        // same pace the connectors are timed at.
+        builder.setStartConnector(direct);
+        builder.addPoint(goalX, goalZ, tolerance, 0, null, false);
+        return builder.build();
     }
 
     /**
@@ -710,7 +790,8 @@ public final class RoadRouter {
      */
     private static Route findNodeRoute(Workspace workspace, double startX, double startZ,
                                        double goalX, double goalZ, String destinationName,
-                                       TravelMode mode, RoutePreferences preferences) {
+                                       TravelMode mode, RoutePreferences preferences,
+                                       Set<Integer> continuations) {
         RoadNetwork network = workspace.routingNetwork();
         Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
         if (graph.isEmpty()) {
@@ -718,15 +799,17 @@ public final class RoadRouter {
         }
 
         List<Integer> starts =
-                nearestRoutableNodes(network, graph, startX, startZ, START_CANDIDATES, mode);
+                nearestNodesWithin(network, graph, startX, startZ, START_CANDIDATES,
+                        endpointReach(mode));
         List<Integer> goals =
-                nearestRoutableNodes(network, graph, goalX, goalZ, GOAL_CANDIDATES, mode);
+                nearestNodesWithin(network, graph, goalX, goalZ, GOAL_CANDIDATES,
+                        endpointReach(mode));
         if (starts.isEmpty() || goals.isEmpty()) {
             return Route.empty();
         }
 
         Best best = searchBetweenCandidates(graph, network, starts, goals, startX, startZ, goalX,
-                goalZ, mode, preferences);
+                goalZ, mode, preferences, continuations);
         if (best == null || beyondConnector(network, best.source(), startX, startZ, mode)
                 || beyondConnector(network, best.goal(), goalX, goalZ, mode)) {
             return Route.empty();
@@ -736,7 +819,10 @@ public final class RoadRouter {
         // The anchored path beside this one has always used the cached one.
         Route route = buildRoute(network, workspace.grouping(), best.source(), best.goal(),
                 best.path(), startX, startZ, goalX, goalZ, destinationName, mode, preferences);
-        return overshotTheRoad(network, best, route) ? Route.empty() : route;
+        if (overshotTheRoad(network, best, route)) {
+            return Route.empty();
+        }
+        return preferDirectWalk(route, startX, startZ, goalX, goalZ, destinationName, mode);
     }
 
     /**
@@ -876,7 +962,8 @@ public final class RoadRouter {
                                                 List<Integer> starts, List<Integer> goals,
                                                 double startX, double startZ, double goalX,
                                                 double goalZ, TravelMode mode,
-                                                RoutePreferences preferences) {
+                                                RoutePreferences preferences,
+                                                Set<Integer> continuations) {
         Map<Integer, Double> gScore = new HashMap<>();
         Map<Integer, Integer> turns = new HashMap<>();
         Map<Integer, RoadSegment> arrivedBy = new HashMap<>();
@@ -938,7 +1025,7 @@ public final class RoadRouter {
                 // highway was refused by the anchored search and then planned by this fallback --
                 // the restriction held for the route that could go round and not for the one that
                 // had to go back. See highwayBendAllowed.
-                if (!highwayBendAllowed(arrived, current, edge.segment())) {
+                if (!highwayBendAllowed(arrived, current, edge.segment(), continuations)) {
                     continue;
                 }
                 double settled = Math.min(tentative, known);
@@ -1108,6 +1195,9 @@ public final class RoadRouter {
         // within three blocks are one place only when something at each of them is on the same storey,
         // which is what stops a bridge being read as a crossroads with the road under it.
         Map<Integer, Set<Integer>> layersAtNode = new HashMap<>();
+        // How many usable pieces meet at each node. One is a road end, and a road end is where a
+        // walker may step off into a field to reach another road -- see addWalkGapLinks.
+        Map<Integer, Integer> usableDegree = new HashMap<>();
         for (RoadSegment segment : network.segmentsSnapshot()) {
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
@@ -1118,6 +1208,7 @@ public final class RoadRouter {
                             .add(segment.roadClass());
                     layersAtNode.computeIfAbsent(nodeId, k -> new java.util.HashSet<>())
                             .add(segment.layer());
+                    usableDegree.merge(nodeId, 1, Integer::sum);
                 }
             }
         }
@@ -1164,6 +1255,145 @@ public final class RoadRouter {
                             continue;
                         }
                         RoadSegment link = syntheticLink(a, b, junctionClass);
+                        graph.computeIfAbsent(a.id(), k -> new ArrayList<>()).add(new Edge(b.id(), link));
+                        graph.computeIfAbsent(b.id(), k -> new ArrayList<>()).add(new Edge(a.id(), link));
+                    }
+                }
+            }
+        }
+        // The one distance the storey does not decide: a walker may step off the end of a road and
+        // cross open ground to the next one. Everything above is about places that are one place;
+        // this is about two places that are not, and it is bounded by the walker's own off-road
+        // allowance rather than by the coincident distance. See addWalkGapLinks.
+        if (mode == TravelMode.WALK) {
+            double walkReach = walkGapReach();
+            if (walkReach > COINCIDENT_DISTANCE) {
+                RoadClass gapClass = preferences.avoids(RoadClass.PATH)
+                        || !mode.allows(RoadClass.PATH) ? junctionClass : RoadClass.PATH;
+                addWalkGapLinks(network, graph, atNode, layersAtNode, usableDegree, walkReach,
+                        gapClass);
+            }
+        }
+    }
+
+    /**
+     * The furthest the walker's gap beeline is looked for, in blocks.
+     *
+     * <p>Not a second setting: a cap on what one plan may do. A crossing longer than this is a route
+     * across the map rather than a step from one road to the next, and the candidate pairs of such a
+     * reach would make the pass quadratic on a large network for an answer nobody asked for. The
+     * setting is declared with this as its upper bound, so the clamp here only matters for a value
+     * written into a config file by hand.
+     */
+    private static final double MAX_WALK_GAP_REACH = 256.0;
+
+    /** The gap reach one plan actually applies, after the cap. @see #MAX_WALK_GAP_REACH */
+    private static double walkGapReach() {
+        return Math.min(RoadConfig.walkOffroadBlocks(), MAX_WALK_GAP_REACH);
+    }
+
+    /**
+     * Joins a road end to a nearby road on the surface, which is the field crossing a walker makes.
+     *
+     * <h2>What this is, and what it is not</h2>
+     * The pass above joins nodes that are one place, and it stops at three blocks. That is the right
+     * number for two roads drawn onto the same spot, but it is not the whole of what a walker does:
+     * a road that stops six or eight blocks short of another is two roads to a car and one walk to
+     * someone on foot, and {@code walk_offroad_blocks} has always been documented as the furthest a
+     * walker may cross between two road ends. It was not implemented -- only the three-block join
+     * was -- so a player standing where two roads plainly nearly meet was told there was no path.
+     *
+     * <p>The join is made from a road <b>end</b> and nowhere else: a piece of the middle of a road is
+     * not a reason to cut across a field, and joining every pair of nearby nodes would turn a field
+     * beside a road into a second network of shortcuts. Only a node with a single usable piece is an
+     * end -- a T or a crossroads is a decision the player drew, not a place to leave the road. A
+     * walker who wants to cross from the middle of a road is already able to: it is one of the two
+     * ends of their trip, and those are walked anyway.
+     *
+     * <p>The link is a footpath rather than a road of whatever the trip is mostly on, because the
+     * ground under it is a field: it is costed at footpath pace and drawn with the footpath
+     * tolerance, so the estimate does not pretend the crossing is as quick as a made road. A policy
+     * that has banned footpaths gets the junction class instead, which is how every other invented
+     * link in this pass is classed -- a join may not smuggle an avoided class into a trip.
+     *
+     * <p>A road's own two ends are not a gap: the road already connects them, and a chord across
+     * its curve would be shorter than the road and would win every route that used it, drawing the
+     * walk as a straight line over the inside of the bend. So the pair of ends one segment itself
+     * joins is skipped here and left to that segment.
+     */
+    private static void addWalkGapLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
+                                        Map<Integer, Set<RoadClass>> atNode,
+                                        Map<Integer, Set<Integer>> layersAtNode,
+                                        Map<Integer, Integer> usableDegree, double reach,
+                                        RoadClass gapClass) {
+        List<RoadNode> nodes = network.nodesSnapshot();
+        double cell = reach;
+        Map<Long, List<RoadNode>> buckets = new HashMap<>();
+        for (RoadNode node : nodes) {
+            buckets.computeIfAbsent(bucketKey(cellOf(node.x(), cell), cellOf(node.z(), cell)),
+                    k -> new ArrayList<>()).add(node);
+        }
+        double maxSq = reach * reach;
+        double coincidentSq = COINCIDENT_DISTANCE * COINCIDENT_DISTANCE;
+        // Two ends of one road are already joined -- by that road. A crossing between them would be
+        // a chord across the road's own curve, and since a chord is shorter than the curve it would
+        // always win: a walk from one end of a winding road to the other, or to a station past it,
+        // would be drawn as a straight line over whatever the road went round. That is the very
+        // thing a planned walking leg is not, so each segment's own ends are left to that segment.
+        Set<Long> joinedByTheirRoad = new HashSet<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            int from = segment.fromNode();
+            int to = segment.toNode();
+            if (from >= 0 && to >= 0 && from != to) {
+                joinedByTheirRoad.add(nodePairKey(from, to));
+            }
+        }
+        for (RoadNode a : nodes) {
+            if (usableDegree.getOrDefault(a.id(), 0) != 1) {
+                // Only an end of a road may be left; see the method comment.
+                continue;
+            }
+            int cx = cellOf(a.x(), cell);
+            int cz = cellOf(a.z(), cell);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    List<RoadNode> bucket = buckets.get(bucketKey(cx + dx, cz + dz));
+                    if (bucket == null) {
+                        continue;
+                    }
+                    for (RoadNode b : bucket) {
+                        if (b.id() == a.id()) {
+                            continue;
+                        }
+                        double distanceSq = a.distSq(b.x(), b.z());
+                        // The three-block pass above already owns everything inside that distance, and
+                        // the pair is asked once: two ends both looking at each other is one crossing.
+                        if (distanceSq <= coincidentSq || distanceSq > maxSq) {
+                            continue;
+                        }
+                        if (usableDegree.getOrDefault(b.id(), 0) == 1 && a.id() > b.id()) {
+                            continue;
+                        }
+                        if (joinedByTheirRoad.contains(nodePairKey(a.id(), b.id()))) {
+                            // One road's two ends: the road is the way between them.
+                            continue;
+                        }
+                        // A crossing is ground a person can walk, not a cliff or a bridge: the slope
+                        // allowance of samePlaceVertically grows with the gap and is right for a place,
+                        // wrong for a field -- two road ends thirty blocks apart and forty apart
+                        // vertically are a cliff. The height difference of a walkable crossing is the
+                        // join distance itself.
+                        if (Math.abs(a.y() - b.y()) > JOIN_DISTANCE) {
+                            continue;
+                        }
+                        if (!shareARoad(atNode.get(a.id()), atNode.get(b.id()))) {
+                            continue;
+                        }
+                        if (!shareSurfaceStorey(layersAtNode.get(a.id()),
+                                layersAtNode.get(b.id()))) {
+                            continue;
+                        }
+                        RoadSegment link = syntheticLink(a, b, gapClass);
                         graph.computeIfAbsent(a.id(), k -> new ArrayList<>()).add(new Edge(b.id(), link));
                         graph.computeIfAbsent(b.id(), k -> new ArrayList<>()).add(new Edge(a.id(), link));
                     }
@@ -1315,6 +1545,13 @@ public final class RoadRouter {
     private static long bucketKey(int cellX, int cellZ) {
         // Pack two signed cell coordinates into one key; 24 bits each is far beyond any real map.
         return ((long) (cellX & 0xFFFFFF) << 24) | (cellZ & 0xFFFFFF);
+    }
+
+    /** One key for two node ids, whichever order they are given in. */
+    private static long nodePairKey(int first, int second) {
+        int low = Math.min(first, second);
+        int high = Math.max(first, second);
+        return ((long) low << 32) | (high & 0xFFFFFFFFL);
     }
 
     private static RoadSegment syntheticLink(RoadNode a, RoadNode b, RoadClass junctionClass) {
@@ -1523,7 +1760,8 @@ public final class RoadRouter {
 
     private static List<RoadSegment> search(Map<Integer, List<Edge>> graph, RoadNetwork network,
                                             int startNode, int goalNode, TravelMode mode,
-                                            RoutePreferences preferences) {
+                                            RoutePreferences preferences,
+                                            Set<Integer> continuations) {
         RoadNode goal = network.node(goalNode);
         if (goal == null) {
             return null;
@@ -1586,7 +1824,7 @@ public final class RoadRouter {
                 // piece alone -- what happens at this node is a question about the two pieces meeting
                 // there, and what happens along a piece is about that piece's own line -- which is
                 // why the rule lives at the one place both are in hand.
-                if (!highwayBendAllowed(arrived, current, edge.segment())) {
+                if (!highwayBendAllowed(arrived, current, edge.segment(), continuations)) {
                     continue;
                 }
                 double settled = Math.min(tentative, known);
@@ -1700,11 +1938,13 @@ public final class RoadRouter {
      * does not: the hairpin, the doubling back, and the reversal. A right-angled junction is ninety
      * and stays.
      *
-     * <p>The limit is a rule about <em>highways</em>, so it is asked where two highways meet, and
+     * <p>The limit is a rule about <em>highways</em>, so it is asked between two highway pieces, and
      * inside a highway's own polyline. It is deliberately not asked where a highway meets a road of
      * another class: getting on and off a highway is a junction whose shape belongs to the ramp, and
      * a ramp that doubles back under the carriageway it serves is ordinary road design. See
-     * {@link #highwayBendAllowed} for where the two are told apart.
+     * {@link #highwayBendAllowed} for where the two are told apart -- and for why the limit is asked
+     * only where the highway carries on through a node (exactly two usable arms) rather than at a
+     * fork the player drew, where a sharp turn is the junction's own shape.
      *
      * <p>Refused in the <em>graph</em> rather than priced in the cost, because this is a rule about
      * what a highway is and not a preference about which way is nicer: a trip that can only be made
@@ -1713,6 +1953,18 @@ public final class RoadRouter {
      * avoided everything else, which is the opposite of what was asked for.
      */
     private static final double HIGHWAY_BEND_LIMIT_DEGREES = 100.0;
+
+    /**
+     * How sharply a highway may turn at a junction, in degrees.
+     *
+     * <p>A junction is a choice and may be sharper than a bend in a road that merely carries on; a
+     * fork at a hundred and twenty-eight degrees is ordinary highway design, and holding it to the
+     * hundred-degree limit refused trips that had no other way through. But a reversal is still a
+     * U-turn however many arms the node has, and the mod says a highway has no way to turn round on
+     * it. So a junction gets a wider limit, not no limit: a hundred and seventy-seven degrees around
+     * a stub is the reversal the rule is for.
+     */
+    private static final double HIGHWAY_JUNCTION_LIMIT_DEGREES = 150.0;
 
     /**
      * Whether a highway may bend this sharply, which is what decides if the edge exists at all.
@@ -1755,8 +2007,23 @@ public final class RoadRouter {
      * joining a highway, or a highway leaving onto a road, is an on-ramp or an off-ramp -- an
      * ordinary turn whose shape belongs to the ramp. The search needs no third piece to tell those
      * apart, which is why the rule can live here at all.
+     *
+     * <h2>Why the angle limit is asked of continuations only</h2>
+     * A node with more than two usable pieces is a junction: the player drew a fork, a T or a
+     * crossroads there, and turning sharply onto another highway at one's own junction is what the
+     * junction is for. Measured on a player's own highway loop, holding every junction to the limit
+     * refused ordinary forks -- a highway leaving a junction at a hundred and one degrees, a loop's
+     * two arms meeting at a hundred and twenty-eight -- and the trip was then reported as impossible
+     * even though a road through the junction existed on the map. The limit is about a highway
+     * <em>carrying on</em>: where exactly two usable pieces meet, the road is passing through and a
+     * bend past the limit there is the kink the rule exists to refuse. Where a third piece exists,
+     * the traveller is at a junction and the angle is the junction's shape -- held to the wider
+     * {@link #HIGHWAY_JUNCTION_LIMIT_DEGREES}, because a junction may be sharp but a reversal is
+     * still the U-turn a highway does not have. Doubling back is refused everywhere, on its own
+     * terms, before the angle is ever considered.
      */
-    private static boolean highwayBendAllowed(RoadSegment arrived, int current, RoadSegment next) {
+    private static boolean highwayBendAllowed(RoadSegment arrived, int current, RoadSegment next,
+                                              Set<Integer> continuations) {
         // A bend inside the piece being taken is asked first, and before the "nothing arrived" case
         // below, because the first piece out of the source arrives from nowhere: a highway whose own
         // polyline doubles back is travelled as one edge, so no junction is ever reached to refuse it
@@ -1779,13 +2046,56 @@ public final class RoadRouter {
         // Doubling back on a highway is refused on its own terms rather than through an angle: going
         // back along the piece just travelled, or onto a piece that leaves this node for the one the
         // traveller came from, is the U-turn a highway does not have -- whatever the arithmetic of
-        // the bend says. Anything that is not that is then held to the hundred-degree limit, which is
-        // what keeps the hairpin out: a highway cannot curve round and rejoin itself either.
+        // the bend says. This one is not a junction question: it is the same ground travelled twice,
+        // and no fork makes it a road.
         if (doublesBackOnItself(arrived, current, next)) {
             return false;
         }
+        // A junction is a choice, and a choice may be at any angle up to a reversal. Only where the
+        // highway carries on through a node with exactly its two own arms is the angle a bend in the
+        // highway itself, and held to the tighter limit; at a junction a wider one still refuses the
+        // U-turn no highway has.
         double degrees = turnDegrees(arrived, current, next);
-        return Double.isNaN(degrees) || highwayMayBend(Math.abs(degrees));
+        if (Double.isNaN(degrees)) {
+            return true;
+        }
+        double limit = continuations.contains(current)
+                ? HIGHWAY_BEND_LIMIT_DEGREES
+                : HIGHWAY_JUNCTION_LIMIT_DEGREES;
+        return Math.abs(degrees) <= limit;
+    }
+
+    /**
+     * The nodes a highway passes through rather than forks at: exactly two usable pieces meet there.
+     *
+     * <p>The scope of the hundred-degree limit, worked out once per plan. "Usable" means a class this
+     * mode may travel and this policy has not excluded, because the question is what
+     * <em>this traveller</em> could do at the node: a footpath hanging off a highway is not a way out
+     * for a driver, and the bend is still a bend in the highway for them. A synthetic coincident link
+     * is not counted: it is not a piece of road, it is this router's way of saying two nodes are one
+     * place.
+     */
+    private static Set<Integer> highwayContinuations(RoadNetwork network, TravelMode mode,
+                                                     RoutePreferences preferences) {
+        Map<Integer, Integer> degree = new HashMap<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (!usable(mode, preferences, segment.roadClass())) {
+                continue;
+            }
+            if (segment.fromNode() == RoadSegment.NO_NODE
+                    || segment.toNode() == RoadSegment.NO_NODE) {
+                continue;
+            }
+            degree.merge(segment.fromNode(), 1, Integer::sum);
+            degree.merge(segment.toNode(), 1, Integer::sum);
+        }
+        Set<Integer> continuations = new HashSet<>();
+        for (Map.Entry<Integer, Integer> entry : degree.entrySet()) {
+            if (entry.getValue() == 2) {
+                continuations.add(entry.getKey());
+            }
+        }
+        return continuations;
     }
 
     /**
@@ -2015,7 +2325,8 @@ public final class RoadRouter {
             appendSegment(builder, grouping, segment, previousNode);
             // The mode's real pace on this class, so the route's own legs time it at the speed the
             // player actually travels: the preference steers the search and never the estimate.
-            builder.addRoadLeg(segment.length(), effectiveSpeed(mode, segment.roadClass()));
+            builder.addRoadLeg(segment.length(), effectiveSpeed(mode, segment.roadClass()),
+                    segment.roadClass());
             previousNode = other(segment, previousNode);
         }
 
