@@ -5,12 +5,14 @@ import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.place.PlaceDetails;
 import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.PlaceKind;
+import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadEditor;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
+import bili.dongsz.howtogo.road.SelectionGesture;
 import bili.dongsz.howtogo.route.Destination;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -49,6 +51,38 @@ public final class RoadEditSession {
 
     /** True while the player holds the modifier that disables snapping. */
     private static boolean freePlacementActive;
+
+    // The mouse buttons, named the way the input layer numbers them. Fully qualified rather than
+    // imported because 1.21.9 moved these constants and the import at the top of the file is already
+    // conditional; the fully qualified name is the one spelling that is right on every node.
+    private static final int MOUSE_BUTTON_LEFT =
+            com.mojang.blaze3d.platform.InputConstants.MOUSE_BUTTON_LEFT;
+    private static final int MOUSE_BUTTON_RIGHT =
+            com.mojang.blaze3d.platform.InputConstants.MOUSE_BUTTON_RIGHT;
+
+    /**
+     * Remembers the last press, so that the second press of a double click can be told from a fresh
+     * one. See {@link SelectionGesture}: the rule itself is a pure class, and this is only the state
+     * a session keeps between two clicks.
+     */
+    private static final SelectionGesture.Detector selectionGesture = new SelectionGesture.Detector();
+
+    /** What the Shift+right press that began the current pan was, and the road it was over. */
+    private static boolean rightPressShift;
+    private static boolean rightPressDouble;
+    private static int rightPressSegment = RoadSegment.NO_SEGMENT;
+
+    /**
+     * What the last Shift+right single click replaced, so that a double click completing a moment
+     * later can take that click back before toggling its one segment.
+     *
+     * <p>The first press of a double click cannot be held back: it has to do something at once or
+     * every multi-select click would feel a third of a second late. So it toggles its whole road
+     * immediately, and remembers the selection it replaced. A second press that the detector reports
+     * as a double restores that selection first, which leaves exactly the one segment selected --
+     * which is what the double click asked for. See {@link RoadEditor#snapshotSelection}.
+     */
+    private static RoadEditor.SelectionSnapshot toggleUndoSnapshot;
 
     /** Work deferred out of an input handler to the next client tick. */
     private static Runnable pendingAction;
@@ -89,7 +123,10 @@ public final class RoadEditSession {
      * roads, so the gesture is "go down a level, then keep drawing". Tying it to the selection would mean
      * the key did one thing while something was selected and another while nothing was -- and the one it
      * did while something was selected is already what {@code N} does, in a panel that also lets the
-     * player see the number they are about to write.
+     * player see the number they are about to write. A selection moved onto a storey is still possible,
+     * through that panel: the edit it commits walks every selected road (see
+     * {@link RoadEditor#setRoadNameAndLayer}), so multi-select does not need this key to grow a second
+     * meaning.
      *
      * <p>No undo entry, and no log line: the drawing storey is a mode rather than a property of anything
      * saved, it is not written into the file, and the readout beside the statistics already says which
@@ -103,16 +140,14 @@ public final class RoadEditSession {
         return ed.activeLayer();
     }
 
-    /** The storey of the selected road, or the surface when nothing is selected. */
+    /** The storey of the main selected road, or the surface when nothing is selected. */
     public static int selectedLayer() {
-        RoadEditor ed = editor();
-        RoadSegment segment = RoadStore.get().segment(ed.selectedSegmentId());
-        return segment != null ? segment.layer() : 0;
+        return editor().selectedLayer();
     }
 
-    /** Length in blocks of the whole selected road, or 0 when nothing is selected. */
+    /** Length in blocks of every selected road, or 0 when nothing is selected. */
     public static double selectedLength() {
-        return editor().chainLength(editor().selectedSegmentId());
+        return editor().selectedLength();
     }
 
     /** The editor for the current level, creating it on first use. */
@@ -142,6 +177,13 @@ public final class RoadEditSession {
     }
 
     private static void reset() {
+        // The gesture state goes before the pan is ended: turning editing off is not a click, and the
+        // pan's own end must not finish a half-recognised selection on the way out.
+        selectionGesture.reset();
+        forgetToggleUndo();
+        rightPressShift = false;
+        rightPressDouble = false;
+        rightPressSegment = RoadSegment.NO_SEGMENT;
         // Before the editor is touched: turning editing off while the right button is held has to let the
         // map's own button go, or the map would keep panning after the mouse was moved with nothing
         // pressed -- the screen believes a button is down until it is told otherwise.
@@ -215,8 +257,11 @@ public final class RoadEditSession {
         RoadClass next = values[index];
 
         RoadEditor ed = editor();
-        if (ed.selectedSegmentId() != RoadSegment.NO_SEGMENT
+        if ((ed.selectedSegmentId() != RoadSegment.NO_SEGMENT || !ed.selectedChain().isEmpty())
                 && ed.setSegmentClass(ed.selectedSegmentId(), next)) {
+            // Every selected road, not only the main one -- see RoadEditor#setSegmentClass. The class
+            // the cycle starts from is the main segment's, because a single press has to have one
+            // starting point; the result is that the whole selection ends up on that class.
             RoadStore.markDirty();
         } else {
             ed.setActiveClass(next);
@@ -224,14 +269,16 @@ public final class RoadEditSession {
     }
 
     /**
-     * Moves the road under the cursor, or the selected one, through the one-way states.
+     * Moves the road under the cursor, or everything selected, through the one-way states.
      *
      * <h2>What it acts on</h2>
      * The selection first, then the road under the cursor, which is the same order {@code N} and
      * {@code <} use: having selected a road, a player expects the next press to act on that road and not
      * on whatever the cursor has drifted over since. The whole road is marked rather than the piece under
      * the cursor -- see {@link RoadEditor#setChainDirection} -- because a street that is one-way for one
-     * of its bends is not a thing anyone means to build.
+     * of its bends is not a thing anyone means to build. A multi-selection advances every selected road
+     * from its own state, so the fourth press brings them all back to two-way however mixed they were;
+     * see {@link RoadEditor#cycleSelectedDirection}.
      *
      * <h2>Why the directions cycle</h2>
      * Two-way, then one-way along the road, then one-way against it, then back. A boolean switch would
@@ -241,6 +288,14 @@ public final class RoadEditSession {
      */
     public static void toggleOneWay() {
         RoadEditor ed = editor();
+        if (!ed.selectedChain().isEmpty()) {
+            if (ed.cycleSelectedDirection()) {
+                RoadStore.markDirty();
+                HowToGo.LOGGER.info("[HowToGo] {} selected road(s) one-way switched",
+                        ed.selectedChain().size());
+            }
+            return;
+        }
         int target = ed.selectedSegmentId();
         if (target == RoadSegment.NO_SEGMENT
                 && lastSnap.kind() == RoadSnapper.Kind.SEGMENT) {
@@ -423,9 +478,17 @@ public final class RoadEditSession {
     public static void nameSelectedRoad() {
         RoadEditor ed = editor();
 
-        // 1. A selected road.
-        if (ed.selectedSegmentId() != RoadSegment.NO_SEGMENT) {
-            promptRoadName(ed.selectedSegmentId());
+        // 1. A selected road -- or several. The panel speaks about the main one (its name and storey
+        //    are what it shows) and the edit it writes applies to every selected road, which is what
+        //    the feature contract asks of N on a multi-selection. The main segment is always set for
+        //    a non-empty selection; the fallback is only for a selection whose main segment an edit
+        //    has removed between keystrokes.
+        if (ed.selectedSegmentId() != RoadSegment.NO_SEGMENT || !ed.selectedChain().isEmpty()) {
+            int main = ed.selectedSegmentId();
+            if (main == RoadSegment.NO_SEGMENT) {
+                main = ed.selectedChain().iterator().next();
+            }
+            promptRoadName(main);
             return;
         }
         // 2. A selected place.
@@ -467,6 +530,10 @@ public final class RoadEditSession {
      * answer -- and because a storey is invisible on a map that cannot show height, so anything that
      * made it a separate key would leave most players never setting one. The panel's own field is
      * checked before anything is applied, so a mistyped level costs a correction rather than the edit.
+     *
+     * <p>The segment is only the road the panel reads its initial values from: the edit it commits
+     * walks every selected road, because naming a road is a road-wide operation and a multi-selection
+     * is the gesture "do this to all of these". See {@link RoadEditor#setRoadNameAndLayer}.
      */
     private static void promptRoadName(int segmentId) {
         RoadSegment segment = RoadStore.get().segment(segmentId);
@@ -488,6 +555,20 @@ public final class RoadEditSession {
      * the place may have moved or gone by then.
      */
     private static void promptPlaceEditor(int nodeId) {
+        promptPlaceEditor(nodeId, null);
+    }
+
+    /**
+     * The same panel, with something to take back if it is cancelled.
+     *
+     * <p>For the place a press just created: the node exists before the panel does, so cancelling has
+     * to remove it. Every other caller passes nothing -- an existing place must survive its editor
+     * being cancelled exactly as it was, and a road or a line has no node at all.
+     *
+     * @param onCancel run when the panel closes without {@code Done}, or null when cancelling is a
+     *                 no-op
+     */
+    private static void promptPlaceEditor(int nodeId, Runnable onCancel) {
         RoadEditor places = editor();
         if (RoadStore.get().node(nodeId) == null) {
             return;
@@ -513,7 +594,8 @@ public final class RoadEditSession {
                     // itself open and say why rather than closing on a change that was refused.
                     kind -> kind != PlaceKind.STATION || places.stationAllowed(nodeId),
                     initial, anchorX, anchorY,
-                    (name, kind, details) -> applyPlaceEdit(places, nodeId, name, kind, details)));
+                    (name, kind, details) -> applyPlaceEdit(places, nodeId, name, kind, details),
+                    onCancel));
         };
     }
 
@@ -758,11 +840,45 @@ public final class RoadEditSession {
                 y = segment.y();
             }
         }
-        int nodeId = ed.addPoi(x, y, z);
+        RoadEditor.PoiPlacement placed = ed.placePoi(x, y, z);
         RoadStore.markDirty();
         // The same prompt an existing place is renamed through, so a place made now and one renamed
-        // later cannot end up with different titles or different storage.
-        promptPlaceEditor(nodeId);
+        // later cannot end up with different titles or different storage. A press that created a node
+        // hands the panel a way to take it back: cancelling the editor of a place the player has not
+        // decided to keep yet must not leave a nameless node behind.
+        if (placed.created()) {
+            promptPlaceEditor(placed.nodeId(), () -> cancelNewPlace(placed.nodeId()));
+        } else {
+            promptPlaceEditor(placed.nodeId());
+        }
+    }
+
+    /**
+     * Takes back a place node a press created, after its editor was cancelled.
+     *
+     * <h2>Why an undo rather than a delete</h2>
+     * Creating the node recorded one undo step, and cancelling is "this press did not happen": undoing
+     * that step removes the node and the history entry together, so the map is exactly as it was --
+     * including Ctrl+Z, which after a cancel must take back the player's previous edit rather than
+     * resurrect the place they declined to make. Deleting it instead would leave the creation and the
+     * deletion on the stack, and the first Ctrl+Z would bring back the nameless node.
+     *
+     * <p>A fallback delete covers the one case undo cannot: the node is still there because the top of
+     * the stack was some other edit. That should be unreachable -- the panel is modal and the press
+     * pushed its snapshot last -- but leaving a stray node would be exactly the bug this exists to fix,
+     * so the node is removed one way or the other.
+     */
+    private static void cancelNewPlace(int nodeId) {
+        RoadNode node = RoadStore.get().node(nodeId);
+        if (node == null || node.type() != RoadNode.Type.POI) {
+            return;
+        }
+        editor().undo();
+        if (RoadStore.get().node(nodeId) != null) {
+            deletePlace(nodeId);
+            return;
+        }
+        RoadStore.markDirty();
     }
 
     /**
@@ -1017,6 +1133,10 @@ public final class RoadEditSession {
         if (!mouseValid) {
             return;
         }
+        // Fed to the gesture tracker even though a plain left click starts nothing: an ordinary click
+        // between two Shift ones is what keeps them from being read as one double click.
+        notePress(MOUSE_BUTTON_LEFT, false);
+        forgetToggleUndo();
         RoadEditor ed = editor();
         RoadSnapper.Result snap = lastSnap;
         // A point snapped onto RoadWeaver's geometry is placed at that geometry's height, not at the
@@ -1043,6 +1163,11 @@ public final class RoadEditSession {
 
     /** Right click: finish the current polyline, or clear selection when idle. */
     public static void clickFinishOrClear() {
+        // The press is still a press: finishing a road with the right button must break a pair of
+        // Shift+right clicks rather than let the next one pair across it. It is not a multi-select
+        // press, so it is fed in with Shift reported as off.
+        notePress(MOUSE_BUTTON_RIGHT, false);
+        forgetToggleUndo();
         RoadEditor ed = editor();
         if (ed.chainNodeId() != RoadSegment.NO_NODE) {
             ed.finishChain();
@@ -1064,7 +1189,16 @@ public final class RoadEditSession {
     }
 
     /**
-     * Selects the node under the cursor and starts dragging it. Called on shift-click.
+     * Handles a Shift+left press: grabs a node to drag, or selects the road under the cursor.
+     *
+     * <h2>What the double click changes, and what it does not</h2>
+     * A press over a <em>node</em> is a drag and stays one however fast it is repeated -- the handle
+     * is a handle, and a double click on it would have to invent a second meaning for grabbing one.
+     * A press over a <em>segment</em> selects: the first press selects the whole road, and a second
+     * press within the double-click window selects only the segment under the cursor. The second
+     * press replaces the selection rather than adding to it, so the two gestures compose without the
+     * first having to be taken back -- which is why the left button needs none of the snapshot
+     * bookkeeping the multi-select button needs.
      *
      * @return true if a node was grabbed
      */
@@ -1072,6 +1206,10 @@ public final class RoadEditSession {
         if (!mouseValid) {
             return false;
         }
+        SelectionGesture.Target gesture = notePress(MOUSE_BUTTON_LEFT, true);
+        // A selection made a moment ago is not part of this click: it is a different road, and the
+        // snapshot a multi-select double click would restore must not outlive the click that took it.
+        forgetToggleUndo();
         RoadEditor ed = editor();
         ed.finishChain();
         switch (lastSnap.kind()) {
@@ -1086,7 +1224,13 @@ public final class RoadEditSession {
                 // Selecting a road instead of grabbing a handle: lets the player re-class or
                 // delete a whole segment without redrawing it.
                 RailNameStore.clearSelection();
-                ed.selectSegment(lastSnap.segmentId());
+                if (gesture == SelectionGesture.Target.DOUBLE) {
+                    // The piece the cursor is on, for the one gesture where the piece is the subject:
+                    // trimming or re-routing one straight stretch of a street.
+                    ed.selectSingleSegment(lastSnap.segmentId());
+                } else {
+                    ed.selectSegment(lastSnap.segmentId());
+                }
                 return false;
             }
             default -> {
@@ -1180,8 +1324,18 @@ public final class RoadEditSession {
      *
      * <p>If the press lands on one of the map's own widgets, the screen handles it and does not start a
      * pan -- which is the correct outcome, since the player aimed at the widget.
+     *
+     * <h2>Shift, and why the selection waits for the release</h2>
+     * A Shift+right press is a multi-select click as well as a pan: the press is taken either way, and
+     * only the release can say which of the two it was, because "did the cursor move" is the same test
+     * that decides whether the map was dragged. So the press is fed to the gesture detector here -- it
+     * is a press, and the double click is measured between presses -- and the selection itself is
+     * applied in {@link #endMapPan} once the release has confirmed there was no drag. Nothing is
+     * applied on a press that becomes a pan.
+     *
+     * @param selectionClick whether Shift was held when the button went down
      */
-    public static void beginMapPan() {
+    public static void beginMapPan(boolean selectionClick) {
         if (panScreen != null) {
             // A pan whose release never arrived -- the button came up while another window had the focus,
             // so the map screen is still holding a press nobody let go of. It is let go here rather than
@@ -1193,6 +1347,12 @@ public final class RoadEditSession {
             return;
         }
         double[] cursor = scaledCursor();
+        // Every right press goes through the tracker, shift or not: an ordinary right click between two
+        // Shift ones is what keeps them from being read as one double click.
+        SelectionGesture.Target gesture = notePress(MOUSE_BUTTON_RIGHT, selectionClick);
+        rightPressShift = selectionClick;
+        rightPressDouble = selectionClick && gesture == SelectionGesture.Target.DOUBLE;
+        rightPressSegment = selectionClick ? segmentUnderCursor() : RoadSegment.NO_SEGMENT;
         panScreen = screen;
         panStartScreenX = cursor[0];
         panStartScreenY = cursor[1];
@@ -1212,9 +1372,11 @@ public final class RoadEditSession {
      * been closed, and a button held down on a screen nobody can see is not something to hand to whatever
      * replaced it.
      *
-     * <p>A right press and release that never moved is the old gesture -- drop the selection -- so it
-     * still does that. A drag is a pan and leaves the selection alone: a player moving the map to look at
-     * something else has not asked to forget what they had selected.
+     * <p>A right press and release that never moved is a click, and a click does something: an
+     * ordinary one drops the selection, and a Shift one is the multi-select gesture -- see
+     * {@link #applySelectionClick}. A drag is a pan and leaves the selection alone: a player moving the
+     * map to look at something else has not asked to forget what they had selected. A drag is also
+     * not a click, so it breaks the chain a following press would otherwise pair with.
      */
     public static void endMapPan() {
         Screen screen = panScreen;
@@ -1235,10 +1397,153 @@ public final class RoadEditSession {
             screen.mouseReleased(cursor[0], cursor[1], GLFW.GLFW_MOUSE_BUTTON_LEFT);
             //?}
         }
-        if (!panMoved) {
-            editor().clearSelection();
-            RailNameStore.clearSelection();
+        // Read and cleared before anything is applied, so a selection edit made below cannot be read
+        // back as the state of this press.
+        boolean selectionClick = rightPressShift;
+        boolean doubleClick = rightPressDouble;
+        int segmentId = rightPressSegment;
+        rightPressShift = false;
+        rightPressDouble = false;
+        rightPressSegment = RoadSegment.NO_SEGMENT;
+        if (panMoved) {
+            // A drag is a pan, and a pan is not half of anything: without this the next press could
+            // pair with the one that started the drag as if the two had been two clicks.
+            selectionGesture.reset();
+            forgetToggleUndo();
+            return;
         }
+        if (selectionClick) {
+            applySelectionClick(doubleClick, segmentId);
+            return;
+        }
+        forgetToggleUndo();
+        editor().clearSelection();
+        RailNameStore.clearSelection();
+    }
+
+    /**
+     * Applies what a Shift+right press turned out to be, now that its release has confirmed it was a
+     * click.
+     *
+     * <h2>Why the single click can be taken back</h2>
+     * The first press of a double click has to select its whole road before the second press exists:
+     * holding it back would make every multi-select click arrive a third of a second late. So it is
+     * applied at once, and the selection it replaced is remembered. When the second press turns out to
+     * be a double, that selection is restored first and then the one segment is toggled -- which leaves
+     * exactly what a double click asked for, rather than "the whole road, plus or minus one piece".
+     *
+     * <p>Nothing is applied for a press that named no road: an empty-space right click in
+     * multi-select mode leaves the selection alone rather than wiping it, because a mis-aimed click is
+     * the commonest thing a modifier-held gesture sees and losing a whole selection to it would be the
+     * worst possible answer.
+     *
+     * @param doubleClick whether the detector said this press completed a double click
+     * @param segmentId   the road under the cursor when the press began, or
+     *                    {@link RoadSegment#NO_SEGMENT}
+     */
+    private static void applySelectionClick(boolean doubleClick, int segmentId) {
+        if (segmentId == RoadSegment.NO_SEGMENT) {
+            forgetToggleUndo();
+            return;
+        }
+        RoadEditor ed = editor();
+        if (!doubleClick) {
+            toggleUndoSnapshot = ed.snapshotSelection();
+            ed.toggleChainSelection(segmentId);
+            return;
+        }
+        // The first click of this double already toggled its whole road. Take that back before toggling
+        // the one segment, or the double would leave the road and the piece of it both acted on.
+        if (toggleUndoSnapshot != null) {
+            ed.restoreSelection(toggleUndoSnapshot);
+            forgetToggleUndo();
+        }
+        ed.toggleSingleSegmentSelection(segmentId);
+    }
+
+    /**
+     * The road under the cursor, as a segment: the segment itself, or for a node the nearest road
+     * that meets it.
+     *
+     * <p>The selection gestures are about roads and segments, and a node is neither -- but a node is
+     * exactly what a cursor lands on when aiming at a road end, and refusing the gesture there would
+     * make the ends of every road unselectable. Snapping to a node wins over snapping to a segment
+     * within a wider catch radius (9 px against 6), so at a bend or a junction the snap is a node
+     * almost whenever the player aims near a corner -- which is the case a "first road stored against
+     * this node" answer got wrong: at a bend that is one of the two pieces of the same street, and at
+     * a junction it can be an entirely different road from the one under the cursor.
+     *
+     * <p>So the incident segments are compared against the cursor's own world position and the nearest
+     * wins. Nothing is guessed at a tie beyond the network's own order, which is stable, and a node
+     * that carries a single road needs no comparison at all. The single-click gesture expands to the
+     * whole chain anyway, so this choice only matters for the segment-level half -- which is exactly
+     * the gesture it exists for.
+     */
+    private static int segmentUnderCursor() {
+        if (!mouseValid) {
+            return RoadSegment.NO_SEGMENT;
+        }
+        if (lastSnap.kind() == RoadSnapper.Kind.SEGMENT) {
+            return lastSnap.segmentId();
+        }
+        if (lastSnap.kind() == RoadSnapper.Kind.NODE) {
+            return nearestIncidentSegment(lastSnap.nodeId());
+        }
+        return RoadSegment.NO_SEGMENT;
+    }
+
+    /**
+     * The road meeting {@code nodeId} that passes nearest the cursor, or
+     * {@link RoadSegment#NO_SEGMENT} when the node holds no road.
+     *
+     * <p>Distances are block distances to the segment's polyline, measured from the cursor's world
+     * position rather than from the snapped node: the snap collapsed the cursor onto the node, and a
+     * node's own position says nothing about which of its roads the player meant. One block and one
+     * screen pixel are not the same length, but for choosing between roads that meet at one point the
+     * ranking is the same at any zoom -- the roads fan out from that point, so the nearer one in blocks
+     * is the nearer one on screen.
+     */
+    private static int nearestIncidentSegment(int nodeId) {
+        RoadNetwork network = RoadStore.get();
+        int best = RoadSegment.NO_SEGMENT;
+        double bestDistance = Double.MAX_VALUE;
+        for (int segmentId : RoadChains.segmentsAt(network, nodeId)) {
+            RoadSegment segment = network.segment(segmentId);
+            if (segment == null) {
+                continue;
+            }
+            double distance = distanceToSegment(segment, mouseWorldX, mouseWorldZ);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = segmentId;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Feeds one button press to the double-click detector and reports what it completes.
+     *
+     * <p>In one place so that no press can be left out of the stream: the detector compares adjacent
+     * presses, so a press that is not reported is a press the next one pairs with instead.
+     *
+     * @return {@link SelectionGesture.Target#DOUBLE} when this press completes a double click
+     */
+    private static SelectionGesture.Target notePress(int button, boolean shift) {
+        double[] cursor = scaledCursor();
+        return selectionGesture.press(button, shift, System.currentTimeMillis(),
+                cursor[0], cursor[1]);
+    }
+
+    /**
+     * Forgets the selection a Shift+right single click replaced, without undoing it.
+     *
+     * <p>For every moment the click it belongs to is over: the double-click window has passed without a
+     * second press, or another action changed the network or the selection in between, or editing was
+     * turned off. The toggle itself stands; only the ability to take it back goes.
+     */
+    private static void forgetToggleUndo() {
+        toggleUndoSnapshot = null;
     }
 
     /**
@@ -1293,22 +1598,32 @@ public final class RoadEditSession {
      */
     public static void deleteSelected() {
         RoadEditor ed = editor();
-        // The node branch only: a selected road takes no place with it, and a place is a node.
-        if (ed.selectedSegmentId() == RoadSegment.NO_SEGMENT && isPlaceNode(ed.selectedNodeId())) {
+        // The node branch only: a selected road takes no place with it, and a place is a node. The
+        // segment set is asked as well as the main segment, because a multi-selection can be non-empty
+        // while an edit has just taken its main segment away.
+        if (ed.selectedSegmentId() == RoadSegment.NO_SEGMENT && ed.selectedChain().isEmpty()
+                && isPlaceNode(ed.selectedNodeId())) {
             deletePlace(ed.selectedNodeId());
             return;
         }
+        // A snapshot taken before a Shift+right click names roads this deletion is about to remove;
+        // restoring it later would put dead ids back into the selection.
+        forgetToggleUndo();
         if (ed.deleteSelection()) {
             RoadStore.markDirty();
         }
     }
 
     public static void undo() {
+        // Undo swaps the network out from under the selection, so a selection snapshot taken before a
+        // Shift+right click is no longer a state this network had.
+        forgetToggleUndo();
         editor().undo();
         RoadStore.markDirty();
     }
 
     public static void redo() {
+        forgetToggleUndo();
         editor().redo();
         RoadStore.markDirty();
     }

@@ -118,9 +118,26 @@ final class MtrKnown {
                 continue;
             }
             TransitLine kept = lines.get(id);
-            if (kept == null || line.stopCount() >= kept.stopCount()) {
+            if (kept == null) {
                 lines.put(id, line);
+                continue;
             }
+            if (line.stopCount() < kept.stopCount()) {
+                continue;
+            }
+            // The newer reading has the line's newest stops, but not always everything that is known
+            // about it: a colour is a fact about MTR's route rather than about the window it arrived
+            // in, and the three readings this client merges do not all carry one -- a reading of the
+            // whole railway is read from a richer object, and a reader that could not get the colour
+            // says zero where the window said the route's real colour. Replacing the line with a
+            // copy that has no colour would repaint it in its kind's colour for the rest of the
+            // session, so a winner without one inherits the colour already learned for the same MTR
+            // line. A winner that does carry one keeps its own: MTR is the authority on it, and the
+            // memory is only the fallback for a reading that was silent.
+            if (!line.hasColor() && kept.hasColor()) {
+                line.setColor(kept.color());
+            }
+            lines.put(id, line);
         }
         for (Map.Entry<Long, RoadNetwork> entry : reading.tracks().entrySet()) {
             if (reading.stated().contains(entry.getKey())) {

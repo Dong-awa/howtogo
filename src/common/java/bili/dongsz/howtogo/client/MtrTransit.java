@@ -1107,6 +1107,25 @@ public final class MtrTransit {
         return List.copyOf(built);
     }
 
+    /**
+     * The reading's lines as this mod's lines, with the colour each one runs under.
+     *
+     * <h2>Why the colour is taken here</h2>
+     * A colour is a property of MTR's route, and all three ways a reading can reach this client --
+     * MTR's own window, the local simulated network, and the server's copy synced by this mod -- end
+     * up in the same {@link MtrClientData.Line} record, so there is one place that turns a reading
+     * into lines and one place that has to carry the colour across. Doing it per reader instead would
+     * be three chances to forget, and a line that lost its colour draws in its kind's colour without
+     * anything on screen saying why.
+     *
+     * <h2>What "no colour" means here</h2>
+     * MTR writes zero when a route has no colour of its own, and this mod's {@code TransitLine} says
+     * "no colour of its own" with null and then asks its kind's configured colour. So zero is passed
+     * as null rather than as {@code setColor(0)}: a line set to ARGB black would be a line the player
+     * asked to be black, which zero is not. The RGB part is what is tested, because the readings
+     * disagree about whether they carry MTR's alpha -- the window keeps whatever MTR handed over and
+     * the whole-map and overlay readers drop it -- and a value whose RGB is zero is MTR's unset.
+     */
     private static List<TransitLine> buildLines(MtrClientData.Snapshot reading, Places places,
                                                 Counts counts) {
         List<TransitLine> built = new ArrayList<>();
@@ -1120,6 +1139,12 @@ public final class MtrTransit {
             }
             TransitLine made = new TransitLine(LINE_ID_PREFIX + Long.toHexString(line.id()),
                     line.name() == null ? Long.toHexString(line.id()) : line.name(), kind);
+            // Zero is MTR's "this route has no colour", not black: see the method comment. The value
+            // keeps its own RGB and the line makes it opaque, so what is drawn is the colour MTR's
+            // map draws rather than one of this mod's kind colours.
+            if ((line.color() & 0xFFFFFF) != 0) {
+                made.setColor(line.color());
+            }
             for (MtrClientData.Stop stop : line.stops()) {
                 // The place the stop's station belongs to, which is where the stop goes: a station built
                 // a platform at a time reaches this mod as several stations, and a line calling at one of

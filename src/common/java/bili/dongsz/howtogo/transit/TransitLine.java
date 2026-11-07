@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.transit;
 
+import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 
 import java.util.ArrayList;
@@ -44,6 +45,24 @@ public final class TransitLine {
     private String name;
     private RoadClass kind;
 
+    /**
+     * The colour this line is drawn in, ARGB, or null when it has none of its own.
+     *
+     * <h2>Why a line may have a colour at all</h2>
+     * Until now a line's colour was a property of its kind -- every rail line the same colour, every
+     * boat line another -- and that is still the default. An MTR route, though, has a colour of its
+     * own, and a player who runs two rail lines through one interchange needs them told apart on the
+     * map; the colour is the thing that carries across the whole map, the line editor's list and the
+     * place card's line chips, so it lives on the line rather than in a view.
+     *
+     * <h2>Why null rather than a sentinel</h2>
+     * Black is a colour, and a line drawn in it is a choice rather than "unset". Null therefore means
+     * exactly one thing -- this line has no colour of its own -- and every caller that draws it asks
+     * {@link #colorOr(int)} with the colour its kind's config says, so a line without a colour keeps
+     * following the config and a line with one keeps it.
+     */
+    private Integer color;
+
     public TransitLine(String id, String name, RoadClass kind) {
         this.id = id == null || id.isBlank() ? java.util.UUID.randomUUID().toString() : id;
         this.name = name == null ? "" : name;
@@ -81,6 +100,56 @@ public final class TransitLine {
         if (kind != null) {
             this.kind = kind;
         }
+    }
+
+    /**
+     * This line's own colour in ARGB, or null when it has none of its own.
+     *
+     * <p>What the editor's field shows and what the map draws; the fallback for a line without one is
+     * the caller's, because only the caller knows whether it is drawing a line (the kind's own
+     * config colour) or listing one in a screen that has already resolved a colour.
+     */
+    public Integer color() {
+        return color;
+    }
+
+    /** Whether this line carries a colour of its own, rather than following its kind's. */
+    public boolean hasColor() {
+        return color != null;
+    }
+
+    /**
+     * The colour to draw this line in: its own when it has one, the given fallback otherwise.
+     *
+     * <p>The one call every drawing site uses. It exists so that "a line without its own colour falls
+     * back to the colour of its kind" is stated here rather than in each of the map, the editor and
+     * the place card, which would sooner or later disagree about a line whose colour was cleared.
+     */
+    public int colorOr(int fallback) {
+        return color == null ? fallback : color;
+    }
+
+    /**
+     * Sets this line's own colour, or clears it when given null.
+     *
+     * <p>The alpha is forced opaque because a line colour is read out of a field a player types into
+     * and out of another mod's data, and a transparent colour is a line that is not there -- the same
+     * rule {@code ColorHex} applies to six-digit road colours. The RGB is kept as given, so the value
+     * written back out is the one that was read in.
+     */
+    public void setColor(Integer argb) {
+        this.color = argb == null ? null : 0xFF000000 | (argb & 0xFFFFFF);
+    }
+
+    /**
+     * The colour as {@code #RRGGBB}, or the empty string when the line has none.
+     *
+     * <p>What the data file stores and what the editor's field is seeded with: six digits is what
+     * every colour picker and every other mod's colour data speaks, and the alpha is this line's to
+     * add back when it reads the value.
+     */
+    public String colorHex() {
+        return color == null ? "" : ColorHex.formatRgb(color);
     }
 
     /** The stops in travel order, which is the order a ride along this line calls at them. */
@@ -171,6 +240,7 @@ public final class TransitLine {
     public TransitLine copy() {
         TransitLine copy = new TransitLine(id, name, kind);
         copy.stops.addAll(stops);
+        copy.setColor(color);
         return copy;
     }
 }

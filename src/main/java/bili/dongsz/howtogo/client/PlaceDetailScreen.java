@@ -1,7 +1,11 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.place.PlaceDetails;
+import bili.dongsz.howtogo.place.PlaceSections;
+import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
+import bili.dongsz.howtogo.transit.TransitLine;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
@@ -94,6 +98,29 @@ public final class PlaceDetailScreen extends Screen {
     public static final String MORE_KEY = "screen.howtogo.place_details.more";
 
     /**
+     * The caption before a station's read-only line chips.
+     *
+     * <p>The address row has no caption key of its own: its text is one whole sentence built by
+     * {@link PlaceAddressView}, and splitting it into a caption and a value would mean translating
+     * the same word twice.
+     */
+    public static final String LINES_KEY = "screen.howtogo.place_details.lines";
+
+    /**
+     * The hint in the type box: what a shop's type looks like.
+     *
+     * <p>Separate from the tag hint because it is one value, not a list, and the tag hint explains
+     * separators that do not exist here. A resource point gets a different example -- see
+     * {@link #RESOURCE_HINT_KEY} -- because "a convenience store" is a shop and telling a resource
+     * point that its type looks like one is simply the wrong example.
+     */
+    public static final String CATEGORY_HINT_KEY = "screen.howtogo.place_details.category_hint";
+
+    /** The hint in the resource-type box: what a gathered resource looks like, not a shop. */
+    public static final String RESOURCE_HINT_KEY =
+            "screen.howtogo.place_details.resource_hint";
+
+    /**
      * How the typed tag text is cut into tags: every comma a Chinese or a western keyboard can send,
      * the two Oriental semicolons, and any whitespace.
      *
@@ -118,6 +145,13 @@ public final class PlaceDetailScreen extends Screen {
     private static final int DESCRIPTION_MAX_HEIGHT = 90;
     private static final int TAG_FIELD_HEIGHT = 16;
     private static final int TOGGLE_HEIGHT = 16;
+    /**
+     * The read-only address row (also the height of the station's line-chip row).
+     *
+     * <p>One line of text, no box: it is a sentence the player reads, and a box around it would
+     * suggest it can be typed into.
+     */
+    private static final int ADDRESS_HEIGHT = 10;
     /**
      * The error line: two lines' worth, reserved whether or not there is a refusal on it.
      *
@@ -165,6 +199,18 @@ public final class PlaceDetailScreen extends Screen {
     /** The tag text, carried through {@link #init()} so a resize does not lose it either. */
     private String tagsText;
 
+    /**
+     * The type / resource-type box, or null for a kind that has no type.
+     *
+     * <p>Null rather than hidden, because the whole row is absent for an ordinary place and a
+     * hidden widget would still take a tab stop and still be walked by {@link #init}. The category
+     * itself is remembered in {@link #categoryText} when there is no box, so a place that used to be
+     * a shop keeps its type instead of losing it the next time its details are edited.
+     */
+    private EditBox categoryField;
+    /** The type as it stood when the dialog opened, carried across a resize like the tag text. */
+    private String categoryText;
+
     /** The message shown when the last attempt was refused, or null. */
     private Component error;
 
@@ -179,6 +225,10 @@ public final class PlaceDetailScreen extends Screen {
     private int contentW;
     private int titleY;
     private int sourceY;
+    private int addressY;
+    private int linesY;
+    private int categoryCaptionY;
+    private int categoryY;
     private int descriptionCaptionY;
     private int descriptionY;
     private int descriptionH;
@@ -200,6 +250,7 @@ public final class PlaceDetailScreen extends Screen {
                 Component.translatable(DESCRIPTION_HINT_KEY), start.description());
         this.favorite = start.favorite();
         this.tagsText = joinTags(start.tags());
+        this.categoryText = start.category();
     }
 
     /**
@@ -249,11 +300,24 @@ public final class PlaceDetailScreen extends Screen {
         cardW = Math.min(CARD_MAX_WIDTH, Math.max(CARD_MIN_WIDTH, width - 16));
         contentW = cardW - PAD * 2;
 
+        boolean showsLines = showsLines();
+        boolean showsType = showsType();
+
         // The card's height is the fixed rows plus whatever the window can spare for the description,
         // inside the description's own bounds. Measured first so `cardY` can centre the card before
         // any row is placed -- the rows are then placed from the card down, and cannot disagree with
         // the height that was used to centre it.
-        int fixed = PAD + TITLE_HEIGHT + 2 + SOURCE_HEIGHT + GAP
+        //
+        // The per-kind rows are in the fixed part and not in the description's slack, because they
+        // are what this dialog is for: an address, a station's lines and a shop's type must not
+        // disappear on a small window, while the description is the one row that can be clipped and
+        // still leave a working dialog. Every row is placed sequentially from the measured height,
+        // so even a window shorter than the fixed part clips at the bottom rather than overlapping.
+        int fixed = PAD + TITLE_HEIGHT + 2
+                + SOURCE_HEIGHT + GAP
+                + ADDRESS_HEIGHT + GAP
+                + (showsLines ? ADDRESS_HEIGHT + GAP : 0)
+                + (showsType ? CAPTION_HEIGHT + 2 + TAG_FIELD_HEIGHT + GAP : 0)
                 + CAPTION_HEIGHT + 2
                 + GAP
                 + CAPTION_HEIGHT + 2
@@ -279,6 +343,18 @@ public final class PlaceDetailScreen extends Screen {
         cursorY += TITLE_HEIGHT + 2;
         sourceY = cursorY;
         cursorY += SOURCE_HEIGHT + GAP;
+        addressY = cursorY;
+        cursorY += ADDRESS_HEIGHT + GAP;
+        if (showsLines) {
+            linesY = cursorY;
+            cursorY += ADDRESS_HEIGHT + GAP;
+        }
+        if (showsType) {
+            categoryCaptionY = cursorY;
+            cursorY += CAPTION_HEIGHT + 2;
+            categoryY = cursorY;
+            cursorY += TAG_FIELD_HEIGHT + GAP;
+        }
         descriptionCaptionY = cursorY;
         cursorY += CAPTION_HEIGHT + 2;
         descriptionY = cursorY;
@@ -306,6 +382,28 @@ public final class PlaceDetailScreen extends Screen {
         tagsField.setMaxLength(PlaceDetails.MAX_TAGS * (PlaceDetails.MAX_TAG_LENGTH + 1));
         tagsField.setValue(seed == null ? "" : seed);
         addRenderableWidget(tagsField);
+
+        if (showsType) {
+            String categorySeed = categoryField != null ? categoryField.getValue() : categoryText;
+            // The box refuses a ninth character rather than letting the player type one and then
+            // refusing Done: the limit is one tag's length, and the field's own limit is the same
+            // number, so the two cannot disagree about what fits.
+            categoryField = new EditBox(this.font, contentX, categoryY, contentW, TAG_FIELD_HEIGHT,
+                    Component.translatable(PlaceSections.labelKey(place.kind())));
+            // A resource point's example is a resource, not a shop: the two kinds share the field and
+            // its rule, but "e.g. convenience store" under "Resource type" would be telling the player
+            // to write the wrong sort of word in it.
+            categoryField.setHint(Component.translatable(
+                    place.kind() == PlaceKind.RESOURCE ? RESOURCE_HINT_KEY : CATEGORY_HINT_KEY));
+            categoryField.setMaxLength(PlaceDetails.MAX_TAG_LENGTH);
+            categoryField.setValue(categorySeed == null ? "" : categorySeed);
+            addRenderableWidget(categoryField);
+        } else {
+            // A kind that has no type shows no box. The value is kept in `categoryText` and carried
+            // through accept(), so changing a place's kind does not silently erase what was typed.
+            categoryField = null;
+        }
+
         if (descriptionFocused) {
             // The description is why the dialog exists and is all the player came to write; the tags
             // box is a Tab away, which is what the key handler below is for.
@@ -324,6 +422,16 @@ public final class PlaceDetailScreen extends Screen {
                         Component.translatable("gui.cancel"), PanelButton.Kind.NEUTRAL, this::onClose));
     }
 
+    /** Whether this kind of place carries a type / resource type the player may write. */
+    private boolean showsType() {
+        return place.kind() == PlaceKind.SHOP || place.kind() == PlaceKind.RESOURCE;
+    }
+
+    /** Whether this kind of place shows the lines calling at it. */
+    private boolean showsLines() {
+        return place.kind() == PlaceKind.STATION;
+    }
+
     // ---------------------------------------------------------------- accepting
 
     /**
@@ -338,9 +446,11 @@ public final class PlaceDetailScreen extends Screen {
         // message cannot outlive the reason for it while the player fixes the field it named.
         error = null;
         List<String> typedTags = parseTags(tagsField.getValue());
+        String typedCategory = categoryField != null ? categoryField.getValue() : categoryText;
         boolean overLimit = PlaceDetails.lengthInCodePoints(description.value())
                 > PlaceDetails.MAX_DESCRIPTION
-                || typedTags.size() > PlaceDetails.MAX_TAGS;
+                || typedTags.size() > PlaceDetails.MAX_TAGS
+                || PlaceDetails.lengthInCodePoints(typedCategory) > PlaceDetails.MAX_TAG_LENGTH;
         if (!overLimit) {
             for (String tag : typedTags) {
                 if (PlaceDetails.lengthInCodePoints(tag) > PlaceDetails.MAX_TAG_LENGTH) {
@@ -350,11 +460,17 @@ public final class PlaceDetailScreen extends Screen {
             }
         }
         if (overLimit) {
+            // One message for every field: the type shares a tag's length limit, and a second
+            // sentence saying so would be the same numbers with a different noun. Refusing rather
+            // than truncating is the same rule the tags and the description follow -- see the class
+            // comment on why the store's silent normalisation must not be the first the player hears
+            // of it.
             error = Component.translatable(OVER_LIMIT_KEY, PlaceDetails.MAX_DESCRIPTION,
                     PlaceDetails.MAX_TAGS, PlaceDetails.MAX_TAG_LENGTH);
             return;
         }
-        onAccept.accept(PlaceDetails.of(description.value(), typedTags, favorite).normalize());
+        onAccept.accept(PlaceDetails.of(description.value(), typedTags, favorite)
+                .withCategory(typedCategory).normalize());
         onClose();
     }
 
@@ -450,8 +566,19 @@ public final class PlaceDetailScreen extends Screen {
         // without this the description -- which is not a widget -- could never be reached from the
         // widgets at all, and the tags box could never be left.
         if (keyCode == InputConstants.KEY_TAB) {
-            descriptionFocused = !descriptionFocused;
-            setFocused(descriptionFocused ? null : tagsField);
+            // Three fields at most, one cycle: the description (not a widget, so it needs the flag),
+            // the tag box, and -- for a shop or a resource point -- the type box. A plain Screen has
+            // no tab order, and without this the description could never be reached from the widgets
+            // at all, and the type box could only ever be clicked.
+            if (descriptionFocused) {
+                descriptionFocused = false;
+                setFocused(tagsField);
+            } else if (categoryField != null && getFocused() != categoryField) {
+                setFocused(categoryField);
+            } else {
+                descriptionFocused = true;
+                setFocused(null);
+            }
             return true;
         }
         if (descriptionFocused && description.keyPressed(this.font, keyCode)) {
@@ -553,6 +680,17 @@ public final class PlaceDetailScreen extends Screen {
 
         drawTitle(graphics);
         drawSource(graphics);
+        drawAddress(graphics);
+        if (showsLines()) {
+            drawLines(graphics);
+        }
+        if (showsType()) {
+            // The box itself is a widget and draws in super.render below; only its caption is here,
+            // and it uses the word the kind's own section picks -- "类型" for a shop, "资源类型"
+            // for a resource point.
+            graphics.drawString(font, caption(PlaceSections.labelKey(place.kind())), contentX,
+                    categoryCaptionY, UiTheme.header(), false);
+        }
 
         graphics.drawString(font, caption(DESCRIPTION_KEY), contentX, descriptionCaptionY,
                 UiTheme.header(), false);
@@ -615,10 +753,91 @@ public final class PlaceDetailScreen extends Screen {
             return;
         }
         HudDraw.fillRounded(graphics, labelX, sourceY - 1, labelX + pillW, sourceY + 9, 3,
-                UiTheme.selection());
+                UiTheme.chipSource());
         graphics.drawString(font,
                 PlaceText.ellipsis(font, label, Math.max(1, pillW - 4)), labelX + 4, sourceY,
-                UiTheme.onSelection(), false);
+                UiTheme.onChip(), false);
+    }
+
+    /**
+     * The read-only address row: where this place is, in the road's words rather than in numbers.
+     *
+     * <p>The same sentence the card draws, from the same cache: opening this dialog must not cost a
+     * search of the network per frame, and the two views must not describe one place two ways. The
+     * coordinates are deliberately absent -- a player editing a description is not navigating, and
+     * a number here would be the only text in the dialog that this mod did not derive.
+     */
+    private void drawAddress(GuiGraphics graphics) {
+        String line = PlaceAddressView.line(place.x(), place.z());
+        graphics.drawString(font, PlaceText.ellipsis(font, line, contentW), contentX, addressY,
+                UiTheme.textSecondary(), false);
+    }
+
+    /**
+     * The station's read-only lines: a caption, then one chip per line in that line's own colour.
+     *
+     * <p>Drawn on one row and clipped rather than wrapped: this is the editor dialog, and the lines
+     * are context for what is being edited, not a list to be read at length. When not all of them
+     * fit, the last slot is a "+N" so a player knows the row is showing a subset. A station with no
+     * lines draws nothing at all -- a caption with nothing after it would read as a failure to load
+     * rather than as a station that no line calls at yet.
+     */
+    private void drawLines(GuiGraphics graphics) {
+        List<TransitLine> lines = PlaceLines.at(place.x(), place.z());
+        if (lines.isEmpty()) {
+            return;
+        }
+        String lineCaption = caption(LINES_KEY);
+        graphics.drawString(font, lineCaption, contentX, linesY, UiTheme.header(), false);
+        int startX = contentX + font.width(lineCaption) + GAP;
+        int limit = contentX + contentW;
+
+        // How many chips fit, then take slots back until a "+N" for the rest also fits. The loops run
+        // at most lines.size() times, which is a handful at worst.
+        int shown = 0;
+        int width = 0;
+        for (int i = 0; i < lines.size(); i++) {
+            int chipWidth = font.width(lines.get(i).label()) + 8 + 3;
+            if (startX + width + chipWidth > limit) {
+                break;
+            }
+            width += chipWidth;
+            shown++;
+        }
+        if (shown < lines.size()) {
+            while (shown > 0) {
+                int restWidth = font.width("+" + (lines.size() - shown)) + 8;
+                if (startX + width + restWidth <= limit) {
+                    break;
+                }
+                shown--;
+                width -= font.width(lines.get(shown).label()) + 8 + 3;
+            }
+        }
+
+        int chipX = startX;
+        for (int i = 0; i < shown; i++) {
+            TransitLine line = lines.get(i);
+            String label = line.label();
+            int chipWidth = Math.min(limit - chipX, font.width(label) + 8);
+            if (chipWidth <= 0) {
+                break;
+            }
+            int fill = line.colorOr(RoadConfig.transitLineColor(line.kind()));
+            HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + chipWidth, linesY + 9, 3, fill);
+            graphics.drawString(font, PlaceText.ellipsis(font, label, Math.max(1, chipWidth - 4)),
+                    chipX + 4, linesY, UiTheme.onChipFor(fill), false);
+            chipX += chipWidth + 3;
+        }
+        if (shown < lines.size()) {
+            String more = "+" + (lines.size() - shown);
+            int restWidth = font.width(more) + 8;
+            if (chipX + restWidth <= limit) {
+                HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + restWidth, linesY + 9, 3,
+                        UiTheme.chipTag());
+                graphics.drawString(font, more, chipX + 4, linesY, UiTheme.onChip(), false);
+            }
+        }
     }
 
     /**

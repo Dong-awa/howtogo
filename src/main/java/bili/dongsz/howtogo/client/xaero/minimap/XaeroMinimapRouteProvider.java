@@ -152,7 +152,7 @@ public final class XaeroMinimapRouteProvider
                 MtrTransit.railLayer()));
         buffer.add(XaeroMinimapRouteElement.networkLayer(
                 XaeroMinimapRouteElement.Kind.ROADWEAVER, anchorX, anchorZ,
-                RoadWeaverLayer.network()));
+                RoadWeaverLayer.drawnNetwork()));
     }
 
     /**

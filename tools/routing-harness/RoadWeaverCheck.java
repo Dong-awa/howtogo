@@ -156,6 +156,17 @@ public final class RoadWeaverCheck {
         RoadNetwork network = RoadWeaverLayer.build(List.of(road), List.of(connection), null);
         expect("both trimmed ends get a straight connector", network.segmentCount() == 3);
         expect("and both structures become nodes of the network", network.nodeCount() == 4);
+        // The connectors are routing geometry, not roads: the maps draw the drawn view instead, so the
+        // straight stubs up to 256 blocks long are not painted across the landscape. The full network
+        // still carries them, which is the half that keeps a destination reachable.
+        RoadWeaverLayer.Converted converted =
+                RoadWeaverLayer.convert(List.of(road), List.of(connection), null);
+        expect("the connectors are kept in the network routing plans over",
+                converted.network().segmentCount() == 3);
+        expect("while the network the maps draw holds only the real road",
+                converted.drawn().segmentCount() == 1);
+        expect("and the drawn segment list is that same road", converted.drawnSegments().size() == 1);
+        expect("with the two connectors named as such", converted.connectors().size() == 2);
         Route route = RoadRouter.findRoute(network, -30, 0, 430, 0, "the village",
                 TravelMode.WALK, RoutePreferences.DEFAULTS);
         expect("so a walk can start at the village and end at the next one", route.isPresent());

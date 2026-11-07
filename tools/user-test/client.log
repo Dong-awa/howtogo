@@ -1,37 +1,360 @@
-> Task :createMinecraftArtifacts UP-TO-DATE
-> Task :compileJava
-> Task :processResources UP-TO-DATE
-> Task :classes
-> Task :downloadAssets UP-TO-DATE
-> Task :writeClientLegacyClasspath UP-TO-DATE
-> Task :prepareClientRun UP-TO-DATE
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.internal.NativeLibraryLoader in an unnamed module (file:/C:/Users/hzz12/.gradle/wrapper/dists/gradle-9.5.1-bin/iq79hdu3mqx29lgffhp8bfmx/gradle-9.5.1/lib/native-platform-0.22-milestone-29.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
 
-> Task :runClient
+Configuration on demand is an incubating feature.
+Running Stonecutter 0.7.11
+> Task :1.21.1-neoforge:stonecutterPrepare UP-TO-DATE
+> Task :1.21.1-neoforge:stonecutterGenerate UP-TO-DATE
+> Task :1.21.1-neoforge:createMinecraftArtifacts UP-TO-DATE
+> Task :1.21.1-neoforge:compileJava UP-TO-DATE
+> Task :1.21.1-neoforge:processResources UP-TO-DATE
+> Task :1.21.1-neoforge:classes UP-TO-DATE
+
+> Task :1.21.1-neoforge:downloadAssets
+Loaded 145 artifacts from H:\MCMOD\HowToGo\versions\1.21.1-neoforge\build\tmp\downloadAssets\nfrt_artifact_manifest.properties
+Downloading asset index 17
+Using Minecraft asset root: C:\Users\hzz12\.gradle\caches\neoformruntime\assets
+  DL    https://piston-meta.mojang.com/v1/packages/4ca8e1a1edd37a703c5d1594f71d409852cd9770/17.json
+
+> Task :1.21.1-neoforge:writeClientLegacyClasspath
+> Task :1.21.1-neoforge:prepareClientRun
+
+> Task :1.21.1-neoforge:runClient
 WARN StatusConsoleListener Advanced terminal features are not available in this environment
-[19:15:17] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: ModLauncher running: args [--launchTarget, forgeclientdev, --version, 21.1.255, --assetIndex, 17, --assetsDir, C:\\Users\\hzz12\\.gradle\\caches\\neoformruntime\\assets, --gameDir, ., --fml.fmlVersion, 4.0.45, --fml.mcVersion, 1.21.1, --fml.neoForgeVersion, 21.1.255, --fml.neoFormVersion, 20240808.144430, --quickPlaySingleplayer, TEST]
-[19:15:17] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: JVM identified as Oracle Corporation Java HotSpot(TM) 64-Bit Server VM 21.0.11+9-LTS-211
-[19:15:17] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: ModLauncher 11.0.5+main.901c6ea8 starting: java version 21.0.11 by Oracle Corporation; OS Windows 10 arch amd64 version 10.0
-[19:15:17] [main/WARN] [ne.ne.fm.lo.FMLConfig/CORE]: Configuration file H:\MCMOD\HowToGo\run\config\fml.toml is not correct. Correcting
-[19:15:17] [main/INFO] [ne.ne.fm.lo.ImmediateWindowHandler/]: Loading ImmediateWindowProvider fmlearlywindow
-[19:15:17] [main/INFO] [EARLYDISPLAY/]: Trying GL version 4.6
-[19:15:18] [main/INFO] [EARLYDISPLAY/]: Requested GL version 4.6 got version 4.6
-[19:15:18] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.7 Source=union:/C:/Users/hzz12/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.16.4+mixin.0.8.7/26d01f0567ab46e9ca0d2ed89d0ecc11aadbd433/sponge-mixin-0.16.4+mixin.0.8.7.jar%23138!/ Service=ModLauncher Env=CLIENT
-[19:15:18] [main/WARN] [ne.ne.fm.lo.FMLConfig/CORE]: Configuration file H:\MCMOD\HowToGo\run\config\fml.toml is not correct. Correcting
-[19:15:18] [pool-2-thread-1/INFO] [EARLYDISPLAY/]: GL info: NVIDIA GeForce RTX 3060 Ti/PCIe/SSE2 GL version 4.6.0 NVIDIA 610.88, NVIDIA Corporation
-[19:15:19] [main/INFO] [ne.ne.fm.lo.mo.lo.JarInJarDependencyLocator/]: Found 2 dependencies adding them to mods collection
-[19:15:19] [main/INFO] [ne.ne.fm.lo.mo.ModDiscoverer/]: 
+[14:06:44] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: ModLauncher running: args [--launchTarget, forgeclientdev, --version, 21.1.264, --assetIndex, 17, --assetsDir, C:\\Users\\hzz12\\.gradle\\caches\\neoformruntime\\assets, --gameDir, ., --fml.fmlVersion, 4.0.45, --fml.mcVersion, 1.21.1, --fml.neoForgeVersion, 21.1.264, --fml.neoFormVersion, 20240808.144430, --quickPlaySingleplayer, TEST]
+[14:06:44] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: JVM identified as Oracle Corporation Java HotSpot(TM) 64-Bit Server VM 21.0.11+9-LTS-211
+[14:06:44] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: ModLauncher 11.0.5+main.901c6ea8 starting: java version 21.0.11 by Oracle Corporation; OS Windows 10 arch amd64 version 10.0
+[14:06:44] [main/INFO] [ne.ne.fm.lo.ImmediateWindowHandler/]: Loading ImmediateWindowProvider fmlearlywindow
+[14:06:44] [main/INFO] [EARLYDISPLAY/]: Trying GL version 4.6
+[14:06:44] [main/INFO] [EARLYDISPLAY/]: Requested GL version 4.6 got version 4.6
+[14:06:44] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.7 Source=union:/C:/Users/hzz12/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.16.4+mixin.0.8.7/26d01f0567ab46e9ca0d2ed89d0ecc11aadbd433/sponge-mixin-0.16.4+mixin.0.8.7.jar%23138!/ Service=ModLauncher Env=CLIENT
+[14:06:44] [pool-2-thread-1/INFO] [EARLYDISPLAY/]: GL info: NVIDIA GeForce RTX 3060 Ti/PCIe/SSE2 GL version 4.6.0 NVIDIA 610.88, NVIDIA Corporation
+[14:06:45] [main/INFO] [ne.ne.fm.lo.mo.lo.JarInJarDependencyLocator/]: Found 9 dependencies adding them to mods collection
+[14:06:45] [main/INFO] [ne.ne.fm.lo.mo.ModDiscoverer/]: 
      Mod List:
 		Name Version (Mod Id)
 
-		HowToGo | 问道 0.2.1 (howtogo)
+		Architectury 13.0.6 (architectury)
+		Cloth Config v15 API 15.0.130 (cloth_config)
+		Create 6.0.10 (create)
+		Flywheel 1.0.6 (flywheel)
+		HowToGo Connect 0.1.0 (htg_connect)
+		HowToGo | 问道 0.2.3 (howtogo)
+		MCphone 1.10.2 (mcphone)
 		Minecraft 1.21.1 (minecraft)
-		NeoForge 21.1.255 (neoforge)
-		Xaero's World Map 1.46.0 (xaeroworldmap)
+		Minecraft Transit Railway 4.1.0-beta.2 (mtr)
+		MTR Map Overlay 1.5.1 (mtrmap)
+		NeoForge 21.1.264 (neoforge)
+		Ponder 1.0.82+mc1.21.1 (ponder)
+		RoadWeaver 2.3.2-1.21.1 (roadweaver)
+		Xaero's Minimap 26.6.0 (xaerominimap)
+		Xaero's World Map 1.47.0 (xaeroworldmap)
 		XaeroLib 1.7.3 (xaerolib)
-[19:15:19] [main/INFO] [ne.ne.fm.lo.FMLServiceProvider/CORE]: Loading coremod script-engine for [xaeroworldmap]
-[19:15:20] [main/INFO] [mixin/]: Compatibility level set to JAVA_17
-[19:15:20] [main/INFO] [cp.mo.mo.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeclientdev' with arguments [--version, 21.1.255, --gameDir, ., --assetsDir, C:\Users\hzz12\.gradle\caches\neoformruntime\assets, --assetIndex, 17, --quickPlaySingleplayer, TEST]
-[19:15:20] [main/WARN] [mixin/]: Reference map 'xaerolib.refmap.json' for xaerolib.mixins.json could not be read. If this is a development environment you can ignore this message
-[19:15:20] [main/WARN] [mixin/]: Reference map 'xaeroworldmap.refmap.json' for xaeroworldmap.mixins.json could not be read. If this is a development environment you can ignore this message
-[19:15:21] [main/INFO] [MixinExtras|Service/]: Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.5).
-[19:15:23] [Datafixer Bootstrap/INFO] [mojang/DataFixerBuilder]: 229 Datafixer optimizations took 682 milliseconds
+[14:06:45] [main/INFO] [ne.ne.fm.lo.FMLServiceProvider/CORE]: Loading coremod script-engine for [xaerominimap, xaeroworldmap]
+[14:06:46] [main/INFO] [mixin/]: Compatibility level set to JAVA_21
+[14:06:46] [main/INFO] [cp.mo.mo.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeclientdev' with arguments [--version, 21.1.264, --gameDir, ., --assetsDir, C:\Users\hzz12\.gradle\caches\neoformruntime\assets, --assetIndex, 17, --quickPlaySingleplayer, TEST]
+[14:06:46] [main/WARN] [mixin/]: Reference map 'xaerolib.refmap.json' for xaerolib.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:46] [main/WARN] [mixin/]: Reference map 'ponder.refmap.json' for ponder-common.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:46] [main/WARN] [mixin/]: Reference map 'xaerominimap.refmap.json' for xaerohud.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:46] [main/WARN] [mixin/]: Reference map 'xaerominimap.refmap.json' for xaerominimap.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:46] [main/WARN] [mixin/]: Reference map 'xaeroworldmap.refmap.json' for xaeroworldmap.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:46] [main/INFO] [MTRMap-Mixin/]: [MTRMap] Xaero's World Map detected - map path layer mixins will be applied
+[14:06:46] [main/WARN] [mixin/]: Reference map '' for roadweaver.mixins.json could not be read. If this is a development environment you can ignore this message
+[14:06:47] [main/WARN] [mixin/]: Error loading class: org/jetbrains/annotations/ApiStatus$ScheduledForRemoval (java.lang.ClassNotFoundException: org.jetbrains.annotations.ApiStatus$ScheduledForRemoval)
+[14:06:47] [main/INFO] [MixinExtras|Service/]: Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.5).
+[14:06:48] [Datafixer Bootstrap/INFO] [mojang/DataFixerBuilder]: 229 Datafixer optimizations took 342 milliseconds
+[14:06:53] [main/WARN] [minecraft/Commands]: Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[14:06:53] [main/WARN] [minecraft/Commands]: Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[14:06:53] [main/WARN] [minecraft/Commands]: Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[14:06:53] [main/WARN] [minecraft/Commands]: Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[14:06:53] [main/WARN] [minecraft/Commands]: Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[14:06:53] [Render thread/WARN] [minecraft/VanillaPackResourcesBuilder]: Assets URL 'union:/H:/MCMOD/HowToGo/versions/1.21.1-neoforge/build/moddev/artifacts/neoforge-21.1.264.jar%23197!/assets/.mcassetsroot' uses unexpected schema
+[14:06:53] [Render thread/WARN] [minecraft/VanillaPackResourcesBuilder]: Assets URL 'union:/H:/MCMOD/HowToGo/versions/1.21.1-neoforge/build/moddev/artifacts/neoforge-21.1.264.jar%23197!/data/.mcassetsroot' uses unexpected schema
+[14:06:53] [Render thread/INFO] [mojang/YggdrasilAuthenticationService]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
+[14:06:53] [Render thread/INFO] [minecraft/Minecraft]: Setting user: Dev
+[14:06:53] [Render thread/INFO] [minecraft/Minecraft]: Backend library: LWJGL version 3.3.3+5
+[14:06:53] [modloading-worker-0/INFO] [roadweaver/]: Initializing RoadWeaver (NeoForge)...
+[14:06:53] [modloading-worker-0/INFO] [ne.ne.ne.co.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 21.1.264, for MC 1.21.1
+[14:06:53] [modloading-worker-0/INFO] [roadweaver/]: 配置已加载 (predictRadius=1024, predictionEnabled=true)
+[14:06:53] [modloading-worker-0/INFO] [co.no.mc.MCphone/]: MCphone 模组加载完成 —— 手机已就绪
+[14:06:53] [modloading-worker-0/INFO] [MTRMap-Mixin/]: [MTRMap] Applied XaeroWorldMapAccessor to GuiMap
+[14:06:53] [modloading-worker-0/INFO] [MTRMap-Mixin/]: [MTRMap] Applied XaeroWorldMapMixin to GuiMap
+[14:06:53] [modloading-worker-0/INFO] [xa.hu.mi.MinimapLogs/]: Xaero's Minimap: World Map found!
+[14:06:53] [modloading-worker-0/INFO] [xa.hu.mi.MinimapLogs/]: No Optifine!
+[14:06:53] [modloading-worker-0/INFO] [xa.hu.mi.MinimapLogs/]: Xaero's Minimap: No Vivecraft!
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Registering common data for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Registering client data for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [co.si.cr.Create/]: Create 6.0.10 initializing! Commit hash: ac0c444d9828da3453ae8cc65338e8de063286fb
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Loading primary common config for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Loading server config profiles for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Loading primary client config for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Starting Minecraft with arguments:
+-Dfml.modFolders=howtogo%%H:\MCMOD\HowToGo\versions\1.21.1-neoforge\build\classes\java\main;howtogo%%H:\MCMOD\HowToGo\versions\1.21.1-neoforge\build\resources\main
+--module-path=C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\net.neoforged\\JarJarFileSystems\\0.4.1\\78f59f89defcd032ed788b151ca6a0d40ace796a\\JarJarFileSystems-0.4.1.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\cpw.mods\\bootstraplauncher\\2.0.2\\1a2d076cbc33b0520cbacd591224427b2a20047d\\bootstraplauncher-2.0.2.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\cpw.mods\\securejarhandler\\3.0.8\\c0ef95cecd8699a0449053ac7d9c160748d902cd\\securejarhandler-3.0.8.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\org.ow2.asm\\asm-commons\\9.10.1\\4229e4c55fd8e01c23f9fe9884075cc628aacc50\\asm-commons-9.10.1.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\org.ow2.asm\\asm-util\\9.10.1\\7bb9d450e8d4cbf9f9e04096c44bbfe7fba80b15\\asm-util-9.10.1.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\org.ow2.asm\\asm-analysis\\9.10.1\\8d49f14d51f632cb1d87c88d1ceaf50db0d8af1b\\asm-analysis-9.10.1.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\org.ow2.asm\\asm-tree\\9.10.1\\e244332a17564c1d1572449399a842de35881be2\\asm-tree-9.10.1.jar;C:\\Users\\hzz12\\.gradle\\caches\\modules-2\\files-2.1\\org.ow2.asm\\asm\\9.10.1\\ada2141c0cc52ee8f5c48cd5fa4ce0e794f22236\\asm-9.10.1.jar
+--add-modules=ALL-MODULE-PATH
+--add-opens=java.base/java.util.jar=cpw.mods.securejarhandler
+--add-opens=java.base/java.lang.invoke=cpw.mods.securejarhandler
+--add-exports=java.base/sun.security.util=cpw.mods.securejarhandler
+--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming
+-Dlog4j2.configurationFile=H:\\MCMOD\\HowToGo\\versions\\1.21.1-neoforge\\build\\moddev\\clientLog4j2.xml
+-Djava.net.preferIPv6Addresses=system
+-DignoreList=mixinextras-neoforge-0.5.5.jar,client-extra,neoforge-
+-DlegacyClassPath.file=H:\\MCMOD\\HowToGo\\versions\\1.21.1-neoforge\\build\\moddev\\clientLegacyClasspath.txt
+-Dneoforge.enableGameTest=true
+-Dhowtogo.selftest.quit=1
+-Dforge.logging.markers=REGISTRIES
+-Dhowtogo.selftest=25
+-Dfile.encoding=UTF-8
+-Duser.country=CN
+-Duser.language=zh
+-Duser.variant
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :  __  __     _                                                __    _     
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : |  \/  |   (_)    _ _      ___     __       _ _   __ _      / _|  | |_   
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : | |\/| |   | |   | ' \    / -_)   / _|     | '_| / _` |    |  _|  |  _|  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : |_|__|_|  _|_|_  |_||_|   \___|   \__|_   _|_|_  \__,_|   _|_|_   _\__|  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : _|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""| 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : "`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-' 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :   _____                                     _      _                     
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :  |_   _|    _ _   __ _    _ _      ___     (_)    | |_                   
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :    | |     | '_| / _` |  | ' \    (_-<     | |    |  _|                  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :   _|_|_   _|_|_  \__,_|  |_||_|   /__/_   _|_|_   _\__|                  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : _|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|                 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : "`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'                 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :    ___              _       _                      _  _                  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :   | _ \   __ _     (_)     | |   __ __ __ __ _    | || |                 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :   |   /  / _` |    | |     | |   \ V  V // _` |    \_, |                 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :   |_|_\  \__,_|   _|_|_   _|_|_   \_/\_/ \__,_|   _|__/                  
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : _|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_|"""""|_| """"|                 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: : "`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-'"`-0-0-' (4.1.0-beta.2+1.21.4) 
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: :                                                                          
+[14:06:54] [modloading-worker-0/INFO] [xa.ma.WorldMap/]: Loading client config profiles for channel xaeroworldmap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Registering common data for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Registering client data for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Loading primary common config for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Loading server config profiles for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Loading primary client config for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.co.HudMod/]: Loading client config profiles for channel xaerominimap:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Registering common data for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Registering client data for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Loading primary common config for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Loading server config profiles for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [MTR Map Overlay/]: [MTR Map Overlay] JourneyMap not found - landmark integration disabled
+[14:06:54] [modloading-worker-0/INFO] [MTR Map Overlay/]: [MTR Map Overlay] Xaero's World Map detected - map-only landmark icons enabled
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Loading primary client config for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [bi.do.ho.HowToGo/]: [HowToGo] constructed
+[14:06:54] [modloading-worker-0/INFO] [xa.li.XaeroLib/]: Loading client config profiles for channel xaerolib:main!
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway blocks
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway items
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway block entity types
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway creative mode tabs
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway sound events
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway data component types
+[14:06:54] [modloading-worker-0/INFO] [MinecraftTransitRailway/]: Registering Minecraft Transit Railway key bindings
+2026-11-07T06:06:54.489727900Z modloading-worker-0 ERROR Log4j API could not find a logging provider.
+[14:06:58] [Render thread/INFO] [ne.ne.ne.ga.GameTestHooks/]: Enabled Gametest Namespaces: []
+[14:06:58] [Render thread/INFO] [minecraft/ReloadableResourceManager]: Reloading ResourceManager: vanilla, mod_resources, mod/mtr, mod/mcphone, mod/architectury, mod/xaerolib, mod/cloth_config, mod/flywheel, mod/ponder, mod/create, mod/xaerominimap, mod/xaeroworldmap, mod/howtogo, mod/mtrmap, mod/htg_connect, mod/neoforge, mod/roadweaver
+[14:06:58] [Worker-Main-3/INFO] [xa.li.XaeroLib/]: Loading XaeroLib common 1/2!
+[14:06:58] [Worker-Main-5/INFO] [MTR Map Overlay/]: [MTR Map Overlay] You get a landmark, you get a landmark, every-nyan gets a landmark! >w<
+[14:06:59] [Render thread/INFO] [co.no.mc.MCphone/]: 一家存储模组都没装，「终端」App 不会出现在主屏上
+[14:06:59] [NeoForge Version Check/INFO] [ne.ne.fm.VersionChecker/]: [create] Starting version check at https://api.modrinth.com/updates/create/forge_updates.json?neoforge=only
+[14:06:59] [Worker-Main-10/INFO] [minecraft/UnihexProvider]: Found unifont_all_no_pua-15.1.05.hex, loading
+[14:06:59] [Worker-Main-10/INFO] [minecraft/UnihexProvider]: Found unifont_jp_patch-15.1.05.hex, loading
+[14:06:59] [Worker-Main-4/WARN] [minecraft/SoundManager]: File mtr:sounds/minecart/loop.ogg does not exist, cannot add it to event mtr:minecart_loop
+[14:06:59] [Worker-Main-4/WARN] [minecraft/SoundManager]: File mtr:sounds/minecart/motor4.ogg does not exist, cannot add it to event mtr:minecart_motor4
+[14:06:59] [Worker-Main-4/WARN] [minecraft/SoundManager]: File mtr:sounds/minecart/motor3.ogg does not exist, cannot add it to event mtr:minecart_motor3
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] 未装 MCEF，浏览器功能不可用
+[14:06:59] [Worker-Main-9/INFO] [xa.li.XaeroLib/]: Loading XaeroLib client 1/2!
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: howtogo:navigator v0.2.3 by DongSZ
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:settings v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:app_store v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:chat v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:camera v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:gallery v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:music v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:ender_chest v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:notes v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 跳过登记: mcphone:waystone（自称当前不可用）
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 跳过登记: mcphone:browser（自称当前不可用）
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:clock v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:weather v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 已登记: mcphone:reader v1.0.0 by 
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 跳过登记: mcphone:quests（自称当前不可用）
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] App 跳过登记: mcphone:terminal（自称当前不可用）
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: [MCphone] SPI 扫描完成，目录中共 12 个 App
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: MCphone 客户端加载完成
+[14:06:59] [Worker-Main-6/INFO] [co.no.mc.MCphone/]: 玩家: Dev
+[14:06:59] [Worker-Main-6/INFO] [xa.mi.XaeroMinimap/]: Loading Xaero's Minimap - Stage 1/2
+[14:06:59] [Worker-Main-1/INFO] [xa.ma.WorldMap/]: Loading Xaero's World Map - Stage 1/2
+[14:06:59] [Worker-Main-10/WARN] [minecraft/SpriteLoader]: Texture mtr:block/psd_door_end_top_right_2_1 with size 40x36 limits mip level from 4 to 2
+[14:06:59] [NeoForge Version Check/INFO] [ne.ne.fm.VersionChecker/]: [create] Found status: OUTDATED Current: 6.0.10 Target: 6.0.10+mc1.21.1
+[14:07:00] [Worker-Main-10/INFO] [bi.do.ho.HowToGo/]: [HowToGo] travel mode: walk
+[14:07:00] [Worker-Main-10/INFO] [bi.do.ho.HowToGo/]: [HowToGo] route preferences: metric shortest_distance avoid [highway] major true voice true boardOnly true
+[14:07:00] [Worker-Main-9/WARN] [xa.li.XaeroLib/]: io exception while checking patreon: Connect timed out
+[14:07:00] [Render thread/INFO] [xa.mi.XaeroMinimap/]: Loading Xaero's Minimap - Stage 2/2
+[14:07:02] [Render thread/WARN] [xa.hu.mi.MinimapLogs/]: io exception while checking versions: Connect timed out
+[14:07:02] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Registered player tracker system: minimap_synced
+[14:07:02] [Render thread/WARN] [ne.ne.fm.DeferredWorkQueue/LOADING]: Mod 'xaerominimap' took 1.530 s to run a deferred task.
+[14:07:02] [Render thread/INFO] [xa.ma.WorldMap/]: Loading Xaero's World Map - Stage 2/2
+[14:07:02] [Render thread/INFO] [xa.ma.WorldMap/]: New world map region cache hash code: 477631786
+[14:07:03] [Render thread/ERROR] [xa.ma.WorldMap/]: io exception while checking versions: Connect timed out
+[14:07:03] [Render thread/INFO] [xa.ma.WorldMap/]: Registered player tracker system: map_synced
+[14:07:03] [Render thread/INFO] [xa.ma.WorldMap/]: Xaero's WorldMap Mod: Xaero's minimap found!
+[14:07:03] [Render thread/INFO] [xa.ma.WorldMap/]: Registered player tracker system: minimap_synced
+[14:07:03] [Render thread/INFO] [xa.ma.WorldMap/]: No Optifine!
+[14:07:03] [Render thread/INFO] [xa.ma.WorldMap/]: Xaero's World Map: No Vivecraft!
+[14:07:03] [Render thread/INFO] [xa.li.XaeroLib/]: Loading XaeroLib common 2/2!
+[14:07:03] [Render thread/INFO] [xa.li.XaeroLib/]: Loading XaeroLib client 2/2!
+[14:07:03] [Worker-Main-1/INFO] [PonderIndex/]: Registering Ponder Scenes took 51.73 ms
+[14:07:03] [Worker-Main-1/INFO] [PonderIndex/]: Registering Ponder Tags took 3.259 ms
+[14:07:03] [Render thread/INFO] [MTR Map Overlay/]: [MTRMap] Full-network sync payloads registered (protocol 5)
+[14:07:03] [Render thread/WARN] [minecraft/SoundEngine]: Missing sound for event: minecraft:item.goat_horn.play
+[14:07:03] [Render thread/WARN] [minecraft/SoundEngine]: Missing sound for event: minecraft:entity.goat.screaming.horn_break
+[14:07:03] [Render thread/INFO] [mojang/Library]: OpenAL initialized on device OpenAL Soft on 扬声器 (2- USB PnP Audio Device)
+[14:07:03] [Render thread/INFO] [minecraft/SoundEngine]: Sound engine started
+[14:07:03] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 4096x2048x4 minecraft:textures/atlas/blocks.png-atlas
+[14:07:03] [Render thread/ERROR] [MinecraftTransitRailway/]: [mtr:textures/block/transparent.png] Invalid model!
+[14:07:06] [Render thread/INFO] [MinecraftTransitRailway/]: Loaded 423 vehicles and completed door movement validation in 0.0 ms
+[14:07:06] [Render thread/INFO] [MinecraftTransitRailway/]: Loaded 135 signs
+[14:07:06] [Render thread/INFO] [MinecraftTransitRailway/]: Loaded 3 rails
+[14:07:06] [Render thread/INFO] [MinecraftTransitRailway/]: Loaded 1 objects
+[14:07:06] [Render thread/INFO] [MinecraftTransitRailway/]: Loaded 1 lifts
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 2048x1024x4 minecraft:textures/atlas/armor_trims.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 128x64x4 minecraft:textures/atlas/decorated_pot.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x256x4 minecraft:textures/atlas/beds.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x256x4 minecraft:textures/atlas/shulker_boxes.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 512x256x0 minecraft:textures/atlas/paintings.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 256x128x0 minecraft:textures/atlas/mob_effects.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 64x64x0 minecraft:textures/atlas/map_decorations.png-atlas
+[14:07:06] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 1024x512x0 minecraft:textures/atlas/gui.png-atlas
+[14:07:06] [Render thread/WARN] [minecraft/ShaderInstance]: Shader rendertype_entity_translucent_emissive could not find sampler named Sampler2 in the specified shader program.
+[14:07:07] [Render thread/INFO] [xa.li.XaeroLib/]: Successfully reloaded the XaeroLib shaders!
+[14:07:07] [Render thread/INFO] [flywheel/backend/shaders/]: Loaded 77 shader sources in 15.310 ms
+[14:07:07] [Render thread/INFO] [co.si.cr.Create/]: Loaded 58 train hat configurations.
+[14:07:07] [Render thread/INFO] [ne.ne.ne.cl.en.an.js.AnimationLoader/]: Loaded 0 entity animations
+[14:07:07] [Render thread/INFO] [co.si.cr.Create/]: Created 157 recipes which will be injected into the game
+[14:07:07] [Render thread/INFO] [co.si.cr.Create/]: Created 0 tags which will be injected into the game
+[14:07:08] [Render thread/INFO] [minecraft/RecipeManager]: Loaded 3158 recipes
+[14:07:08] [Render thread/INFO] [minecraft/AdvancementTree]: Loaded 2508 advancements
+[14:07:08] [Render thread/WARN] [minecraft/MappedRegistry]: Not all defined tags for registry ResourceKey[minecraft:root / minecraft:worldgen/biome] are present in data pack: minecraft:is_birch_forest, minecraft:is_mangrove
+[14:07:09] [Server thread/INFO] [minecraft/IntegratedServer]: Starting integrated minecraft server version 1.21.1
+[14:07:09] [Server thread/INFO] [minecraft/MinecraftServer]: Generating keypair
+[14:07:09] [Server thread/INFO] [minecraft/MinecraftServer]: Preparing start region for dimension minecraft:overworld
+[14:07:09] [progressListener/INFO] [minecraft/LoggerChunkProgressListener]: 准备生成区域中：0%
+[14:07:10] [Server thread/INFO] [ne.ne.ne.se.pe.PermissionAPI/]: Successfully initialized permission handler neoforge:default_handler
+[14:07:10] [progressListener/INFO] [minecraft/LoggerChunkProgressListener]: Time elapsed: 212 ms
+[14:07:10] [Server thread/INFO] [RoadWeaver/StructureDiscovery/]: 发现 24 个结构和 5 个标签
+[14:07:10] [Server thread/INFO] [MinecraftTransitRailway/]: Found available port: 8888
+SLF4J(E): A service provider failed to instantiate:
+org.mtr.libraries.org.slf4j.spi.SLF4JServiceProvider: Provider org.mtr.libraries.org.apache.logging.slf4j.SLF4JServiceProvider not found
+SLF4J(E): A service provider failed to instantiate:
+org.mtr.libraries.org.slf4j.spi.SLF4JServiceProvider: Provider org.mtr.libraries.org.apache.logging.slf4j.SLF4JServiceProvider not found
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[14:07:10] [Server thread/INFO] [MinecraftTransitRailway/]: Starting server as a non-dedicated server
+[14:07:10] [Server thread/INFO] [minecraft/IntegratedServer]: Changing view distance to 12, from 10
+[14:07:10] [Server thread/INFO] [minecraft/IntegratedServer]: Changing simulation distance to 12, from 0
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] road layer registered with Xaero's World Map
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] navigation route overlay registered with Xaero's Minimap
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] map display mode: navigation map content is drawn on Xaero's Minimap; the HUD carries the readout only
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] api | v1 ready; 0 destination source(s) and 0 self check(s) contributed by other mods
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] RoadWeaver's road store is reachable through net.shiroha233.roadweaver.persistence.sharded.RoadShardStorage
+[14:07:10] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] RoadWeaver's roads are readable
+[14:07:10] [Render thread/INFO] [co.si.cr.Create/]: Created 157 recipes which will be injected into the game
+[14:07:10] [Render thread/INFO] [co.si.cr.Create/]: Created 0 tags which will be injected into the game
+[14:07:10] [Server thread/INFO] [minecraft/PlayerList]: Dev[local:E:0ed54886] logged in with entity id 1 at (-48.23484760157314, 56.0, -42.87915007348702)
+[14:07:11] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Minimap required item set to nothing.
+[14:07:11] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: New Xaero hud session initialized!
+[14:07:11] [Server thread/INFO] [minecraft/MinecraftServer]: Dev加入了游戏
+[14:07:11] [Render thread/INFO] [xa.ma.WorldMap/]: Fullscreen map required item set to nothing.
+[14:07:11] [Render thread/INFO] [xa.ma.WorldMap/]: New world map session initialized!
+[14:07:11] [Server thread/INFO] [io.gi.mo.ht.HowToGoConnect/]: Dev 加入了，但服务端还没有路网
+[14:07:11] [Render thread/INFO] [co.no.mc.MCphone/]: [MCphone] 已安装 11 / 目录 12 个 App
+[14:07:11] [Render thread/INFO] [co.no.mc.MCphone/]: [MCphone] 已加载存档 'world_TEST' 的 App 安装状态
+[14:07:11] [Render thread/INFO] [MinecraftTransitRailway/]: Open the Transport System Map at http://localhost:8888
+[14:07:11] [Render thread/INFO] [MinecraftTransitRailway/]: Open the Resource Pack Creator at http://localhost:8888/creator/
+[14:07:11] [Render thread/INFO] [flywheel/]: Started 6 worker threads
+[14:07:11] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Minimap updated server level id: 264987511 for world ResourceKey[minecraft:dimension / minecraft:overworld]
+[14:07:11] [Render thread/INFO] [minecraft/AdvancementTree]: Loaded 90 advancements
+[14:07:11] [Render thread/INFO] [co.no.mc.MCphone/]: [MCphone] 价格表就绪：1 个报价方，共 1 条报价
+[14:07:11] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Reloading radar icon resources...
+[14:07:11] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Reloaded radar icon resources!
+[14:07:11] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] world data: sp_新的世界 | sp_xin_de_shi_jie/minecraft_overworld.json
+[14:07:11] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] loaded 43 nodes / 48 segments from minecraft_overworld.json
+[14:07:11] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] place details: 1 record(s) from place_details.json
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] loaded 2 line(s) from minecraft_overworld-lines.json
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] restored MTR Map Overlay's map toggles (routes off, tracks off)
+[14:07:12] [Render thread/INFO] [MTR Map Overlay/]: [MTRMap] JourneyMap not installed - landmark integration disabled
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] Create track layer: reading 1 track id(s) and 1 station id(s)
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] Create track graph bound reflectively (com.simibubi.create.CreateClient)
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] MTR client data bound reflectively (org.mtr.client.MinecraftClientData)
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] MTR's simulated network is reachable through org.mtr.MTR
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] MTR Map Overlay's fetched railway is readable (com.lx862.mtrmap.mapdata.MapDataCache)
+[14:07:12] [Server thread/INFO] [bi.do.ho.mt.MtrServerSync/]: [HowToGo] MTR sync | a client asked for MTR's network
+[14:07:12] [Server thread/INFO] [bi.do.ho.mt.MtrServerData/]: [HowToGo] MTR's server-side network is reachable through org.mtr.MTR
+[14:07:12] [Server thread/INFO] [bi.do.ho.mt.MtrServerSync/]: [HowToGo] MTR sync | no railway in this world; sending an empty snapshot so clients clear the old reading
+[14:07:12] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] MTR is synced from the server (3 dimension(s), 0 kB)
+[14:07:12] [Server thread/INFO] [minecraft/IntegratedServer]: Saving and pausing game...
+[14:07:12] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:overworld
+[14:07:12] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:the_nether
+[14:07:12] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:the_end
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] Xaero waypoint source bound reflectively (xaero.common.XaeroMinimapSession)
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] loaded 43 nodes / 48 segments from howtogo-selftest-copy15628361808864608677.json
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] loaded 43 nodes / 48 segments from howtogo-selftest12388862458157939912.json
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] webmap | listening on http://127.0.0.1:54430/ (loopback only, 2 socket(s))
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] webmap | stopped
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.world | nodes=43 segments=48 places=6 stops=0 lines=2 rail=7 mtr=0 roadweaver=0/1 mode=walk boardOnly=true debug=false
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.line | 111 (RAIL): 2 stops, gaps ok=1 cut=0 unjudged=0
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.line | 222 (ROAD): 3 stops, gaps ok=2 cut=0 unjudged=0
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.plans | 2/2 lines, 2 ride(s) | 111: 3 legs, 1 ride(s) | 222: 4 legs, 1 ride(s)
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.ride | no destination to ride to
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.routes | walk 108 blocks | drive 108 blocks
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.storage | wrote 43/48, read 43/48; lines=2
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.details | limits 512cp/16tags/8cp ok | preview ok | round trip 2/2 | keys 5/5 pinned | delete manual only
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.archive | files=3 bytes=19755 marker=rewritten manifest=this world roads=same details=same
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.webmap | port=54430 page=5065B app.js=48524B html2canvas=197801B api=200/55 segments auto=7
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest | ok | command.howtogo.selftest.check.theme | mode=auto light=true sky=0.704273 day=true night=true noSky=true ids=true unknown=true
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest summary | failed=0 total=11
+[14:07:37] [Render thread/INFO] [bi.do.ho.HowToGo/]: [HowToGo] selftest asked the client to stop
+[14:07:37] [Render thread/INFO] [minecraft/Minecraft]: Stopping!
+[14:07:37] [Render thread/INFO] [xa.hu.mi.MinimapLogs/]: Xaero hud session finalized.
+[14:07:37] [Render thread/INFO] [xa.ma.WorldMap/]: Finalizing world map session...
+[14:07:37] [Thread-5/INFO] [xa.ma.WorldMap/]: World map cleaned normally!
+[14:07:37] [Render thread/INFO] [xa.ma.WorldMap/]: World map session finalized.
+[14:07:37] [Server thread/INFO] [minecraft/ServerGamePacketListenerImpl]: Dev lost connection: 连接中断
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Dev退出了游戏
+[14:07:37] [Server thread/INFO] [minecraft/ServerCommonPacketListenerImpl]: Stopping singleplayer server as player logged out
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Stopping server
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Saving players
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Saving worlds
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:overworld
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:the_nether
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: Saving chunks for level 'ServerLevel[新的世界]'/minecraft:the_end
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: ThreadedAnvilChunkStorage (TEST): All chunks are saved
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[14:07:37] [Server thread/INFO] [minecraft/MinecraftServer]: ThreadedAnvilChunkStorage: All dimensions are saved
+
+> Task :1.21.1-neoforge:runClient FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':1.21.1-neoforge:runClient' (registered in build file 'build.neoforge.gradle.kts').
+> Process 'command 'C:\Program Files\Java\jdk-21.0.11\bin\java.exe'' finished with non-zero exit value -1 (NTSTATUS 0xFFFFFFFF)
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 58s
+9 actionable tasks: 4 executed, 5 up-to-date

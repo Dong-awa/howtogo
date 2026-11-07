@@ -84,10 +84,16 @@ import java.util.function.Consumer;
  * two fragments, and a destination at the village cannot be reached by road. This layer therefore
  * closes the gap: for a completed connection it took from RoadWeaver, it finds the end of the road
  * that was built for it and joins that end to the structure with a straight two-point connector of
- * the same class. The connector is this mod's geometry, drawn and planned like the rest of the
- * layer, and it is replaced whole with every reading; nothing is written back. Reach is bounded
- * ({@link #JOIN_REACH}), so a connection whose road is missing or further away than any trim
- * RoadWeaver can be configured for is left as it is rather than joined to something else by guess.
+ * the same class. The connector is this mod's geometry and it is replaced whole with every reading;
+ * nothing is written back. Reach is bounded ({@link #JOIN_REACH}), so a connection whose road is
+ * missing or further away than any trim RoadWeaver can be configured for is left as it is rather
+ * than joined to something else by guess.
+ *
+ * <p>The connector is <em>planned over but not drawn</em>: it is a link for the router, not a road,
+ * and a straight stub up to 256 blocks long painted across the landscape reads as a road that does
+ * not exist. So the reading keeps two views of itself -- {@link #network()} for trips and
+ * {@link #drawnNetwork()} for the maps -- and the connector is in the first only. See
+ * {@link Converted}.
  *
  * <h2>What RoadWeaver calls a structure</h2>
  * Its own map lets the player give a structure an alias; the destination list uses that alias in
@@ -293,6 +299,19 @@ public final class RoadWeaverLayer {
         return reading.segments();
     }
 
+    /**
+     * The roads the maps draw: every segment except the synthetic connectors.
+     *
+     * <p>The connectors are routing links this mod makes to close RoadWeaver's deliberate gap before a
+     * structure; they are straight stubs up to {@link #JOIN_REACH} blocks long and are not roads, so
+     * drawing them is what produced the long straight lines across the map. Every map -- the world
+     * map, the mod's own viewers, the browser map -- draws this list; routing, snapping and the
+     * "which road am I on" reads keep {@link #segments()}, which holds them.
+     */
+    public static List<RoadSegment> drawnSegments() {
+        return reading.drawnSegments();
+    }
+
     /** The structures the roads connect, as destinations. Empty when there is no reading. */
     public static List<Structure> structures() {
         return reading.structures();
@@ -321,9 +340,22 @@ public final class RoadWeaverLayer {
     /**
      * The reading as this mod's own network, for a caller that wants to snap to it rather than plan
      * over it. Never written to; the layer replaces it whole.
+     *
+     * <p>This is the routing network, connectors included -- see {@link #drawnNetwork()} for the one
+     * the maps draw.
      */
     public static RoadNetwork network() {
         return reading.network();
+    }
+
+    /**
+     * The same reading with the synthetic connectors left out, for the maps.
+     *
+     * <p>See {@link #drawnSegments()}: the connectors are routing links and are not drawn, and a map
+     * that drew them showed straight lines across the landscape that no road was under.
+     */
+    public static RoadNetwork drawnNetwork() {
+        return reading.drawnNetwork();
     }
 
     /**
@@ -515,9 +547,9 @@ public final class RoadWeaverLayer {
                 List<Polyline> roads = cachePolylines(snapshot);
                 List<Connection> connections = cacheConnections(snapshot);
                 List<Structure> structures = cacheStructures(snapshot);
-                RoadNetwork network = build(roads, connections, forced);
-                List<RoadSegment> segments = List.copyOf(network.segmentsSnapshot());
-                publish(new Reading(network, segments, boundsOf(segments), structures,
+                Converted converted = convert(roads, connections, forced);
+                publish(new Reading(converted.network(), converted.drawn(), converted.segments(),
+                        converted.drawnSegments(), boundsOf(converted.segments()), structures,
                         "client map snapshot"), expectedEpoch, request, false);
             } catch (ReflectiveOperationException | RuntimeException failed) {
                 // Forget the failed snapshot so the next tick retries it instead of treating it as
@@ -653,10 +685,11 @@ public final class RoadWeaverLayer {
                     CONVERTER.execute(() -> {
                         try {
                             List<Polyline> polylines = serverPolylines(roads);
-                            RoadNetwork network = build(polylines, connections, forced);
-                            List<RoadSegment> segments = List.copyOf(network.segmentsSnapshot());
-                            Reading next = new Reading(network, segments, boundsOf(segments),
-                                    structures, "RoadWeaver's road store");
+                            Converted converted = convert(polylines, connections, forced);
+                            Reading next = new Reading(converted.network(), converted.drawn(),
+                                    converted.segments(), converted.drawnSegments(),
+                                    boundsOf(converted.segments()), structures,
+                                    "RoadWeaver's road store");
                             if (publish(next, expectedEpoch, request, true)) {
                                 serverReadingSignature = signature;
                             }
@@ -801,11 +834,44 @@ public final class RoadWeaverLayer {
      *
      * <p>See the class comment: RoadWeaver deliberately stops a road short of the structure it serves,
      * so the road network is missing the last stretch at each end unless it is put back. The connector
-     * polylines are built here and converted as ordinary roads, which means they are drawn in the
-     * class' colour and planned over like everything else -- they are not a special case downstream.
+     * polylines are built here and converted as ordinary roads, which means they are planned over like
+     * everything else -- they are not a special case downstream.
+     *
+     * <p>They are, however, a special case <em>for drawing</em>: see {@link Converted}.
      */
     static RoadNetwork build(List<Polyline> roads, List<Connection> connections, RoadClass forced) {
+        return convert(roads, connections, forced).network();
+    }
+
+    /**
+     * What one conversion produced: the network routing uses, and the network the maps draw.
+     *
+     * <h2>Why the two are not the same</h2>
+     * A connector is this mod's own geometry, not a road: RoadWeaver ended its road just short of the
+     * village it serves, and the straight two-point stub is what lets a trip reach the village at all.
+     * The router needs it, and the maps do not: drawn as a road it is a straight line up to 256 blocks
+     * long across whatever lies between the structure and the road end, which reads as a road that does
+     * not exist -- and at the zoom a whole region fits on screen, several of them read as a mess of
+     * long straight lines. The player's complaint was exactly that.
+     *
+     * <p>So the same reading carries both: {@link #network()} for routing, snapping and everything that
+     * asks "can I get there", and {@link #drawn()} for the layers that ask "what does this look like".
+     * The drawn network shares the real segments and nodes with the full one; only the connectors are
+     * left out, and the two are computed once per reading rather than filtered per frame.
+     *
+     * @param network       every segment, connectors included; what routing plans over
+     * @param drawn         the real roads only; what every map draws
+     * @param segments      the full segment list, in network order
+     * @param drawnSegments the drawn segment list, in the same order
+     * @param connectors    the ids of the synthetic connectors, for the self-checks and diagnostics
+     */
+    record Converted(RoadNetwork network, RoadNetwork drawn, List<RoadSegment> segments,
+                     List<RoadSegment> drawnSegments, List<Integer> connectors) {
+    }
+
+    static Converted convert(List<Polyline> roads, List<Connection> connections, RoadClass forced) {
         List<Polyline> polylines = roads;
+        int roadPolylines = roads.size();
         if (connections != null && !connections.isEmpty()) {
             List<Polyline> connectors = connectorPolylines(roads, connections);
             if (!connectors.isEmpty()) {
@@ -828,7 +894,15 @@ public final class RoadWeaverLayer {
         Map<Point, Integer> nodeByPoint = new HashMap<>();
         int[] nodeIds = {ID_BASE};
         int[] segmentIds = {ID_BASE};
-        for (Polyline polyline : polylines) {
+        // The connector polylines are appended after the roads, and segment ids are handed out in that
+        // order, so the first connector's id is the line between a road and a stub without having to
+        // match geometry afterwards. -1 means this reading has no connectors at all.
+        int firstConnectorId = -1;
+        for (int index = 0; index < polylines.size(); index++) {
+            Polyline polyline = polylines.get(index);
+            if (index == roadPolylines && polylines.size() > roadPolylines) {
+                firstConnectorId = segmentIds[0];
+            }
             List<Point> points = polyline.points();
             if (points.size() < 2) {
                 continue;
@@ -849,7 +923,31 @@ public final class RoadWeaverLayer {
                 runStart = i;
             }
         }
-        return network;
+
+        List<RoadSegment> segments = List.copyOf(network.segmentsSnapshot());
+        List<Integer> connectorIds = new ArrayList<>();
+        List<RoadSegment> drawnSegments;
+        RoadNetwork drawn;
+        if (firstConnectorId < 0 || firstConnectorId >= segmentIds[0]) {
+            drawn = network;
+            drawnSegments = segments;
+        } else {
+            drawn = new RoadNetwork();
+            for (RoadNode node : network.nodesSnapshot()) {
+                drawn.putNode(node);
+            }
+            List<RoadSegment> real = new ArrayList<>(segments.size());
+            for (RoadSegment segment : segments) {
+                if (segment.id() >= firstConnectorId) {
+                    connectorIds.add(segment.id());
+                    continue;
+                }
+                real.add(segment);
+                drawn.putSegment(segment);
+            }
+            drawnSegments = List.copyOf(real);
+        }
+        return new Converted(network, drawn, segments, drawnSegments, List.copyOf(connectorIds));
     }
 
     /**
@@ -1051,11 +1149,17 @@ public final class RoadWeaverLayer {
      *
      * <p>The bounds are the same segments' bounding boxes, four ints each, worked out once here so a
      * view can reject the geometry it is not looking at with four comparisons per segment.
+     *
+     * <p>{@code network} and {@code segments} are the routing view, connectors included;
+     * {@code drawnNetwork} and {@code drawnSegments} are the same reading with the synthetic
+     * connectors left out, which is what every map draws. See {@link Converted}.
      */
-    record Reading(RoadNetwork network, List<RoadSegment> segments, int[] bounds,
-                   List<Structure> structures, String source) {
+    record Reading(RoadNetwork network, RoadNetwork drawnNetwork, List<RoadSegment> segments,
+                   List<RoadSegment> drawnSegments, int[] bounds, List<Structure> structures,
+                   String source) {
         static final Reading EMPTY =
-                new Reading(new RoadNetwork(), List.of(), new int[0], List.of(), "nothing");
+                new Reading(new RoadNetwork(), new RoadNetwork(), List.of(), List.of(), new int[0],
+                        List.of(), "nothing");
 
         boolean isEmpty() {
             return segments.isEmpty() && structures.isEmpty();

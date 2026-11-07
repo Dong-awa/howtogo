@@ -398,6 +398,76 @@ public final class UiTheme {
         return pick(0xFFFFFFFF, 0xFF174EA6);
     }
 
+    // -------------------------------------------------------------------- chips
+
+    /*
+     * The chip fills below are the same value in both styles, which is the one place in this class
+     * where that is true on purpose. Every other role here asks {@link #pick} because a colour read
+     * against a dark panel is wrong read against a light one -- a grey that separates two chips on
+     * black disappears on white. These three do not have that problem, because the user named the
+     * colours themselves: the tags are grey, the source blue and the type orange, and a theme that
+     * re-mapped them would be a theme disobeying the request. The chips also sit on top of the card
+     * rather than being the card, and each carries its own text colour ({@link #onChip} or
+     * {@link #onChipFor}), so contrast is decided per chip rather than per style.
+     *
+     * They are also deliberately not {@link #selection()} / {@link #accent()}: those are the theme's
+     * own two colours and change with it, while a source chip has to be the same blue in both
+     * styles for the three kinds of chip to stay visually distinct from each other.
+     */
+
+    /** The fill of an ordinary tag chip: grey, with white text. */
+    public static int chipTag() {
+        return 0xFF5F6368;
+    }
+
+    /** The fill of a source chip: blue, with white text. */
+    public static int chipSource() {
+        return 0xFF1A73E8;
+    }
+
+    /**
+     * The fill of a type / resource-type chip: orange, with white text.
+     *
+     * <p>The same hue as {@link #place()}, which is what a place marker is drawn in: a type chip is
+     * the place's own classification, so the two reading as one colour is the point.
+     */
+    public static int chipType() {
+        return 0xFFE8710A;
+    }
+
+    /** Text on a chip whose fill is one of the three fixed chip colours above. */
+    public static int onChip() {
+        return 0xFFFFFFFF;
+    }
+
+    /**
+     * Text on a chip filled with an arbitrary colour, white or near-black by brightness.
+     *
+     * <p>Needed because a line chip is filled with the line's own colour, and lines are chosen by
+     * players from a palette of bright colours: white text on the pale blue a rail line defaults to
+     * is unreadable, and black text on a dark purple line is the same failure the other way round.
+     * The threshold is on perceived brightness ({@value #CHIP_DARK_TEXT_FROM}) rather than on
+     * lightness in HSL, because what the eye reads is the weighted mix of the three channels and
+     * because the values are all fully opaque -- the alpha is masked off, so a colour with an odd
+     * alpha cannot flip the decision.
+     *
+     * <p>Not a per-theme {@link #pick}: the fill is the line's colour in either style, so the text on
+     * it has to follow that fill, not the interface around it.
+     */
+    public static int onChipFor(int argb) {
+        int rgb = argb & 0xFFFFFF;
+        double brightness = 0.299 * ((rgb >> 16) & 0xFF) / 255.0
+                + 0.587 * ((rgb >> 8) & 0xFF) / 255.0
+                + 0.114 * (rgb & 0xFF) / 255.0;
+        return brightness >= CHIP_DARK_TEXT_FROM ? CHIP_DARK_TEXT : 0xFFFFFFFF;
+    }
+
+    /** Perceived-brightness threshold above which a chip gets dark text ({@link #onChipFor}). */
+    private static final double CHIP_DARK_TEXT_FROM = 0.6;
+
+    /** The dark text {@link #onChipFor} uses on a bright chip; the light style's ordinary body text. */
+    private static final int CHIP_DARK_TEXT = 0xFF202124;
+
     // ------------------------------------------------------- accents and states
 
     /** Anything that can be acted on, and the accent line of a card. */

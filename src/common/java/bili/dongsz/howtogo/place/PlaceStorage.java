@@ -3,6 +3,8 @@ package bili.dongsz.howtogo.place;
 import bili.dongsz.howtogo.HowToGo;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSyntaxException;
 
 import java.io.IOException;
@@ -156,6 +158,13 @@ public final class PlaceStorage {
                     if (!value.tags().isEmpty()) {
                         out.tags = new ArrayList<>(value.tags());
                     }
+                    if (!value.category().isBlank()) {
+                        // Absent rather than empty when there is no category, so a record written by
+                        // this build and one written before the field existed are the same bytes.
+                        // JsonPrimitive rather than a String field because the reader tolerates a
+                        // hand-edited value of any JSON type; see #categoryOf.
+                        out.category = new JsonPrimitive(value.category());
+                    }
                     if (value.favorite()) {
                         out.favorite = true;
                     }
@@ -213,9 +222,28 @@ public final class PlaceStorage {
 
     private static PlaceDetails toDetails(DetailsDto entry) {
         List<String> tags = entry.tags == null ? List.of() : entry.tags;
-        return PlaceDetails.of(entry.description, tags, entry.favorite)
+        return PlaceDetails.of(entry.description, tags, categoryOf(entry.category), entry.favorite)
                 .withUpdatedAt(Math.max(0L, entry.updatedAt))
                 .normalize();
+    }
+
+    /**
+     * One record's category, read as text, or {@code ""} when the file's value is not text.
+     *
+     * <p>Read through a {@link JsonElement} rather than straight into a {@code String} for a reason
+     * that is only visible in the failure: Gson would coerce a JSON number or boolean into its text
+     * form ("3", "true") -- a category nobody typed -- and a JSON object or array would make the
+     * <em>whole file</em> fail to parse, so one mangled field would quarantine every note in it. The
+     * rule stated in the class comment is that a missing or unusable field reads as "less detail",
+     * never as an error, and this is the shape that keeps that true for a value whose type a player
+     * can edit by hand.
+     */
+    private static String categoryOf(JsonElement element) {
+        if (element == null || element.isJsonNull() || !element.isJsonPrimitive()) {
+            return PlaceDetails.EMPTY_CATEGORY;
+        }
+        JsonPrimitive primitive = element.getAsJsonPrimitive();
+        return primitive.isString() ? primitive.getAsString() : PlaceDetails.EMPTY_CATEGORY;
     }
 
     private static boolean isBlank(String text) {
@@ -234,8 +262,9 @@ public final class PlaceStorage {
      *
      * <p>Every field is optional and read tolerantly: a record written before a field existed is a
      * record with the default for it, which is exactly the reading that makes the format additive.
-     * Empty values are not written at all, so a detail that is only a favourite is three fields
-     * rather than six -- and a missing field and an empty one mean the same thing by construction.
+     * Empty values are not written at all, so a detail that is only a favourite is a few fields
+     * rather than a row of blanks -- and a missing field and an empty one mean the same thing by
+     * construction.
      */
     private static final class DetailsDto {
         String dimension;
@@ -243,6 +272,15 @@ public final class PlaceStorage {
         String id;
         String description;
         List<String> tags;
+        /**
+         * The place's type or resource type, absent when it has none.
+         *
+         * <p>{@link JsonElement} rather than {@code String} so that a hand-edited value of the wrong
+         * JSON type reads as "no category" instead of as a broken file -- see {@link #categoryOf}.
+         * It is written as a JSON string, so the file is still the plain {@code "category": "药房"}
+         * a player would expect.
+         */
+        JsonElement category;
         boolean favorite;
         long updatedAt;
     }

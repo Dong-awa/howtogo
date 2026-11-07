@@ -277,7 +277,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         // drawn chain by chain -- whole roads rather than one piece at a time -- so a long road is one
         // continuous stroke. The layer holds a whole region's worth of roads, so chains outside this
         // window are skipped before anything is projected.
-        emitNetworkInBox(last, RoadWeaverLayer.network(), m00, m01, m02, m10, m11, m12,
+        emitNetworkInBox(last, RoadWeaverLayer.drawnNetwork(), m00, m01, m02, m10, m11, m12,
                 ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY,
                 playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 

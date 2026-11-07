@@ -52,6 +52,8 @@ public final class PlaceDetailsCheck {
         try {
             root = Files.createTempDirectory("howtogo-place-details");
             limits();
+            categories();
+            sections();
             previews();
             valueChanges();
             storageRoundTrip(root.resolve("store"));
@@ -121,6 +123,114 @@ public final class PlaceDetailsCheck {
                         && !PlaceDetails.of("", List.of(), true).isEmpty());
     }
 
+    /**
+     * The category: one short value, its limits, and the fact that it is a field of its own.
+     *
+     * <p>Deliberately checked beside the tags rather than in a separate file, because the two share
+     * the length limit and a reader changing one needs to see the other: a category that silently
+     * became a tag would pass every tag check here and still draw a grey chip where an orange one
+     * was asked for.
+     */
+    private static void categories() {
+        expect("a category is trimmed", "药房".equals(
+                PlaceDetails.of("", List.of(), "  药房 \r\n", false).normalize().category()));
+        expect("a whitespace-only category is no category",
+                PlaceDetails.EMPTY_CATEGORY.equals(
+                        PlaceDetails.of("", List.of(), "   \n", false).normalize().category()));
+
+        String longCategory = "文化中心站台层出入口";
+        String cut = PlaceDetails.of("", List.of(), longCategory, false).normalize().category();
+        expect("a category longer than 8 code points is cut to 8",
+                PlaceDetails.lengthInCodePoints(cut) == PlaceDetails.MAX_TAG_LENGTH);
+        expect("and the cut is the first eight characters",
+                cut.equals("文化中心站台层出"));
+
+        String emoji = "\uD83D\uDE00";
+        String pasted = "a".repeat(PlaceDetails.MAX_TAG_LENGTH - 1) + emoji + "b";
+        String pastedCut = PlaceDetails.of("", List.of(), pasted, false).normalize().category();
+        expect("a category is never cut through a surrogate pair",
+                pastedCut.endsWith(emoji)
+                        && PlaceDetails.lengthInCodePoints(pastedCut) == PlaceDetails.MAX_TAG_LENGTH);
+
+        expect("the four-argument constructor and of() mean no category",
+                PlaceDetails.of("x", List.of(), false).category().isEmpty()
+                        && new PlaceDetails("x", List.of(), false, 1L).category().isEmpty());
+        expect("a null category is the empty one",
+                PlaceDetails.of("", List.of(), null, false).category().isEmpty()
+                        && PlaceDetails.EMPTY_CATEGORY.equals(PlaceDetails.EMPTY.category()));
+
+        expect("a record that is only a type is worth storing",
+                !PlaceDetails.of("", List.of(), "药房", false).normalize().isEmpty());
+        expect("while no text, no tags, no type and no favourite is empty",
+                PlaceDetails.EMPTY.isEmpty()
+                        && PlaceDetails.of("", List.of(), "  ", false).normalize().isEmpty());
+
+        PlaceDetails base = PlaceDetails.of("描述", List.of("tag"), "药房", true);
+        expect("every other change carries the category with it",
+                "药房".equals(base.withDescription("新").category())
+                        && "药房".equals(base.withTags(List.of("其它")).category())
+                        && "药房".equals(base.withFavorite(false).category())
+                        && "药房".equals(base.withUpdatedAt(7L).category()));
+        expect("and changing the category keeps everything else",
+                base.withCategory("便利店").category().equals("便利店")
+                        && "描述".equals(base.withCategory("便利店").description())
+                        && base.withCategory("便利店").tags().equals(List.of("tag"))
+                        && base.withCategory("便利店").favorite());
+        expect("with an edit that normalises like every other value",
+                "便利店".equals(PlaceDetails.of("", List.of(), false)
+                        .withCategory("  便利店  ").normalize().category()));
+    }
+
+    /**
+     * The display order the user asked for, and the two words for the one TYPE block.
+     *
+     * <p>Checked here rather than in a view because the table is pure: if the order is wrong, the
+     * check that catches it must not need a window, and the card and the dialog both read the same
+     * list so one wrong order would be wrong in both views at once.
+     */
+    private static void sections() {
+        expect("an ordinary place shows source, tags and description, in that order",
+                List.of(PlaceSections.Section.SOURCE, PlaceSections.Section.TAGS,
+                        PlaceSections.Section.DESCRIPTION).equals(PlaceSections.of(PlaceKind.PLACE)));
+        expect("a station shows its lines first, then source, tags and description",
+                List.of(PlaceSections.Section.LINES, PlaceSections.Section.SOURCE,
+                        PlaceSections.Section.TAGS, PlaceSections.Section.DESCRIPTION)
+                        .equals(PlaceSections.of(PlaceKind.STATION)));
+        expect("a shop shows its type first, then tags, source and description",
+                List.of(PlaceSections.Section.TYPE, PlaceSections.Section.TAGS,
+                        PlaceSections.Section.SOURCE, PlaceSections.Section.DESCRIPTION)
+                        .equals(PlaceSections.of(PlaceKind.SHOP)));
+        expect("a resource point shows its resource type first, then tags, source and description",
+                List.of(PlaceSections.Section.TYPE, PlaceSections.Section.TAGS,
+                        PlaceSections.Section.SOURCE, PlaceSections.Section.DESCRIPTION)
+                        .equals(PlaceSections.of(PlaceKind.RESOURCE)));
+        expect("a kind that has not been resolved reads as an ordinary place",
+                PlaceSections.of(null).equals(PlaceSections.of(PlaceKind.PLACE)));
+        expect("only a station is offered the lines block",
+                PlaceSections.of(PlaceKind.STATION).contains(PlaceSections.Section.LINES)
+                        && !PlaceSections.of(PlaceKind.PLACE).contains(PlaceSections.Section.LINES)
+                        && !PlaceSections.of(PlaceKind.SHOP).contains(PlaceSections.Section.LINES)
+                        && !PlaceSections.of(PlaceKind.RESOURCE).contains(PlaceSections.Section.LINES));
+        expect("only a shop or a resource point is offered the type block",
+                PlaceSections.of(PlaceKind.SHOP).contains(PlaceSections.Section.TYPE)
+                        && PlaceSections.of(PlaceKind.RESOURCE).contains(PlaceSections.Section.TYPE)
+                        && !PlaceSections.of(PlaceKind.PLACE).contains(PlaceSections.Section.TYPE)
+                        && !PlaceSections.of(PlaceKind.STATION).contains(PlaceSections.Section.TYPE));
+        expect("the description is always written last",
+                PlaceSections.of(PlaceKind.PLACE).get(PlaceSections.of(PlaceKind.PLACE).size() - 1)
+                        == PlaceSections.Section.DESCRIPTION
+                        && PlaceSections.of(PlaceKind.STATION)
+                        .get(PlaceSections.of(PlaceKind.STATION).size() - 1)
+                        == PlaceSections.Section.DESCRIPTION);
+        expect("a shop's type and a resource point's resource type are different captions",
+                !PlaceSections.labelKey(PlaceKind.SHOP)
+                        .equals(PlaceSections.labelKey(PlaceKind.RESOURCE))
+                        && PlaceSections.labelKey(PlaceKind.SHOP)
+                        .equals(PlaceSections.TYPE_LABEL_KEY)
+                        && PlaceSections.labelKey(PlaceKind.RESOURCE)
+                        .equals(PlaceSections.RESOURCE_TYPE_LABEL_KEY));
+    }
+
     /** The one-line preview, and the payload cut that keeps its newlines. */
     private static void previews() {
         PlaceDetails shortDetails = PlaceDetails.of("短描述", List.of(), false);
@@ -161,27 +271,47 @@ public final class PlaceDetailsCheck {
                         && base.withFavorite(true).withDescription("新").favorite());
     }
 
-    /** Two records through the real writer and the real reader, every awkward character included. */
+    /**
+     * Three records through the real writer and the real reader, every awkward character included.
+     *
+     * <p>The third carries a category and the other two do not, so one pass holds both halves of the
+     * additive format: a field present round-trips, and a field absent is still a record that reads
+     * back equal to what was written -- which is what an older build's file looks like.
+     */
     private static void storageRoundTrip(Path root) throws IOException {
         Path file = root.resolve("place_details.json");
         Map<PlaceKey, PlaceDetails> written = new LinkedHashMap<>();
         PlaceKey manual = new PlaceKey("minecraft:overworld", PlaceSources.MANUAL, "12");
         PlaceKey station = new PlaceKey("minecraft:the_nether", PlaceSources.MTR, "42");
+        PlaceKey shop = new PlaceKey("minecraft:overworld", PlaceSources.MANUAL, "13");
         written.put(manual, new PlaceDetails(
                 "第一行 \"引号\" 反斜杠 \\ 换行\n第二行 月台", List.of("餐饮", "可停车"),
                 true, 1712345678901L).normalize());
         written.put(station, new PlaceDetails("车站备注", List.of(), false, 42L).normalize());
+        written.put(shop, PlaceDetails.of("药店备注", List.of("餐饮"), " 药房 ", false)
+                .withUpdatedAt(99L).normalize());
 
         expect("the store writes its file", PlaceStorage.save(file, written)
                 && Files.isRegularFile(file));
         expect("and leaves no half-written file beside it", !partialBesideExists(file));
 
         Map<PlaceKey, PlaceDetails> read = PlaceStorage.load(file);
-        expect("two records are written and two come back", read.size() == 2);
+        expect("three records are written and three come back", read.size() == 3);
         expect("Chinese, a quote, a backslash and a newline survive the round trip",
                 written.get(manual).equals(read.get(manual)));
         expect("and a record with no tags or escape in it does too",
                 written.get(station).equals(read.get(station)));
+        expect("a category survives the round trip, trimmed like every other value",
+                written.get(shop).equals(read.get(shop))
+                        && "药房".equals(read.get(shop).category()));
+
+        String json = Files.readString(file, StandardCharsets.UTF_8);
+        expect("a record with no category writes no category field at all",
+                countOf(json, "\"category\"") == 1);
+        expect("while the record that has one writes it as a JSON string",
+                json.contains("\"category\": \"药房\""));
+        expect("and adding the field does not bump the format version",
+                PlaceStorage.FORMAT_VERSION == 1 && json.contains("\"version\": 1"));
     }
 
     /** A file that was never written, and a null path, both read as "no details". */
@@ -200,8 +330,9 @@ public final class PlaceDetailsCheck {
         write(file, "{\"version\":2,\"editedBy\":\"a later build\",\"details\":["
                 + "{\"dimension\":\" minecraft:overworld \",\"source\":\"poi\",\"id\":\"12\","
                 + "\"description\":\"  一行笔记\\n第二行  \",\"tags\":[\" cafe \",\"CAFE\",\"\"],"
-                + "\"favourite\":true,\"colour\":3},"
-                + "{\"dimension\":\"minecraft:overworld\",\"source\":\"mtr_station\",\"id\":\"42\"},"
+                + "\"category\":\" 文化中心站台层出入口 \",\"favourite\":true,\"colour\":3},"
+                + "{\"dimension\":\"minecraft:overworld\",\"source\":\"mtr_station\",\"id\":\"42\","
+                + "\"category\":[1,2]},"
                 + "{\"dimension\":\"\",\"source\":\"poi\",\"id\":\"13\"}]}");
         Map<PlaceKey, PlaceDetails> read = PlaceStorage.load(file);
         PlaceKey key = new PlaceKey("minecraft:overworld", PlaceSources.MANUAL, "12");
@@ -211,11 +342,27 @@ public final class PlaceDetailsCheck {
                 && "一行笔记\n第二行".equals(first.description())
                 && first.tags().equals(List.of("cafe"))
                 && !first.favorite());
+        expect("a hand-edited category is trimmed and cut to a tag's length",
+                "文化中心站台层出".equals(first.category()));
         expect("a record with only a key has the defaults", PlaceDetails.EMPTY.equals(
                 read.get(new PlaceKey("minecraft:overworld", PlaceSources.MTR, "42"))));
+        expect("a category of the wrong JSON type reads as no category rather than as a broken file",
+                PlaceDetails.EMPTY_CATEGORY.equals(
+                        read.get(new PlaceKey("minecraft:overworld", PlaceSources.MTR, "42"))
+                                .category()));
         expect("an entry whose key is blank is not a record at all",
                 !read.containsKey(new PlaceKey("minecraft:overworld", PlaceSources.MANUAL, "13"))
                         && !read.containsKey(new PlaceKey("unknown", PlaceSources.MANUAL, "13")));
+
+        Path older = root.resolve("before-categories.json");
+        write(older, "{\"version\":1,\"details\":["
+                + "{\"dimension\":\"minecraft:overworld\",\"source\":\"poi\",\"id\":\"21\","
+                + "\"description\":\"旧文件里的备注\",\"tags\":[\"旧\"]}]}");
+        PlaceDetails oldRecord = PlaceStorage.load(older)
+                .get(new PlaceKey("minecraft:overworld", PlaceSources.MANUAL, "21"));
+        expect("a record written before the field existed has no category",
+                oldRecord != null && PlaceDetails.EMPTY_CATEGORY.equals(oldRecord.category())
+                        && "旧文件里的备注".equals(oldRecord.description()));
 
         Path duplicates = root.resolve("duplicates.json");
         write(duplicates, "{\"version\":1,\"details\":["
@@ -358,6 +505,20 @@ public final class PlaceDetailsCheck {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** How many times {@code needle} occurs in {@code text}; asserting "exactly one field" needs it. */
+    private static int countOf(String text, String needle) {
+        int count = 0;
+        int from = 0;
+        while (true) {
+            int at = text.indexOf(needle, from);
+            if (at < 0) {
+                return count;
+            }
+            count++;
+            from = at + needle.length();
+        }
+    }
 
     private static void write(Path file, String text) throws IOException {
         Files.createDirectories(file.getParent());

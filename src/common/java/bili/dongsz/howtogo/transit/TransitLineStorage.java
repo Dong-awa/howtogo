@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.transit;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -72,6 +73,9 @@ public final class TransitLineStorage {
                     continue;
                 }
                 TransitLine line = new TransitLine(l.id, l.name, parseClass(l.kind));
+                // An absent or unreadable colour is a line without one of its own, which is what a
+                // file written before lines had colours means: it keeps following its kind's colour.
+                line.setColor(ColorHex.parseOrNull(l.color));
                 if (l.stops != null) {
                     for (StopDto s : l.stops) {
                         if (s == null) {
@@ -133,6 +137,12 @@ public final class TransitLineStorage {
                 l.id = line.id();
                 l.name = line.name();
                 l.kind = line.kind().name();
+                // Written as the six-digit text a player typed rather than as the ARGB integer: the
+                // file is hand-editable and every other colour this mod stores is written that way,
+                // and a line without a colour writes no field at all.
+                if (line.hasColor()) {
+                    l.color = line.colorHex();
+                }
                 l.stops = new ArrayList<>(line.stopCount());
                 for (LineStop stop : line.stops()) {
                     StopDto s = new StopDto();
@@ -200,6 +210,14 @@ public final class TransitLineStorage {
         String id;
         String name;
         String kind;
+        /**
+         * The line's own colour, {@code #RRGGBB}, or absent.
+         *
+         * <p>Optional like every field of this file: a line file written before lines had colours
+         * reads back with none, which is the truth about those lines rather than an error, and a
+         * value that is not a colour is treated the same way.
+         */
+        String color;
         List<StopDto> stops;
     }
 

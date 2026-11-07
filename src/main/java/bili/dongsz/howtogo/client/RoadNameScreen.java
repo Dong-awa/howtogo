@@ -102,6 +102,25 @@ public final class RoadNameScreen extends Screen {
     private final PlaceKind initialKind;
     private final Predicate<PlaceKind> kindAllowed;
     private final PlaceApply onAcceptPlace;
+    /**
+     * What to do if the panel is cancelled, for an edit that has something to take back.
+     *
+     * <p>Null for every panel that edits something already there -- cancelling one of those is
+     * simply not applying the edit. It is set only by the place editor opened on a place the same
+     * press just created: that place exists before the panel does, so its Cancel has to remove it or
+     * the map would keep a nameless node the player never asked to keep. The panel does not know how
+     * to do that, which is why it is a callback rather than a flag.
+     */
+    private final Runnable onCancel;
+    /**
+     * Whether this visit ended in {@code Done}.
+     *
+     * <p>What keeps {@link #onCancel} from firing after a successful edit: {@code Done} applies the
+     * edit and then closes the panel through the same {@code onClose} the Cancel button uses, so the
+     * two endings have to be told apart somewhere. A field rather than "was it closed by the button",
+     * because Escape and the button are the same cancel.
+     */
+    private boolean committed;
 
     // The road editor's extra part: the storey, given with the name because they are edited together.
     private final int initialLayer;
@@ -157,6 +176,7 @@ public final class RoadNameScreen extends Screen {
         this.onAcceptPlace = null;
         this.initialLayer = 0;
         this.onAcceptRoad = null;
+        this.onCancel = null;
     }
 
     /**
@@ -184,6 +204,7 @@ public final class RoadNameScreen extends Screen {
         this.onAcceptPlace = null;
         this.initialLayer = initialLayer;
         this.onAcceptRoad = onAcceptRoad;
+        this.onCancel = null;
     }
 
     /**
@@ -200,6 +221,25 @@ public final class RoadNameScreen extends Screen {
     public RoadNameScreen(Screen parent, String titleKey, String initialValue, PlaceKind initialKind,
                           Predicate<PlaceKind> kindAllowed, PlaceDetails initialDetails,
                           double anchorX, double anchorY, PlaceApply onAcceptPlace) {
+        this(parent, titleKey, initialValue, initialKind, kindAllowed, initialDetails, anchorX,
+                anchorY, onAcceptPlace, null);
+    }
+
+    /**
+     * The same, plus what cancelling has to take back.
+     *
+     * <p>Used only when the place being edited was created by the press that opened this panel: the
+     * node is already in the network, so Cancel -- and Escape, which is the same ending -- must remove
+     * it. Editing a place that already existed passes null and Cancel does what it always did, which
+     * is nothing at all.
+     *
+     * @param onCancel called when the panel is closed without {@code Done}, or null when there is
+     *                 nothing to undo
+     */
+    public RoadNameScreen(Screen parent, String titleKey, String initialValue, PlaceKind initialKind,
+                          Predicate<PlaceKind> kindAllowed, PlaceDetails initialDetails,
+                          double anchorX, double anchorY, PlaceApply onAcceptPlace,
+                          Runnable onCancel) {
         super(Component.translatable(titleKey));
         this.parent = parent;
         this.titleKey = titleKey;
@@ -213,6 +253,7 @@ public final class RoadNameScreen extends Screen {
         this.selectedKind = this.initialKind;
         this.initialLayer = 0;
         this.onAcceptRoad = null;
+        this.onCancel = onCancel;
         this.draftDetails = initialDetails == null ? PlaceDetails.EMPTY : initialDetails;
     }
 
@@ -358,11 +399,13 @@ public final class RoadNameScreen extends Screen {
                 return;
             }
             onAcceptRoad.accept(field.getValue(), layer);
+            committed = true;
             onClose();
             return;
         }
         if (!isPlaceEditor()) {
             onAccept.accept(field.getValue());
+            committed = true;
             onClose();
             return;
         }
@@ -375,6 +418,7 @@ public final class RoadNameScreen extends Screen {
         // The details go with the name and the kind: they are the third part of the same edit, and a
         // caller that saved them itself would make this panel's cancel only two-thirds of a cancel.
         onAcceptPlace.accept(field.getValue(), selectedKind, draftDetails);
+        committed = true;
         onClose();
     }
 
@@ -559,6 +603,12 @@ public final class RoadNameScreen extends Screen {
 
     @Override
     public void onClose() {
+        // An edit that created the thing it edits is taken back by cancelling it. Done applies the
+        // edit and then closes through this same method, which is what `committed` separates: without
+        // it, a successful place edit would delete the place it had just written.
+        if (!committed && onCancel != null) {
+            onCancel.run();
+        }
         Screens.set(parent);
     }
 

@@ -505,23 +505,28 @@ public final class MtrClientData {
      * <p>The one with more of its stops placed, and the later of the two on a tie -- which is the one
      * whose reading is stronger, since they are merged weakest first.
      *
-     * <p>The rails are knowledge about a line rather than about its stops, and the stronger reading is
-     * not always the one that has them: MTR's own window never says which rails a line runs along, and
-     * the fetched snapshot always does. So a winner with no rails takes the other copy's, and one that
-     * has its own keeps them -- a line's rails are what it is drawn along, and dropping them for being
-     * on the weaker copy is what would draw the line as straight hops between its stations.
+     * <p>The rails and the colour are knowledge about a line rather than about its stops, and the
+     * stronger reading is not always the one that has them: MTR's own window never says which rails a
+     * line runs along and says nothing about the route's colour when the client has not been sent
+     * one, while the fetched snapshot always does. So a winner with no rails takes the other copy's,
+     * and one that has its own keeps them -- a line's rails are what it is drawn along, and dropping
+     * them for being on the weaker copy is what would draw the line as straight hops between its
+     * stations. The colour is inherited by the same rule: a line is drawn in its own colour when it
+     * has one, so a reading that happens to arrive without it must not turn a coloured line into a
+     * kind-coloured one. Zero means "this reading has no colour for the line" rather than black,
+     * which is the convention the three readers already use.
      */
     private static Line better(Line kept, Line offered) {
         Line winner = offered.stops().size() >= kept.stops().size() ? offered : kept;
-        if (!winner.rails().isEmpty()) {
-            return winner;
-        }
         Line other = winner == offered ? kept : offered;
-        if (other.rails().isEmpty()) {
+        boolean needsRails = winner.rails().isEmpty() && !other.rails().isEmpty();
+        boolean needsColour = (winner.color() & 0xFFFFFF) == 0 && (other.color() & 0xFFFFFF) != 0;
+        if (!needsRails && !needsColour) {
             return winner;
         }
-        return new Line(winner.id(), winner.name(), winner.mode(), winner.color(), winner.stops(),
-                other.rails());
+        return new Line(winner.id(), winner.name(), winner.mode(),
+                needsColour ? other.color() : winner.color(), winner.stops(),
+                needsRails ? other.rails() : winner.rails());
     }
 
     /**

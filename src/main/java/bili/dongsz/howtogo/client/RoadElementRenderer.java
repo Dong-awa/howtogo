@@ -1349,7 +1349,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 viewRight, viewBottom);
         addRoadInk(ink, AddonRoadStore.segments(), scale, projection, places, reachBlocks, margin,
                 viewRight, viewBottom);
-        addRoadInk(ink, RoadWeaverLayer.segments(), scale, projection, places, reachBlocks, margin,
+        addRoadInk(ink, RoadWeaverLayer.drawnSegments(), scale, projection, places, reachBlocks, margin,
                 viewRight, viewBottom);
         return ink;
     }
@@ -2270,18 +2270,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * A line's colour, from the kind of road it runs on.
+     * A line's colour: its own when it has one, and its kind's configured colour when it does not.
      *
-     * <p>By kind rather than per line: the kinds are what a reader of the map already knows -- a rail
-     * line is the railway, a boat line is the waterway -- and a network where every rail line had its
-     * own colour would say nothing about which of them a given stretch of track belongs to. The
-     * colours themselves are configurable, so a player who wants their rail and water lines told
-     * apart from the road and ice ones can have it without every line becoming its own colour. The
-     * stop markers read the same answer, which is what makes a platform shared by two lines of one
-     * kind show that kind's colour rather than one of the two at random.
+     * <h2>Why the line and not only its kind</h2>
+     * The kinds are what a reader of the map already knows -- a rail line is the railway, a boat line
+     * is the waterway -- and a line without a colour of its own still follows that, so a network where
+     * every rail line is the same colour keeps saying which of them a given stretch of track belongs
+     * to. A colour of the line's own is the other case: an MTR route arrives with one, and a player
+     * who runs two rail lines through one interchange needs them told apart on the map. The colour is
+     * therefore asked of the line first, with the kind's colour as the fallback every drawing site
+     * shares -- the stroke, the stop markers, the interchange markers made of stops, the line list's
+     * swatch and the place card's chips all ask this one method or the one rule it states.
+     *
+     * <p>The colours themselves are configurable, so a player who wants their rail and water lines
+     * told apart from the road and ice ones can have it without every line becoming its own colour.
+     * The stop markers read the same answer, which is what makes a platform shared by two lines of
+     * one kind show that kind's colour rather than one of the two at random -- and a platform shared
+     * by an MTR line with its own colour show that line's.
      */
     private static int lineColour(TransitLine line) {
-        return RoadConfig.transitLineColor(line.kind());
+        return line.colorOr(RoadConfig.transitLineColor(line.kind()));
     }
 
     /**

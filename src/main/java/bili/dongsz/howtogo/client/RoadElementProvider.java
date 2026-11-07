@@ -138,7 +138,7 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
         // and an addon's layers are: they are roads of classes this mod already knows how to draw, and
         // a renderer of their own would have to be told the storeys all over again to sort against
         // them. Read once per pass; the list is replaced whole when the layer is re-read.
-        for (RoadSegment segment : RoadWeaverLayer.segments()) {
+        for (RoadSegment segment : RoadWeaverLayer.drawnSegments()) {
             if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
                 continue;
             }

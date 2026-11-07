@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -14,6 +15,7 @@ import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
+import bili.dongsz.howtogo.transit.TransitLineColours;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
@@ -66,6 +68,23 @@ public final class TransitLineScreen extends Screen {
     private static final int KIND_HEIGHT = 14;
     private static final int FIELD_HEIGHT = 14;
     private static final int FIELD_WIDTH = 130;
+    /**
+     * The colour row's pieces: a small typed field for an exact colour, the current colour as a
+     * preview block, and the presets as swatches beside them.
+     *
+     * <p>The field is smaller than the name field on purpose. A hex colour is seven characters, and a
+     * field the width of the name's would take room from the three columns for no readability it
+     * could use; the presets are what most players reach for, and they are small because eight of
+     * them have to sit on one row beside the field at any ordinary window width.
+     */
+    private static final int COLOUR_FIELD_WIDTH = 70;
+    private static final int COLOUR_PREVIEW = 12;
+    private static final int PRESET_SIZE = 7;
+    private static final int PRESET_STEP = 9;
+    /** Below this a swatch is too small to hit or to tell from its neighbours, so none are drawn. */
+    private static final int PRESET_MIN_SIZE = 4;
+    /** The label of the colour row; the field's hint says the format on its own. */
+    private static final String COLOUR_LABEL = "screen.howtogo.line_color";
     /** Width of one of the per-row controls on a stop: rename, up, down, remove. */
     private static final int CONTROL_WIDTH = 11;
 
@@ -94,6 +113,28 @@ public final class TransitLineScreen extends Screen {
 
     private String selectedId;
     private EditBox nameField;
+
+    /**
+     * The colour row: the typed field, and where its label, preview and presets are drawn.
+     *
+     * <p>The geometry is worked out once in {@link #init}, like the columns', because the panel itself
+     * cannot move while the screen is open and a layout recomputed per frame would only be a chance to
+     * disagree with the hit testing. The preset geometry is derived from what is left of the row rather
+     * than fixed: a window narrow enough to leave no room for eight readable swatches shows none, and
+     * the typed field still takes any colour.
+     */
+    private EditBox colourField;
+    private Component colourLabel;
+    private int colourLabelX;
+    private int colourLabelY;
+    private int colourFieldX;
+    private int colourFieldY;
+    private int colourPreviewX;
+    private int colourPreviewY;
+    private int colourPresetX;
+    private int colourPresetY;
+    private int colourPresetStep;
+    private int colourPresetSize;
 
     /**
      * How far each column is scrolled, in rows.
@@ -196,15 +237,22 @@ public final class TransitLineScreen extends Screen {
             return;
         }
         commitName();
+        commitColour();
         String suffix = Component.translatable("screen.howtogo.line_copy_suffix").getString();
         TransitLine copy = new TransitLine(null, line.name() + suffix, line.kind());
         for (LineStop stop : line.stops()) {
             copy.addStop(stop);
         }
+        // The colour is part of what the line is, not of the screen showing it: a copy of an MTR line
+        // is the player's own line in the colour MTR drew it, and a copy of one of their own is a
+        // second line that looks like the first until they change it. Not copying it was a copy that
+        // silently changed kind colour, which is exactly the difference the colour exists to state.
+        copy.setColor(line.color());
         TransitLineStore.get().add(copy);
         TransitLineStore.markDirty();
         selectedId = copy.id();
         refreshName();
+        refreshColour();
         buildFooterButtons();
     }
 
@@ -217,11 +265,13 @@ public final class TransitLineScreen extends Screen {
      */
     private void newLine() {
         commitName();
+        commitColour();
         TransitLine created = new TransitLine(null, "", RoadClass.ROAD);
         TransitLineStore.get().add(created);
         TransitLineStore.markDirty();
         selectedId = created.id();
         refreshName();
+        refreshColour();
         buildFooterButtons();
     }
 
@@ -242,6 +292,7 @@ public final class TransitLineScreen extends Screen {
             List<TransitLine> left = listed();
             selectedId = left.isEmpty() ? null : left.get(0).id();
             refreshName();
+            refreshColour();
         }
         buildFooterButtons();
     }
@@ -286,10 +337,53 @@ public final class TransitLineScreen extends Screen {
         nameField.setValue(line == null ? "" : line.name());
         addRenderableWidget(nameField);
 
+        // The colour row, between the controls and the three columns: the field for an exact colour,
+        // the current colour as a preview, and the presets as swatches beside it. It gets a line of its
+        // own because the kind chips and the name field already share one, and putting the colour on
+        // either of those would be a third thing drawn through two others at a small window.
+        int colourY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + 3;
+        colourLabel = Component.translatable(COLOUR_LABEL);
+        int colourRowX = panelX + PAD;
+        colourLabelX = colourRowX;
+        colourLabelY = colourY + 3;
+        colourRowX += this.font.width(colourLabel) + 4;
+        colourFieldX = colourRowX;
+        colourFieldY = colourY;
+        colourRowX += COLOUR_FIELD_WIDTH + 4;
+        colourPreviewX = colourRowX;
+        colourPreviewY = colourY + 1;
+        colourRowX += COLOUR_PREVIEW + 6;
+        // The presets take what is left of the row, and are sized from it: eight swatches of a fixed
+        // width would either overrun the panel on a narrow window or leave a gap that reads as a
+        // control that failed to draw on a wide one. When the leftover is too small for even a
+        // recognisable swatch, none are drawn at all -- a row of specks would be neither lookable nor
+        // clickable, and the typed field is still there for a colour.
+        int presetCount = TransitLineColours.presets().size();
+        int leftover = panelX + panelW - PAD - colourRowX;
+        colourPresetStep = Math.max(1, Math.min(PRESET_STEP,
+                presetCount == 0 ? PRESET_STEP : leftover / presetCount));
+        colourPresetX = colourRowX;
+        colourPresetY = colourY + 2;
+        colourPresetSize = Math.min(PRESET_SIZE, colourPresetStep - 2);
+        if (colourPresetSize < PRESET_MIN_SIZE) {
+            colourPresetSize = 0;
+        }
+
+        colourField = new EditBox(this.font, colourFieldX, colourFieldY, COLOUR_FIELD_WIDTH,
+                FIELD_HEIGHT, Component.translatable(COLOUR_LABEL));
+        // Nine characters rather than seven so that a pasted #AARRGGBB is not truncated into a colour
+        // that is silently not the one that was pasted; what the field stores is six digits and what
+        // it shows after a commit is the normalised #RRGGBB.
+        colourField.setMaxLength(9);
+        colourField.setHint(Component.literal("#RRGGBB"));
+        addRenderableWidget(colourField);
+        refreshColour();
+
         // The lists start below the column headers, not below the controls: the headers are drawn at
         // listY - HEADER_HEIGHT, so leaving only PAD between them and the controls row drew the three of
-        // them through the kind buttons above.
-        listY = Math.max(fieldY + FIELD_HEIGHT, kindY + KIND_HEIGHT) + HEADER_HEIGHT + 2;
+        // them through the kind buttons above. The colour row pushes both down by its own height, which
+        // is why listY is recomputed from the row rather than from the controls it was computed from.
+        listY = colourY + FIELD_HEIGHT + HEADER_HEIGHT + 2;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
         // The row depends on the panel's geometry and on which line is selected, so it is built last
@@ -378,6 +472,165 @@ public final class TransitLineScreen extends Screen {
         if (!typed.equals(line.name())) {
             line.setName(typed);
             TransitLineStore.markDirty();
+        }
+    }
+
+    /**
+     * Brings the colour field up to date with the selected line: its colour, and whether it may be
+     * typed into.
+     *
+     * <p>Called on every change of selection and after every commit, which is what keeps the field one
+     * value with the line rather than a copy of it: an MTR line's colour is shown in the field and the
+     * field is not editable, so the same box both states the colour and refuses to change it. The
+     * presets are refused for that line the same way and for the same reason -- see
+     * {@link #applyPreset}.
+     */
+    private void refreshColour() {
+        if (colourField == null) {
+            return;
+        }
+        TransitLine line = selected();
+        colourField.setValue(line == null ? "" : line.colorHex());
+        colourField.setEditable(line != null && !readOnly(line));
+    }
+
+    /**
+     * Writes what is in the colour field onto the selected line, or puts the field back as it was.
+     *
+     * <h2>What each kind of input means</h2>
+     * <ul>
+     *   <li><b>Empty</b> -- the line has no colour of its own any more, and follows its kind's
+     *       configured colour. Clearing is a real answer, not a refused edit, because "the colour I
+     *       typed was a mistake" and "what this line should be is the kind's colour" are the same
+     *       request and the field is the only place to make it.</li>
+     *   <li><b>Parseable</b> -- that colour. The field is rewritten from the stored value afterwards,
+     *       so {@code 1e88e5}, {@code #1E88E5} and a pasted eight-digit value all settle into the one
+     *       {@code #RRGGBB} spelling the file and the map use.</li>
+     *   <li><b>Anything else</b> -- refused: nothing is written and the field is put back to the
+     *       colour the line actually has. Typing part of a colour and clicking away must not leave
+     *       "#1E8" on screen as though it were the line's colour, and guessing what was meant is how
+     *       a typo becomes a silently different line.</li>
+     * </ul>
+     *
+     * <p>Called on Enter, on Done, when the field loses focus and when the selection changes, which is
+     * every way there is to stop typing. An MTR line is never written to: it is not in the list this
+     * screen owns, so the same rule that makes its name read-only applies here.
+     */
+    private void commitColour() {
+        if (colourField == null) {
+            return;
+        }
+        TransitLine line = selected();
+        if (line == null || readOnly(line)) {
+            refreshColour();
+            return;
+        }
+        String typed = colourField.getValue().trim();
+        if (typed.isEmpty()) {
+            if (line.hasColor()) {
+                line.setColor(null);
+                TransitLineStore.markDirty();
+            }
+            refreshColour();
+            return;
+        }
+        Integer parsed = ColorHex.parseOrNull(typed);
+        if (parsed == null) {
+            // Refused rather than guessed at -- see the method comment. The field is the line's own
+            // value again, so what is on screen never says something the file does not.
+            refreshColour();
+            return;
+        }
+        if (!parsed.equals(line.color())) {
+            line.setColor(parsed);
+            TransitLineStore.markDirty();
+        }
+        refreshColour();
+    }
+
+    /**
+     * The preset under the pointer, or -1 when there is none to press.
+     *
+     * <p>Nothing for an MTR line: its colour is MTR's, and a preset that quietly did nothing is worse
+     * than no preset. This is the same rule the kind chips and the stop controls follow, stated once
+     * here rather than at each hit test.
+     */
+    private int presetAt(double mouseX, double mouseY) {
+        TransitLine line = selected();
+        if (line == null || readOnly(line) || colourPresetSize <= 0) {
+            return -1;
+        }
+        List<Integer> presets = TransitLineColours.presets();
+        for (int i = 0; i < presets.size(); i++) {
+            int x = colourPresetX + i * colourPresetStep;
+            if (mouseX >= x && mouseX < x + colourPresetSize
+                    && mouseY >= colourPresetY && mouseY < colourPresetY + colourPresetSize) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Whether the pointer is over the colour field, which is the one click that does not commit it. */
+    private boolean insideColourField(double mouseX, double mouseY) {
+        return colourFieldX <= mouseX && mouseX < colourFieldX + COLOUR_FIELD_WIDTH
+                && colourFieldY <= mouseY && mouseY < colourFieldY + FIELD_HEIGHT;
+    }
+
+    /** Puts one of the presets on the selected line, and shows it in the field at once. */
+    private void applyPreset(int index) {
+        TransitLine line = selected();
+        List<Integer> presets = TransitLineColours.presets();
+        if (line == null || readOnly(line) || index < 0 || index >= presets.size()) {
+            return;
+        }
+        line.setColor(presets.get(index));
+        TransitLineStore.markDirty();
+        refreshColour();
+    }
+
+    /**
+     * The colour row: the label, the swatch of the colour the line is actually drawn in, and the
+     * presets.
+     *
+     * <p>The preview is the line's <em>effective</em> colour -- its own when it has one, its kind's
+     * otherwise -- because that is the colour the map will draw and the one a player is trying to
+     * judge. A line with no colour of its own therefore shows its kind's colour here, which says what
+     * clearing the field does rather than leaving the box empty of information.
+     *
+     * <p>The presets are drawn only for a line the player may edit. An MTR line's row is read-only
+     * everywhere else on this screen and its swatches would be a row of controls that do nothing.
+     */
+    private void drawColourRow(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
+        graphics.drawString(this.font, colourLabel.getString(), colourLabelX, colourLabelY,
+                UiTheme.textSecondary(), false);
+        int preview = line == null ? UiTheme.button()
+                : line.colorOr(RoadConfig.transitLineColor(line.kind()));
+        graphics.fill(colourPreviewX - 1, colourPreviewY - 1, colourPreviewX + COLOUR_PREVIEW + 1,
+                colourPreviewY + COLOUR_PREVIEW + 1,
+                line == null ? UiTheme.button() : UiTheme.windowEdge());
+        graphics.fill(colourPreviewX, colourPreviewY, colourPreviewX + COLOUR_PREVIEW,
+                colourPreviewY + COLOUR_PREVIEW, preview);
+        if (line == null || readOnly(line) || colourPresetSize <= 0) {
+            return;
+        }
+        List<Integer> presets = TransitLineColours.presets();
+        Integer chosen = line.color();
+        for (int i = 0; i < presets.size(); i++) {
+            int x = colourPresetX + i * colourPresetStep;
+            int colour = presets.get(i);
+            // The colour the line already has gets a ring, so a player who opened the editor to
+            // change one line can see which preset it is already on rather than having to read the
+            // hex back out of the field.
+            boolean current = chosen != null && chosen == colour;
+            boolean hovered = mouseX >= x && mouseX < x + colourPresetSize
+                    && mouseY >= colourPresetY && mouseY < colourPresetY + colourPresetSize;
+            graphics.fill(x - 1, colourPresetY - 1, x + colourPresetSize + 1,
+                    colourPresetY + colourPresetSize + 1,
+                    current ? UiTheme.selection()
+                            : (hovered ? UiTheme.buttonHover() : UiTheme.windowEdge()));
+            graphics.fill(x, colourPresetY, x + colourPresetSize, colourPresetY + colourPresetSize,
+                    colour);
         }
     }
 
@@ -493,6 +746,9 @@ public final class TransitLineScreen extends Screen {
         TransitLine line = selected();
         refreshRideable();
         drawKinds(graphics, mouseX, mouseY, line);
+        // Before the columns, because the colour row is part of the controls above them: a preset
+        // drawn over a list row would be a swatch on a line it does not belong to.
+        drawColourRow(graphics, mouseX, mouseY, line);
         drawLines(graphics, mouseX, mouseY);
         drawStops(graphics, mouseX, mouseY, line);
         drawCandidates(graphics, mouseX, mouseY, line);
@@ -597,12 +853,12 @@ public final class TransitLineScreen extends Screen {
             boolean isSelected = candidate.id().equals(selectedId);
             int rowY = listY + row * ROW_HEIGHT;
             drawRow(graphics, linesX, row, isSelected || index == hovered);
-            // The marker is the kind's own colour -- the same value the map draws the line in, read
-            // from the same section of the config -- so the colour in this list and the colour on
-            // the map are one fact rather than two. It is drawn after the row fill so a selected
-            // row's blue does not paint over it.
+            // The marker is the colour the map draws the line in -- its own when it has one, the
+            // kind's otherwise -- so the swatch in this list and the stroke on the map are one fact
+            // rather than two. It is drawn after the row fill so a selected row's blue does not paint
+            // over it.
             HudDraw.drawRowMarker(graphics, linesX + 3, rowY + 3, ROW_MARKER,
-                    RoadConfig.transitLineColor(candidate.kind()));
+                    candidate.colorOr(RoadConfig.transitLineColor(candidate.kind())));
             String kind = Component.translatable(
                             "screen.howtogo.road_class." + candidate.kind().name().toLowerCase(Locale.ROOT))
                     .getString();
@@ -1100,6 +1356,14 @@ public final class TransitLineScreen extends Screen {
         }
         List<TransitLine> lines = listed();
 
+        // A press anywhere but the colour field ends the editing of it, and what was typed is what is
+        // written then: a field whose value only stuck when the right button was pressed would be a
+        // field the player cannot tell they have finished with. Done, Enter and a change of selection
+        // commit it too; this is the fourth way out and the ordinary one.
+        if (colourField != null && colourField.isFocused() && !insideColourField(mouseX, mouseY)) {
+            commitColour();
+        }
+
         // The footer buttons are drawn, not widgets, so nothing else routes a click to them: this is
         // their only chance to see one. It comes before the columns so a press on a button is never
         // also a press on the row behind it.
@@ -1107,6 +1371,15 @@ public final class TransitLineScreen extends Screen {
             if (candidate.click(mouseX, mouseY)) {
                 return true;
             }
+        }
+
+        // The preset swatches are drawn rather than widgets, like the footer: this is their only chance
+        // to see a click. They are before the columns for the same reason the buttons are -- a swatch
+        // is not a row and a press on one is not a press on anything below it.
+        int preset = presetAt(mouseX, mouseY);
+        if (preset >= 0) {
+            applyPreset(preset);
+            return true;
         }
 
         int lineRow = rowAt(mouseX, mouseY, linesX, lines.size(), lineScroll);
@@ -1120,8 +1393,10 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
             commitName();
+            commitColour();
             selectedId = clicked.id();
             refreshName();
+            refreshColour();
             // Delete is offered only while there is a line, so the row follows the selection.
             buildFooterButtons();
             return true;
@@ -1187,9 +1462,35 @@ public final class TransitLineScreen extends Screen {
         return -1;
     }
 
+    /**
+     * Enter commits the colour being typed and Escape puts back the colour the line has.
+     *
+     * <p>Both are here rather than in the field because a field has no notion of the value it edits:
+     * the screen is what knows which line is selected and is what writes it. Escape cancels rather
+     * than commits -- a half-typed hex is a guess in progress -- and neither key closes the screen
+     * while the field has focus, which is the same two-step the map's name prompt uses.
+     */
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (colourField != null && colourField.isFocused()) {
+            if (keyCode == 257 || keyCode == 335) {
+                commitColour();
+                colourField.setFocused(false);
+                return true;
+            }
+            if (keyCode == 256) {
+                refreshColour();
+                colourField.setFocused(false);
+                return true;
+            }
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
     @Override
     public void onClose() {
         commitName();
+        commitColour();
         Screens.set(parent);
     }
 

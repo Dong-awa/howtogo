@@ -56,7 +56,13 @@ import org.lwjgl.glfw.GLFW;
  *   <li><b>R</b> - toggle road editing (also rebindable under Controls)</li>
  *   <li><b>Left click</b> - place a point, extending the road being drawn</li>
  *   <li><b>Alt + left click</b> - place a point exactly where the cursor is, snapping disabled</li>
- *   <li><b>Shift + left click / drag</b> - grab and move a node, or select a road</li>
+ *   <li><b>Shift + left click</b> - select the whole road under the cursor; a <b>double</b> shift click
+ *       selects only the one segment under the cursor. Shift + left on a node still grabs and moves the
+ *       node, however fast it is repeated</li>
+ *   <li><b>Shift + right click</b> - add the road under the cursor to the multi-selection, or take it
+ *       out if it is already in it; a <b>double</b> shift right click does the same for the one segment
+ *       under the cursor. Shift + right drag still pans the map, and a press that is dragged is a pan
+ *       and not a selection</li>
  *   <li><b>Ctrl + left click</b> - set the current cursor spot as the navigation destination
  *       (works whether or not editing is on). This is the only way to start navigating from the map;
  *       there used to be a bare {@code G} as well, and it was dropped because a single unmodified
@@ -295,7 +301,11 @@ public final class RoadEditHandler {
                     // press is still taken from Xaero: the pan is Xaero's own, driven by a left press this
                     // session hands it in beginMapPan, and letting the real right click through as well
                     // would open the map's right-click menu on the release. See RoadEditSession.
-                    safely("pan map", RoadEditSession::beginMapPan);
+                    //
+                    // Shift is read here rather than inside the session because it is the handler that
+                    // owns the input state of the press; the session only decides, on the release, whether
+                    // the press was a multi-select click or a pan.
+                    safely("pan map", () -> RoadEditSession.beginMapPan(Screen.hasShiftDown()));
                 }
                 return true;
             }

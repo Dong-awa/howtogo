@@ -145,12 +145,21 @@ public final class Harness {
         int[] placeDetails = bili.dongsz.howtogo.place.PlaceDetailsCheck.run();
         checks += placeDetails[0];
         failures += placeDetails[1];
+        int[] placeAddress = bili.dongsz.howtogo.place.PlaceAddressCheck.run();
+        checks += placeAddress[0];
+        failures += placeAddress[1];
         int[] drawOrder = DrawOrderCheck.run();
         checks += drawOrder[0];
         failures += drawOrder[1];
         int[] webMapHttp = bili.dongsz.howtogo.webmap.WebMapHttpCheck.run();
         checks += webMapHttp[0];
         failures += webMapHttp[1];
+        int[] lineColour = bili.dongsz.howtogo.transit.TransitLineColourCheck.run();
+        checks += lineColour[0];
+        failures += lineColour[1];
+        int[] selection = bili.dongsz.howtogo.road.SelectionCheck.run();
+        checks += selection[0];
+        failures += selection[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");

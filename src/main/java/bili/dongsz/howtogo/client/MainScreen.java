@@ -767,7 +767,7 @@ public final class MainScreen extends Screen {
         // a chain of separately rounded ends, which at a large scale reads as darker beads along a
         // translucent line. The layer is a whole region's worth of roads, so only the chains inside
         // the window are projected.
-        HudDraw.emitNetworkInBox(sink, RoadWeaverLayer.network(), pathM00(), 0, pathM02(), 0,
+        HudDraw.emitNetworkInBox(sink, RoadWeaverLayer.drawnNetwork(), pathM00(), 0, pathM02(), 0,
                 pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
                 worldLeft, worldTop, worldRight, worldBottom, MainScreen::roadHalfWidth);
         HudDraw.emitNetwork(sink, RailTrackStore.network(), pathM00(), 0, pathM02(), 0,

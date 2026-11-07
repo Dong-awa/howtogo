@@ -96,6 +96,24 @@ public final class PoiCheck {
                 onRoad.node(vertex.id()) == null ? "vertex gone"
                         : onRoad.node(vertex.id()).type().name());
 
+        // What a press reports about itself, which is what lets the place editor's Cancel remove a
+        // place the same press just made without touching one that was already there. Cancelling is
+        // the editor's undo of the creation, so that is what is checked here.
+        RoadNetwork cancelNet = new RoadNetwork();
+        RoadEditor cancelling = new RoadEditor(cancelNet);
+        RoadEditor.PoiPlacement created = cancelling.placePoi(30, 64, 30);
+        record("a press on an empty block reports that it created the place",
+                created.created() && cancelNet.node(created.nodeId()) != null,
+                created.created() ? "created" : "reported an existing place");
+        RoadEditor.PoiPlacement second = cancelling.placePoi(30, 64, 30);
+        record("while a press on the place already there reports that it did not",
+                !second.created() && second.nodeId() == created.nodeId(),
+                second.created() ? "reported a creation" : "same node " + second.nodeId());
+        cancelling.undo();
+        record("undoing that creation -- what cancelling the editor does -- leaves no node behind",
+                cancelNet.node(created.nodeId()) == null && cancelNet.nodeCount() == 0,
+                cancelNet.nodeCount() + " node(s)");
+
         System.out.println(failures == 0
                 ? "place merge ok (" + checks + " checks)"
                 : "place merge FAILED: " + failures + " of " + checks + " checks");

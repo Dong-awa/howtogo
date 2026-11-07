@@ -107,6 +107,8 @@ public final class MtrImportCheck {
         expect("an empty reading becomes nothing at all",
                 build(MtrClientData.Snapshot.EMPTY).lines().isEmpty());
 
+        checkLineColours();
+
         checkHandshake();
 
         // A line is told from the player's own by its id alone, which is what lets the planner take
@@ -980,6 +982,78 @@ public final class MtrImportCheck {
         made.addStop(LineStop.ofStation("from", fromX, fromZ));
         made.addStop(LineStop.ofStation("to", toX, toZ));
         return made;
+    }
+
+    /**
+     * The colour MTR gives a line, carried through the import.
+     *
+     * <h2>Why one path is enough here</h2>
+     * MTR can reach this client in three ways -- its own client window ({@link MtrClientData}), the
+     * network this process simulates ({@link MtrWholeMap}), and the whole railway a server running
+     * this mod sends ({@code MtrServerData} through {@link MtrClientSync}), with MTR Map Overlay's
+     * fetched snapshot as the fallback ({@link MtrMapOverlay}) -- and all four readings are converted
+     * into the same {@code MtrClientData.Line} record before anything else sees them. The colour is
+     * therefore one field by the time {@link MtrTransit} converts a reading at all, and
+     * {@code buildLines} is the single place the three paths meet. Whether each reader fills that
+     * field from its own source is a question about reflection against three other mods' shapes, not
+     * about this conversion, and it is answered where the readers are (their handshakes are checked
+     * above when the jars are on the classpath).
+     *
+     * <h2>What is held</h2>
+     * A reading's colour becomes the imported line's own colour, in the six-digit form the map, the
+     * editor field and the file all use; MTR's zero is "no colour of its own", so that line follows
+     * its kind's configured colour instead of being painted black. And a later reading of the same
+     * MTR line that does not carry the colour must not take it away again -- the memory already knows
+     * it, and the three paths do not all say the field.
+     */
+    private static void checkLineColours() {
+        System.out.println("   the colour a line keeps");
+
+        MtrClientData.Snapshot coloured = reading(
+                List.of(station(1, "Alpha", "TRAIN", 0, 0), station(2, "Beta", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(new MtrClientData.Line(41, "Azure", "TRAIN", 0x1A73E8, List.of(
+                        stop(11, 1, "Alpha"), stop(12, 2, "Beta")))),
+                List.of(track("a", "TRAIN", 0, 0, 100, 0)));
+        MtrTransit.Built built = build(coloured);
+        TransitLine imported = built.lines().get(0);
+        int kindColour = RoadConfig.transitLineColor(RoadClass.RAIL);
+        expect("a line keeps the colour MTR gives it",
+                imported.hasColor() && imported.color() == 0xFF1A73E8);
+        expect("written as the six digits the map, the editor and the file use",
+                "#1A73E8".equals(imported.colorHex()));
+        expect("and is drawn in it rather than in its kind's colour",
+                imported.colorOr(kindColour) == 0xFF1A73E8);
+
+        // MTR writes zero for a route with no colour of its own. That is not black: it is the line
+        // following its kind's configured colour, the same answer every line gave before lines could
+        // have colours at all.
+        MtrClientData.Snapshot colourless = reading(
+                List.of(station(1, "Alpha", "TRAIN", 0, 0), station(2, "Beta", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(new MtrClientData.Line(42, "Plain", "TRAIN", 0, List.of(
+                        stop(11, 1, "Alpha"), stop(12, 2, "Beta")))),
+                List.of(track("a", "TRAIN", 0, 0, 100, 0)));
+        TransitLine plain = build(colourless).lines().get(0);
+        expect("a line MTR gives no colour has none of its own rather than being black",
+                !plain.hasColor() && plain.colorHex().isEmpty());
+        expect("and falls back to its kind's configured colour",
+                plain.colorOr(kindColour) == kindColour);
+
+        // A later reading of the same line, with the colour absent: the memory's winner takes the
+        // newer stops but keeps the colour already learned, because a colour is a fact about MTR's
+        // route rather than about the window it happened to arrive in.
+        MtrKnown known = new MtrKnown();
+        known.remember(build(coloured));
+        known.remember(build(reading(
+                List.of(station(1, "Alpha", "TRAIN", 0, 0), station(2, "Beta", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(new MtrClientData.Line(41, "Azure", "TRAIN", 0, List.of(
+                        stop(11, 1, "Alpha"), stop(12, 2, "Beta")))),
+                List.of(track("a", "TRAIN", 0, 0, 100, 0)))));
+        expect("a later reading that does not carry the colour keeps the one already known",
+                known.lines().size() == 1 && known.lines().get(0).hasColor()
+                        && known.lines().get(0).color() == 0xFF1A73E8);
     }
 
     /**

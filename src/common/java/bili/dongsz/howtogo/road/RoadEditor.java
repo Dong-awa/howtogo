@@ -97,22 +97,30 @@ public final class RoadEditor {
     }
 
     /**
-     * Moves the whole road the given segment belongs to onto the given storey.
+     * Moves every selected road onto the given storey, and makes that the storey new roads go on.
      *
-     * <p>Whole road rather than one piece, for the reason {@link #setSegmentClass} gives: a street that
-     * bends is several pieces, and a storey that changed halfway along one of them would be a bridge
-     * whose far end is on the ground. The drawing storey follows it, which is what makes "make this
-     * the tunnel, then keep drawing the tunnel" one gesture.
+     * <p>Whole roads rather than the pieces the cursor happened to be over, for the reason
+     * {@link #setSegmentClass} gives: a street that bends is several pieces, and a storey that
+     * changed halfway along one of them would be a bridge whose far end is on the ground. With
+     * several roads selected it moves all of them, in one undo step -- the gesture was one press, and
+     * having to step back once per road would be a lie about how many changes were made.
+     *
+     * <p>The drawing storey follows it, which is what makes "make this the tunnel, then keep drawing
+     * the tunnel" one gesture. A selection that names no segment still has the road of
+     * {@code segmentId} moved, which is the single-road behaviour this method has always had.
      */
     public boolean setChainLayer(int segmentId, int layer) {
-        if (network.segment(segmentId) == null) {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
             return false;
         }
         pushUndo();
-        for (int id : RoadChains.chainContaining(network, segmentId)) {
-            RoadSegment segment = network.segment(id);
-            if (segment != null) {
-                segment.setLayer(layer);
+        for (java.util.List<Integer> chain : chains) {
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    segment.setLayer(layer);
+                }
             }
         }
         setActiveLayer(layer);
@@ -144,16 +152,98 @@ public final class RoadEditor {
         return total;
     }
 
-    /** Re-classes the whole road the given segment belongs to, leaving the drawing class alone. */
+    /**
+     * How long everything selected is, in blocks: the sum of the roads the selection touches.
+     *
+     * <h2>Why whole roads and not the selected pieces</h2>
+     * Every bulk operation on a selection works on whole roads -- class, storey, name and the one-way
+     * marking all walk each selected segment's chain, because a street cannot be half one thing and
+     * half another. A readout that measured only the highlighted pieces would then disagree with
+     * every edit the same selection makes, and the number under the caption would be describing a
+     * thing the player cannot actually change on its own. So a selection that is one segment of a
+     * three-piece street reads the whole street, which is also what {@link #chainLength} has always
+     * said about a selected road.
+     *
+     * <p>Two segments of one road count it once: the walk is deduplicated by the road, so a selection
+     * assembled from several segments of the same street does not make it longer. A selection that
+     * names no segment at all is zero rather than an exception, which is what the readout asks of an
+     * empty selection every frame.
+     */
+    public double selectedLength() {
+        if (selectedChain.isEmpty()) {
+            return chainLength(selectedSegmentId);
+        }
+        double total = 0.0;
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (int seed : selectedChain) {
+            if (!seen.add(seed)) {
+                continue;
+            }
+            java.util.List<Integer> chain = RoadChains.chainContaining(network, seed);
+            if (chain.isEmpty()) {
+                RoadSegment alone = network.segment(seed);
+                if (alone != null) {
+                    total += alone.length();
+                }
+                continue;
+            }
+            // Every segment of the road counts, and none of it is walked a second time: the members
+            // are marked seen before the next seed is asked about.
+            seen.addAll(chain);
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    total += segment.length();
+                }
+            }
+        }
+        return total;
+    }
+
+    /**
+     * The storey of the main selected segment, or the surface when nothing is selected.
+     *
+     * <p>One number for a selection that may span several storeys, because the readout has room for
+     * one and the alternative -- a word for "mixed" -- would be a readout that says nothing about
+     * either road. The main segment is the last one the player touched, which is the one the caption's
+     * class and one-way state are read from as well; a road is moved to a storey as a whole (see
+     * {@link #setChainLayer}), so the number is the road's and not an accident of which piece was
+     * clicked.
+     */
+    public int selectedLayer() {
+        RoadSegment segment = network.segment(selectedSegmentId);
+        return segment != null ? segment.layer() : 0;
+    }
+
+    /**
+     * Re-classes every selected road, leaving the drawing class alone.
+     *
+     * <p>A road, and not a piece of one: "which pieces are one road" is a question about their class
+     * (see {@link RoadChains}), so re-classing one segment of a street would cut the street in two at
+     * that point and give the map a road that changes name at a bend. Each selected segment is
+     * therefore expanded to its road and the whole road is re-classed, which also keeps the
+     * selection's own grouping stable -- two selected segments of one street cannot end up as two
+     * roads of different classes. With several roads selected it changes all of them in one undo
+     * step.
+     *
+     * <p>A selection that names no segment re-classes the road of {@code segmentId}, which is the
+     * single-road behaviour this method has always had.
+     */
     public boolean setSegmentClass(int segmentId, RoadClass roadClass) {
-        if (network.segment(segmentId) == null) {
+        if (roadClass == null) {
+            return false;
+        }
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
             return false;
         }
         pushUndo();
-        for (int id : RoadChains.chainContaining(network, segmentId)) {
-            RoadSegment segment = network.segment(id);
-            if (segment != null) {
-                segment.setRoadClass(roadClass);
+        for (java.util.List<Integer> chain : chains) {
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    segment.setRoadClass(roadClass);
+                }
             }
         }
         // A class is not geometry, but it is not invisible to the caches either: "one road" is a
@@ -243,20 +333,62 @@ public final class RoadEditor {
      * @return whether anything changed
      */
     public boolean setChainDirection(int segmentId, RoadDirection direction) {
-        if (network.segment(segmentId) == null || direction == null) {
+        if (direction == null) {
             return false;
         }
-        java.util.List<Integer> chain = RoadChains.chainContaining(network, segmentId);
-        if (chain.isEmpty()) {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
             return false;
         }
         pushUndo();
+        for (java.util.List<Integer> chain : chains) {
+            applyChainDirection(chain, direction);
+        }
+        return true;
+    }
 
+    /**
+     * Turns every selected road one step further round the one-way states, each from its own state.
+     *
+     * <h2>Why each road advances from itself</h2>
+     * The switch on the road under the cursor goes two-way, along, against, two-way; a bulk switch
+     * that took the state of the main segment and wrote it onto every other selected road would not
+     * be a switch at all. A road that was already one-way against the walk would be flipped to the
+     * other way rather than moved on to two-way, so pressing the key twice would not take a mixed
+     * selection anywhere in particular. Advancing each road from where it actually is means the
+     * fourth press brings every selected road back to two-way however mixed they started, which is
+     * the same promise the single-road switch makes.
+     *
+     * <p>Each road is still oriented along its own walk -- see {@link #setChainDirection} for why the
+     * stored direction of a piece is not the direction of the street -- and the whole thing is one
+     * undo step.
+     *
+     * @return whether anything was selected and switched
+     */
+    public boolean cycleSelectedDirection() {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(selectedSegmentId);
+        if (chains.isEmpty()) {
+            return false;
+        }
+        pushUndo();
+        for (java.util.List<Integer> chain : chains) {
+            applyChainDirection(chain, chainDirection(chain.get(0)).next());
+        }
+        return true;
+    }
+
+    /**
+     * Writes one direction onto one whole chain, orienting every piece along the chain's own walk.
+     *
+     * <p>The body {@link #setChainDirection} always had, factored out so that a bulk edit can apply
+     * the same rule to each of several roads without copying it.
+     */
+    private void applyChainDirection(java.util.List<Integer> chain, RoadDirection direction) {
         // The node the walk starts from: the end of the first segment that the second one is not attached
         // to. A chain of one segment has no second one, and then the segment's own from-node is the start
         // -- so FORWARD on a single piece of road is the direction it was drawn in, which is the answer
         // that needs no explaining to the player who drew it.
-        int node = chainStartNode(chain, segmentId);
+        int node = chainStartNode(chain, chain.get(0));
 
         for (int id : chain) {
             RoadSegment segment = network.segment(id);
@@ -277,7 +409,6 @@ public final class RoadEditor {
             segment.setDirection(along ? direction : direction.reversed());
             node = along ? segment.toNode() : segment.fromNode();
         }
-        return true;
     }
 
     /**
@@ -315,6 +446,24 @@ public final class RoadEditor {
     private static final int SAME_PLACE_HEIGHT = 2;
 
     /**
+     * What {@link #placePoi} did: the place's node, and whether the press created it.
+     *
+     * <h2>Why the caller needs to know which it was</h2>
+     * A press on an empty block creates a place, opens the editor for it, and the player may then
+     * cancel -- in which case there must be nothing left behind. A press on a block that already
+     * holds a place only selects it, and cancelling the editor must leave that place exactly as it
+     * was. The two presses look the same from outside, so the fact that separates them (this press
+     * created the node, or found one) has to come back with the id; a caller that guessed from the
+     * network afterwards cannot tell a just-created place from one that was always there.
+     *
+     * @param nodeId  the place's node, created or found
+     * @param created whether this call added it to the network, and therefore whether cancelling the
+     *                edit has anything to take back
+     */
+    public record PoiPlacement(int nodeId, boolean created) {
+    }
+
+    /**
      * Creates a point of interest and selects it.
      *
      * <p>A second press on the same block selects the place that is already there rather than putting
@@ -326,8 +475,11 @@ public final class RoadEditor {
      *
      * <p>The existing place is kept and the press is treated as selecting it, so a double press is a
      * no-op: no new undo step, no second record in the place-details store, nothing to clean up.
+     *
+     * <p>See {@link PoiPlacement} for why the answer says whether a node was made rather than only
+     * naming it.
      */
-    public int addPoi(int x, int y, int z) {
+    public PoiPlacement placePoi(int x, int y, int z) {
         for (RoadNode existing : network.nodesSnapshot()) {
             if (existing.type() == RoadNode.Type.POI
                     && existing.x() == x
@@ -335,16 +487,32 @@ public final class RoadEditor {
                     && Math.abs(existing.y() - y) <= SAME_PLACE_HEIGHT) {
                 selectedNodeId = existing.id();
                 selectedSegmentId = RoadSegment.NO_SEGMENT;
+                // A node selection replaces the road selection rather than sitting beside it: the two
+                // are one selection, and leaving the roads in the set would have the map highlight
+                // them for a Delete that is about to remove the place.
+                selectedChain.clear();
                 chainNodeId = RoadSegment.NO_NODE;
-                return existing.id();
+                return new PoiPlacement(existing.id(), false);
             }
         }
         pushUndo();
         RoadNode node = network.addNode(x, y, z, RoadNode.Type.POI, null);
         selectedNodeId = node.id();
         selectedSegmentId = RoadSegment.NO_SEGMENT;
+        selectedChain.clear();
         chainNodeId = RoadSegment.NO_NODE;
-        return node.id();
+        return new PoiPlacement(node.id(), true);
+    }
+
+    /**
+     * The same, keeping the older call shape for callers that do not need the created flag.
+     *
+     * <p>The self-checks and any addon code written against the previous signature use this; the
+     * editor itself asks {@link #placePoi} because it has to know whether cancelling has something
+     * to take back.
+     */
+    public int addPoi(int x, int y, int z) {
+        return placePoi(x, y, z).nodeId();
     }
 
     public boolean setNodeName(int nodeId, String name) {
@@ -428,42 +596,51 @@ public final class RoadEditor {
     }
 
     /**
-     * Names the whole road the given segment belongs to.
+     * Names every selected road, and the road of {@code segmentId} when nothing is selected.
      *
      * <p>Naming a single segment would leave a road with bends called one thing for one straight
-     * piece and something else for the next.
+     * piece and something else for the next, so each selected segment's road is named whole. Several
+     * selected roads get the same name -- which is what the panel's one field says, and what a player
+     * who selected three roads and pressed N asked for -- in one undo step, so taking it back is one
+     * press rather than one per road.
      */
     public boolean setRoadName(int segmentId, String name) {
-        if (network.segment(segmentId) == null) {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
             return false;
         }
         pushUndo();
-        for (int id : RoadChains.chainContaining(network, segmentId)) {
-            RoadSegment segment = network.segment(id);
-            if (segment != null) {
-                segment.setName(name);
+        for (java.util.List<Integer> chain : chains) {
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    segment.setName(name);
+                }
             }
         }
         return true;
     }
 
     /**
-     * Names the whole road and puts it on a storey, as one edit.
+     * Names every selected road and puts it on a storey, as one edit.
      *
      * <p>One undo step rather than two, because it is one visit to one panel: a player who named a road
      * and set its storey and then pressed undo twice to get back where they were would be undoing two
      * halves of a single answer. See {@link #setChainLayer} for what the storey decides.
      */
     public boolean setRoadNameAndLayer(int segmentId, String name, int layer) {
-        if (network.segment(segmentId) == null) {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
             return false;
         }
         pushUndo();
-        for (int id : RoadChains.chainContaining(network, segmentId)) {
-            RoadSegment segment = network.segment(id);
-            if (segment != null) {
-                segment.setName(name);
-                segment.setLayer(layer);
+        for (java.util.List<Integer> chain : chains) {
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    segment.setName(name);
+                    segment.setLayer(layer);
+                }
             }
         }
         // The storey just given is the one the next road drawn goes on, which is what makes a tunnel
@@ -530,6 +707,10 @@ public final class RoadEditor {
         chainNodeId = nodeId;
         selectedNodeId = nodeId;
         selectedSegmentId = RoadSegment.NO_SEGMENT;
+        // Drawing selects the point being drawn, which is a node selection: the roads selected a
+        // moment ago are not what Delete or N would act on now, and leaving them highlighted would
+        // say they were.
+        selectedChain.clear();
         reclassifyNodes();
         return nodeId;
     }
@@ -571,6 +752,15 @@ public final class RoadEditor {
         return true;
     }
 
+    /**
+     * Selects the whole road the given segment belongs to, and only that road.
+     *
+     * <p>A road drawn with bends is several segments, and this is the gesture "select this road" --
+     * the whole chain is what the map highlights and what every road-wide operation then acts on.
+     * The multi-select gestures are {@link #toggleChainSelection} and
+     * {@link #toggleSingleSegmentSelection}; this one replaces whatever was selected before, which is
+     * what a plain Shift+left click means.
+     */
     public void selectSegment(int segmentId) {
         RoadSegment segment = network.segment(segmentId);
         selectedSegmentId = segment != null ? segmentId : RoadSegment.NO_SEGMENT;
@@ -580,6 +770,185 @@ public final class RoadEditor {
         if (segment != null) {
             selectedChain.addAll(RoadChains.chainContaining(network, segmentId));
         }
+    }
+
+    /**
+     * Selects one segment of a road and nothing else.
+     *
+     * <h2>Why the whole-road selection is still the default</h2>
+     * A road with bends is several segments, and "this road" is almost always what a player means by
+     * pointing at one: naming, re-classing and deleting it as a single straight piece is the mistake
+     * this model was built to avoid. The segment-level selection exists for the one case where the
+     * piece really is the subject -- trimming or re-routing a single straight stretch of a street --
+     * and it is reached by double-clicking, so it cannot be arrived at by accident.
+     *
+     * <p>The main selection is the segment itself, so the readout and the road-wide operations still
+     * have one segment to speak from; see {@link #selectedLength} for why those operations stay
+     * road-wide even when the selection is not.
+     */
+    public void selectSingleSegment(int segmentId) {
+        RoadSegment segment = network.segment(segmentId);
+        selectedSegmentId = segment != null ? segmentId : RoadSegment.NO_SEGMENT;
+        selectedNodeId = RoadSegment.NO_NODE;
+        chainNodeId = RoadSegment.NO_NODE;
+        selectedChain.clear();
+        if (segment != null) {
+            selectedChain.add(segmentId);
+        }
+    }
+
+    /**
+     * Adds the whole road the given segment belongs to, or takes it back out.
+     *
+     * <h2>Why the whole road is the unit</h2>
+     * The multi-select gesture exists so that several roads can be re-classed, renamed or deleted in
+     * one go, and all of those are road-wide operations: adding one piece of a bent street to the
+     * selection would put a road into it that only half exists as far as the operations can tell. A
+     * road that is only partly in the set is completed rather than removed -- the first press on a
+     * half-selected road means "add this road", and only a press when the whole road is in the set
+     * takes it out.
+     *
+     * <p>The main selection becomes the road just added. When a road is taken out and it was the
+     * main one, the main selection moves to whatever is left, because every readout and the naming
+     * panel need one segment to speak from; when nothing is left it is
+     * {@link RoadSegment#NO_SEGMENT}.
+     *
+     * @return whether the segment names a road, which is what makes the press worth consuming
+     */
+    public boolean toggleChainSelection(int segmentId) {
+        if (network.segment(segmentId) == null) {
+            return false;
+        }
+        java.util.List<Integer> chain = RoadChains.chainContaining(network, segmentId);
+        if (chain.isEmpty()) {
+            chain = java.util.List.of(segmentId);
+        }
+        return toggleSelection(segmentId, chain);
+    }
+
+    /**
+     * Adds one segment to the selection, or takes it back out, leaving the rest of its road alone.
+     *
+     * <p>The segment-level half of the multi-select gesture, reached by double-clicking: for putting
+     * one straight piece of a street into a selection without the rest of the street. The main
+     * selection follows the same rule as {@link #toggleChainSelection}.
+     */
+    public boolean toggleSingleSegmentSelection(int segmentId) {
+        if (network.segment(segmentId) == null) {
+            return false;
+        }
+        return toggleSelection(segmentId, java.util.List.of(segmentId));
+    }
+
+    /**
+     * Adds a set of segments to the selection, or removes it if all of them are already in.
+     *
+     * <p>Clearing the node selection is deliberate: the selection is one thing at a time, and the
+     * multi-select gestures are about roads. Leaving a selected place behind would have Delete ask
+     * which of the two the player meant.
+     */
+    private boolean toggleSelection(int clickedSegmentId, java.util.List<Integer> members) {
+        selectedNodeId = RoadSegment.NO_NODE;
+        chainNodeId = RoadSegment.NO_NODE;
+        if (selectedChain.containsAll(members)) {
+            selectedChain.removeAll(members);
+            if (selectedChain.isEmpty()) {
+                selectedSegmentId = RoadSegment.NO_SEGMENT;
+            } else if (!selectedChain.contains(selectedSegmentId)) {
+                // The main segment was in what came out. Any remaining one will do: the group is
+                // selected as a group, and a readout that changed its mind about which member it
+                // speaks for would be showing a road that is no longer in the selection.
+                selectedSegmentId = selectedChain.iterator().next();
+            }
+        } else {
+            selectedChain.addAll(members);
+            selectedSegmentId = clickedSegmentId;
+        }
+        return true;
+    }
+
+    /**
+     * A copy of the segment selection, for a gesture that has to take one of its own steps back.
+     *
+     * <p>The multi-select click has an ambiguity no ordering of events can avoid: the first press of
+     * a double click is indistinguishable from a single one, so its effect has to be applied before
+     * the second press can say what the gesture was. The client therefore remembers the selection the
+     * first click replaced and hands it back here when the second click turns out to be a double, so
+     * the double can select its one segment rather than leaving the first click's whole road
+     * selected as well. Kept as a plain value so the client can hold it without reaching into the
+     * editor's fields, and so the restore can be reasoned about (and tested) on its own.
+     */
+    public record SelectionSnapshot(java.util.List<Integer> segments, int primary) {
+    }
+
+    /** The selection as it stands, for {@link #restoreSelection}. */
+    public SelectionSnapshot snapshotSelection() {
+        return new SelectionSnapshot(new java.util.ArrayList<>(selectedChain), selectedSegmentId);
+    }
+
+    /**
+     * Puts the segment selection back to a snapshot.
+     *
+     * <p>Ids that no longer name a segment are dropped rather than kept: the snapshot outlives the
+     * click that took it by a few hundred milliseconds, and a deletion in between must not leave the
+     * selection holding ids the map would have to ask a stale question about. If the main segment has
+     * gone for the same reason, the first remaining one becomes the main selection.
+     */
+    public void restoreSelection(SelectionSnapshot snapshot) {
+        selectedChain.clear();
+        selectedNodeId = RoadSegment.NO_NODE;
+        chainNodeId = RoadSegment.NO_NODE;
+        selectedSegmentId = RoadSegment.NO_SEGMENT;
+        if (snapshot == null) {
+            return;
+        }
+        for (int id : snapshot.segments()) {
+            if (network.segment(id) != null) {
+                selectedChain.add(id);
+            }
+        }
+        if (snapshot.primary() != RoadSegment.NO_SEGMENT
+                && network.segment(snapshot.primary()) != null) {
+            selectedSegmentId = snapshot.primary();
+            selectedChain.add(selectedSegmentId);
+        } else if (!selectedChain.isEmpty()) {
+            selectedSegmentId = selectedChain.iterator().next();
+        }
+    }
+
+    /**
+     * The roads a bulk edit acts on: every road touched by the selection, plus the road of the given
+     * segment.
+     *
+     * <p>Every road-wide edit has to answer the same question -- which roads is this press about --
+     * and answering it here, once, is what keeps the class, storey, name and one-way edits from
+     * drifting apart. The segment argument is always included: the caller may be acting on the road
+     * under the cursor while nothing is selected, which is how every one of these operations behaved
+     * before multi-select existed, and a selection must not make that road un-editable.
+     *
+     * <p>The walk is deduplicated by road rather than by segment: a selection made of several
+     * segments of one street is one road to edit, and calling {@code chainContaining} for each of them
+     * would build the adjacency index as many times as the street has pieces.
+     */
+    private java.util.List<java.util.List<Integer>> chainsToEdit(int segmentId) {
+        java.util.Map<Integer, java.util.List<Integer>> chains = new java.util.LinkedHashMap<>();
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        java.util.List<Integer> seeds = new java.util.ArrayList<>(selectedChain);
+        if (network.segment(segmentId) != null) {
+            seeds.add(segmentId);
+        }
+        for (int seed : seeds) {
+            if (network.segment(seed) == null || !seen.add(seed)) {
+                continue;
+            }
+            java.util.List<Integer> chain = RoadChains.chainContaining(network, seed);
+            if (chain.isEmpty()) {
+                chain = java.util.List.of(seed);
+            }
+            seen.addAll(chain);
+            chains.put(chain.get(0), chain);
+        }
+        return new java.util.ArrayList<>(chains.values());
     }
 
     /**
@@ -744,22 +1113,36 @@ public final class RoadEditor {
      * several segments meeting at pass-through nodes, which is what makes it one road rather than
      * several, so that is what "delete this road" has to mean.
      *
+     * <h2>Why it deletes exactly the selected segments</h2>
+     * The selection is the list of what goes, and that is the one place the segment-level selection
+     * means what it says: a player who double-clicked one straight piece of a street and pressed
+     * delete asked for that piece to be cut out, not for the street to vanish -- and if they wanted
+     * the street they had selected it with a single click. The multi-selection works the same way:
+     * every road and every single segment in it goes, nothing more.
+     *
+     * <p>A selection that names no segment set at all -- the state before multi-select existed --
+     * still deletes the whole road of the main segment, so the old behaviour is untouched.
+     *
      * <p>A node is still deleted as the node it is: what a node has is the segments that end on it,
      * and those go with it.
      */
     public boolean deleteSelection() {
-        if (selectedSegmentId != RoadSegment.NO_SEGMENT) {
+        if (selectedSegmentId != RoadSegment.NO_SEGMENT || !selectedChain.isEmpty()) {
             pushUndo();
             // Read before anything is removed: the walk answers out of the network, so it cannot be
             // asked once pieces of the road are gone. The chain always holds the seed, so the empty
             // answer is only reachable for a selection that names no segment at all.
-            java.util.List<Integer> road = RoadChains.chainContaining(network, selectedSegmentId);
-            if (road.isEmpty()) {
-                network.removeSegment(selectedSegmentId);
-            } else {
-                for (int segmentId : road) {
-                    network.removeSegment(segmentId);
+            java.util.Set<Integer> doomed = new java.util.LinkedHashSet<>(selectedChain);
+            if (doomed.isEmpty()) {
+                java.util.List<Integer> road = RoadChains.chainContaining(network, selectedSegmentId);
+                if (road.isEmpty()) {
+                    doomed.add(selectedSegmentId);
+                } else {
+                    doomed.addAll(road);
                 }
+            }
+            for (int segmentId : doomed) {
+                network.removeSegment(segmentId);
             }
             selectedSegmentId = RoadSegment.NO_SEGMENT;
             // The ids just removed are not selection any more; leaving them in the chain would have
@@ -924,16 +1307,28 @@ public final class RoadEditor {
         redoStack.clear();
     }
 
-    /** Drops selection ids that no longer exist after an undo/redo swapped the network out. */
+    /**
+     * Drops selection ids that no longer exist after an undo/redo swapped the network out.
+     *
+     * <p>The selection is kept as a set of segments rather than rebuilt from the main segment, so a
+     * multi-selection survives an undo as the roads it named rather than collapsing to one road's
+     * chain. What cannot survive is a segment the swapped-in network does not have -- undo across a
+     * deletion removes the ids the deletion took -- so those go, and the main selection moves to a
+     * remaining one if it was among them.
+     */
     private void clampSelection() {
         if (network.node(selectedNodeId) == null) {
             selectedNodeId = RoadSegment.NO_NODE;
         }
-        selectedChain.clear();
-        if (network.segment(selectedSegmentId) == null) {
-            selectedSegmentId = RoadSegment.NO_SEGMENT;
-        } else {
-            selectedChain.addAll(RoadChains.chainContaining(network, selectedSegmentId));
+        selectedChain.removeIf(segmentId -> network.segment(segmentId) == null);
+        if (selectedSegmentId != RoadSegment.NO_SEGMENT
+                && network.segment(selectedSegmentId) == null) {
+            selectedSegmentId = selectedChain.isEmpty()
+                    ? RoadSegment.NO_SEGMENT
+                    : selectedChain.iterator().next();
+        }
+        if (selectedSegmentId == RoadSegment.NO_SEGMENT && !selectedChain.isEmpty()) {
+            selectedSegmentId = selectedChain.iterator().next();
         }
         if (network.node(chainNodeId) == null) {
             chainNodeId = RoadSegment.NO_NODE;

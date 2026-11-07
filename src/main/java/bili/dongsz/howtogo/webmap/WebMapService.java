@@ -348,7 +348,7 @@ public final class WebMapService {
      */
     private static List<RoadMapSnapshot.ReadOnlyLayer> readOnlyLayers() {
         List<RoadMapSnapshot.ReadOnlyLayer> layers = new ArrayList<>(4);
-        addReadOnlyLayer(layers, "ROADWEAVER", RoadWeaverLayer.segments());
+        addReadOnlyLayer(layers, "ROADWEAVER", RoadWeaverLayer.drawnSegments());
         addReadOnlyLayer(layers, "CREATE", RailTrackStore.segments());
         RoadNetwork mtr = MtrTransit.railLayer();
         if (mtr != null && mtr.segmentCount() > 0) {

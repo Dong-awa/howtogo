@@ -1232,7 +1232,7 @@ public final class DestinationScreen extends Screen {
         // planned partly over them, and a preview that omitted them would show a line across ground
         // it cannot explain. Drawn chain by chain so a long road is one continuous stroke, and boxed
         // by the view rectangle -- the layer can hold a whole region's worth.
-        HudDraw.emitNetworkInBox(last, RoadWeaverLayer.network(), m00, 0, m02, 0, m11, m12,
+        HudDraw.emitNetworkInBox(last, RoadWeaverLayer.drawnNetwork(), m00, 0, m02, 0, m11, m12,
                 0.7, 0x9A, minX, minY, maxX, maxY,
                 mapCenterX - reach, mapCenterZ - reach, mapCenterX + reach, mapCenterZ + reach);
 
