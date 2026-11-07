@@ -128,6 +128,7 @@ public final class SelfTest {
         List<LineStop> stops = TransitStops.all(network);
 
         results.add(checkWorld(network, lines, stops));
+        results.add(checkMapDrawing(network));
         results.addAll(checkLines(network, lines));
         results.add(checkPlans(lines));
         results.add(checkSimulatedRide());
@@ -152,6 +153,58 @@ public final class SelfTest {
                 + RoutePreferenceStore.transitBoardOnly() + " debug=" + RoadConfig.debugLog();
         boolean ok = network.segmentCount() == 0 || network.nodeCount() > 0;
         return new Result("command.howtogo.selftest.check.world", ok, detail);
+    }
+
+    /**
+     * Every layer the maps draw, checked for a stroke that jumps between two of its own pieces.
+     *
+     * <p>A jump is a straight line painted between two points the network does not join: the road
+     * itself is fine, routing is fine, and the only symptom is a line across the map that no road
+     * follows -- precisely the kind of defect that is invisible to every other check because the
+     * data is all correct. The coordinates of a jump are reported so the line can be found in the
+     * world it was reported in.
+     *
+     * <p>Only the maps that stroke whole roads are covered, which is every map except Xaero's world
+     * map: that one draws segment by segment, so this defect would not show there at all -- and a
+     * bug that is only visible on some of the maps is exactly the one worth naming out loud.
+     */
+    private static Result checkMapDrawing(RoadNetwork network) {
+        Map<String, RoadNetwork> layers = new LinkedHashMap<>();
+        layers.put("own", network);
+        layers.put("rail", RailTrackStore.network());
+        layers.put("mtr", MtrTransit.railLayer());
+        layers.put("rw", RoadWeaverLayer.drawnNetwork());
+        int segments = 0;
+        int strokes = 0;
+        int jumps = 0;
+        StringBuilder detail = new StringBuilder();
+        for (Map.Entry<String, RoadNetwork> layer : layers.entrySet()) {
+            RoadNetwork drawn = layer.getValue();
+            if (drawn == null || drawn.segmentCount() == 0) {
+                continue;
+            }
+            int layerJumps = 0;
+            for (DisplayStrokes.Stroke stroke : DisplayStrokes.build(drawn)) {
+                strokes++;
+                for (DisplayStrokes.Jump jump : DisplayStrokes.jumps(drawn, stroke)) {
+                    layerJumps++;
+                    if (jumps + layerJumps <= 3) {
+                        detail.append(String.format(
+                                " | %s jump %.0f blocks (%d,%d)->(%d,%d)",
+                                layer.getKey(), jump.distance(),
+                                Math.round(jump.fromX()), Math.round(jump.fromZ()),
+                                Math.round(jump.toX()), Math.round(jump.toZ())));
+                    }
+                }
+            }
+            segments += drawn.segmentCount();
+            jumps += layerJumps;
+            detail.append(" | ").append(layer.getKey()).append('=')
+                    .append(drawn.segmentCount()).append('/').append(layerJumps);
+        }
+        boolean ok = jumps == 0;
+        String text = "segments=" + segments + " strokes=" + strokes + detail;
+        return new Result("command.howtogo.selftest.check.draw", ok, text);
     }
 
     /**

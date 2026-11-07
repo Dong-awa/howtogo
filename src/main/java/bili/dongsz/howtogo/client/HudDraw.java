@@ -15,14 +15,6 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.gui.GuiGraphics;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-
 /**
  * Shared 2D drawing helpers for this mod's interfaces.
  *
@@ -759,34 +751,35 @@ public final class HudDraw {
     }
 
     /**
-     * Draws a whole road -- a chain of segments through its pass-through nodes -- as one stroke.
+     * Draws a whole road -- a stroke of segments through its pass-through nodes -- as one line.
      *
      * <h2>Why segment-by-segment still shows notches</h2>
      * A bend is not always inside one segment: a road drawn with several clicks is stored as several
      * segments meeting at a pass-through node, and a track read from another mod is cut at every
      * node. Drawing each segment on its own mitres its own corners and nothing else, so the joint
      * between two segments is two butt ends with a wedge between them at a bend -- the same notch,
-     * moved to fewer places. The chain is what the road is; this concatenates it into one polyline,
-     * orienting every piece so it continues the previous one, and draws that.
+     * moved to fewer places. The stroke is what the road is; this concatenates it into one polyline
+     * and draws that.
      *
-     * <p>Segment vertices are integers and the display curve, when there is one, may run the other
-     * way round from the segment's stored order; the orientation is decided by which end is nearer
-     * the point the previous piece stopped at.
+     * <p>How each piece is oriented is not worked out here. {@link DisplayStrokes} walks the stroke
+     * and records for every piece whether it is drawn forwards or backwards; inferring it from "the
+     * end nearer the last point written" reads a prepended piece wrongly, and the wrong read is a
+     * straight line painted between two places the road never joined. See that class.
      */
-    public static void emitChain(VertexSink out, RoadNetwork network,
-                                 int[] chain, double m00, double m01, double m02,
+    public static void emitChain(VertexSink out, RoadNetwork network, DisplayStrokes.Stroke stroke,
+                                 double m00, double m01, double m02,
                                  double m10, double m11, double m12,
                                  double halfWidth, int argb, int alpha,
                                  double minX, double minY, double maxX, double maxY) {
-        if (network == null || chain == null || chain.length == 0) {
+        if (network == null || stroke == null || stroke.pieces().isEmpty()) {
             return;
         }
         int written = 0;
         double previousWorldX = 0;
         double previousWorldZ = 0;
         boolean havePrevious = false;
-        for (int id : chain) {
-            RoadSegment segment = network.segment(id);
+        for (DisplayStrokes.Piece piece : stroke.pieces()) {
+            RoadSegment segment = network.segment(piece.segmentId());
             if (segment == null) {
                 continue;
             }
@@ -795,16 +788,9 @@ public final class HudDraw {
             if (count < 2) {
                 continue;
             }
-            double firstX = curve != null ? curve.x(0) : segment.x(0);
-            double firstZ = curve != null ? curve.z(0) : segment.z(0);
-            double lastX = curve != null ? curve.x(count - 1) : segment.x(count - 1);
-            double lastZ = curve != null ? curve.z(count - 1) : segment.z(count - 1);
-            boolean reverse = havePrevious
-                    && distanceSq(previousWorldX, previousWorldZ, lastX, lastZ)
-                    < distanceSq(previousWorldX, previousWorldZ, firstX, firstZ);
             ensurePathCapacity(written + count);
             for (int i = 0; i < count; i++) {
-                int index = reverse ? count - 1 - i : i;
+                int index = piece.reversed() ? count - 1 - i : i;
                 double x = curve != null ? curve.x(index) : segment.x(index);
                 double z = curve != null ? curve.z(index) : segment.z(index);
                 if (havePrevious && written > 0 && Math.abs(previousWorldX - x) < 1.0E-6
@@ -820,12 +806,6 @@ public final class HudDraw {
             }
         }
         emitProjectedPath(out, written, halfWidth, argb, alpha, minX, minY, maxX, maxY);
-    }
-
-    private static double distanceSq(double ax, double az, double bx, double bz) {
-        double dx = ax - bx;
-        double dz = az - bz;
-        return dx * dx + dz * dz;
     }
 
     /**
@@ -866,192 +846,16 @@ public final class HudDraw {
         if (network == null || network.segmentCount() == 0) {
             return;
         }
-        for (int[] chain : displayChains(network)) {
-            RoadSegment segment = network.segment(chain[0]);
+        for (DisplayStrokes.Stroke stroke : DisplayStrokes.cached(network)) {
+            RoadSegment segment = network.segment(stroke.firstSegmentId());
             if (segment == null) {
                 continue;
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
-            emitChain(out, network, chain, m00, m01, m02, m10, m11, m12, width,
+            emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
                     bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
                     minX, minY, maxX, maxY);
         }
-    }
-
-    // --------------------------------------------------------- display chains
-    //
-    // The chains used for drawing are not quite the chains the editor and the router use. Those stop
-    // at every node where three roads meet, because a junction is a real decision point -- but a road
-    // that merely passes through a junction is still one road, and stroking it as two strokes makes
-    // the two ends overlap at the junction. With a translucent stroke that overlap is painted twice
-    // and reads as a lighter (or darker, depending on what is under it) blob exactly where two pieces
-    // of the same road meet. So for drawing a chain is walked on through a junction as well, taking
-    // the straightest continuation of the same class and name; the overlaps that remain are between
-    // genuinely different roads, which is what a junction looks like anyway.
-    //
-    // This is display-only: nothing else in the mod asks this question, and the editor's own chains
-    // (which decide what a click selects, what a rename applies to) stay the geometry's answer.
-
-    /** How many drawn networks keep a reading; a frame asks about the player's roads and the layers. */
-    private static final int DISPLAY_CACHE_SLOTS = 6;
-
-    private static final class DisplayChains {
-        private final RoadNetwork network;
-        private final int revision;
-        private final int appearance;
-        private final List<int[]> chains;
-
-        private DisplayChains(RoadNetwork network, int revision, int appearance,
-                              List<int[]> chains) {
-            this.network = network;
-            this.revision = revision;
-            this.appearance = appearance;
-            this.chains = chains;
-        }
-    }
-
-    private static final DisplayChains[] DISPLAY_CACHE = new DisplayChains[DISPLAY_CACHE_SLOTS];
-    private static int nextDisplayCacheSlot;
-
-    /** The straightest a road may turn at a junction and still be read as the same road going on. */
-    private static final double DISPLAY_TURN_LIMIT_RADIANS = Math.toRadians(120.0);
-
-    private static List<int[]> displayChains(RoadNetwork network) {
-        for (DisplayChains reading : DISPLAY_CACHE) {
-            if (reading != null && reading.network == network
-                    && reading.revision == network.revision()
-                    && reading.appearance == RoadSegment.appearanceChanges()) {
-                return reading.chains;
-            }
-        }
-        List<int[]> built = buildDisplayChains(network);
-        int slot = nextDisplayCacheSlot;
-        nextDisplayCacheSlot = (nextDisplayCacheSlot + 1) % DISPLAY_CACHE_SLOTS;
-        DISPLAY_CACHE[slot] = new DisplayChains(network, network.revision(),
-                RoadSegment.appearanceChanges(), built);
-        return built;
-    }
-
-    /** One pass over a network grouping its segments into strokes that run straight through junctions. */
-    private static List<int[]> buildDisplayChains(RoadNetwork network) {
-        List<RoadSegment> segments = network.segmentsSnapshot();
-        Map<Integer, List<Integer>> atNode = new HashMap<>(segments.size() * 2);
-        for (RoadSegment segment : segments) {
-            if (segment.fromNode() != RoadSegment.NO_NODE) {
-                atNode.computeIfAbsent(segment.fromNode(), key -> new ArrayList<>(2))
-                        .add(segment.id());
-            }
-            if (segment.toNode() != RoadSegment.NO_NODE && segment.toNode() != segment.fromNode()) {
-                atNode.computeIfAbsent(segment.toNode(), key -> new ArrayList<>(2))
-                        .add(segment.id());
-            }
-        }
-        Set<Integer> used = new HashSet<>(segments.size() * 2);
-        List<int[]> chains = new ArrayList<>();
-        for (RoadSegment seed : segments) {
-            if (!used.add(seed.id())) {
-                continue;
-            }
-            List<Integer> chain = new ArrayList<>();
-            chain.add(seed.id());
-            while (true) {
-                Integer next = sameRoadContinuing(network, atNode, used,
-                        chain.get(chain.size() - 1), true);
-                if (next == null) {
-                    break;
-                }
-                used.add(next);
-                chain.add(next);
-            }
-            while (true) {
-                Integer previous = sameRoadContinuing(network, atNode, used, chain.get(0), false);
-                if (previous == null) {
-                    break;
-                }
-                used.add(previous);
-                chain.add(0, previous);
-            }
-            int[] ids = new int[chain.size()];
-            for (int i = 0; i < ids.length; i++) {
-                ids[i] = chain.get(i);
-            }
-            chains.add(ids);
-        }
-        return chains;
-    }
-
-    /**
-     * The unused segment that carries the same road on from one end of a chain, or null.
-     *
-     * <p>At a junction several segments are incident; the continuation is the one whose direction
-     * differs least from the direction the chain is already travelling. A turn past
-     * {@link #DISPLAY_TURN_LIMIT_RADIANS} is not a continuation: the chain ends there and the piece
-     * beyond is a stroke of its own, because merging a sharp elbow into one stroke would be a claim
-     * about the road that the data does not make.
-     */
-    private static Integer sameRoadContinuing(RoadNetwork network, Map<Integer, List<Integer>> atNode,
-                                              Set<Integer> used, int segmentId, boolean afterSegment) {
-        RoadSegment segment = network.segment(segmentId);
-        if (segment == null || segment.vertexCount() < 2) {
-            return null;
-        }
-        int nodeId = afterSegment ? segment.toNode() : segment.fromNode();
-        if (nodeId == RoadSegment.NO_NODE) {
-            return null;
-        }
-        // The direction the chain is travelling as it arrives at (or leaves from) the node.
-        double inX;
-        double inZ;
-        if (afterSegment) {
-            int last = segment.vertexCount() - 1;
-            inX = segment.x(last) - segment.x(last - 1);
-            inZ = segment.z(last) - segment.z(last - 1);
-        } else {
-            inX = segment.x(0) - segment.x(1);
-            inZ = segment.z(0) - segment.z(1);
-        }
-        double inLength = Math.hypot(inX, inZ);
-        if (inLength < 1.0E-9) {
-            return null;
-        }
-        String name = segment.name();
-        Integer best = null;
-        double bestTurn = DISPLAY_TURN_LIMIT_RADIANS;
-        for (int candidateId : atNode.getOrDefault(nodeId, List.of())) {
-            if (candidateId == segmentId || used.contains(candidateId)) {
-                continue;
-            }
-            RoadSegment candidate = network.segment(candidateId);
-            if (candidate == null || candidate.vertexCount() < 2
-                    || candidate.roadClass() != segment.roadClass()
-                    || !Objects.equals(name, candidate.name())) {
-                continue;
-            }
-            // The candidate's direction away from the node.
-            double outX;
-            double outZ;
-            if (candidate.fromNode() == nodeId) {
-                outX = candidate.x(1) - candidate.x(0);
-                outZ = candidate.z(1) - candidate.z(0);
-            } else if (candidate.toNode() == nodeId) {
-                int last = candidate.vertexCount() - 1;
-                outX = candidate.x(last - 1) - candidate.x(last);
-                outZ = candidate.z(last - 1) - candidate.z(last);
-            } else {
-                continue;
-            }
-            double outLength = Math.hypot(outX, outZ);
-            if (outLength < 1.0E-9) {
-                continue;
-            }
-            double cosine = (inX * outX + inZ * outZ) / (inLength * outLength);
-            double turn = Math.acos(Math.max(-1.0, Math.min(1.0, cosine)));
-            if (turn < bestTurn) {
-                bestTurn = turn;
-                best = candidateId;
-            }
-        }
-        return best;
     }
 
     /**
@@ -1093,34 +897,34 @@ public final class HudDraw {
         if (network == null || network.segmentCount() == 0) {
             return;
         }
-        for (int[] chain : displayChains(network)) {
-            if (!chainInBox(network, chain, worldMinX, worldMinZ, worldMaxX, worldMaxZ)) {
+        for (DisplayStrokes.Stroke stroke : DisplayStrokes.cached(network)) {
+            if (!strokeInBox(network, stroke, worldMinX, worldMinZ, worldMaxX, worldMaxZ)) {
                 continue;
             }
-            RoadSegment segment = network.segment(chain[0]);
+            RoadSegment segment = network.segment(stroke.firstSegmentId());
             if (segment == null) {
                 continue;
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
-            emitChain(out, network, chain, m00, m01, m02, m10, m11, m12, width,
+            emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
                     bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
                     minX, minY, maxX, maxY);
         }
     }
 
     /**
-     * Whether any segment of a chain comes within the world rectangle.
+     * Whether any segment of a stroke comes within the world rectangle.
      *
      * <p>Tested per segment's own bounding box, so a road that crosses the window from outside to
      * outside still counts -- an "is one of its points inside" test would throw away exactly the
-     * long roads that matter most. A box test is allowed to keep a chain that only grazes the window;
-     * the stroke pass clips the edges anyway.
+     * long roads that matter most. A box test is allowed to keep a stroke that only grazes the
+     * window; the stroke pass clips the edges anyway.
      */
-    private static boolean chainInBox(RoadNetwork network, int[] chain,
-                                      double worldMinX, double worldMinZ,
-                                      double worldMaxX, double worldMaxZ) {
-        for (int id : chain) {
-            RoadSegment segment = network.segment(id);
+    private static boolean strokeInBox(RoadNetwork network, DisplayStrokes.Stroke stroke,
+                                       double worldMinX, double worldMinZ,
+                                       double worldMaxX, double worldMaxZ) {
+        for (DisplayStrokes.Piece piece : stroke.pieces()) {
+            RoadSegment segment = network.segment(piece.segmentId());
             if (segment == null || segment.vertexCount() == 0) {
                 continue;
             }

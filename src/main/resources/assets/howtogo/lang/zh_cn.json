@@ -180,6 +180,7 @@
   "command.howtogo.selftest.check.archive": "地图存档压缩包",
   "command.howtogo.selftest.check.webmap": "浏览器地图",
   "command.howtogo.selftest.check.theme": "界面主题",
+  "command.howtogo.selftest.check.draw": "地图绘制",
   "command.howtogo.terminal": "打开导航终端",
   "command.howtogo.stop": "已结束前往 %s 的导航",
   "command.howtogo.stop.none": "当前没有正在进行的导航",

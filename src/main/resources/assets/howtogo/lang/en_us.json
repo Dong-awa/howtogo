@@ -184,6 +184,7 @@
   "command.howtogo.selftest.check.archive": "map archive round trip",
   "command.howtogo.selftest.check.webmap": "browser map",
   "command.howtogo.selftest.check.theme": "interface theme",
+  "command.howtogo.selftest.check.draw": "map drawing",
   "command.howtogo.webmap.started": "Browser map started: %s (click to open)",
   "command.howtogo.webmap.running": "Browser map is already running: %s",
   "command.howtogo.webmap.stopped": "Browser map server stopped",

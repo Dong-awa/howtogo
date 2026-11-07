@@ -1471,7 +1471,16 @@ public final class TransitLineScreen extends Screen {
      * while the field has focus, which is the same two-step the map's name prompt uses.
      */
     @Override
+    // 1.21.9 turned key input into a record and moved the key codes onto the SDL-backed
+    // InputConstants. The dispatch below compares the code against three numbers, so the record is
+    // unpacked on entry and reads the same on either side -- the same unpacking the destination
+    // picker, the place editor and the road-name prompt already do.
+    //? if >=1.21.9 {
+    /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+        int keyCode = event.key();
+    *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    //?}
         if (colourField != null && colourField.isFocused()) {
             if (keyCode == 257 || keyCode == 335) {
                 commitColour();
@@ -1484,7 +1493,11 @@ public final class TransitLineScreen extends Screen {
                 return true;
             }
         }
+        //? if >=1.21.9 {
+        /*return super.keyPressed(event);
+        *///?} else {
         return super.keyPressed(keyCode, scanCode, modifiers);
+        //?}
     }
 
     @Override
