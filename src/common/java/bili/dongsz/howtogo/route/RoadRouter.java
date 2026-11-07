@@ -66,8 +66,88 @@ public final class RoadRouter {
      */
     private static final double OFF_ROAD_SPEED = 0.7;
 
-    /** Only segments wired to real nodes take part; free-floating ones have no topology to route on. */
-    private record Edge(int toNode, RoadSegment segment) {
+    /**
+     * One directed piece of road: leaving {@code fromNode}, arriving at {@code toNode}.
+     *
+     * <p>Only segments wired to real nodes take part; free-floating ones have no topology to route
+     * on. An edge is a direction rather than a segment -- a two-way road is two edges sharing one
+     * segment, and so is each synthetic join this router invents -- and the id is handed out once per
+     * graph build.
+     *
+     * <h2>Why an edge needs an id at all</h2>
+     * The search's state is the edge, not the node, because the cost of arriving somewhere depends on
+     * where the traveller came from: a turn is priced by the angle between the piece arrived on and
+     * the piece left on, so two arrivals at one node are not interchangeable. Keying the search on the
+     * node, which is what it used to do, therefore cannot carry a turn cost at all: the second arrival
+     * would be compared against the first as if they were the same state. The id is what makes one
+     * arrival distinguishable from another; see {@link Arm}.
+     */
+    private record Edge(int id, int fromNode, int toNode, RoadSegment segment) {
+    }
+
+    /**
+     * One directed piece of road as the search sees it: the edge, and the headings at its two ends.
+     *
+     * <p>The turn between two pieces is the angle between the heading the traveller arrives on and the
+     * heading they leave on. The arrival heading belongs to the incoming piece and the departure
+     * heading to the outgoing one, so over one search the same piece is asked for a heading once for
+     * every way out of the node it arrives at. Working the two headings out when the arm is first met,
+     * and reusing them, is what keeps the turn cost from spending four trigonometry calls on every edge
+     * examined.
+     *
+     * <p>NaN is a heading a piece cannot give -- a synthetic join between two coincident nodes can be
+     * zero blocks long, and a span with no length has no direction. Both callers of {@link #turnDegrees}
+     * treat that as "not a turn", which is the honest reading: there is no heading there to change.
+     */
+    private record Arm(Edge edge, double headingIn, double headingOut) {
+
+        int id() {
+            return edge.id();
+        }
+
+        int toNode() {
+            return edge.toNode();
+        }
+
+        RoadSegment segment() {
+            return edge.segment();
+        }
+    }
+
+    /** The arm for an edge, worked out once per search and kept in {@code arms}. */
+    private static Arm armOf(Map<Integer, Arm> arms, Edge edge) {
+        return arms.computeIfAbsent(edge.id(), id -> new Arm(edge,
+                travelBearing(edge.segment(), edge.toNode()),
+                leaveBearing(edge.segment(), edge.fromNode())));
+    }
+
+    /**
+     * Extra search cost on a chosen set of roads: how a second plan is made genuinely different.
+     *
+     * <h2>Why a toll rather than a ban</h2>
+     * The alternative plan is meant to be another way round, not a proof that one exists. Removing the
+     * roads of the first plan from the graph would answer "no route" whenever they were the only way
+     * through, and a plan list that collapses to one entry on a network with one main street is worse
+     * than one that offers a slower way round it. A multiplier keeps the roads usable while making
+     * them unattractive, which is what a preference is -- see {@link RoutePreferences#weight}.
+     *
+     * <p>Whole roads rather than single segments, because "avoid this stretch of this street" is not
+     * a thing a player can act on. The keys are the same ones the route already carries to name a
+     * turn, and they come from the workspace's own grouping, so the roads a finished plan reports and
+     * the roads the next search avoids are the same roads -- see {@link Route#roadKeys()}.
+     */
+    private record Tolls(RoadChains.Grouping grouping, Set<Integer> roads, double multiplier) {
+
+        /** No toll at all: the ordinary plan, and the one every other caller gets. */
+        static final Tolls NONE = new Tolls(null, Set.of(), 1.0);
+
+        /** The multiplier for one road, which is one for every road not being discouraged. */
+        double on(RoadSegment segment) {
+            if (roads.isEmpty() || grouping == null) {
+                return 1.0;
+            }
+            return roads.contains(grouping.keyOf(segment)) ? multiplier : 1.0;
+        }
     }
 
     private RoadRouter() {
@@ -341,7 +421,33 @@ public final class RoadRouter {
     public static Route findRoute(Workspace workspace, double startX, double startZ,
                                   double goalX, double goalZ, String destinationName,
                                   TravelMode mode, RoutePreferences preferences) {
-        return plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode, preferences);
+        return plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode, preferences,
+                Tolls.NONE);
+    }
+
+    /**
+     * Plans a route that keeps off the given roads where it can, which is how a second plan is made.
+     *
+     * <p>The roads are the ones a finished {@link Route} reports through {@link Route#roadKeys()},
+     * and they are made expensive rather than forbidden: see {@link Tolls}. A trip whose only way is
+     * through them still gets a route -- a slower one, which is what an alternative is -- and a trip
+     * that never touches them comes back unchanged.
+     *
+     * @param discouragedRoads the roads the plan should avoid, as grouping keys
+     * @param multiplier       how much more those roads cost, above one; 2.5 is a detour worth looking
+     *                         at, and ten is nearly a ban
+     * @return the route, or {@link Route#empty()} when no road path exists even so
+     */
+    public static Route findRouteAvoiding(Workspace workspace, double startX, double startZ,
+                                          double goalX, double goalZ, String destinationName,
+                                          TravelMode mode, RoutePreferences preferences,
+                                          Set<Integer> discouragedRoads, double multiplier) {
+        if (discouragedRoads == null || discouragedRoads.isEmpty() || multiplier <= 1.0) {
+            return findRoute(workspace, startX, startZ, goalX, goalZ, destinationName, mode,
+                    preferences);
+        }
+        return plan(workspace, startX, startZ, goalX, goalZ, destinationName, mode, preferences,
+                new Tolls(workspace.grouping(), Set.copyOf(discouragedRoads), multiplier));
     }
 
     /**
@@ -527,19 +633,19 @@ public final class RoadRouter {
     /** One attempt: anchored if it can be, between the nearest nodes if it cannot. */
     private static Route plan(Workspace workspace, double startX, double startZ, double goalX,
                               double goalZ, String destinationName, TravelMode mode,
-                              RoutePreferences preferences) {
+                              RoutePreferences preferences, Tolls tolls) {
         // Worked out once for both attempts. It is a reading of the saved network the two attempts
         // share, not of the workspace's copy: splitting a road at an anchor adds a node of its own,
         // and that node is an end of this trip rather than a junction the route turns at.
         Set<Integer> continuations =
                 highwayContinuations(workspace.routingNetwork(), mode, preferences);
         Route anchored = findAnchoredRoute(workspace, startX, startZ, goalX, goalZ, destinationName,
-                mode, preferences, continuations);
+                mode, preferences, continuations, tolls);
         if (anchored != null) {
             return anchored;
         }
         return findNodeRoute(workspace, startX, startZ, goalX, goalZ,
-                destinationName, mode, preferences, continuations);
+                destinationName, mode, preferences, continuations, tolls);
     }
 
     /**
@@ -564,7 +670,7 @@ public final class RoadRouter {
     private static Route findAnchoredRoute(Workspace workspace, double startX, double startZ,
                                            double goalX, double goalZ, String destinationName,
                                            TravelMode mode, RoutePreferences preferences,
-                                           Set<Integer> continuations) {
+                                           Set<Integer> continuations, Tolls tolls) {
         RoadNetwork network = workspace.mutable();
         RoadEditor editor = workspace.editor();
         RoadPoint startRoad = nearestRoadPoint(network, startX, startZ, mode, preferences);
@@ -605,7 +711,7 @@ public final class RoadRouter {
 
         Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
         List<RoadSegment> path = search(graph, network, startNode, goalNode, mode, preferences,
-                continuations);
+                continuations, tolls);
         if (path == null) {
             return null;
         }
@@ -791,7 +897,7 @@ public final class RoadRouter {
     private static Route findNodeRoute(Workspace workspace, double startX, double startZ,
                                        double goalX, double goalZ, String destinationName,
                                        TravelMode mode, RoutePreferences preferences,
-                                       Set<Integer> continuations) {
+                                       Set<Integer> continuations, Tolls tolls) {
         RoadNetwork network = workspace.routingNetwork();
         Map<Integer, List<Edge>> graph = workspace.graphFor(mode, preferences);
         if (graph.isEmpty()) {
@@ -809,7 +915,7 @@ public final class RoadRouter {
         }
 
         Best best = searchBetweenCandidates(graph, network, starts, goals, startX, startZ, goalX,
-                goalZ, mode, preferences, continuations);
+                goalZ, mode, preferences, continuations, tolls);
         if (best == null || beyondConnector(network, best.source(), startX, startZ, mode)
                 || beyondConnector(network, best.goal(), goalX, goalZ, mode)) {
             return Route.empty();
@@ -933,8 +1039,37 @@ public final class RoadRouter {
     private record Best(int source, int goal, List<RoadSegment> path) {
     }
 
-    /** A predecessor chain walked back to the source it started from. */
-    private record Chain(int source, List<RoadSegment> path) {
+    /**
+     * Walks a predecessor chain of arms back to the piece the trip set off along.
+     *
+     * <p>A source arm has no predecessor, which is what ends the walk: with more than one source there
+     * is no single node to stop at, as there was when every search began at one end. Null for a chain
+     * that does not end, which the caller reads as "plan the trip another way" rather than as a route
+     * with a piece missing from the middle.
+     */
+    private static List<RoadSegment> armChain(Map<Integer, Integer> cameFrom,
+                                              Map<Integer, Arm> arrived, int from) {
+        List<RoadSegment> reversed = new ArrayList<>();
+        int current = from;
+        // Bounded by the predecessor count: guards against a malformed chain looping forever.
+        int guard = cameFrom.size() + 2;
+        while (guard-- > 0) {
+            Arm arm = arrived.get(current);
+            if (arm == null) {
+                return null;
+            }
+            reversed.add(arm.segment());
+            Integer previous = cameFrom.get(current);
+            if (previous == null) {
+                List<RoadSegment> path = new ArrayList<>(reversed.size());
+                for (int i = reversed.size() - 1; i >= 0; i--) {
+                    path.add(reversed.get(i));
+                }
+                return path;
+            }
+            current = previous;
+        }
+        return null;
     }
 
     /**
@@ -963,14 +1098,14 @@ public final class RoadRouter {
                                                 double startX, double startZ, double goalX,
                                                 double goalZ, TravelMode mode,
                                                 RoutePreferences preferences,
-                                                Set<Integer> continuations) {
+                                                Set<Integer> continuations, Tolls tolls) {
         Map<Integer, Double> gScore = new HashMap<>();
         Map<Integer, Integer> turns = new HashMap<>();
-        Map<Integer, RoadSegment> arrivedBy = new HashMap<>();
-        Map<Integer, Integer> cameFromNode = new HashMap<>();
-        Map<Integer, RoadSegment> cameFromSegment = new HashMap<>();
+        Map<Integer, Integer> cameFrom = new HashMap<>();
+        Map<Integer, Integer> sourceOf = new HashMap<>();
+        Map<Integer, Arm> arrived = new HashMap<>();
+        Map<Integer, Arm> arms = new HashMap<>();
         Set<Integer> closed = new HashSet<>();
-        Set<Integer> settledGoals = new HashSet<>();
 
         // Ordered by cost and then by turns, for the reason given on the single-source search: on a
         // rectilinear network the cost cannot tell a staircase from a route with one turn in it.
@@ -978,45 +1113,68 @@ public final class RoadRouter {
                 Comparator.<double[]>comparingDouble(a -> a[0]).thenComparingDouble(a -> a[1]));
         for (int start : starts) {
             double connector = connectorCost(network, start, startX, startZ, mode, preferences);
-            if (connector < gScore.getOrDefault(start, Double.MAX_VALUE)) {
-                gScore.put(start, connector);
-                turns.put(start, 0);
+            for (Edge edge : graph.getOrDefault(start, List.of())) {
+                // The first piece of a trip has nothing arrived on, so there is no turn to price; the
+                // bend inside the piece itself is still refused -- see highwayBendAllowed.
+                if (!highwayBendAllowed(null, start, edge.segment(), continuations)) {
+                    continue;
+                }
+                int target = edge.id();
+                double cost = connector + edgeCost(edge.segment(), mode, preferences)
+                        * tolls.on(edge.segment());
+                if (cost >= gScore.getOrDefault(target, Double.MAX_VALUE) - COST_EPSILON) {
+                    continue;
+                }
+                gScore.put(target, cost);
+                turns.put(target, 0);
+                sourceOf.put(target, start);
+                arrived.put(target, armOf(arms, edge));
                 frontier.add(new double[]{
-                        connector + nearestGoalEstimate(network, start, goals, mode, preferences),
-                        0, start});
+                        cost + nearestGoalEstimate(network, edge.toNode(), goals, mode, preferences),
+                        0, target});
             }
         }
 
+        // On reaching a goal: the state that reached it, not just the node. Two arrivals at one node
+        // have different costs once the turn into it is priced, and the chain followed back has to be
+        // the one the cheaper arrival came along.
+        int bestState = -1;
         double bestTotal = Double.MAX_VALUE;
         while (!frontier.isEmpty() && frontier.peek()[0] < bestTotal) {
-            int current = (int) frontier.poll()[2];
-            if (!closed.add(current)) {
+            int currentId = (int) frontier.poll()[2];
+            if (!closed.add(currentId)) {
                 continue;
             }
-            double currentG = gScore.getOrDefault(current, Double.MAX_VALUE);
+            Arm current = arrived.get(currentId);
+            if (current == null) {
+                continue;
+            }
+            int node = current.toNode();
+            if (goals.contains(node)) {
+                double total = gScore.getOrDefault(currentId, Double.MAX_VALUE)
+                        + connectorCost(network, node, goalX, goalZ, mode, preferences);
+                if (total < bestTotal) {
+                    bestTotal = total;
+                    bestState = currentId;
+                }
+            }
+            double currentG = gScore.getOrDefault(currentId, Double.MAX_VALUE);
             if (currentG >= bestTotal) {
                 continue;
             }
-            if (goals.contains(current) && settledGoals.add(current)) {
-                double total = currentG
-                        + connectorCost(network, current, goalX, goalZ, mode, preferences);
-                bestTotal = Math.min(bestTotal, total);
-            }
-
-            int currentTurns = turns.getOrDefault(current, 0);
-            RoadSegment arrived = arrivedBy.get(current);
-            for (Edge edge : graph.getOrDefault(current, List.of())) {
-                if (closed.contains(edge.toNode())) {
-                    continue;
-                }
-                double tentative = currentG + edgeCost(edge.segment(), mode, preferences);
-                int viaTurns = currentTurns
-                        + (turnsAt(arrived, current, edge.segment()) ? 1 : 0);
-                double known = gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE);
-                boolean better = tentative < known - COST_EPSILON;
-                boolean tidier = !better && tentative <= known + COST_EPSILON
-                        && viaTurns < turns.getOrDefault(edge.toNode(), Integer.MAX_VALUE);
-                if (!better && !tidier) {
+            int currentTurns = turns.getOrDefault(currentId, 0);
+            for (Edge edge : graph.getOrDefault(node, List.of())) {
+                Arm next = armOf(arms, edge);
+                // Turning round and heading straight back to the node just left is not a road, it is
+                // a U-turn: the same node a moment later under a different heading. The search may
+                // not use one to reset the angle it arrives on -- without this, a dead end beside a
+                // junction is a way to reach that junction pointing the other way, and the trip in
+                // the harness that is meant to be refused as a highway reversal was "planned" by
+                // going down a stub and backing out again. Refused rather than priced because a price
+                // has to be cheaper than the alternative to be a preference, and here there is no
+                // alternative being asked for: a trip whose only way on is to turn round is one this
+                // mod does not have an answer for, exactly as a highway U-turn is.
+                if (next.edge().toNode() == current.edge().fromNode()) {
                     continue;
                 }
                 // The same rule the anchored search asks, and the whole reason it is asked in the
@@ -1025,39 +1183,59 @@ public final class RoadRouter {
                 // highway was refused by the anchored search and then planned by this fallback --
                 // the restriction held for the route that could go round and not for the one that
                 // had to go back. See highwayBendAllowed.
-                if (!highwayBendAllowed(arrived, current, edge.segment(), continuations)) {
+                if (!highwayBendAllowed(current.segment(), node, next.segment(), continuations)) {
+                    continue;
+                }
+                int target = edge.id();
+                double tentative = currentG + turnCost(current, next, mode, preferences)
+                        + edgeCost(next.segment(), mode, preferences) * tolls.on(next.segment());
+                int viaTurns = currentTurns + (turnsAt(current, next) ? 1 : 0);
+                double known = gScore.getOrDefault(target, Double.MAX_VALUE);
+                boolean better = tentative < known - COST_EPSILON;
+                boolean tidier = !better && tentative <= known + COST_EPSILON
+                        && viaTurns < turns.getOrDefault(target, Integer.MAX_VALUE);
+                if (!better && !tidier) {
                     continue;
                 }
                 double settled = Math.min(tentative, known);
-                gScore.put(edge.toNode(), settled);
-                turns.put(edge.toNode(), viaTurns);
-                arrivedBy.put(edge.toNode(), edge.segment());
-                cameFromNode.put(edge.toNode(), current);
-                cameFromSegment.put(edge.toNode(), edge.segment());
+                gScore.put(target, settled);
+                turns.put(target, viaTurns);
+                sourceOf.put(target, sourceOf.getOrDefault(currentId, -1));
+                arrived.put(target, next);
+                cameFrom.put(target, currentId);
                 frontier.add(new double[]{
-                        settled + nearestGoalEstimate(network, edge.toNode(), goals, mode,
+                        settled + nearestGoalEstimate(network, next.toNode(), goals, mode,
                                 preferences),
-                        viaTurns, edge.toNode()});
+                        viaTurns, target});
             }
         }
 
-        // Settled in non-decreasing order, so the cheapest goal is the first one the search reached
-        // for which the connector still leaves it cheapest overall.
-        int bestGoal = -1;
-        double bestWithConnector = Double.MAX_VALUE;
-        for (int goal : settledGoals) {
-            double total = gScore.getOrDefault(goal, Double.MAX_VALUE)
-                    + connectorCost(network, goal, goalX, goalZ, mode, preferences);
-            if (total < bestWithConnector) {
-                bestWithConnector = total;
-                bestGoal = goal;
+        // A trip whose two ends are one node: nothing to drive, only the two connectors. The old
+        // node-keyed search found this by seeding the candidate nodes themselves, and the arm-keyed
+        // one seeds only the ways out of them, so the case is asked for here rather than lost.
+        int sharedNode = -1;
+        for (int start : starts) {
+            if (!goals.contains(start)) {
+                continue;
+            }
+            double total = connectorCost(network, start, startX, startZ, mode, preferences)
+                    + connectorCost(network, start, goalX, goalZ, mode, preferences);
+            if (total < bestTotal) {
+                bestTotal = total;
+                sharedNode = start;
             }
         }
-        if (bestGoal < 0) {
+        if (sharedNode >= 0) {
+            return new Best(sharedNode, sharedNode, List.of());
+        }
+        if (bestState < 0) {
             return null;
         }
-        Chain chain = chain(cameFromNode, cameFromSegment, bestGoal);
-        return new Best(chain.source(), bestGoal, chain.path());
+        List<RoadSegment> path = armChain(cameFrom, arrived, bestState);
+        if (path == null) {
+            return null;
+        }
+        return new Best(sourceOf.getOrDefault(bestState, -1), arrived.get(bestState).toNode(), path);
     }
 
     /** The lowest estimate of what is left to any of the goals, in the metric in force. */
@@ -1074,34 +1252,6 @@ public final class RoadRouter {
         return best == Double.MAX_VALUE ? 0 : best;
     }
 
-    /**
-     * Walks a predecessor chain back to the node it started from.
-     *
-     * <p>A source has no predecessor, which is what ends the walk: with more than one source there is
-     * no single node to stop at, as there was when every search began at one end.
-     */
-    private static Chain chain(Map<Integer, Integer> cameFromNode,
-                               Map<Integer, RoadSegment> cameFromSegment, int from) {
-        List<RoadSegment> reversed = new ArrayList<>();
-        int current = from;
-        // Bounded by the predecessor count: guards against a malformed chain looping forever.
-        int guard = cameFromNode.size() + 2;
-        while (guard-- > 0) {
-            Integer previous = cameFromNode.get(current);
-            RoadSegment segment = cameFromSegment.get(current);
-            if (previous == null || segment == null) {
-                break;
-            }
-            reversed.add(segment);
-            current = previous;
-        }
-        List<RoadSegment> path = new ArrayList<>(reversed.size());
-        for (int i = reversed.size() - 1; i >= 0; i--) {
-            path.add(reversed.get(i));
-        }
-        return new Chain(current, path);
-    }
-
     // ------------------------------------------------------------------ graph
 
     /**
@@ -1111,6 +1261,9 @@ public final class RoadRouter {
     private static Map<Integer, List<Edge>> buildGraph(RoadNetwork network, TravelMode mode,
                                                        RoutePreferences preferences) {
         Map<Integer, List<Edge>> graph = new HashMap<>();
+        // One counter for the whole build, so every directed edge in one graph has its own id. See
+        // Edge: the search keys its state on this, and the synthetic joins below are edges too.
+        int[] nextEdgeId = {0};
         for (RoadSegment segment : network.segmentsSnapshot()) {
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
@@ -1127,13 +1280,15 @@ public final class RoadRouter {
             // and asking the segment rather than testing the flag here keeps the graph and the arrows the
             // map draws reading the same rule -- see RoadSegment.allowsTravelFrom.
             if (segment.allowsTravelFrom(from)) {
-                graph.computeIfAbsent(from, k -> new ArrayList<>()).add(new Edge(to, segment));
+                graph.computeIfAbsent(from, k -> new ArrayList<>())
+                        .add(new Edge(nextEdgeId[0]++, from, to, segment));
             }
             if (segment.allowsTravelFrom(to)) {
-                graph.computeIfAbsent(to, k -> new ArrayList<>()).add(new Edge(from, segment));
+                graph.computeIfAbsent(to, k -> new ArrayList<>())
+                        .add(new Edge(nextEdgeId[0]++, to, from, segment));
             }
         }
-        addCoincidentNodeLinks(network, graph, mode, preferences);
+        addCoincidentNodeLinks(network, graph, mode, preferences, nextEdgeId);
         return graph;
     }
 
@@ -1173,7 +1328,8 @@ public final class RoadRouter {
      * this pass uses it with the storeys beside it.
      */
     private static void addCoincidentNodeLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
-                                               TravelMode mode, RoutePreferences preferences) {
+                                               TravelMode mode, RoutePreferences preferences,
+                                               int[] nextEdgeId) {
         List<RoadNode> nodes = network.nodesSnapshot();
         if (nodes.size() < 2) {
             return;
@@ -1255,8 +1411,10 @@ public final class RoadRouter {
                             continue;
                         }
                         RoadSegment link = syntheticLink(a, b, junctionClass);
-                        graph.computeIfAbsent(a.id(), k -> new ArrayList<>()).add(new Edge(b.id(), link));
-                        graph.computeIfAbsent(b.id(), k -> new ArrayList<>()).add(new Edge(a.id(), link));
+                        graph.computeIfAbsent(a.id(), k -> new ArrayList<>())
+                                .add(new Edge(nextEdgeId[0]++, a.id(), b.id(), link));
+                        graph.computeIfAbsent(b.id(), k -> new ArrayList<>())
+                                .add(new Edge(nextEdgeId[0]++, b.id(), a.id(), link));
                     }
                 }
             }
@@ -1271,7 +1429,7 @@ public final class RoadRouter {
                 RoadClass gapClass = preferences.avoids(RoadClass.PATH)
                         || !mode.allows(RoadClass.PATH) ? junctionClass : RoadClass.PATH;
                 addWalkGapLinks(network, graph, atNode, layersAtNode, usableDegree, walkReach,
-                        gapClass);
+                        gapClass, nextEdgeId);
             }
         }
     }
@@ -1325,7 +1483,7 @@ public final class RoadRouter {
                                         Map<Integer, Set<RoadClass>> atNode,
                                         Map<Integer, Set<Integer>> layersAtNode,
                                         Map<Integer, Integer> usableDegree, double reach,
-                                        RoadClass gapClass) {
+                                        RoadClass gapClass, int[] nextEdgeId) {
         List<RoadNode> nodes = network.nodesSnapshot();
         double cell = reach;
         Map<Long, List<RoadNode>> buckets = new HashMap<>();
@@ -1394,8 +1552,10 @@ public final class RoadRouter {
                             continue;
                         }
                         RoadSegment link = syntheticLink(a, b, gapClass);
-                        graph.computeIfAbsent(a.id(), k -> new ArrayList<>()).add(new Edge(b.id(), link));
-                        graph.computeIfAbsent(b.id(), k -> new ArrayList<>()).add(new Edge(a.id(), link));
+                        graph.computeIfAbsent(a.id(), k -> new ArrayList<>())
+                                .add(new Edge(nextEdgeId[0]++, a.id(), b.id(), link));
+                        graph.computeIfAbsent(b.id(), k -> new ArrayList<>())
+                                .add(new Edge(nextEdgeId[0]++, b.id(), a.id(), link));
                     }
                 }
             }
@@ -1758,10 +1918,28 @@ public final class RoadRouter {
 
     // --------------------------------------------------------------------- A*
 
+    /**
+     * Single-source A* over the graph, from one node to another.
+     *
+     * <h2>Why the frontier holds edges and not nodes</h2>
+     * The cost of arriving somewhere is not the cost of leaving it: a turn is priced by the angle
+     * between the piece arrived on and the piece left on, so the same node reached from two different
+     * streets is two different states. Keying the search on the node, as this did while turns were
+     * only a tie-break, cannot express that -- the second arrival is compared with the first as though
+     * they were interchangeable, and the cheaper arrival at the node is whichever arrived first rather
+     * than whichever suits the way out. So the state is the arm (see {@link Arm}), and a node with
+     * four usable pieces has four states instead of one.
+     *
+     * <p>Entries are {@code {fScore, turns, edgeId}}. Stale entries are tolerated and skipped via the
+     * closed set. The middle number is the tie-break: the cost already prices a turn under "fastest",
+     * but under "shortest" a turn costs nothing -- that metric promises the shorter line whatever it
+     * does at the corners -- so equal lengths are still ordered by the fewest turns, which is what a
+     * driver does and what a maps app shows.
+     */
     private static List<RoadSegment> search(Map<Integer, List<Edge>> graph, RoadNetwork network,
                                             int startNode, int goalNode, TravelMode mode,
                                             RoutePreferences preferences,
-                                            Set<Integer> continuations) {
+                                            Set<Integer> continuations, Tolls tolls) {
         RoadNode goal = network.node(goalNode);
         if (goal == null) {
             return null;
@@ -1769,102 +1947,87 @@ public final class RoadRouter {
 
         Map<Integer, Double> gScore = new HashMap<>();
         Map<Integer, Integer> turns = new HashMap<>();
-        Map<Integer, RoadSegment> arrivedBy = new HashMap<>();
-        Map<Integer, Integer> cameFromNode = new HashMap<>();
-        Map<Integer, RoadSegment> cameFromSegment = new HashMap<>();
+        Map<Integer, Integer> cameFrom = new HashMap<>();
+        Map<Integer, Arm> arrived = new HashMap<>();
+        Map<Integer, Arm> arms = new HashMap<>();
         Set<Integer> closed = new HashSet<>();
 
-        gScore.put(startNode, 0.0);
-        turns.put(startNode, 0);
-        // Entries are {fScore, turns, nodeId}. Stale entries are tolerated and skipped via the closed
-        // set.
-        //
-        // The middle number is the tie-break, and it is the whole answer to a rectilinear network.
-        // Every staircase across a grid of streets is the same length as the two-turn route that goes
-        // straight and turns once, so the cost cannot choose between them and the search used to
-        // return whichever the heap happened to reach first -- which the panel then read out as turn
-        // left, turn right, turn left, turn right, all the way to the destination. Ordering equal
-        // costs by the fewest turns is what a driver does and what a maps app shows. Nothing is added
-        // to the cost: a route that is genuinely longer is still not chosen, so "shortest distance"
-        // remains the shortest and "fastest time" the fastest.
         PriorityQueue<double[]> frontier = new PriorityQueue<>(
                 Comparator.<double[]>comparingDouble(a -> a[0]).thenComparingDouble(a -> a[1]));
-        frontier.add(new double[]{heuristic(network, startNode, goal, mode, preferences), 0, startNode});
 
-        while (!frontier.isEmpty()) {
-            int current = (int) frontier.poll()[2];
-            if (!closed.add(current)) {
+        // The ways out of the start node: a trip begins by leaving, which is not a turn, so nothing is
+        // priced for it. The bend inside the piece itself is still refused -- a highway folded in two
+        // has no junction to be refused at, so the rule is asked of the first piece too.
+        for (Edge edge : graph.getOrDefault(startNode, List.of())) {
+            if (!highwayBendAllowed(null, startNode, edge.segment(), continuations)) {
                 continue;
             }
-            if (current == goalNode) {
-                return reconstruct(cameFromNode, cameFromSegment, startNode, goalNode);
+            int target = edge.id();
+            double cost = edgeCost(edge.segment(), mode, preferences) * tolls.on(edge.segment());
+            if (cost >= gScore.getOrDefault(target, Double.MAX_VALUE) - COST_EPSILON) {
+                continue;
+            }
+            gScore.put(target, cost);
+            turns.put(target, 0);
+            arrived.put(target, armOf(arms, edge));
+            frontier.add(new double[]{
+                    cost + heuristic(network, edge.toNode(), goal, mode, preferences), 0, target});
+        }
+
+        while (!frontier.isEmpty()) {
+            int currentId = (int) frontier.poll()[2];
+            if (!closed.add(currentId)) {
+                continue;
+            }
+            Arm current = arrived.get(currentId);
+            if (current == null) {
+                continue;
+            }
+            if (current.toNode() == goalNode) {
+                return armChain(cameFrom, arrived, currentId);
             }
 
-            double currentG = gScore.getOrDefault(current, Double.MAX_VALUE);
-            int currentTurns = turns.getOrDefault(current, 0);
-            RoadSegment arrived = arrivedBy.get(current);
-            for (Edge edge : graph.getOrDefault(current, List.of())) {
-                if (closed.contains(edge.toNode())) {
-                    continue;
-                }
-                double tentative = currentG + edgeCost(edge.segment(), mode, preferences);
-                int viaTurns = currentTurns
-                        + (turnsAt(arrived, current, edge.segment()) ? 1 : 0);
-                double known = gScore.getOrDefault(edge.toNode(), Double.MAX_VALUE);
-                boolean better = tentative < known - COST_EPSILON;
-                // Equal cost and fewer turns: replace, so the settled route is the tidiest of the
-                // equally good ones rather than the first one found.
-                boolean tidier = !better && tentative <= known + COST_EPSILON
-                        && viaTurns < turns.getOrDefault(edge.toNode(), Integer.MAX_VALUE);
-                if (!better && !tidier) {
-                    continue;
-                }
+            double currentG = gScore.getOrDefault(currentId, Double.MAX_VALUE);
+            int currentTurns = turns.getOrDefault(currentId, 0);
+            for (Edge edge : graph.getOrDefault(current.toNode(), List.of())) {
                 // A highway is a road with no way to turn round on it, so a bend no highway makes is
                 // not an edge: see highwayBendAllowed. Neither half of the rule can be read off one
                 // piece alone -- what happens at this node is a question about the two pieces meeting
                 // there, and what happens along a piece is about that piece's own line -- which is
                 // why the rule lives at the one place both are in hand.
-                if (!highwayBendAllowed(arrived, current, edge.segment(), continuations)) {
+                Arm next = armOf(arms, edge);
+                // No U-turn in the middle of a trip: see the same rule in searchBetweenCandidates.
+                if (next.edge().toNode() == current.edge().fromNode()) {
+                    continue;
+                }
+                if (!highwayBendAllowed(current.segment(), current.toNode(), next.segment(),
+                        continuations)) {
+                    continue;
+                }
+                int target = edge.id();
+                double tentative = currentG + turnCost(current, next, mode, preferences)
+                        + edgeCost(next.segment(), mode, preferences) * tolls.on(next.segment());
+                int viaTurns = currentTurns + (turnsAt(current, next) ? 1 : 0);
+                double known = gScore.getOrDefault(target, Double.MAX_VALUE);
+                boolean better = tentative < known - COST_EPSILON;
+                // Equal cost and fewer turns: replace, so the settled route is the tidiest of the
+                // equally good ones rather than the first one found.
+                boolean tidier = !better && tentative <= known + COST_EPSILON
+                        && viaTurns < turns.getOrDefault(target, Integer.MAX_VALUE);
+                if (!better && !tidier) {
                     continue;
                 }
                 double settled = Math.min(tentative, known);
-                gScore.put(edge.toNode(), settled);
-                turns.put(edge.toNode(), viaTurns);
-                arrivedBy.put(edge.toNode(), edge.segment());
-                cameFromNode.put(edge.toNode(), current);
-                cameFromSegment.put(edge.toNode(), edge.segment());
+                gScore.put(target, settled);
+                turns.put(target, viaTurns);
+                cameFrom.put(target, currentId);
+                arrived.put(target, next);
                 frontier.add(new double[]{
-                        settled + heuristic(network, edge.toNode(), goal, mode, preferences),
-                        viaTurns, edge.toNode()});
+                        settled + heuristic(network, next.toNode(), goal, mode, preferences),
+                        viaTurns, target});
             }
         }
         return null;
-    }
-
-    private static List<RoadSegment> reconstruct(Map<Integer, Integer> cameFromNode,
-                                                 Map<Integer, RoadSegment> cameFromSegment,
-                                                 int startNode, int goalNode) {
-        List<RoadSegment> reversed = new ArrayList<>();
-        int current = goalNode;
-        // Bounded by the node count: guards against a malformed predecessor chain looping forever.
-        int guard = cameFromNode.size() + 1;
-        while (current != startNode && guard-- > 0) {
-            RoadSegment segment = cameFromSegment.get(current);
-            Integer previous = cameFromNode.get(current);
-            if (segment == null || previous == null) {
-                return null;
-            }
-            reversed.add(segment);
-            current = previous;
-        }
-        if (current != startNode) {
-            return null;
-        }
-        List<RoadSegment> path = new ArrayList<>(reversed.size());
-        for (int i = reversed.size() - 1; i >= 0; i--) {
-            path.add(reversed.get(i));
-        }
-        return path;
     }
 
     /**
@@ -1921,6 +2084,83 @@ public final class RoadRouter {
      * bend nobody is told to make is not a turn to count either.
      */
     private static final double TURN_BREAK_DEGREES = 25.0;
+
+    /**
+     * What a ninety-degree turn is worth to the search, in blocks of road the mode would rather
+     * travel instead. One number per mode, because a turn is not the same thing to everybody.
+     *
+     * <h2>Why turns are priced at all</h2>
+     * The search used to count turns only as a tie-break among equal costs, which is enough on a
+     * perfect grid -- every staircase to one corner is the same length as the L-shaped route that
+     * turns once -- and not enough anywhere else. A grid of hand-drawn streets is never perfect: one
+     * block is ten blocks long and the next eleven, a road shares a node with the one beside it, and
+     * the few tenths of a second between two routes is enough for the staircase to win. What comes
+     * out of the picker is then a line that reads as a staircase on the map and as "turn left, turn
+     * right, turn left" in the guidance, which is exactly the "the square grid still looks
+     * unnatural" this constant is for.
+     *
+     * <h2>Why a length and not a time</h2>
+     * The price is stated in blocks because that is what it is standing in for: the detour the
+     * traveller would accept to avoid the corner. It is then turned into the metric's own units in
+     * {@link #turnCost}, so the same weight means the same detour on a highway and on a footpath
+     * instead of meaning six seconds for a lorry and six seconds for a walker.
+     *
+     * <h2>The numbers</h2>
+     * A driver will go sixty blocks out of their way to avoid one right-angled junction, which on a
+     * grid of a hundred-block blocks is not enough to prefer going round three sides of a block --
+     * it only refuses the staircase. A walker would not: twelve blocks, which is a couple of seconds,
+     * and enough to straighten the zig-zag without ever taking the long way round. A ride is on a
+     * track it does not steer, so a "turn" along a line is the track's own shape and costs nothing.
+     */
+    private static final double WALK_TURN_BLOCKS = 12.0;
+    private static final double DRIVE_TURN_BLOCKS = 60.0;
+    private static final double TRANSIT_TURN_BLOCKS = 0.0;
+
+    /** The turn weight for one mode, in blocks per ninety degrees. */
+    private static double turnBlocks(TravelMode mode) {
+        return switch (mode) {
+            case WALK -> WALK_TURN_BLOCKS;
+            case DRIVE -> DRIVE_TURN_BLOCKS;
+            case TRANSIT -> TRANSIT_TURN_BLOCKS;
+        };
+    }
+
+    /**
+     * How much the search pays for a turn, in the metric's own units, and zero when there is none.
+     *
+     * <p>Scaled by the angle, so a right-angled corner costs what {@link #DRIVE_TURN_BLOCKS} says and
+     * a hundred-and-eighty-degree reversal costs twice that. Only bends at or past
+     * {@link #TURN_BREAK_DEGREES} are priced, which is the same angle the guidance uses to decide
+     * what a turn is: a curve stored as twenty short pieces changes heading by a few degrees at every
+     * piece, and pricing each of those would punish a bend in a road rather than a corner in a grid.
+     *
+     * <h2>Why this is not in the reported time</h2>
+     * The price is a routing preference, not a fact about the world: nothing at the corner charges
+     * seconds. Folding it into the estimate would make the same journey report a longer time
+     * depending on which way the search chose to go, and the mod's estimate is documented as the
+     * pace over the ground -- see {@link RoutePreferences#weight}, which is the same trade for the
+     * "prefer major roads" switch.
+     *
+     * <h2>Why the shortest metric is left alone</h2>
+     * "Shortest distance" promises the shorter line whatever it does at the corners, and a route
+     * chosen by length plus a turn penalty is not the shortest -- it is the tidiest. The tie-break
+     * still prefers fewer turns among equal lengths there, which is all this metric can honestly
+     * claim.
+     */
+    private static double turnCost(Arm arrived, Arm next, TravelMode mode,
+                                   RoutePreferences preferences) {
+        if (arrived == null || next == null
+                || preferences.metric() != RoutePreference.FASTEST_TIME) {
+            return 0;
+        }
+        double degrees = turnDegrees(arrived, next);
+        if (Double.isNaN(degrees) || Math.abs(degrees) < TURN_BREAK_DEGREES) {
+            return 0;
+        }
+        double blocks = turnBlocks(mode) * Math.abs(degrees) / 90.0;
+        double speed = Math.max(0.05, effectiveSpeed(mode, next.segment().roadClass()));
+        return blocks / speed;
+    }
 
     /**
      * How sharply a highway may bend before the bend is not one a highway makes, in degrees.
@@ -2166,24 +2406,43 @@ public final class RoadRouter {
     }
 
     /**
-     * Whether going from {@code incoming} to {@code outgoing} at a node is a turn rather than a
-     * continuation.
+     * Whether going from one arm to the next is a turn rather than a continuation.
      *
-     * <p>Measured on the two pieces' own directions where they meet, not on the nodes: a road that
+     * <p>Measured on the two pieces' own headings where they meet, not on the nodes: a road that
      * curves is still one way to travel, and the question here is only whether the traveller has to
-     * change heading.
+     * change heading. The headings were worked out when each arm was first met -- see {@link Arm}.
      */
-    private static boolean turnsAt(RoadSegment incoming, int atNode, RoadSegment outgoing) {
-        double degrees = turnDegrees(incoming, atNode, outgoing);
+    private static boolean turnsAt(Arm arrived, Arm next) {
+        double degrees = turnDegrees(arrived, next);
         return !Double.isNaN(degrees) && Math.abs(degrees) >= TURN_BREAK_DEGREES;
     }
 
     /**
+     * The angle a traveller changes heading by, going from one arm to the next, in degrees; positive
+     * is towards +Z, which is {@link #turnsAt}'s convention.
+     *
+     * <p>NaN when either arm has no heading to give -- a zero-length synthetic join -- which is the
+     * same answer {@link #turnsAt} treats as "not a turn".
+     */
+    private static double turnDegrees(Arm arrived, Arm next) {
+        if (arrived == null || next == null) {
+            return Double.NaN;
+        }
+        if (Double.isNaN(arrived.headingIn()) || Double.isNaN(next.headingOut())) {
+            return Double.NaN;
+        }
+        return Math.toDegrees(Math.atan2(Math.sin(next.headingOut() - arrived.headingIn()),
+                Math.cos(next.headingOut() - arrived.headingIn())));
+    }
+
+    /**
      * The angle a traveller changes heading by, going from {@code incoming} to {@code outgoing} at a
-     * node, in degrees; positive is towards +Z, which is {@link #turnsAt}'s convention.
+     * node, in degrees; positive is towards +Z, which is the convention above.
      *
      * <p>NaN when either piece has no direction to give -- nothing arrives, or nothing leaves -- which
-     * is the same answer {@link #turnsAt} treats as "not a turn".
+     * is the same answer {@link #turnsAt} treats as "not a turn". Read on the pieces rather than on
+     * arms because the highway rule below is asked of the piece being taken before any arm exists for
+     * it; the two readings are the same formula over the same headings.
      */
     private static double turnDegrees(RoadSegment incoming, int atNode, RoadSegment outgoing) {
         if (incoming == null || outgoing == null) {

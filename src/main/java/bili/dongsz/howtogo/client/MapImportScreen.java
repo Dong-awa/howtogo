@@ -69,6 +69,15 @@ public final class MapImportScreen extends Screen {
     private int panelW;
     private int panelH;
 
+    /**
+     * This frame's entrance and exit opacity, 0 to 1.
+     *
+     * <p>A field rather than a local in {@link #render} because the sheet is drawn from
+     * {@link #renderBackground}, which the parent calls from inside its own render: the background
+     * has to fade on the same number the rest of the frame does, and it runs first.
+     */
+    private float open = 1.0F;
+
     /** @param nextParent the screen the transfer screen should return to once the import is done */
     public MapImportScreen(Screen cancelTo, Screen nextParent, Path archive,
                            WorldArchive.Contents contents) {
@@ -172,13 +181,28 @@ public final class MapImportScreen extends Screen {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
 
+        // Both at the frame's opacity: the warning sheet is the first thing to arrive and the last
+        // thing to leave, so every line drawn over it goes with it rather than outliving it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.windowEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
+                UiMotion.fade(UiTheme.windowEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panelSolid(), open));
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // One call for this frame, before a pixel is drawn: it advances the entrance and the exit and
+        // drives the deferred swap the exit is holding up. Everything below is drawn at the opacity
+        // it answers with, so the warning arrives as one sheet.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The whole frame is displaced, not only faded: a warning sheet that appears where it stays
+        // reads as a cut. Pushed before any pixel -- the sheet 1.20.1 asks for by hand below included --
+        // so the panel, the warning and the buttons travel together as one surface. The pose is rebuilt
+        // by the game for every frame, so the pop at the end of this method is the whole of the
+        // bookkeeping; nothing here can outlive the screen's own drawing.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
+
         // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
         // 1.20.1 has no such call, so a screen that wants the sheet asks for it here.
         //? if <1.20.2 {
@@ -190,19 +214,21 @@ public final class MapImportScreen extends Screen {
         int room = panelW - PAD * 2;
         int y = panelY + PAD;
 
-        graphics.drawString(this.font, this.title, x, y, UiTheme.title(), false);
+        graphics.drawString(this.font, this.title, x, y, UiMotion.fade(UiTheme.title(), open), false);
         y += LINE_HEIGHT + 5;
 
         // The one line that must not be missed: red, on its own, above everything else.
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.overwrite_loud"), UiTheme.error());
+                Component.translatable("screen.howtogo.mapdata.overwrite_loud"),
+                UiMotion.fade(UiTheme.error(), open));
         y += LINE_HEIGHT + 3;
 
         // A backup is the undo for an earlier import, and importing one rolls the map back. Saying
         // so before the button is what keeps it from being mistaken for a fresh map to bring in.
         if (isBackup()) {
             drawLine(graphics, x, y, room,
-                    Component.translatable("screen.howtogo.import_confirm.backup"), UiTheme.note());
+                    Component.translatable("screen.howtogo.import_confirm.backup"),
+                    UiMotion.fade(UiTheme.note(), open));
             y += LINE_HEIGHT + 1;
         }
 
@@ -210,39 +236,43 @@ public final class MapImportScreen extends Screen {
         String directory = MapDataTransfer.worldLoaded()
                 ? MapDataTransfer.dataDirectory().getFileName().toString() : "?";
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.import_confirm.current",
-                world), UiTheme.text());
+                world), UiMotion.fade(UiTheme.text(), open));
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
                 Component.translatable("screen.howtogo.mapdata.directory_only", directory),
-                UiTheme.textSecondary());
+                UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT + 4;
 
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.import_confirm.archive",
-                archive.getFileName().toString()), UiTheme.text());
+                archive.getFileName().toString()), UiMotion.fade(UiTheme.text(), open));
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, originLine(), UiTheme.textSecondary());
+        drawLine(graphics, x, y, room, originLine(), UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, contentsLine(), UiTheme.textSecondary());
+        drawLine(graphics, x, y, room, contentsLine(), UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT;
-        drawLine(graphics, x, y, room, fileNamesLine(), UiTheme.textFaint());
+        drawLine(graphics, x, y, room, fileNamesLine(), UiMotion.fade(UiTheme.textFaint(), open));
         y += LINE_HEIGHT + 4;
 
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.name_ignored"), UiTheme.note());
+                Component.translatable("screen.howtogo.mapdata.name_ignored"),
+                UiMotion.fade(UiTheme.note(), open));
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.backup_note"), UiTheme.accentSoft());
+                Component.translatable("screen.howtogo.mapdata.backup_note"),
+                UiMotion.fade(UiTheme.accentSoft(), open));
 
         if (error != null) {
             // Just above the buttons rather than after the last line of context: on a short window
             // the context can reach the bottom of the panel, and a reason printed over the button
             // that has to be pressed again is a reason nobody can read.
             int errorY = panelY + panelH - PAD - BUTTON_HEIGHT - LINE_HEIGHT - 4;
-            drawLine(graphics, x, errorY, room, error, UiTheme.error());
+            drawLine(graphics, x, errorY, room, error, UiMotion.fade(UiTheme.error(), open));
         }
         // Last in the frame: the context above can reach the bottom of the panel on a short window,
         // and a button drawn before it would have a line of it across its own label.
         drawButtons(graphics, mouseX, mouseY);
+        // Last statement of the frame: the displacement covered every pass above and stops here.
+        UiMotion.popFrame(graphics);
     }
 
     /**

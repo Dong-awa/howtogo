@@ -160,8 +160,22 @@ final class NavHudShapes {
      * leaves a ring of accent around a dark centre and keeps the marker legible on either sheet.
      */
     static void drawTransitMarker(GuiGraphics graphics, int cx, int cy) {
-        graphics.fill(cx - 4, cy - 4, cx + 4, cy + 4, UiTheme.accent());
-        graphics.fill(cx - 2, cy - 2, cx + 2, cy + 2, UiTheme.markerBackdrop());
+        drawTransitMarker(graphics, cx, cy, 1.0F);
+    }
+
+    /**
+     * The same marker, faded with the card it stands on.
+     *
+     * <p>An overload rather than a change of the plain one: the two colours here are read from
+     * {@link UiTheme} and are fully opaque, so a HUD card that fades in or out would otherwise carry
+     * one square that stays at full strength while everything around it disappears. The alpha is
+     * applied through {@link UiMotion#fade}, which returns the colour unchanged at full opacity, so
+     * the card at rest is drawn by exactly the same numbers as before.
+     */
+    static void drawTransitMarker(GuiGraphics graphics, int cx, int cy, float alpha) {
+        graphics.fill(cx - 4, cy - 4, cx + 4, cy + 4, UiMotion.fade(UiTheme.accent(), alpha));
+        graphics.fill(cx - 2, cy - 2, cx + 2, cy + 2,
+                UiMotion.fade(UiTheme.markerBackdrop(), alpha));
     }
 
     // ------------------------------------------------------------------ progress

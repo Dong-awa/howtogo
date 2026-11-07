@@ -18,7 +18,10 @@ import bili.dongsz.howtogo.route.LinePlanner;
 import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.RouteAlternatives;
+import bili.dongsz.howtogo.route.RouteOption;
 import bili.dongsz.howtogo.route.RoutePreferences;
+import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.route.Trip;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
@@ -103,6 +106,15 @@ public final class SelfTest {
     private static final int MAX_ROUTE_PROBES = 6;
 
     /**
+     * How many trips the alternatives check plans, per kind, so a whole railway cannot make it slow.
+     *
+     * <p>Two, because the check is about the shape of a plan list rather than about coverage: a second
+     * pair across the other axis is there so one axis's worth of road cannot hide a list that is always
+     * a single plan.
+     */
+    private static final int MAX_ALTERNATIVE_PROBES = 2;
+
+    /**
      * One check's outcome.
      *
      * @param name   which check, as a translation key
@@ -131,6 +143,7 @@ public final class SelfTest {
         results.add(checkMapDrawing(network));
         results.addAll(checkLines(network, lines));
         results.add(checkPlans(lines));
+        results.add(checkAlternatives(network, lines));
         results.add(checkSimulatedRide());
         results.add(checkRoutes(network));
         results.add(checkStorage(network, lines));
@@ -308,9 +321,174 @@ public final class SelfTest {
                         + " ride(s) | " + detail);
     }
 
+    /**
+     * The plans a trip is offered, checked for being plans: several questions, one list, no repeats.
+     *
+     * <h2>What can only be checked here</h2>
+     * The harness checks the mechanisms on networks built for the purpose. What it cannot check is the
+     * list a player actually sees: whether the mod, on their own roads and their own lines, comes back
+     * with plans that are real, distinct, in time order, and at most three -- and whether a trip the
+     * router can plan is one the picker can offer. A list that repeats one line under three labels, or
+     * offers nothing where a route exists, is a fault in this mod whatever the world looks like.
+     *
+     * <p>An empty list is not a failure on its own: a network with two separate fragments has no
+     * journey to offer, and that is a fact about the world. It is a failure only when the plain router
+     * can plan the same trip, which is exactly the disagreement the check exists to catch.
+     */
+    private static Result checkAlternatives(RoadNetwork network, List<TransitLine> lines) {
+        RoutePreferences preferences = RoutePreferenceStore.preferences();
+        List<String> faults = new ArrayList<>();
+        StringBuilder detail = new StringBuilder();
+
+        int roadPairs = 0;
+        int roadPlans = 0;
+        for (int[] probe : alternativeProbes(network)) {
+            if (roadPairs >= MAX_ALTERNATIVE_PROBES) {
+                break;
+            }
+            roadPairs++;
+            List<RouteOption> plans = RouteAlternatives.roads(network, probe[0], probe[1], probe[2],
+                    probe[3], "alternatives", TravelMode.DRIVE, preferences);
+            roadPlans += plans.size();
+            String fault = planFault(plans);
+            if (fault == null && plans.isEmpty()) {
+                Route single = RoadRouter.findRoute(network, probe[0], probe[1], probe[2], probe[3],
+                        "alternatives", TravelMode.DRIVE, preferences);
+                if (single.isPresent()) {
+                    fault = "a drive exists but no plan was offered";
+                }
+            }
+            if (fault != null) {
+                faults.add("road " + probe[0] + "," + probe[1] + ": " + fault);
+            }
+            detail.append(' ').append(probe[0]).append(',').append(probe[1]).append("->")
+                    .append(probe[2]).append(',').append(probe[3]).append('=').append(plans.size());
+        }
+
+        int linePairs = 0;
+        int linePlans = 0;
+        if (!lines.isEmpty()) {
+            boolean ownTracksOnly = MtrTransit.everyLineRidesItsOwnTrack(lines);
+            RoadNetwork marked = RailTrackStore.forRouting(TravelMode.TRANSIT, preferences, true);
+            RoadNetwork plain = ownTracksOnly ? marked
+                    : RailTrackStore.forRouting(TravelMode.TRANSIT, preferences, false);
+            RideRoads roads = RideRoads.of(marked, plain, MtrTransit::marksEnabled, MtrTransit::trackOf);
+            for (TransitLine line : lines) {
+                if (line.stopCount() < 2 || linePairs >= MAX_ALTERNATIVE_PROBES) {
+                    continue;
+                }
+                linePairs++;
+                LineStop from = line.stops().get(0);
+                LineStop to = line.stops().get(line.stopCount() - 1);
+                List<RouteOption> plans = RouteAlternatives.transit(roads, lines, from.x(), from.z(),
+                        to.x(), to.z(), "alternatives", preferences);
+                linePlans += plans.size();
+                String fault = planFault(plans);
+                if (fault == null && plans.isEmpty()) {
+                    Trip single = TransitPlanner.plan(roads, lines, from.x(), from.z(), to.x(),
+                            to.z(), "alternatives", preferences);
+                    if (single.isPresent()) {
+                        fault = "a journey exists but no plan was offered";
+                    }
+                }
+                if (fault != null) {
+                    faults.add("line " + line.label() + ": " + fault);
+                }
+                detail.append(' ').append(line.label()).append('=').append(plans.size());
+            }
+        }
+
+        String text = "roads " + roadPairs + " pair(s)/" + roadPlans + " plan(s), lines " + linePairs
+                + "/" + linePlans + " plan(s) |" + detail;
+        if (!faults.isEmpty()) {
+            return new Result("command.howtogo.selftest.check.alternatives", false,
+                    String.join("; ", faults));
+        }
+        return new Result("command.howtogo.selftest.check.alternatives", true, text);
+    }
+
+    /**
+     * Two corners of the player's own road network to plan across.
+     *
+     * <p>Chosen by extreme coordinate rather than by any search: the point of the check is the plan
+     * list, not which places are interesting, and a far-apart pair is what gives the strategies room to
+     * disagree. Two pairs across the two axes, when the network is wide enough for the second to be a
+     * different question.
+     */
+    private static List<int[]> alternativeProbes(RoadNetwork network) {
+        List<int[]> probes = new ArrayList<>();
+        List<RoadNode> nodes = network.nodesSnapshot();
+        if (nodes.size() < 2) {
+            return probes;
+        }
+        RoadNode west = nodes.get(0);
+        RoadNode east = nodes.get(0);
+        RoadNode south = nodes.get(0);
+        RoadNode north = nodes.get(0);
+        for (RoadNode node : nodes) {
+            if (node.x() < west.x()) {
+                west = node;
+            }
+            if (node.x() > east.x()) {
+                east = node;
+            }
+            if (node.z() < south.z()) {
+                south = node;
+            }
+            if (node.z() > north.z()) {
+                north = node;
+            }
+        }
+        probes.add(new int[]{Math.round(west.x()), Math.round(west.z()), Math.round(east.x()),
+                Math.round(east.z())});
+        if (Math.abs(north.z() - south.z()) > 100) {
+            probes.add(new int[]{Math.round(south.x()), Math.round(south.z()), Math.round(north.x()),
+                    Math.round(north.z())});
+        }
+        return probes;
+    }
+
+    /** What is wrong with a list of plans, or null when nothing is. */
+    private static String planFault(List<RouteOption> plans) {
+        if (plans.size() > RouteAlternatives.MAX_PLANS) {
+            return plans.size() + " plans offered";
+        }
+        for (int i = 0; i < plans.size(); i++) {
+            RouteOption plan = plans.get(i);
+            if (!plan.isPresent()) {
+                return "plan " + (i + 1) + " has no route";
+            }
+            if (i > 0 && plan.seconds() < plans.get(i - 1).seconds() - 1.0E-6) {
+                return "plans are not in time order at " + (i + 1);
+            }
+            for (int j = 0; j < i; j++) {
+                if (planShape(plan).equals(planShape(plans.get(j)))) {
+                    return "plans " + (j + 1) + " and " + (i + 1) + " are the same line";
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A plan's shape, coarse enough to say "the same line".
+     *
+     * <p>Three points at whole-block precision, plus the rounded length: two plans of the same trip
+     * that agree on all four must be the same line for any purpose this check has, and a plan that
+     * differs by a turning somewhere in the middle does not agree on the middle point.
+     */
+    private static String planShape(RouteOption plan) {
+        List<double[]> points = plan.route().points();
+        double[] first = points.get(0);
+        double[] middle = points.get(points.size() / 2);
+        double[] last = points.get(points.size() - 1);
+        return Math.round(first[0]) + "," + Math.round(first[1]) + "|" + Math.round(middle[0]) + ","
+                + Math.round(middle[1]) + "|" + Math.round(last[0]) + "," + Math.round(last[1]) + "|"
+                + Math.round(plan.length());
+    }
+
     /** What is wrong with a planned journey's rides, or null when nothing is. */
-    private static String rideFault(Trip trip) {
-        for (Trip.Leg leg : trip.legs()) {
+    private static String rideFault(Trip trip) {        for (Trip.Leg leg : trip.legs()) {
             Trip.Ride ride = leg.ride();
             if (ride == null) {
                 continue;

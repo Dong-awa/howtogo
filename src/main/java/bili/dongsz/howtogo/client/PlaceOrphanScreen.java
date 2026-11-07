@@ -82,6 +82,19 @@ public final class PlaceOrphanScreen extends Screen {
     /** What the last delete did, so the row disappearing is confirmed in words as well. */
     private Component status;
 
+    /** The opacity the whole window is drawn at this frame; the row helpers read it. See {@link #render}. */
+    private float open = 1.0F;
+
+    /**
+     * Each visible row's delete control, keyed by the row's position on screen.
+     *
+     * <p>Position rather than identity, because what it animates is a highlight and a highlight
+     * belongs to whatever the cursor is over now; a pool that outlives the list is also what keeps
+     * this allocation-free after the first pass. The row's own band has no hover state -- these rows
+     * are not selectable -- so nothing else uses the pool.
+     */
+    private final UiMotion.Slides deleteHovers = new UiMotion.Slides();
+
     public PlaceOrphanScreen(Screen parent) {
         super(Component.translatable(TITLE));
         this.parent = parent;
@@ -252,6 +265,7 @@ public final class PlaceOrphanScreen extends Screen {
 
     // ------------------------------------------------------------------ drawing
 
+
     @Override
     //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
@@ -259,14 +273,25 @@ public final class PlaceOrphanScreen extends Screen {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
         // The edge and sheet belong to renderBackground so that everything render() draws afterwards
-        // lands on the panel rather than behind it, as on the map-data screen.
+        // lands on the panel rather than behind it, as on the map-data screen. Both are drawn at the
+        // window's own opacity, so the panel arrives over the map instead of appearing on it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.windowEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
+                UiMotion.fade(UiTheme.windowEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panelSolid(), open));
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The frame's motion first, before the background could be asked for by either path: 1.20.2
+        // draws it from super.render below, 1.20.1 by hand after this, and both need this frame's
+        // opacity. UiMotion.of is also what pumps a deferred screen swap, so it is read once here.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The card then travels as one piece, and it is pushed before either background path is
+        // entered: the sheet and its edge are the card, so they have to move with the rows rather
+        // than staying put while the contents rise past them.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
         // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
         // 1.20.1 has no such call, so a screen that wants the edge and sheet asks for it here.
         //? if <1.20.2 {
@@ -275,25 +300,30 @@ public final class PlaceOrphanScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
 
         listScroll = clampScroll(listScroll);
-        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(),
-                false);
+        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD,
+                UiMotion.fade(UiTheme.title(), open), false);
         // Ellipsised, not hard-cut: the hint is a full sentence and at a narrow window it is longer
         // than the sheet, where a cut mid-word reads as a rendering fault.
         String hint = Component.translatable("screen.howtogo.orphans.hint").getString();
         graphics.drawString(this.font, PlaceText.ellipsis(this.font, hint, listW),
-                panelX + PAD, panelY + PAD + LINE_HEIGHT + 2, UiTheme.textSecondary(), false);
+                panelX + PAD, panelY + PAD + LINE_HEIGHT + 2,
+                UiMotion.fade(UiTheme.textSecondary(), open), false);
         if (orphans.size() > visibleRows) {
             String count = Math.min(orphans.size(), listScroll + visibleRows) + "/"
                     + orphans.size();
             graphics.drawString(this.font, count, listX + listW - this.font.width(count),
-                    panelY + PAD, UiTheme.textFaint(), false);
+                    panelY + PAD, UiMotion.fade(UiTheme.textFaint(), open), false);
         }
 
         drawList(graphics, mouseX, mouseY);
         if (status != null) {
-            drawLine(graphics, listX, statusLineY, listW, status, UiTheme.okSoft());
+            drawLine(graphics, listX, statusLineY, listW, status,
+                    UiMotion.fade(UiTheme.okSoft(), open));
         }
         drawButtons(graphics, mouseX, mouseY);
+        // Last, and unconditional: everything above was drawn inside the displacement pushed at the
+        // top of this method, and leaving it pushed would misplace the frames that follow.
+        UiMotion.popFrame(graphics);
     }
 
     private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -313,33 +343,40 @@ public final class PlaceOrphanScreen extends Screen {
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         if (orphans.isEmpty()) {
             drawLine(graphics, listX, listY, listW,
-                    Component.translatable("screen.howtogo.orphans.none"), UiTheme.textFaint());
+                    Component.translatable("screen.howtogo.orphans.none"),
+                    UiMotion.fade(UiTheme.textFaint(), open));
             return;
         }
         int hovered = rowIndexAt(mouseX, mouseY);
-        graphics.enableScissor(listX, listY, listX + listW, listY + listH);
+        UiMotion.clip(graphics, listX, listY, listX + listW, listY + listH);
         for (int row = 0; row < visibleRows && listScroll + row < orphans.size(); row++) {
             int index = listScroll + row;
             PlaceDetailStore.Orphan orphan = orphans.get(index);
             PlaceKey key = orphan.key();
             int y = listY + row * ROW_HEIGHT;
-            graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 2, UiTheme.rowSurface());
+            // Two values, not one: how far the row has arrived as part of the list's entrance, and how
+            // far the cursor has moved onto its delete control. The row is faded by the first and the
+            // control's face is mixed by the second, so a row the cursor is already over when the
+            // screen opens still arrives before it answers.
+            float arrived = UiMotion.stagger(row, open);
+            graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 2,
+                    UiMotion.fade(UiTheme.rowSurface(), arrived));
 
             // The source badge first, because it is the part of the identity that survives a rename:
             // what the player recognises is "an MTR station" long before the id means anything.
             String source = Destinations.sourceLabel(key.source());
             int pillW = Math.min(Math.max(1, deleteX() - listX - 8), this.font.width(source) + 8);
             HudDraw.fillRounded(graphics, listX + 4, y + 3, listX + 4 + pillW, y + 13, 3,
-                    UiTheme.rowMarkedTint());
+                    UiMotion.fade(UiTheme.rowMarkedTint(), arrived));
             String sourceText = PlaceText.ellipsis(this.font, source, Math.max(1, pillW - 6));
-            graphics.drawString(this.font, sourceText, listX + 7, y + 5, UiTheme.textSecondary(),
-                    false);
+            graphics.drawString(this.font, sourceText, listX + 7, y + 5,
+                    UiMotion.fade(UiTheme.textSecondary(), arrived), false);
 
             int idX = listX + 4 + pillW + 6;
             int idRoom = Math.max(8, deleteX() - 4 - idX);
             String id = Component.translatable("screen.howtogo.orphans.id", key.id()).getString();
             graphics.drawString(this.font, PlaceText.ellipsis(this.font, id, idRoom),
-                    idX, y + 5, UiTheme.text(), false);
+                    idX, y + 5, UiMotion.fade(UiTheme.text(), arrived), false);
 
             String summary = PlaceText.summary(this.font, orphan.details().description(),
                     Math.max(1, deleteX() - 8 - listX));
@@ -348,14 +385,14 @@ public final class PlaceOrphanScreen extends Screen {
                 // line alone, rather than a placeholder sentence about editing something that has
                 // no edit control here.
                 graphics.drawString(this.font, summary, listX + 4, y + ROW_TEXT_STEP,
-                        UiTheme.textFaint(), false);
+                        UiMotion.fade(UiTheme.textFaint(), arrived), false);
             }
 
             boolean armed = key.equals(armedKey);
             boolean hoveredButton = index == hovered
                     && mouseX >= deleteX() && mouseX < deleteX() + DELETE_WIDTH
                     && mouseY >= y + 2 && mouseY < y + 2 + DELETE_HEIGHT;
-            drawDeleteButton(graphics, y, armed, hoveredButton);
+            drawDeleteButton(graphics, row, armed, hoveredButton, arrived);
         }
         graphics.disableScissor();
     }
@@ -364,19 +401,23 @@ public final class PlaceOrphanScreen extends Screen {
      * One row's delete control, in the theme's danger colour.
      *
      * <p>The same two-step wording the details card uses, so a delete means the same gesture and
-     * the same words wherever this mod offers one.
+     * the same words wherever this mod offers one. Arming a row and pointing at it are the same two
+     * faces -- both mean "this control is about to act" -- so both travel towards the hover face on
+     * one slide, and the second press reads as the fill having been ready rather than as a new fill.
      */
-    private void drawDeleteButton(GuiGraphics graphics, int rowY, boolean armed, boolean hovered) {
+    private void drawDeleteButton(GuiGraphics graphics, int row, boolean armed, boolean hovered,
+                                  float arrived) {
         int x = deleteX();
-        int y = rowY + 2;
+        int y = listY + row * ROW_HEIGHT + 2;
+        float lit = deleteHovers.get(row).to(armed || hovered ? 1.0F : 0.0F).eased();
         HudDraw.fillRounded(graphics, x, y, x + DELETE_WIDTH, y + DELETE_HEIGHT, 3,
-                armed || hovered ? UiTheme.dangerHover() : UiTheme.danger());
+                UiMotion.fade(UiMotion.mix(UiTheme.danger(), UiTheme.dangerHover(), lit), arrived));
         String label = Component.translatable(armed
                 ? "screen.howtogo.orphans.delete_confirm"
                 : "screen.howtogo.orphans.delete").getString();
         label = this.font.plainSubstrByWidth(label, DELETE_WIDTH - 4);
         graphics.drawString(this.font, label, x + (DELETE_WIDTH - this.font.width(label)) / 2,
-                y + 3, UiTheme.onSelection(), false);
+                y + 3, UiMotion.fade(UiTheme.onSelection(), arrived), false);
     }
 
     /** One line, cut to the room available rather than allowed to run off the panel. */

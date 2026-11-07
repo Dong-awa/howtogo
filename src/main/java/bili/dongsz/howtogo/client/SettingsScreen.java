@@ -52,6 +52,19 @@ import java.util.function.IntSupplier;
  * {@link UiTheme}, which resolves the palette on each call -- so the theme row changes the whole
  * screen on the next frame, and a theme that switches with the time of day recolours this screen
  * while it is open.
+ *
+ * <h2>Motion</h2>
+ * Third in the same family as the palette and the text ranks, and for the same reason: the durations
+ * and curves come from {@link UiMotion}, never from a number written here. What this screen adds to
+ * that vocabulary is the one thing only a list needs -- rows that arrive one after another rather
+ * than all at once ({@link UiMotion#stagger}), and a scroll offset that travels instead of jumping.
+ *
+ * <p>The scroll is the one place where motion touches correctness rather than looks, so it is worth
+ * being explicit: {@link #scroll} is the row the wheel asked for and {@link #scrollShown} is where the
+ * list actually is. Both the drawing pass and the hit test read the second one, which is why a click
+ * during a scroll lands on the row the player can see under the cursor rather than on the row the
+ * list is heading towards. A smoothed scroll whose hit test used the target would be a scrolling bug
+ * dressed as an animation.
  */
 final class SettingsScreen extends Screen {
 
@@ -90,6 +103,31 @@ final class SettingsScreen extends Screen {
     private int descY;
     private int contentHeight;
     private int scroll;
+
+    /**
+     * Where the list is drawn, as opposed to where {@link #scroll} says it is heading.
+     *
+     * <p>A wheel notch is a request, not a place: the row under the cursor has to arrive somewhere
+     * rather than teleport, so the drawn offset chases the target through {@link UiMotion#follow}.
+     * Both the drawing and the hit test read this one value -- the list a player clicks must be the
+     * list they are looking at, and a smoothed scroll whose hit test used the un-smoothed target
+     * would open whichever row was under the cursor a few frames ago.
+     */
+    private float scrollShown;
+
+    /** Every row's own hover value, so a tint grows under the cursor instead of appearing. */
+    private final UiMotion.Slides rowHovers = new UiMotion.Slides();
+
+    /**
+     * The stepper buttons' hover values, in a pool of their own.
+     *
+     * <p>Separate from {@link #rowHovers} because they are keyed by row and side: sharing one pool
+     * would let the second box of one row drive the tint of the next row along.
+     */
+    private final UiMotion.Slides boxHovers = new UiMotion.Slides();
+
+    /** The opacity the whole window is drawn at this frame; see {@link #render}. */
+    private float open = 1.0F;
 
     /** The reset button's first press arms it; the second one restores the defaults. */
     private boolean resetArmed;
@@ -131,6 +169,14 @@ final class SettingsScreen extends Screen {
                         () -> themes.indexOf(RoadConfig.uiTheme()),
                         index -> RoadConfig.setUiTheme(themes.get(index)),
                         themes.indexOf(UiTheme.Mode.AUTO)),
+                // Directly under the theme, because the two are the same kind of decision about the
+                // interface rather than about what it does, and a player who turns the motion off
+                // wants it off from this screen -- which is why the row's own state change is not
+                // animated either once it is off.
+                Row.toggle("howtogo.configuration.ui_animations",
+                        "screen.howtogo.settings.ui_animations.desc",
+                        RoadConfig::uiAnimations,
+                        RoadConfig::setUiAnimations, true),
                 Row.choice("howtogo.configuration.map_display_mode",
                         "screen.howtogo.settings.map_display_mode.desc",
                         List.of(label("howtogo.configuration.map_display_mode.hud"),
@@ -272,17 +318,25 @@ final class SettingsScreen extends Screen {
 
         measureContent();
         scroll = clampScroll(scroll);
+        // A resize re-runs init() on the same screen; the drawn offset starts at the target rather
+        // than gliding in from wherever the old geometry left it.
+        scrollShown = scroll;
         buildButtons();
     }
 
     /** Puts every row's top edge into content coordinates: the same numbers draw and hit-test. */
     private void measureContent() {
         int y = 0;
+        int index = 0;
         for (Group group : groups) {
             group.contentY = y;
             y += GROUP_HEIGHT;
             for (Row row : group.rows) {
                 row.contentY = y;
+                // The position in the flat list, which is what a stagger and a hover pool are keyed
+                // by: two rows can share a top edge across groups only if the groups overlap, and
+                // the flat order is what the player reads down.
+                row.index = index++;
                 y += ROW_HEIGHT;
             }
             y += GAP;
@@ -345,7 +399,7 @@ final class SettingsScreen extends Screen {
             if (insideList(mouseX, mouseY)) {
                 Row row = rowAt(mouseX, mouseY);
                 if (row != null && row.isEnabled()) {
-                    int rowY = listY + row.contentY - scroll;
+                    int rowY = listY + row.contentY - Math.round(scrollShown);
                     int controlX = controlX(row);
                     int controlY = controlY(rowY);
                     int width = controlWidth(row);
@@ -450,17 +504,35 @@ final class SettingsScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        graphics.fill(0, 0, this.width, this.height, UiTheme.dim());
+        // The dimming reaches past the screen's own corners because it is drawn inside the frame that
+        // RISE displaces: a scrim cut exactly to the window would leave an undimmed strip along one
+        // edge for as long as the entrance takes. The sheet below does not need the margin -- it moves
+        // with the frame it is part of.
+        graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
+                this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
+                UiMotion.fade(UiTheme.dim(), open));
         // The sheet is rounded like the destination picker's, rather than the square frame the
         // world map uses: this is a window over the game, not a full-screen workspace.
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
-                UiTheme.panel());
+                UiMotion.fade(UiTheme.panel(), open));
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
-                UiTheme.panelEdge());
+                UiMotion.fade(UiTheme.panelEdge(), open));
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The animation state first, before anything is drawn and before the parent is asked for the
+        // background: 1.20.1 calls renderBackground by hand below, 1.20.2 calls it from super.render,
+        // and both have to see this frame's opacity. UiMotion.of is also what pumps a deferred screen
+        // swap, so it is read exactly once per frame.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The whole frame is displaced, not only faded: a window that appears in place reads as a cut.
+        // Pushed before any pixel -- the background 1.20.1 asks for by hand below included -- so the
+        // dimming, the sheet, the rows and the footer buttons travel together as one surface. The pose
+        // is rebuilt by the game every frame, so the pop at the end of this method is the whole of the
+        // bookkeeping: no try/finally, nothing to unwind if a caller skips a frame.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
         // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
         // 1.20.1 has no such call, so a screen that wants the dimming and the sheet asks for it here.
         //? if <1.20.2 {
@@ -469,6 +541,7 @@ final class SettingsScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
         pointerX = mouseX;
         pointerY = mouseY;
+        scrollShown = UiMotion.follow(scrollShown, scroll, UiMotion.FOLLOW_SECONDS);
         drawFrame(graphics);
         drawList(graphics, mouseX, mouseY);
         if (descriptionVisible) {
@@ -477,28 +550,36 @@ final class SettingsScreen extends Screen {
         for (PanelButton button : buttons) {
             button.render(graphics, font, mouseX, mouseY);
         }
+        // Nothing is drawn after this point, which is what keeps the pair balanced: every pass above
+        // ran inside the displacement and the pose is back where the game left it.
+        UiMotion.popFrame(graphics);
     }
 
     /** The title and the hairlines that separate the three bands of the window. */
     private void drawFrame(GuiGraphics graphics) {
-        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
-        graphics.fill(listX, listY - 4, listX + listW, listY - 3, UiTheme.panelEdge());
+        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD,
+                UiMotion.fade(UiTheme.title(), open), false);
+        graphics.fill(listX, listY - 4, listX + listW, listY - 3,
+                UiMotion.fade(UiTheme.panelEdge(), open));
         if (descriptionVisible) {
-            graphics.fill(listX, descY - 4, listX + listW, descY - 3, UiTheme.panelEdge());
+            graphics.fill(listX, descY - 4, listX + listW, descY - 3,
+                    UiMotion.fade(UiTheme.panelEdge(), open));
         }
     }
 
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         Row hovered = rowAt(mouseX, mouseY);
-        graphics.enableScissor(listX, listY, listX + listW, listY + listH);
+        int scrollPixels = Math.round(scrollShown);
+        UiMotion.clip(graphics, listX, listY, listX + listW, listY + listH);
         for (Group group : groups) {
-            int headerY = listY + group.contentY - scroll;
+            int headerY = listY + group.contentY - scrollPixels;
             if (headerY + GROUP_HEIGHT > listY && headerY < listY + listH) {
                 graphics.drawString(font, group.title,
-                        listX + 2, headerY + (GROUP_HEIGHT - 8) / 2, UiTheme.header(), false);
+                        listX + 2, headerY + (GROUP_HEIGHT - 8) / 2,
+                        UiMotion.fade(UiTheme.header(), open), false);
             }
             for (Row row : group.rows) {
-                int rowY = listY + row.contentY - scroll;
+                int rowY = listY + row.contentY - scrollPixels;
                 if (rowY + ROW_HEIGHT > listY && rowY < listY + listH) {
                     drawRow(graphics, row, rowY, mouseX, mouseY, row == hovered);
                 }
@@ -511,9 +592,14 @@ final class SettingsScreen extends Screen {
     private void drawRow(GuiGraphics graphics, Row row, int rowY,
                          int mouseX, int mouseY, boolean hovered) {
         boolean enabled = row.isEnabled();
-        if (hovered && enabled) {
+        // Two values, not one: how far the row has arrived as part of the list's entrance, and how
+        // far the cursor has moved onto it. They multiply, because a row the cursor is already on
+        // when the window opens still has to arrive before it can be highlighted.
+        float arrived = UiMotion.stagger(row.index, open);
+        float lit = rowHovers.get(row.index).to(hovered && enabled ? 1.0F : 0.0F).eased();
+        if (lit > 0.001F) {
             graphics.fill(listX, rowY, listX + listW, rowY + ROW_HEIGHT - 1,
-                    UiTheme.rowHoverTint());
+                    UiMotion.fade(UiTheme.rowHoverTint(), lit * arrived));
         }
         int controlX = controlX(row);
         int controlY = controlY(rowY);
@@ -523,43 +609,55 @@ final class SettingsScreen extends Screen {
                 && mouseY >= controlY && mouseY < controlY + CONTROL_HEIGHT;
 
         // The control's face is a shape, so it is filled before any string of this row is drawn.
-        drawControlFace(graphics, row, controlX, controlY, controlWidth, enabled, overControl);
+        drawControlFace(graphics, row, controlX, controlY, controlWidth, enabled, overControl,
+                lit, arrived);
 
         graphics.drawString(font, PlaceText.ellipsis(font, row.label.getString(), room),
                 listX + 4, rowY + 4,
-                enabled ? UiTheme.text() : UiTheme.textFaint(), false);
+                UiMotion.fade(enabled ? UiTheme.text() : UiTheme.textFaint(), arrived), false);
         Component hint = enabled || row.disabledReason == null
                 ? row.description : row.disabledReason;
         graphics.drawString(font,
                 PlaceText.ellipsis(font, hint.getString(), room),
                 listX + 4, rowY + 15,
-                enabled ? UiTheme.textMuted() : UiTheme.textFaint(), false);
+                UiMotion.fade(enabled ? UiTheme.textMuted() : UiTheme.textFaint(), arrived), false);
 
-        drawControlLabel(graphics, row, controlX, controlY, controlWidth, enabled, overControl);
+        drawControlLabel(graphics, row, controlX, controlY, controlWidth, enabled, lit, arrived);
     }
 
+    /**
+     * The face of a row's control, mixed from its resting face to its lit one by the hover value.
+     *
+     * <p>A mix rather than a switch, because that is the whole of the difference: a toggle that is
+     * on lightens towards the hover face as the cursor arrives, and a choice chip fills from the soft
+     * selection towards the solid one. Both readings are the same two colours the screen always had;
+     * what changed is that the player now sees the states between them.
+     */
     private void drawControlFace(GuiGraphics graphics, Row row, int x, int y, int width,
-                                 boolean enabled, boolean overControl) {
+                                 boolean enabled, boolean overControl, float lit, float arrived) {
         if (row.kind == Kind.NUMBER) {
             int valueWidth = width - STEP_BOX * 2 - 2;
-            drawStepBox(graphics, x, y, enabled && overControl
-                    && mouseInBox(x, y));
-            drawStepBox(graphics, x + STEP_BOX + 1 + valueWidth + 1, y, enabled && overControl
-                    && mouseInBox(x + STEP_BOX + 1 + valueWidth + 1, y));
+            drawStepBox(graphics, row, 0, x, y, enabled && overControl
+                    && mouseInBox(x, y), arrived);
+            drawStepBox(graphics, row, 1, x + STEP_BOX + 1 + valueWidth + 1, y,
+                    enabled && overControl
+                            && mouseInBox(x + STEP_BOX + 1 + valueWidth + 1, y), arrived);
             return;
         }
         int face;
         if (row.kind == Kind.TOGGLE) {
             // A switched-on toggle still has to answer the cursor: buttonHover is the one face both
             // palettes define as "you are on this", and onButton is its readable label.
+            int resting = row.boolValue() ? UiTheme.buttonOn() : UiTheme.button();
             face = !enabled ? UiTheme.button()
-                    : row.boolValue() ? (overControl ? UiTheme.buttonHover() : UiTheme.buttonOn())
-                    : overControl ? UiTheme.buttonHover() : UiTheme.button();
+                    : UiMotion.mix(resting, UiTheme.buttonHover(), overControl ? lit : 0.0F);
         } else {
             face = !enabled ? UiTheme.button()
-                    : overControl ? UiTheme.selection() : UiTheme.selectionSoft();
+                    : UiMotion.mix(UiTheme.selectionSoft(), UiTheme.selection(),
+                            overControl ? lit : 0.0F);
         }
-        HudDraw.fillRounded(graphics, x, y, x + width, y + CONTROL_HEIGHT, 3, face);
+        HudDraw.fillRounded(graphics, x, y, x + width, y + CONTROL_HEIGHT, 3,
+                UiMotion.fade(face, arrived));
     }
 
     /**
@@ -574,13 +672,18 @@ final class SettingsScreen extends Screen {
                 && pointerY >= y && pointerY < y + CONTROL_HEIGHT;
     }
 
-    private void drawStepBox(GuiGraphics graphics, int x, int y, boolean hovered) {
+    private void drawStepBox(GuiGraphics graphics, Row row, int box, int x, int y,
+                             boolean hovered, float arrived) {
+        // A pool rather than two more fields on the row: the two boxes are the same control drawn
+        // twice, so they are two slides keyed by row and side, and a row that is scrolled out and
+        // back keeps its own value instead of starting from nothing.
+        float lit = boxHovers.get(row.index * 2 + box).to(hovered ? 1.0F : 0.0F).eased();
         HudDraw.fillRounded(graphics, x, y, x + STEP_BOX, y + CONTROL_HEIGHT, 3,
-                hovered ? UiTheme.buttonHover() : UiTheme.button());
+                UiMotion.fade(UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit), arrived));
     }
 
     private void drawControlLabel(GuiGraphics graphics, Row row, int x, int y, int width,
-                                  boolean enabled, boolean hovered) {
+                                  boolean enabled, float lit, float arrived) {
         if (row.kind == Kind.NUMBER) {
             String value = row.numberText();
             int valueX = x + STEP_BOX + 2;
@@ -588,12 +691,13 @@ final class SettingsScreen extends Screen {
             graphics.drawString(font, PlaceText.ellipsis(font, value, valueWidth),
                     valueX + Math.max(0, (valueWidth - font.width(value)) / 2),
                     y + (CONTROL_HEIGHT - 8) / 2,
-                    enabled ? UiTheme.textStrong() : UiTheme.textFaint(), false);
+                    UiMotion.fade(enabled ? UiTheme.textStrong() : UiTheme.textFaint(), arrived),
+                    false);
             int textY = y + (CONTROL_HEIGHT - 8) / 2;
             drawCentred(graphics, "-", x, STEP_BOX, textY,
-                    enabled ? UiTheme.onButton() : UiTheme.textFaint());
+                    UiMotion.fade(enabled ? UiTheme.onButton() : UiTheme.textFaint(), arrived));
             drawCentred(graphics, "+", x + width - STEP_BOX, STEP_BOX, textY,
-                    enabled ? UiTheme.onButton() : UiTheme.textFaint());
+                    UiMotion.fade(enabled ? UiTheme.onButton() : UiTheme.textFaint(), arrived));
             return;
         }
         if (row.kind == Kind.TOGGLE) {
@@ -603,15 +707,17 @@ final class SettingsScreen extends Screen {
                     Component.translatable(row.boolValue()
                             ? "screen.howtogo.settings.value.on"
                             : "screen.howtogo.settings.value.off").getString(),
-                    x, width, y + (CONTROL_HEIGHT - 8) / 2, text);
+                    x, width, y + (CONTROL_HEIGHT - 8) / 2, UiMotion.fade(text, arrived));
             return;
         }
+        // The chip's label follows its face: white on the blue it fills into, the darker blue on the
+        // soft one it rests at, and every shade between them while the cursor arrives.
         int text = !enabled ? UiTheme.textFaint()
-                : hovered ? UiTheme.onSelection() : UiTheme.onSelectionSoft();
+                : UiMotion.mix(UiTheme.onSelectionSoft(), UiTheme.onSelection(), lit);
         String current = row.choiceLabel().getString();
         graphics.drawString(font, PlaceText.ellipsis(font, current, width - 6),
                 x + Math.max(3, (width - font.width(current)) / 2),
-                y + (CONTROL_HEIGHT - 8) / 2, text, false);
+                y + (CONTROL_HEIGHT - 8) / 2, UiMotion.fade(text, arrived), false);
     }
 
     private void drawCentred(GuiGraphics graphics, String text, int x, int width, int y, int color) {
@@ -631,9 +737,11 @@ final class SettingsScreen extends Screen {
         int trackX = listX + listW - 2;
         int thumbHeight = Math.max(16, listH * listH / contentHeight);
         int thumbY = listY + (int) ((listH - thumbHeight)
-                * ((double) scroll / Math.max(1, contentHeight - listH)));
-        graphics.fill(trackX, listY, trackX + 2, listY + listH, UiTheme.scrollTrack());
-        graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, UiTheme.scrollThumb());
+                * ((double) scrollShown / Math.max(1, contentHeight - listH)));
+        graphics.fill(trackX, listY, trackX + 2, listY + listH,
+                UiMotion.fade(UiTheme.scrollTrack(), open));
+        graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight,
+                UiMotion.fade(UiTheme.scrollThumb(), open));
     }
 
     /**
@@ -679,7 +787,7 @@ final class SettingsScreen extends Screen {
                 }
                 shown = PlaceText.ellipsis(font, rest.toString(), width);
             }
-            graphics.drawString(font, shown, listX + 2, y, color, false);
+            graphics.drawString(font, shown, listX + 2, y, UiMotion.fade(color, open), false);
             y += LINE_HEIGHT;
         }
     }
@@ -712,7 +820,10 @@ final class SettingsScreen extends Screen {
         if (!insideList(mouseX, mouseY)) {
             return null;
         }
-        int contentY = (int) (mouseY - listY + scroll);
+        // The drawn offset, not the target one: while a scroll is still travelling the row under the
+        // cursor is the row drawn there, and a hit test against where the list is heading would open
+        // a row that has not arrived yet.
+        int contentY = (int) (mouseY - listY + Math.round(scrollShown));
         for (Row row : rows) {
             if (contentY >= row.contentY && contentY < row.contentY + ROW_HEIGHT) {
                 return row;
@@ -768,6 +879,8 @@ final class SettingsScreen extends Screen {
         private Component disabledReason;
         private Runnable resetValue;
         private int contentY;
+        /** The row's place in the flat list, which is what its hover slide and stagger are keyed by. */
+        private int index;
 
         private Row(Kind kind, Component label, Component description) {
             this.kind = kind;

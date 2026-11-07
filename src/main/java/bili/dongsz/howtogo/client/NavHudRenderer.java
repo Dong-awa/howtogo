@@ -56,6 +56,15 @@ import java.util.List;
  * {@link NavHudReadout}, read once at the top of the frame, so switching display modes cannot make
  * the trip read differently, and the arrow, the stop marker and the progress bar live in
  * {@link NavHudShapes} for the same reason.
+ *
+ * <h2>Motion, without a screen to hang it on</h2>
+ * The panel is not a screen: it is never constructed, the game draws it whenever a destination is
+ * set and no window is open, and there is no instance for {@link UiMotion#of} to key a state on. So
+ * its presence is one static {@link UiMotion.Slide}, driven to 1 while a trip exists and to 0 once it
+ * does not, and the fade is applied to the theme's own colours rather than to a second set of them.
+ * The consequence worth knowing is that the panel keeps drawing for the few frames after a trip ends
+ * -- that is what the fade is -- and then stops drawing anything at all, including an invisible sheet
+ * over the corner of the screen: see {@link #VANISHED}.
  */
 public final class NavHudRenderer {
 
@@ -98,6 +107,64 @@ public final class NavHudRenderer {
     private static final double ROAD_THICKNESS = 1.0;
     private static final double ROUTE_THICKNESS = 2.6;
 
+    // ------------------------------------------------------------------- motion
+
+    /**
+     * Below this the panel has no visible pixel left, so the frame stops drawing it outright.
+     *
+     * <p>Not a rounding guard. It is what makes an overlay nobody is navigating with cost one null
+     * check per frame instead of a mini-map's worth of geometry, and it is what keeps a panel at
+     * alpha two from painting over whatever else shares that corner.
+     */
+    static final float VANISHED = 0.01F;
+
+    /**
+     * Whether the panel is on screen, as a value travelling between 0 and 1.
+     *
+     * <p>Static because a HUD is not a screen: there is no instance to hang a {@link
+     * UiMotion.ScreenState} on and nothing to construct. One slide for the whole overlay, driven by
+     * the one question the renderer asks -- is there a trip -- and read once per frame.
+     *
+     * <p>Out-cubic on {@link UiMotion#HUD}: a HUD is furniture rather than a window, so it arrives and
+     * leaves more softly than a screen does. It does move, but only vertically and only by
+     * {@link UiMotion#HUD_RISE}: a card this small reads as sliding into its corner, while a
+     * horizontal travel would read as the layout breaking -- the panel shares that corner with
+     * Xaero's map, whose own position this overlay must not appear to disturb.
+     */
+    private static final UiMotion.Slide presence =
+            new UiMotion.Slide(UiMotion.Easing.OUT_CUBIC, 0.0F, UiMotion.HUD);
+
+    /**
+     * How far the panel has come this frame, 0 to 1; set once by {@link #draw} and read by every
+     * colour below.
+     *
+     * <p>A field rather than one more parameter: the fade reaches the sheet, its edge, the mini-map's
+     * geometry, a dozen strings and the two shapes {@link NavHudShapes} draws, and threading one
+     * number through nine private methods would change nine signatures to say one thing once. There
+     * is exactly one reader -- the render thread, in the frame that set it -- so there is no second
+     * reading to disagree with.
+     */
+    private static float open = 1.0F;
+
+    /**
+     * The last reading that had a trip behind it, kept for the frames in which the trip has ended but
+     * the panel has not finished leaving.
+     *
+     * <p>The readout describes the current trip; once that is gone there is nothing to describe, and
+     * a fade-out would then be an emptied sheet rather than the panel leaving with its last words
+     * still on it. One reference, replaced on every frame that has a trip and dropped the moment the
+     * panel is fully gone -- which is also what lets the idle frames below return before anything
+     * else is asked.
+     */
+    private static NavHudReadout lastReadout;
+
+    /**
+     * Where the progress bar is drawn, which chases {@link NavHudReadout#progress()} rather than
+     * being it: the fraction of a trip moves in steps as waypoints are passed, and a bar that jumped
+     * by those steps reads as a counter. See {@link #smoothProgress}.
+     */
+    private static float progressShown;
+
     private NavHudRenderer() {
     }
 
@@ -120,9 +187,10 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (Screens.of(mc) != null || mc.player == null || mc.level == null) {
             return;
         }
-        if (Navigation.target() == null) {
-            return;
-        }
+        // A trip that has just ended is not a reason to stop drawing: the panel fades out over the
+        // next few frames, and whether there is anything left to draw is decided in draw() once the
+        // presence slide has advanced. What must not be deferred is the world having gone away, and
+        // that is the guard above.
         //? if fabric {
         /*draw(graphics, mc);
         *///?} else {
@@ -133,24 +201,49 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
     // -------------------------------------------------------------------- panel
 
     /**
-     * Which layout this frame gets, and the readout both of them draw.
+     * How far this frame's layout has faded in, which layout it is, and the readout it draws.
      *
      * <p>The decision is taken once, here, rather than inside either layout: the panel and the compact
      * card are alternatives, and a frame that started drawing one must not change its mind halfway
      * down. {@link NavMapMode#effective()} is also the only thing that knows why the answer might not
      * be the configured one -- Xaero's Minimap missing, or not yet registered -- so the fallback is
      * not re-derived here and its log line is not duplicated.
+     *
+     * <p>Presence is decided before either layout is entered, which is what produces the frames after
+     * a trip has ended: the reading is kept from the last frame that had one, the slide travels to
+     * closed, and the moment there is nothing left to see the frame stops drawing altogether.
      */
     private static void draw(GuiGraphics graphics, Minecraft mc) {
-        // Which layout is possible at all is the same question the Xaero overlay asks, and it is
-        // answered in one place so the two can never disagree about whether a map is being drawn.
+        boolean navigating = Navigation.target() != null;
+        if (navigating) {
+            // Read before the branch: both layouts need it, and one value means the arrow, the words
+            // and the progress bar describe the same instant whichever layout draws them.
+            lastReadout = NavHudReadout.of();
+        }
+        NavHudReadout readout = lastReadout;
+        if (readout == null) {
+            // No trip has been read out yet in this session, so neither layout has anything to fade
+            // out of and there is nothing to draw. This is the whole cost of a game with no
+            // navigation running: one null check.
+            return;
+        }
         MapDisplayMode mode = NavMapMode.effective();
-        // Read before the branch: both layouts need it, and one value means the arrow, the words and
-        // the progress bar describe the same instant whichever layout draws them.
-        NavHudReadout readout = NavHudReadout.of();
         if (mode == MapDisplayMode.HUD) {
+            open = presence.to(navigating ? 1.0F : 0.0F).eased();
+            if (open < VANISHED) {
+                // Gone, and asked for nothing: no geometry is projected, no text is measured, and
+                // nothing is drawn over whatever else shares the corner. The bar is put back to
+                // nothing as well, so the next trip starts from empty instead of running backwards
+                // down from the finish of the last one, and the reading is dropped so the frames
+                // after this one are as cheap as the ones before the first trip.
+                forgetProgress();
+                lastReadout = null;
+                return;
+            }
             drawPanel(graphics, mc, readout);
         } else {
+            // The compact card owns the slide for its own corner: this frame only decides that the
+            // card is the layout in force, and the card decides whether it is still visible at all.
             NavCompactHud.draw(graphics, mc, readout);
         }
     }
@@ -162,13 +255,24 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int panelX = Math.max(MARGIN, screenWidth - PANEL_WIDTH - MARGIN);
         int panelY = MARGIN;
 
+        // The card slides up into its corner while it arrives, and the push is taken here rather
+        // than in draw() on purpose: draw() is where the frame decides the panel is gone, and a
+        // push taken before that early return would have to be unwound on the path that draws
+        // nothing. Vertical only -- the panel hangs beside Xaero's own map, and a card that came in
+        // sideways would be fighting that overlay's layout every time a trip started.
+        // HudDraw.beginBlock inside the mini-map pushes its own pose; the game's matrix nests, so
+        // that block is free to open and close inside this one.
+        UiMotion.pushFrame(graphics, 0.0F, (1.0F - open) * UiMotion.HUD_RISE);
+
         // Panel: the theme's sheet colour with a soft edge, drawn as rounded spans so the corners do
         // not look like a raw rectangle. The sheet is translucent in both styles -- over the world it
         // has to be, or the panel would be a hole punched in the scene rather than a card on it.
+        // The fade is applied to the theme's own colour rather than to a second copy of it, so a
+        // fully open panel is drawn in exactly the ink it was drawn in before there was any motion.
         fillRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
-                CORNER_RADIUS, UiTheme.panel());
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), open));
         outlineRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
-                CORNER_RADIUS, UiTheme.panelEdge());
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panelEdge(), open));
 
         int contentX = panelX + PADDING;
         int headerY = panelY + PADDING;
@@ -177,11 +281,16 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int mapX = contentX;
         int mapY = headerY + HEADER_HEIGHT;
         graphics.fill(mapX - 1, mapY - 1, mapX + MAP_SIZE + 1, mapY + MAP_SIZE + 1,
-                UiTheme.panelEdge());
-        graphics.fill(mapX, mapY, mapX + MAP_SIZE, mapY + MAP_SIZE, UiTheme.mapBackdrop());
+                UiMotion.fade(UiTheme.panelEdge(), open));
+        graphics.fill(mapX, mapY, mapX + MAP_SIZE, mapY + MAP_SIZE,
+                UiMotion.fade(UiTheme.mapBackdrop(), open));
         drawMiniMap(graphics, mc, mapX, mapY);
 
         drawInfo(graphics, mc, contentX, mapY + MAP_SIZE + PADDING, readout);
+
+        // Last, and unconditional within this method: every early exit that means "nothing to draw"
+        // is taken in draw() before drawPanel is entered, so this pairing cannot be skipped.
+        UiMotion.popFrame(graphics);
     }
 
     /**
@@ -214,8 +323,9 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         String mode = readout.modeLabel();
         int modeWidth = mc.font.width(mode);
         graphics.drawString(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
-                x, y, UiTheme.header(), false);
-        graphics.drawString(mc.font, mode, x + MAP_SIZE - modeWidth, y, UiTheme.accent(), false);
+                x, y, UiMotion.fade(UiTheme.header(), open), false);
+        graphics.drawString(mc.font, mode, x + MAP_SIZE - modeWidth, y,
+                UiMotion.fade(UiTheme.accent(), open), false);
     }
 
     // ------------------------------------------------------------------ mini-map
@@ -239,6 +349,12 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         double maxX = mapX + MAP_SIZE;
         double maxY = mapY + MAP_SIZE;
 
+        // Everything in this block is geometry rather than a theme colour, so its share of the fade
+        // is the alpha each emitter already takes -- the same fade, one layer down. Rounded rather
+        // than truncated, so a half-open panel's map is not a shade darker than the sheet around it.
+        int solid = (int) (0xFF * open + 0.5F);
+        int pale = (int) (0x9A * open + 0.5F);
+
         // The mini-map is one drawing block. Before 1.21.6 that meant a live vertex consumer reached
         // through the pose; from 1.21.6 on the same block collects into a deferred batch that the GUI
         // renderer plays back at the end of the frame. HudDraw.beginBlock hides which, and the
@@ -261,16 +377,16 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         double m12 = centerY - playerX * m10 - playerZ * m11;
         RoadNetwork network = RoadStore.get();
         emitNetwork(last, network, m00, m01, m02, m10, m11, m12,
-                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
+                ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
 
         // The machine-read rails -- Create's tracks and MTR's -- drawn in with the roads and culled by
         // the same reach: the map is a view of the ground, and a rail the player can see on the world
         // map belongs on this one too. Each layer is drawn chain by chain, so a long rail is one
         // stroke rather than one per sampled piece.
         emitNetwork(last, RailTrackStore.network(), m00, m01, m02, m10, m11, m12,
-                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
+                ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
         emitNetwork(last, MtrTransit.railLayer(), m00, m01, m02, m10, m11, m12,
-                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY);
+                ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
 
         // The roads read out of RoadWeaver, drawn with the same two passes and the same reach: they
         // are drawn on the world map and planned over, so the mini-map has to show them too. They are
@@ -278,7 +394,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         // continuous stroke. The layer holds a whole region's worth of roads, so chains outside this
         // window are skipped before anything is projected.
         emitNetworkInBox(last, RoadWeaverLayer.drawnNetwork(), m00, m01, m02, m10, m11, m12,
-                ROAD_THICKNESS * 0.5, 0x9A, minX, minY, maxX, maxY,
+                ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY,
                 playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
         Route route = Navigation.route();
@@ -328,11 +444,11 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             double half = ROUTE_THICKNESS * 0.5;
             if (done.size() >= 2) {
                 emitPath(last, done, m00, m01, m02, m10, m11, m12, half, UiTheme.routeDone(),
-                        0xFF, minX, minY, maxX, maxY);
+                        solid, minX, minY, maxX, maxY);
             }
             if (ahead.size() >= 2) {
                 emitPath(last, ahead, m00, m01, m02, m10, m11, m12, half, UiTheme.route(),
-                        0xFF, minX, minY, maxX, maxY);
+                        solid, minX, minY, maxX, maxY);
             }
         }
 
@@ -341,14 +457,14 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (!Double.isNaN(originX)) {
             emitMarker(last, screenX(originX - playerX, originZ - playerZ, cos, sin, scale, centerX),
                     screenY(originX - playerX, originZ - playerZ, cos, sin, scale, centerY),
-                    UiTheme.origin(), minX, minY, maxX, maxY);
+                    UiMotion.fade(UiTheme.origin(), open), minX, minY, maxX, maxY);
         }
         Destination destination = Navigation.target();
         if (destination != null) {
             emitMarker(last,
                     screenX(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerX),
                     screenY(destination.x() - playerX, destination.z() - playerZ, cos, sin, scale, centerY),
-                    UiTheme.destination(), minX, minY, maxX, maxY);
+                    UiMotion.fade(UiTheme.destination(), open), minX, minY, maxX, maxY);
         }
 
         drawPlayerArrow(last, centerX, centerY);
@@ -459,14 +575,16 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             pose.pushMatrix();
             pose.translate((float) x, (float) centreY);
             pose.rotate((float) angle);
-            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
+            graphics.drawString(mc.font, name, -width / 2, -4,
+                    UiMotion.fade(UiTheme.mapLabel(), open), false);
             pose.popMatrix();
             *///?} else {
             PoseStack pose = graphics.pose();
             pose.pushPose();
             pose.translate(x, centreY, 0.0);
             pose.mulPose(Axis.ZP.rotation(angle));
-            graphics.drawString(mc.font, name, -width / 2, -4, UiTheme.mapLabel(), false);
+            graphics.drawString(mc.font, name, -width / 2, -4,
+                    UiMotion.fade(UiTheme.mapLabel(), open), false);
             pose.popPose();
             //?}
         }
@@ -498,12 +616,12 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 cx + size * 0.75, cy + size * 0.75,
                 cx, cy + size * 0.3,
                 cx - size * 0.75, cy + size * 0.75,
-                UiTheme.player());
+                UiMotion.fade(UiTheme.player(), open));
     }
 
     private static void drawNorthMarker(GuiGraphics graphics, Minecraft mc, double x, double y) {
         graphics.drawString(mc.font, "N", (int) Math.round(x) - 2, (int) Math.round(y) - 4,
-                UiTheme.text(), false);
+                UiMotion.fade(UiTheme.text(), open), false);
     }
 
     // ------------------------------------------------------------------- info
@@ -526,16 +644,16 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
         if (readout.arrived()) {
             NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
-                    readout.arrowDegrees(), readout.arrowColor());
+                    readout.arrowDegrees(), UiMotion.fade(readout.arrowColor(), open));
             graphics.drawString(font, readout.arrivalLine(),
-                    x + READOUT_TEXT_X, y + 6, readout.arrowColor(), false);
+                    x + READOUT_TEXT_X, y + 6, UiMotion.fade(readout.arrowColor(), open), false);
             graphics.drawString(font, readout.destinationName(), x + READOUT_TEXT_X, y + 18,
-                    UiTheme.textSecondary(), false);
+                    UiMotion.fade(UiTheme.textSecondary(), open), false);
         } else if (!readout.hasRoute()) {
             NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
-                    readout.arrowDegrees(), readout.arrowColor());
+                    readout.arrowDegrees(), UiMotion.fade(readout.arrowColor(), open));
             graphics.drawString(font, readout.noRouteLine(),
-                    x + READOUT_TEXT_X, y + 6, readout.arrowColor(), false);
+                    x + READOUT_TEXT_X, y + 6, UiMotion.fade(readout.arrowColor(), open), false);
         } else {
             drawRouteReadout(graphics, mc, x, y, readout);
         }
@@ -559,19 +677,19 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (readout.transit()) {
             // A square rather than an arrow: an arrow would be a claim about a junction, and there is
             // no junction being asked about -- the marker says "a stop" and nothing more.
-            NavHudShapes.drawTransitMarker(graphics, x + 11, y + 12);
+            NavHudShapes.drawTransitMarker(graphics, x + 11, y + 12, open);
         } else {
             NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
-                    readout.arrowDegrees(), readout.arrowColor());
+                    readout.arrowDegrees(), UiMotion.fade(readout.arrowColor(), open));
         }
 
         // Distance to the turn is the number that matters, so it gets the large treatment. "Now" has
         // already been decided by the readout, at the same distance the spoken announcement uses.
         graphics.drawString(font, readout.distance(), x + READOUT_TEXT_X, y + 2,
-                UiTheme.textStrong(), false);
+                UiMotion.fade(UiTheme.textStrong(), open), false);
         graphics.drawString(font,
                 font.plainSubstrByWidth(readout.instruction(), MAP_SIZE - READOUT_TEXT_X - 2),
-                x + READOUT_TEXT_X, y + 14, UiTheme.textSecondary(), false);
+                x + READOUT_TEXT_X, y + 14, UiMotion.fade(UiTheme.textSecondary(), open), false);
 
         drawTripProgress(graphics, font, x, y, y + 30, readout);
     }
@@ -583,17 +701,48 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
      */
     private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY,
                                          NavHudReadout readout) {
-        NavHudShapes.drawProgressBar(graphics, x, barY, MAP_SIZE, 5, readout.progress());
+        // The bar is fed the eased fraction rather than the readout's own: a trip's progress moves in
+        // steps, and a bar that jumped by those steps is the one part of this readout that would read
+        // as a counter instead of as a journey. See smoothProgress.
+        NavHudShapes.drawProgressBar(graphics, x, barY, MAP_SIZE, 5,
+                smoothProgress(readout.progress()));
 
         int color = readout.offRoute() ? UiTheme.warn() : UiTheme.textSecondary();
-        graphics.drawString(font, readout.remaining(), x, barY + 9, color, false);
+        graphics.drawString(font, readout.remaining(), x, barY + 9, UiMotion.fade(color, open), false);
 
         // Why this is a walking route when another mode is selected.
         String fallback = readout.fallbackHint();
         if (fallback != null) {
             graphics.drawString(font, font.plainSubstrByWidth(fallback, MAP_SIZE),
-                    x, barY + 20, UiTheme.warn(), false);
+                    x, barY + 20, UiMotion.fade(UiTheme.warn(), open), false);
         }
+    }
+
+    // ---------------------------------------------------------------- progress
+
+    /**
+     * The fraction the progress bar is drawn at, chasing the readout's own.
+     *
+     * <p>It lives here rather than in either layout because both draw the same bar from the same
+     * trip: a copy per layout would step whenever the player switched the map display mode, and
+     * there is no reason for the bar to behave differently in a smaller card.
+     *
+     * <p>Read exactly once per frame, by whichever layout drew the bar. A follow advances by this
+     * frame's delta each time it is read, so reading it twice would run the bar at double speed.
+     */
+    static float smoothProgress(double target) {
+        progressShown = UiMotion.follow(progressShown, (float) target, UiMotion.FOLLOW_SECONDS);
+        return progressShown;
+    }
+
+    /**
+     * Puts the bar back at nothing, for a layout that has finished leaving the screen.
+     *
+     * <p>Without this the next trip's bar would run backwards down from the last one's finish during
+     * its fade-in, which reads as the progress being undone rather than as a new journey starting.
+     */
+    static void forgetProgress() {
+        progressShown = 0.0F;
     }
 
     /**
@@ -615,7 +764,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int count = Math.min(NARRATOR_HINT_LINES, lines.size());
         for (int i = 0; i < count; i++) {
             graphics.drawString(font, lines.get(i), x, y + i * NARRATOR_HINT_LINE_HEIGHT,
-                    UiTheme.warn(), false);
+                    UiMotion.fade(UiTheme.warn(), open), false);
         }
     }
 
@@ -648,6 +797,6 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             return;
         }
         HudDraw.emitPlaceMarker(out, x, y, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
-                UiTheme.place());
+                UiMotion.fade(UiTheme.place(), open));
     }
 }

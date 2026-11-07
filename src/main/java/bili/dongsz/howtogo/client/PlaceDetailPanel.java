@@ -101,6 +101,33 @@ public final class PlaceDetailPanel {
     private boolean drawn;
 
     /**
+     * How far the card has appeared, 0 to 1.
+     *
+     * <p>A {@link UiMotion.Slide} rather than a screen's state, because this is not a screen: it is a
+     * card a caller draws inside a rectangle it owns, so there is nothing for {@link UiMotion#of} to
+     * key a state by and asking would need a screen that does not exist. The duration is
+     * {@link UiMotion#HUD} -- a card that floats over a map is a thing on the interface, not a window
+     * arriving, and {@link UiMotion#ENTER} is reserved for the sheets that replace one.
+     */
+    private final UiMotion.Slide appear = new UiMotion.Slide(UiMotion.Easing.OUT_CUBIC, 0.0F,
+            UiMotion.HUD);
+
+    /** Whether {@link #render} has drawn a card at all, and for which place; see the fade below. */
+    private boolean shown;
+    private int shownX;
+    private int shownZ;
+
+    /**
+     * The hover of each action control, keyed by its slot in the row.
+     *
+     * <p>A pool, and a field: the controls are rebuilt into {@link #faces} every frame, so a slide
+     * made at the call site would never travel, and the four of them are asked about once per frame
+     * per card -- which with the map moving under it is the one place in this class where an
+     * allocation would be noticed.
+     */
+    private final UiMotion.Slides controlHovers = new UiMotion.Slides();
+
+    /**
      * Draws the panel, and remembers where its controls are.
      *
      * @param place       the selected place; its name and source are shown read-only
@@ -119,15 +146,45 @@ public final class PlaceDetailPanel {
         cardH = Math.max(1, h);
         if (place == null) {
             drawn = false;
+            // A card that has been taken away is a card the next place has to appear as: the caller
+            // clears the selection between two places often enough (a delete, a tap on empty map) that
+            // treating the gap as nothing happening would leave the next card switched on.
+            shown = false;
             return;
         }
         drawn = true;
 
+        // A card for a different place is a new card, not the old one with new words in it: it starts
+        // at nothing and fades in, so following a selection around the map reads as one card after
+        // another rather than as text changing in place. The place is keyed by where it is, which is
+        // what the card's own address line is derived from and costs two integer comparisons.
+        if (!shown || shownX != place.x() || shownZ != place.z()) {
+            shown = true;
+            shownX = place.x();
+            shownZ = place.z();
+            appear.jump(0.0F);
+        }
+        appear.to(1.0F);
+        float open = appear.eased();
+
+        // The card slides up into place by HUD_RISE while it appears, on top of the fade: a card
+        // that only faded read as a cut, and the travel is what makes following a selection around
+        // the map feel like one card arriving after another.
+        //
+        // Pushed around the drawing rather than added to the geometry, because this class computes
+        // its control rectangles from the same y the sheet is drawn at -- and those rectangles are
+        // hit-tested in actionAt/contains against logic that must not move. The displacement is
+        // therefore a property of the paint only, and the frame the card is clicked on stays where
+        // the card will be once it has arrived.
+        UiMotion.pushFrame(graphics, 0.0F, (1.0F - open) * UiMotion.HUD_RISE);
+
         // The sheet first: an opaque card, because in the main screen this floats over a map that is
         // otherwise drawn all the way to the panel's edge and any transparency would turn the text
         // into a picture of roads.
-        HudDraw.fillRounded(graphics, x, y, x + w, y + h, 4, UiTheme.panelSolid());
-        HudDraw.outlineRounded(graphics, x, y, x + w, y + h, 4, UiTheme.windowEdge());
+        HudDraw.fillRounded(graphics, x, y, x + w, y + h, 4,
+                UiMotion.fade(UiTheme.panelSolid(), open));
+        HudDraw.outlineRounded(graphics, x, y, x + w, y + h, 4,
+                UiMotion.fade(UiTheme.windowEdge(), open));
 
         int pad = PAD;
         int innerX = x + pad;
@@ -196,8 +253,12 @@ public final class PlaceDetailPanel {
                 overflow = chipLine == 0 ? 0 : placeChips.size() - i;
                 break;
             }
+            // Each chip is a row of a short list: it arrives with the card and one stagger step after
+            // the chip before it, so the tags are read left to right rather than appearing as a block.
+            float arrived = UiMotion.stagger(i, open);
             faces.add(new Face(chipX, chipsTop + chipLine * (PILL_HEIGHT + 3), chipW, PILL_HEIGHT,
-                    chip.face(), chip.label(), chip.text()));
+                    UiMotion.fade(chip.face(), arrived), chip.label(),
+                    UiMotion.fade(chip.text(), arrived)));
             chipLines = Math.max(chipLines, chipLine + 1);
             chipX += chipW + 3;
         }
@@ -209,8 +270,9 @@ public final class PlaceDetailPanel {
             if (chipX + moreW > innerX + innerW) {
                 chipX = innerX;
             }
-            faces.add(new Face(chipX, moreY, moreW, PILL_HEIGHT, UiTheme.chipTag(), more,
-                    UiTheme.onChip()));
+            faces.add(new Face(chipX, moreY, moreW, PILL_HEIGHT,
+                    UiMotion.fade(UiTheme.chipTag(), open), more,
+                    UiMotion.fade(UiTheme.onChip(), open)));
         }
 
         // ---- description: whatever the card has left ----------------------------------------------
@@ -232,32 +294,38 @@ public final class PlaceDetailPanel {
             int by = actionTop + row * (BUTTON_HEIGHT + gap);
             Control control = controls.get(i);
             controls.set(i, control.withBounds(bx, by, buttonW));
-            int face;
+            int resting;
             int text;
             if (!control.enabled()) {
-                face = UiTheme.button();
+                resting = UiTheme.button();
                 text = UiTheme.textFaint();
             } else if (control.action() == Action.NAVIGATE) {
-                face = UiTheme.accent();
+                resting = UiTheme.accent();
                 text = UiTheme.onSelection();
             } else if (control.action() == Action.DELETE) {
-                face = UiTheme.danger();
+                resting = UiTheme.danger();
                 text = UiTheme.onSelection();
             } else if (control.action() == Action.BACK) {
-                face = UiTheme.button();
+                resting = UiTheme.button();
                 text = UiTheme.textStrong();
             } else {
-                face = UiTheme.button();
+                resting = UiTheme.button();
                 text = UiTheme.textStrong();
             }
             boolean hot = control.enabled() && mouseX >= bx && mouseX <= bx + buttonW
                     && mouseY >= by && mouseY <= by + BUTTON_HEIGHT;
-            if (hot && control.action() == Action.DELETE) {
-                face = UiTheme.dangerHover();
-            } else if (hot) {
-                face = UiTheme.buttonHover();
-            }
-            faces.add(new Face(bx, by, buttonW, BUTTON_HEIGHT, face, control.label(), text));
+            // The face under the cursor is the same second face this card always had -- the danger
+            // hover on a delete, the button hover on everything else -- reached by mixing rather than
+            // by switching, so the control is walked to it while the cursor arrives. The action row
+            // starts after the chips in the stagger, and past the limit every row shares the last
+            // delay anyway, so the two cannot disagree about how late a row may be.
+            float lit = controlHovers.get(i).to(hot ? 1.0F : 0.0F).eased();
+            int hoveredFace = control.action() == Action.DELETE
+                    ? UiTheme.dangerHover() : UiTheme.buttonHover();
+            float arrived = UiMotion.stagger(UiMotion.STAGGER_LIMIT + i, open);
+            faces.add(new Face(bx, by, buttonW, BUTTON_HEIGHT,
+                    UiMotion.fade(UiMotion.mix(resting, hoveredFace, lit), arrived),
+                    control.label(), UiMotion.fade(text, arrived)));
             if (control.enabled()) {
                 hits.add(new Hit(bx, by, bx + buttonW, by + BUTTON_HEIGHT, control.action()));
             }
@@ -271,14 +339,16 @@ public final class PlaceDetailPanel {
 
         HudDraw.Drawing block = HudDraw.beginBlock(graphics);
         HudDraw.emitStar(block.sink, starCx, starCy, 4.5,
-                details.favorite() ? UiTheme.accent() : UiTheme.textFaint());
+                UiMotion.fade(details.favorite() ? UiTheme.accent() : UiTheme.textFaint(),
+                        UiMotion.stagger(0, open)));
         HudDraw.endBlock(graphics, block);
 
-        graphics.drawString(font, name, innerX, titleY, UiTheme.textStrong(), false);
+        graphics.drawString(font, name, innerX, titleY,
+                UiMotion.fade(UiTheme.textStrong(), UiMotion.stagger(0, open)), false);
         // The address is a read-only sentence, so it is drawn in the secondary rank: it matters, and
         // it must not compete with the place's name above it for the first glance.
         graphics.drawString(font, PlaceText.ellipsis(font, address, innerW), innerX, addressY,
-                UiTheme.textSecondary(), false);
+                UiMotion.fade(UiTheme.textSecondary(), UiMotion.stagger(1, open)), false);
         for (Face face : faces) {
             String label = PlaceText.ellipsis(font, face.label(), Math.max(1, face.w() - 4));
             int textX = face.x() + Math.max(2, (face.w() - font.width(label)) / 2);
@@ -289,7 +359,7 @@ public final class PlaceDetailPanel {
         if (deleteHint) {
             graphics.drawString(font,
                     Component.translatable("screen.howtogo.place_details.not_deletable").getString(),
-                    innerX, hintTop, UiTheme.textFaint(), false);
+                    innerX, hintTop, UiMotion.fade(UiTheme.textFaint(), open), false);
         }
 
         // The description last, so it is clipped by the room the actions left rather than drawn over.
@@ -299,8 +369,11 @@ public final class PlaceDetailPanel {
             if (maxLines > 0) {
                 graphics.drawString(font,
                         Component.translatable("screen.howtogo.place_details.empty").getString(),
-                        innerX, descTop, UiTheme.textFaint(), false);
+                        innerX, descTop, UiMotion.fade(UiTheme.textFaint(), open), false);
             }
+            // This branch finishes the card, so it has to hand the matrix back before it returns:
+            // a push left open would displace everything the caller draws after the panel.
+            UiMotion.popFrame(graphics);
             return;
         }
         List<String> lines = PlaceText.wrap(font, details.description(), innerW);
@@ -309,8 +382,11 @@ public final class PlaceDetailPanel {
             if (i == maxLines - 1 && lines.size() > maxLines) {
                 line = PlaceText.ellipsis(font, line, innerW);
             }
-            graphics.drawString(font, line, innerX, descTop + i * lineHeight, UiTheme.text(), false);
+            graphics.drawString(font, line, innerX, descTop + i * lineHeight,
+                    UiMotion.fade(UiTheme.text(), UiMotion.stagger(2 + i, open)), false);
         }
+        // The card is finished: unwind the slide pushed when it started arriving.
+        UiMotion.popFrame(graphics);
     }
 
     /** The control at a screen point, as of the last {@link #render}. */
@@ -443,6 +519,7 @@ public final class PlaceDetailPanel {
     }
 
     // ---------------------------------------------------------------- controls
+
 
     /** One action the caller offers, with the label and state the panel draws. */
     private record Control(Action action, String label, boolean enabled, int x, int y, int width) {

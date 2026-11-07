@@ -173,6 +173,39 @@ public final class TransitLineScreen extends Screen {
      */
     private List<PanelButton> buttons = List.of();
 
+    /** The opacity the whole window is drawn at this frame; the column and row helpers read it. */
+    private float open = 1.0F;
+
+    /*
+     * The hover state of everything on this screen that answers the cursor. Pools, all of them, and
+     * all of them fields: the columns redraw from a loop every frame, so a slide made at the call
+     * site would restart from nothing each time and the highlight would never travel. They are
+     * separate pools rather than one because each family numbers its controls from zero, and two
+     * families sharing an index would share a highlight.
+     */
+
+    /**
+     * The row slot under the cursor, shared by the three columns.
+     *
+     * <p>One pool rather than three because the cursor is over one row of one column at a time, and
+     * because the slot is what the highlight belongs to: it is keyed by the row's position on screen,
+     * which is the same number in all three columns, so scrolling a column moves the highlight with
+     * the rows rather than leaving it where the cursor happens to be.
+     */
+    private final UiMotion.Slides rowHovers = new UiMotion.Slides();
+
+    /** The four controls each stop row carries, keyed by the row and by their slot in it. */
+    private final UiMotion.Slides stopControlHovers = new UiMotion.Slides();
+
+    /** The marks switch at the right end of an imported line's row, keyed by that row. */
+    private final UiMotion.Slides marksHovers = new UiMotion.Slides();
+
+    /** The kind chips above the columns, keyed by their position in the row. */
+    private final UiMotion.Slides kindHovers = new UiMotion.Slides();
+
+    /** The colour presets beside the colour field, keyed by their position in the row. */
+    private final UiMotion.Slides presetHovers = new UiMotion.Slides();
+
     public TransitLineScreen(Screen parent) {
         super(Component.translatable(TITLE));
         this.parent = parent;
@@ -603,14 +636,14 @@ public final class TransitLineScreen extends Screen {
      */
     private void drawColourRow(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
         graphics.drawString(this.font, colourLabel.getString(), colourLabelX, colourLabelY,
-                UiTheme.textSecondary(), false);
+                UiMotion.fade(UiTheme.textSecondary(), open), false);
         int preview = line == null ? UiTheme.button()
                 : line.colorOr(RoadConfig.transitLineColor(line.kind()));
         graphics.fill(colourPreviewX - 1, colourPreviewY - 1, colourPreviewX + COLOUR_PREVIEW + 1,
                 colourPreviewY + COLOUR_PREVIEW + 1,
-                line == null ? UiTheme.button() : UiTheme.windowEdge());
+                UiMotion.fade(line == null ? UiTheme.button() : UiTheme.windowEdge(), open));
         graphics.fill(colourPreviewX, colourPreviewY, colourPreviewX + COLOUR_PREVIEW,
-                colourPreviewY + COLOUR_PREVIEW, preview);
+                colourPreviewY + COLOUR_PREVIEW, UiMotion.fade(preview, open));
         if (line == null || readOnly(line) || colourPresetSize <= 0) {
             return;
         }
@@ -621,16 +654,18 @@ public final class TransitLineScreen extends Screen {
             int colour = presets.get(i);
             // The colour the line already has gets a ring, so a player who opened the editor to
             // change one line can see which preset it is already on rather than having to read the
-            // hex back out of the field.
+            // hex back out of the field. That ring is the resting face; every other swatch is mixed
+            // towards the hover face by its own slide.
             boolean current = chosen != null && chosen == colour;
             boolean hovered = mouseX >= x && mouseX < x + colourPresetSize
                     && mouseY >= colourPresetY && mouseY < colourPresetY + colourPresetSize;
+            float lit = presetHovers.get(i).to(hovered && !current ? 1.0F : 0.0F).eased();
+            int ring = current ? UiTheme.selection()
+                    : UiMotion.mix(UiTheme.windowEdge(), UiTheme.buttonHover(), lit);
             graphics.fill(x - 1, colourPresetY - 1, x + colourPresetSize + 1,
-                    colourPresetY + colourPresetSize + 1,
-                    current ? UiTheme.selection()
-                            : (hovered ? UiTheme.buttonHover() : UiTheme.windowEdge()));
+                    colourPresetY + colourPresetSize + 1, UiMotion.fade(ring, open));
             graphics.fill(x, colourPresetY, x + colourPresetSize, colourPresetY + colourPresetSize,
-                    colour);
+                    UiMotion.fade(colour, open));
         }
     }
 
@@ -653,19 +688,22 @@ public final class TransitLineScreen extends Screen {
     }
 
     /**
-     * One row of a column: its resting band, and the chosen fill on top of it.
+     * One row of a column: its resting band, and the chosen fill mixed into it by the row's own hover.
      *
      * <p>The band is drawn for every row, not only under the cursor: a row here is clicked to select a
      * line, add a stop or pick a candidate, and a list of bare text lines on the sheet reads as a block
-     * of labels rather than as rows a player may pick. The chosen row's fill is painted over the band,
-     * so the band is what an ordinary row looks like and the blue is what being chosen does to it.
+     * of labels rather than as rows a player may pick. It used to be two fills -- the band, then the
+     * chosen one over it -- which is also why the highlight could only arrive in one step; one mixed
+     * fill gives the same colour at either end and every shade between them on the way.
+     *
+     * @param lit     how far this row has been chosen or reached by the cursor, 0 to 1
+     * @param arrived how far it has come in as part of the list's entrance, 0 to 1
      */
-    private void drawRow(GuiGraphics graphics, int columnX, int index, boolean highlighted) {
-        int y = listY + index * ROW_HEIGHT;
-        graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, UiTheme.rowSurface());
-        if (highlighted) {
-            graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1, UiTheme.selection());
-        }
+    private void drawRow(GuiGraphics graphics, int columnX, int row, float lit, float arrived) {
+        int y = listY + row * ROW_HEIGHT;
+        graphics.fill(columnX, y, columnX + columnW, y + ROW_HEIGHT - 1,
+                UiMotion.fade(UiMotion.mix(UiTheme.rowSurface(), UiTheme.selection(), lit),
+                        arrived));
     }
 
     private void drawLabel(GuiGraphics graphics, int columnX, int index, String text, int colour) {
@@ -681,6 +719,17 @@ public final class TransitLineScreen extends Screen {
     }
 
     /**
+     * The text colour of a row that may be selected or under the cursor.
+     *
+     * <p>Mixed rather than switched, so the label goes through the shades between the row's own ranks
+     * and the pair that reads on the chosen fill: the row's fill travels, and a label that jumped
+     * while its background was still travelling would be the one thing on the row that did not.
+     */
+    private static int rowText(int resting, float lit) {
+        return UiMotion.mix(resting, UiTheme.onSelection(), lit);
+    }
+
+    /**
      * A column's header, with how much of the column is on screen when it does not all fit.
      *
      * <p>The count is the only thing that says a list continues past its own edge. Without it a column
@@ -690,13 +739,13 @@ public final class TransitLineScreen extends Screen {
     private void drawColumnHeader(GuiGraphics graphics, int columnX, String key, int count,
                                   int scroll) {
         graphics.drawString(this.font, Component.translatable(key).getString(), columnX,
-                listY - HEADER_HEIGHT, UiTheme.textSecondary(), false);
+                listY - HEADER_HEIGHT, UiMotion.fade(UiTheme.textSecondary(), open), false);
         if (count <= visibleRows()) {
             return;
         }
         String shown = Math.min(count, scroll + visibleRows()) + "/" + count;
         graphics.drawString(this.font, shown, columnX + columnW - 2 - this.font.width(shown),
-                listY - HEADER_HEIGHT, UiTheme.textFaint(), false);
+                listY - HEADER_HEIGHT, UiMotion.fade(UiTheme.textFaint(), open), false);
     }
 
     // ---------------------------------------------------------------- render
@@ -727,6 +776,11 @@ public final class TransitLineScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The frame's motion first, before the parent is re-rendered and before the sheet is drawn:
+        // every row, chip and control on this screen reads this one value, and UiMotion.of is also
+        // what pumps a deferred swap, so it is asked exactly once per frame.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
         if (parent != null) {
             try {
                 parent.render(graphics, mouseX, mouseY, partialTick);
@@ -735,13 +789,21 @@ public final class TransitLineScreen extends Screen {
                 // to be usable.
             }
         }
+        // The window then travels as one piece -- edge, sheet, title, columns and footer -- so it
+        // rises into place rather than being cut on. Pushed after the parent's pass rather than
+        // before it: that backdrop is another screen's frame, and a translated one would slide the
+        // map under this window and leave a strip of the parent's own dimming along its edge.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
 
         // This window is its own screen rather than a sheet over the map, so it draws a full frame:
-        // the outermost pixel is the window edge and the sheet under it is the opaque panel.
+        // the outermost pixel is the window edge and the sheet under it is the opaque panel. Both
+        // fade in, so the window arrives over the map rather than appearing on it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.windowEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
-        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
+                UiMotion.fade(UiTheme.windowEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panelSolid(), open));
+        graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD,
+                UiMotion.fade(UiTheme.title(), open), false);
 
         TransitLine line = selected();
         refreshRideable();
@@ -764,7 +826,8 @@ public final class TransitLineScreen extends Screen {
         if (readOnly(line)) {
             String note = Component.translatable("screen.howtogo.line_from_mtr_note").getString();
             String shown = this.font.plainSubstrByWidth(note, noteRoom);
-            graphics.drawString(this.font, shown, noteX, panelY + PAD, UiTheme.accentSoft(), false);
+            graphics.drawString(this.font, shown, noteX, panelY + PAD,
+                    UiMotion.fade(UiTheme.accentSoft(), open), false);
             noteX += this.font.width(shown) + 6;
             noteRoom = Math.max(12, noteRoom - this.font.width(shown) - 6);
         }
@@ -773,20 +836,23 @@ public final class TransitLineScreen extends Screen {
             // and a red stop that says nothing about why would only move the mystery.
             graphics.drawString(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_broken").getString(), noteRoom),
-                    noteX, panelY + PAD, UiTheme.error(), false);
+                    noteX, panelY + PAD, UiMotion.fade(UiTheme.error(), open), false);
         } else if (hasUnjudgedPair()) {
             // Not silence, because "the mod cannot tell" is itself worth saying -- a line of a kind the
             // world has no roads of is the case this catches -- and not the red note either, which would
             // be an accusation the network does not support.
             graphics.drawString(this.font, this.font.plainSubstrByWidth(
                             Component.translatable("screen.howtogo.line_unjudged").getString(), noteRoom),
-                    noteX, panelY + PAD, UiTheme.note(), false);
+                    noteX, panelY + PAD, UiMotion.fade(UiTheme.note(), open), false);
         }
 
         super.render(graphics, mouseX, mouseY, partialTick);
         // Last in the frame: the columns above can reach the footer on a short window, and a button
         // drawn before them would have a row of one of them across its label.
         drawButtons(graphics, mouseX, mouseY);
+        // Last, and unconditional: everything above was drawn inside the displacement pushed at the
+        // top of this method, and the game's matrix has to be handed back unshifted.
+        UiMotion.popFrame(graphics);
     }
 
     /**
@@ -819,9 +885,15 @@ public final class TransitLineScreen extends Screen {
             boolean selected = line != null && line.kind() == kinds.get(i);
             boolean hovered = !readOnly(line) && mouseX >= x && mouseX < x + kindW
                     && mouseY >= kindY && mouseY < kindY + KIND_HEIGHT;
+            // The chosen chip keeps its own face whatever the cursor does -- it is the answer, not a
+            // button -- so only an unchosen one is mixed towards the hover face, by its own slide.
+            // The chips also arrive a stagger step apart, so the row is read left to right.
+            float lit = kindHovers.get(i).to(hovered && !selected ? 1.0F : 0.0F).eased();
+            float arrived = UiMotion.stagger(i, open);
             int background = selected ? UiTheme.selectionSoft()
-                    : (hovered ? UiTheme.buttonHover() : UiTheme.button());
-            graphics.fill(x, kindY, x + kindW, kindY + KIND_HEIGHT, background);
+                    : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit);
+            graphics.fill(x, kindY, x + kindW, kindY + KIND_HEIGHT,
+                    UiMotion.fade(background, arrived));
 
             // The road class names the mod already has, so the four kinds of line are called what
             // the four kinds of road are called everywhere else.
@@ -831,7 +903,8 @@ public final class TransitLineScreen extends Screen {
             String shown = this.font.plainSubstrByWidth(label, kindW - 2);
             graphics.drawString(this.font, shown,
                     x + Math.max(0, (kindW - this.font.width(shown)) / 2), kindY + 3,
-                    selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(), false);
+                    UiMotion.fade(selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(),
+                            arrived), false);
         }
     }
 
@@ -841,7 +914,7 @@ public final class TransitLineScreen extends Screen {
         if (lines.isEmpty()) {
             lineScroll = 0;
             drawLabel(graphics, linesX, 0, Component.translatable("screen.howtogo.line_none").getString(),
-                    UiTheme.textFaint());
+                    UiMotion.fade(UiTheme.textFaint(), open));
             return;
         }
         lineScroll = clampScroll(lineScroll, lines.size());
@@ -851,14 +924,21 @@ public final class TransitLineScreen extends Screen {
             int index = lineScroll + row;
             TransitLine candidate = lines.get(index);
             boolean isSelected = candidate.id().equals(selectedId);
+            // Two values, not one: how far this row has arrived with the column, and how far the
+            // cursor or the selection has moved onto it. A chosen row is at the far end at once --
+            // a selection is an answer, not a hover -- while a row the cursor is on walks there.
+            float arrived = UiMotion.stagger(row, open);
+            float lit = isSelected ? 1.0F
+                    : rowHovers.get(row).to(index == hovered ? 1.0F : 0.0F).eased();
             int rowY = listY + row * ROW_HEIGHT;
-            drawRow(graphics, linesX, row, isSelected || index == hovered);
+            drawRow(graphics, linesX, row, lit, arrived);
             // The marker is the colour the map draws the line in -- its own when it has one, the
             // kind's otherwise -- so the swatch in this list and the stroke on the map are one fact
             // rather than two. It is drawn after the row fill so a selected row's blue does not paint
             // over it.
             HudDraw.drawRowMarker(graphics, linesX + 3, rowY + 3, ROW_MARKER,
-                    candidate.colorOr(RoadConfig.transitLineColor(candidate.kind())));
+                    UiMotion.fade(candidate.colorOr(RoadConfig.transitLineColor(candidate.kind())),
+                            arrived));
             String kind = Component.translatable(
                             "screen.howtogo.road_class." + candidate.kind().name().toLowerCase(Locale.ROOT))
                     .getString();
@@ -875,12 +955,10 @@ public final class TransitLineScreen extends Screen {
                     source + candidate.label() + "  (" + kind + ")", Math.max(8, room));
             // Hovering paints the chosen fill, so both ranks of text follow the chosen row's pair: a
             // body-text grey on the selection blue is the one row on the screen that stops being read.
-            boolean filled = isSelected || index == hovered;
             graphics.drawString(this.font, shown, linesX + 3 + ROW_MARKER_STEP, rowY + 2,
-                    filled ? UiTheme.onSelection() : UiTheme.text(), false);
+                    UiMotion.fade(rowText(UiTheme.text(), lit), arrived), false);
             if (marked) {
-                drawMarksToggle(graphics, mouseX, mouseY, candidate,
-                        linesX + columnW - TOGGLE_WIDTH - 1, listY + row * ROW_HEIGHT);
+                drawMarksToggle(graphics, mouseX, mouseY, candidate, row, arrived);
             }
         }
     }
@@ -900,12 +978,15 @@ public final class TransitLineScreen extends Screen {
      * is said by the glyph being there at all, not by the fill.
      */
     private void drawMarksToggle(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line,
-                                 int x, int y) {
+                                 int row, float arrived) {
+        int x = linesX + columnW - TOGGLE_WIDTH - 1;
+        int y = listY + row * ROW_HEIGHT;
         boolean on = MtrTransit.marksEnabled(line);
         boolean hovered = mouseX >= x && mouseX < x + TOGGLE_WIDTH
                 && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
+        float lit = marksHovers.get(row).to(hovered ? 1.0F : 0.0F).eased();
         graphics.fill(x, y, x + TOGGLE_WIDTH - 1, y + ROW_HEIGHT - 1,
-                hovered ? UiTheme.buttonHover() : UiTheme.button());
+                UiMotion.fade(UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit), arrived));
         if (!on) {
             // Nothing in the box at all, which is as different from a glyph as two states can be: a dot
             // that differed only in colour was read as "the click did nothing", which is what a control
@@ -916,7 +997,7 @@ public final class TransitLineScreen extends Screen {
         // what turning it on actually adds. Both are one glyph wide, so the row's text does not shift.
         String glyph = line.kind() == RoadClass.WATER ? "\u6C34" : "\u8F68";
         graphics.drawString(this.font, glyph, x + 1, y + 2,
-                RoadConfig.roadColor(line.kind()), false);
+                UiMotion.fade(RoadConfig.roadColor(line.kind()), arrived), false);
     }
 
     private void drawStops(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
@@ -925,7 +1006,7 @@ public final class TransitLineScreen extends Screen {
         if (line == null || line.stopCount() == 0) {
             stopsScroll = 0;
             drawLabel(graphics, stopsX, 0, Component.translatable("screen.howtogo.line_empty").getString(),
-                    UiTheme.textFaint());
+                    UiMotion.fade(UiTheme.textFaint(), open));
             return;
         }
         stopsScroll = clampScroll(stopsScroll, line.stopCount());
@@ -933,12 +1014,15 @@ public final class TransitLineScreen extends Screen {
         for (int row = 0; row < visible && stopsScroll + row < line.stopCount(); row++) {
             int i = stopsScroll + row;
             int y = listY + row * ROW_HEIGHT;
+            float arrived = UiMotion.stagger(row, open);
             // The stops are rows to act on -- every one of them carries its own four controls -- so
-            // they take the same resting band as the other two columns.
-            drawRow(graphics, stopsX, row, false);
+            // they take the same resting band as the other two columns. The band itself has no hover:
+            // pressing a stop row acts on the stop, and the four controls are what says so.
+            drawRow(graphics, stopsX, row, 0.0F, arrived);
             int nameColour = i > 0 && i - 1 < rideable.length
                     && rideable[i - 1] == RIDE_BROKEN ? UiTheme.error() : UiTheme.text();
-            drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)), nameColour);
+            drawLabel(graphics, stopsX, row, (i + 1) + ". " + liveName(line.stops().get(i)),
+                    UiMotion.fade(nameColour, arrived));
             // Four controls at the right edge: rename, earlier, later, remove. Drawn per row rather than
             // as widgets so that a long line does not create four buttons per stop. The rename one is
             // drawn as N because N is what renames a place on the map. A line read out of MTR has none
@@ -951,13 +1035,17 @@ public final class TransitLineScreen extends Screen {
                 int x = controlsX + c * CONTROL_WIDTH;
                 boolean hovered = mouseX >= x && mouseX < x + CONTROL_WIDTH
                         && mouseY >= y && mouseY < y + ROW_HEIGHT - 1;
+                float lit = stopControlHovers.get(row * CONTROLS + c)
+                        .to(hovered ? 1.0F : 0.0F).eased();
                 graphics.fill(x, y, x + CONTROL_WIDTH - 1, y + ROW_HEIGHT - 1,
-                        hovered ? UiTheme.buttonHover() : UiTheme.button());
+                        UiMotion.fade(UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit),
+                                arrived));
                 String glyph = c == 0 ? "N" : c == 1 ? "^" : c == 2 ? "v" : "x";
                 // Remove is the one control here that destroys something, so it is the one drawn in
                 // the error colour; the other three are ordinary glyphs on the row.
                 int colour = c == 3 ? UiTheme.error() : UiTheme.textSecondary();
-                graphics.drawString(this.font, glyph, x + 3, y + 2, colour, false);
+                graphics.drawString(this.font, glyph, x + 3, y + 2,
+                        UiMotion.fade(colour, arrived), false);
             }
         }
     }
@@ -970,7 +1058,7 @@ public final class TransitLineScreen extends Screen {
             candidatesScroll = 0;
             drawLabel(graphics, candidatesX, 0,
                     Component.translatable("screen.howtogo.line_no_candidates").getString(),
-                    UiTheme.textFaint());
+                    UiMotion.fade(UiTheme.textFaint(), open));
             return;
         }
         candidatesScroll = clampScroll(candidatesScroll, offered.size());
@@ -980,17 +1068,19 @@ public final class TransitLineScreen extends Screen {
             int i = candidatesScroll + row;
             LineStop stop = offered.get(i);
             boolean already = line != null && line.callsAt(stop.x(), stop.z());
-            drawRow(graphics, candidatesX, row, i == hovered);
+            float arrived = UiMotion.stagger(row, open);
+            float lit = rowHovers.get(row).to(i == hovered ? 1.0F : 0.0F).eased();
+            drawRow(graphics, candidatesX, row, lit, arrived);
             // A stop that cannot be renamed here says so, and one the line already calls at is dimmed
             // rather than hidden: seeing that it is already on the line is the answer to "why is it
-            // not in the list". The hovered row is filled, so its text takes the pair that reads on
-            // that fill instead of the row's own ranks.
+            // not in the list". The resting ranks are the row's own; from there the text is mixed
+            // towards the pair that reads on the hovered fill by the same slide the fill uses.
             String suffix = stop.editable() ? ""
                     : " " + Component.translatable("screen.howtogo.line_readonly").getString();
-            int colour = i == hovered ? UiTheme.onSelection()
-                    : already ? UiTheme.textFaint()
-                            : (stop.editable() ? UiTheme.text() : UiTheme.textSecondary());
-            drawLabel(graphics, candidatesX, row, stop.label() + suffix, colour);
+            int resting = already ? UiTheme.textFaint()
+                    : (stop.editable() ? UiTheme.text() : UiTheme.textSecondary());
+            drawLabel(graphics, candidatesX, row, stop.label() + suffix,
+                    UiMotion.fade(rowText(resting, lit), arrived));
         }
     }
 

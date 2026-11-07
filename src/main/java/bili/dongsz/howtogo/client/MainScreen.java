@@ -107,6 +107,17 @@ public final class MainScreen extends Screen {
     /** The two rows of buttons, built in {@link #init()} and drawn and hit-tested by hand. */
     private final List<PanelButton> buttons = new ArrayList<>();
 
+    /**
+     * How far this screen has arrived, 0 to 1, as of the frame being drawn.
+     *
+     * <p>Written once at the top of {@link #render} and read by every pass below it, including
+     * {@link #renderBackground}, which the game calls from inside the parent's render. One value
+     * shared by the dimming, the sheet, the map and the text is what makes them arrive as one
+     * surface: a screen whose chrome faded but whose map did not would look like two things being
+     * laid down one after the other.
+     */
+    private float open = 1.0F;
+
     /** View centre in world blocks, and the zoom. Kept across a resize, not across screens. */
     private double centerX;
     private double centerZ;
@@ -699,10 +710,19 @@ public final class MainScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        graphics.fill(0, 0, this.width, this.height, UiTheme.dim());
+        // The dimming, the sheet and the sheet's edge fade with the entrance rather than appearing at
+        // full strength: the screen is one surface arriving, not a panel laid over a dimmer.
+        // The dimming reaches past the screen's own corners because it is drawn inside the frame that
+        // RISE displaces: a scrim cut exactly to the window would leave an undimmed strip along one
+        // edge for as long as the entrance takes. The sheet below does not need the margin -- it moves
+        // with the frame it is part of.
+        graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
+                this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
+                UiMotion.fade(UiTheme.dim(), open));
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.panelEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panel());
+                UiMotion.fade(UiTheme.panelEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panel(), open));
     }
 
     /**
@@ -718,6 +738,19 @@ public final class MainScreen extends Screen {
      */
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // Read here and only here: this call advances the entrance, multiplies it by any exit that
+        // has been asked for, and is the frame in which Screens is allowed to complete a deferred
+        // swap. Calling it twice would advance the animation twice, and calling it from a method the
+        // game may skip would leave a screen that never finishes leaving.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The frame itself is displaced, not only faded: a sheet that appears in place reads as a cut,
+        // and a cut is what makes an interface feel assembled rather than designed. Pushed before any
+        // pixel is drawn -- including the background 1.20.1 asks for by hand below -- so the
+        // dimming, the sheet, the map and the buttons travel together as the one surface they are.
+        // The game builds a fresh pose for every frame, so this needs no try/finally: the pop at the
+        // end of the method is enough to keep the displacement from outliving the screen's own drawing.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
         // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
         // 1.20.1 has no such call, so a screen that wants the dimming and the sheet asks for it here.
         //? if <1.20.2 {
@@ -733,6 +766,9 @@ public final class MainScreen extends Screen {
         // internally, which is also why it cannot be called inside the map's block above.
         drawDetailPanel(graphics, mouseX, mouseY);
         drawButtons(graphics, mouseX, mouseY);
+        // Nothing is drawn after this point, which is what keeps the pair balanced: every pass above
+        // ran inside the displacement and the pose is back where the game left it.
+        UiMotion.popFrame(graphics);
     }
 
     /**
@@ -742,11 +778,19 @@ public final class MainScreen extends Screen {
      */
     private List<MapLabel> drawMap(GuiGraphics graphics) {
         List<MapLabel> labels = new ArrayList<>();
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, UiTheme.mapBackdrop());
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + 1, UiTheme.mapEdge());
-        graphics.fill(mapX, mapY + mapH - 1, mapX + mapW, mapY + mapH, UiTheme.mapEdge());
-        graphics.fill(mapX, mapY, mapX + 1, mapY + mapH, UiTheme.mapEdge());
-        graphics.fill(mapX + mapW - 1, mapY, mapX + mapW, mapY + mapH, UiTheme.mapEdge());
+        // The map is part of the screen that is arriving, so everything in it is drawn at the
+        // entrance's opacity: the backdrop, the strokes' own alphas and the marker colours. Only the
+        // alpha moves -- not one coordinate here is touched, so the map the player clicks is the map
+        // that was drawn, at every point of the entrance.
+        int edge = UiMotion.fade(UiTheme.mapEdge(), open);
+        int stroke = (int) (0xD0 * open);
+        int routeAlpha = (int) (0xFF * open);
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH,
+                UiMotion.fade(UiTheme.mapBackdrop(), open));
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + 1, edge);
+        graphics.fill(mapX, mapY + mapH - 1, mapX + mapW, mapY + mapH, edge);
+        graphics.fill(mapX, mapY, mapX + 1, mapY + mapH, edge);
+        graphics.fill(mapX + mapW - 1, mapY, mapX + mapW, mapY + mapH, edge);
 
         int minX = mapX;
         int minY = mapY;
@@ -762,19 +806,19 @@ public final class MainScreen extends Screen {
         double worldBottom = worldYAt(maxY) + 4;
 
         HudDraw.emitNetwork(sink, RoadStore.get(), pathM00(), 0, pathM02(), 0, pathM11(),
-                pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY, MainScreen::roadHalfWidth);
+                pathM12(), 2.4, stroke, minX, minY, maxX, maxY, MainScreen::roadHalfWidth);
         // Whole roads rather than one piece at a time: a machine-read road stroked piece by piece is
         // a chain of separately rounded ends, which at a large scale reads as darker beads along a
         // translucent line. The layer is a whole region's worth of roads, so only the chains inside
         // the window are projected.
         HudDraw.emitNetworkInBox(sink, RoadWeaverLayer.drawnNetwork(), pathM00(), 0, pathM02(), 0,
-                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                pathM11(), pathM12(), 2.4, stroke, minX, minY, maxX, maxY,
                 worldLeft, worldTop, worldRight, worldBottom, MainScreen::roadHalfWidth);
         HudDraw.emitNetwork(sink, RailTrackStore.network(), pathM00(), 0, pathM02(), 0,
-                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                pathM11(), pathM12(), 2.4, stroke, minX, minY, maxX, maxY,
                 MainScreen::roadHalfWidth);
         HudDraw.emitNetwork(sink, MtrTransit.railLayer(), pathM00(), 0, pathM02(), 0,
-                pathM11(), pathM12(), 2.4, 0xD0, minX, minY, maxX, maxY,
+                pathM11(), pathM12(), 2.4, stroke, minX, minY, maxX, maxY,
                 MainScreen::roadHalfWidth);
         // Addon layers are roads of classes this mod knows, drawn by the world map in the same pass;
         // the viewer shows what the world map shows, so they are here too. An addon states straight
@@ -787,7 +831,7 @@ public final class MainScreen extends Screen {
         Route route = Navigation.route();
         if (route.isPresent()) {
             HudDraw.emitPath(sink, route.points(), pathM00(), 0, pathM02(), 0, pathM11(),
-                    pathM12(), 1.6, UiTheme.route(), 0xFF, minX, minY, maxX, maxY);
+                    pathM12(), 1.6, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
         }
 
         // Places, and the labels to draw after the shapes. The names are thinned by the same rule
@@ -801,11 +845,12 @@ public final class MainScreen extends Screen {
                 continue;
             }
             HudDraw.emitPlaceMarker(sink, sx, sy, HudDraw.PLACE_MARKER_SMALL_PX * 0.5,
-                    UiTheme.place());
+                    UiMotion.fade(UiTheme.place(), open));
             if (PlaceDetailStore.isFavorite(place)) {
                 // The badge is one more shape in the same block as the marker, before any text: a
                 // star emitted later would be writing into a buffer a string has already flushed.
-                HudDraw.emitStar(sink, sx + 3.0, sy - 3.0, FAVOURITE_BADGE_RADIUS, UiTheme.accent());
+                HudDraw.emitStar(sink, sx + 3.0, sy - 3.0, FAVOURITE_BADGE_RADIUS,
+                        UiMotion.fade(UiTheme.accent(), open));
             }
             if (!names) {
                 continue;
@@ -830,7 +875,8 @@ public final class MainScreen extends Screen {
             double sx = screenX(target.x());
             double sy = screenY(target.z());
             if (sx >= minX && sx < maxX && sy >= minY && sy < maxY) {
-                HudDraw.emitPlaceMarker(sink, sx, sy, 4.0, UiTheme.destination());
+                HudDraw.emitPlaceMarker(sink, sx, sy, 4.0,
+                        UiMotion.fade(UiTheme.destination(), open));
             }
         }
 
@@ -845,7 +891,7 @@ public final class MainScreen extends Screen {
         int color = RoadConfig.roadColor(segment.roadClass());
         double half = roadHalfWidth(segment.roadClass());
         HudDraw.emitPath(sink, segment, pathM00(), 0, pathM02(), 0, pathM11(), pathM12(),
-                half, color, 0xD0, minX, minY, maxX, maxY);
+                half, color, (int) (0xD0 * open), minX, minY, maxX, maxY);
     }
 
     private double pathM00() {
@@ -904,7 +950,8 @@ public final class MainScreen extends Screen {
         double leftY = sy - fz * 3 + pz * 3.2;
         double rightX = sx - fx * 3 - px * 3.2;
         double rightY = sy - fz * 3 - pz * 3.2;
-        HudDraw.emitTriangle(sink, tipX, tipY, leftX, leftY, rightX, rightY, UiTheme.player());
+        HudDraw.emitTriangle(sink, tipX, tipY, leftX, leftY, rightX, rightY,
+                UiMotion.fade(UiTheme.player(), open));
     }
 
     /**
@@ -928,7 +975,8 @@ public final class MainScreen extends Screen {
             y = mouseY + 12;
         }
         y = Mth.clamp(y, mapY + 2, Math.max(mapY + 2, mapY + mapH - LINE_HEIGHT - 2));
-        graphics.drawString(font, summary, x, y, UiTheme.mapLabelStrong(), false);
+        graphics.drawString(font, summary, x, y, UiMotion.fade(UiTheme.mapLabelStrong(), open),
+                false);
     }
 
     /**
@@ -976,13 +1024,20 @@ public final class MainScreen extends Screen {
     /** Every string on the screen, after every shape. */
     private void drawText(GuiGraphics graphics, List<MapLabel> labels, int mouseX, int mouseY) {
         var font = this.font;
+        // Written at the entrance's opacity, like the sheet and the map under it: text that stayed at
+        // full strength while the panel faded in would be the one thing on screen that had not moved,
+        // and it is what the eye lands on first.
+        int titleInk = UiMotion.fade(UiTheme.title(), open);
+        int textInk = UiMotion.fade(UiTheme.text(), open);
+        int mutedInk = UiMotion.fade(UiTheme.textMuted(), open);
+        int labelInk = UiMotion.fade(UiTheme.mapLabelStrong(), open);
 
-        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, UiTheme.title(), false);
+        graphics.drawString(font, this.title, panelX + PAD, panelY + PAD, titleInk, false);
 
         Destination target = Navigation.target();
         int y = statusY;
         graphics.drawString(font, Component.translatable("screen.howtogo.main.mode_now",
-                Navigation.mode().label()).getString(), panelX + PAD, y, UiTheme.text(), false);
+                Navigation.mode().label()).getString(), panelX + PAD, y, textInk, false);
         y += LINE_HEIGHT;
         if (target != null) {
             String line = Navigation.route().isPresent() && !Navigation.showArrival()
@@ -993,17 +1048,17 @@ public final class MainScreen extends Screen {
                     : Component.translatable("screen.howtogo.main.navigating_no_route",
                             target.name()).getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
-                    panelX + PAD, y, UiTheme.text(), false);
+                    panelX + PAD, y, textInk, false);
         } else {
             graphics.drawString(font, Component.translatable("screen.howtogo.main.idle").getString(),
-                    panelX + PAD, y, UiTheme.textMuted(), false);
+                    panelX + PAD, y, mutedInk, false);
         }
         y += LINE_HEIGHT;
         graphics.drawString(font, Component.translatable("screen.howtogo.main.stats",
                         RoadStore.get().segmentCount(),
                         RoadWeaverLayer.segments().size(),
                         Destinations.places().size()).getString(),
-                panelX + PAD, y, UiTheme.textMuted(), false);
+                panelX + PAD, y, mutedInk, false);
 
         // The browser map's address has the last line of the status block to itself, and the notices
         // stop one line above it. Both used to be placed independently -- the notices from the top of
@@ -1018,7 +1073,7 @@ public final class MainScreen extends Screen {
             }
             y += LINE_HEIGHT;
             graphics.drawString(font, font.plainSubstrByWidth(notice, panelW - PAD * 2),
-                    panelX + PAD, y, UiTheme.text(), false);
+                    panelX + PAD, y, textInk, false);
         }
 
         // The map's two hints: what a drag does, and the one gesture that opens the details card.
@@ -1026,10 +1081,10 @@ public final class MainScreen extends Screen {
         // punctuation hard-coded in Java, and at a narrow window each has to be cut on its own.
         String placeHint = Component.translatable("screen.howtogo.main.place_hint").getString();
         graphics.drawString(font, PlaceText.ellipsis(font, placeHint, mapW - 8), mapX + 4,
-                mapY + mapH - LINE_HEIGHT * 2 - 3, UiTheme.textMuted(), false);
+                mapY + mapH - LINE_HEIGHT * 2 - 3, mutedInk, false);
         String hint = Component.translatable("screen.howtogo.main.map_hint").getString();
         graphics.drawString(font, PlaceText.ellipsis(font, hint, mapW - 8), mapX + 4,
-                mapY + mapH - LINE_HEIGHT - 2, UiTheme.textMuted(), false);
+                mapY + mapH - LINE_HEIGHT - 2, mutedInk, false);
 
         for (MapLabel label : labels) {
             int labelX = (int) Math.round(label.x());
@@ -1037,7 +1092,7 @@ public final class MainScreen extends Screen {
             if (labelX < mapX || labelX >= mapX + mapW - 4 || labelY < mapY || labelY >= mapY + mapH) {
                 continue;
             }
-            graphics.drawString(font, label.name(), labelX, labelY, UiTheme.mapLabelStrong(), false);
+            graphics.drawString(font, label.name(), labelX, labelY, labelInk, false);
         }
 
         // The browser map's address, on the line reserved for it between the notices and the buttons.
@@ -1045,7 +1100,7 @@ public final class MainScreen extends Screen {
             String line = Component.translatable("screen.howtogo.main.webmap_running", webmap)
                     .getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
-                    panelX + PAD, addressY, UiTheme.textMuted(), false);
+                    panelX + PAD, addressY, mutedInk, false);
         }
 
         // The hover readout comes after every other string so a place name beside it cannot hide

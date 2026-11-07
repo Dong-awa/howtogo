@@ -10,6 +10,7 @@ import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
 import bili.dongsz.howtogo.client.RoadStore;
+import bili.dongsz.howtogo.client.UiMotion;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -65,6 +66,21 @@ import java.util.Locale;
  * writes into (and a deferred batch has to be closed before the GUI renderer replays it), so
  * {@link #drawMap} runs first, opens and closes that block, and only emits geometry; the sheet, its
  * labels and the list follow it.
+ *
+ * <h2>Motion</h2>
+ * The page is not one of this mod's screens, so it cannot use {@link UiMotion#of} -- that map is keyed
+ * on {@code Screen} instances and this is a page drawn inside another mod's window. Its entrance is
+ * therefore its own {@link UiMotion.Slide}, restarted by {@link #onOpen()}, and every piece of ink on
+ * the page is faded by it: the phone's own chrome stays where it is and the sheet fades up over it.
+ *
+ * <p>The two states a finger can actually change -- the row under the cursor, and a chip or switch
+ * being the choice -- are eased rather than switched, because a tapped control that answers on the
+ * same frame as the tap reads as the interface ticking rather than as a decision. Both are slides this
+ * page owns, so a frame of this page allocates nothing.
+ *
+ * <p>Hit testing is untouched by any of it: {@link #mouseClicked} works from the same rectangles the
+ * layout methods produce, never from what a slide happens to be showing. A control fades in where it
+ * is, and is pressable where it is drawn.
  */
 public final class DestinationPickerPage implements IPhonePage {
 
@@ -148,11 +164,75 @@ public final class DestinationPickerPage implements IPhonePage {
     /** Decided during render, where the font is available, and read by the input methods after. */
     private int controlRows = 3;
 
+    // ------------------------------------------------------------------ motion
+
+    /**
+     * The page arriving, restarted every time it is opened.
+     *
+     * <p>Out-quint over {@link UiMotion#ENTER}: the same entrance every screen in this mod uses, so
+     * the phone's pages and the mod's own windows are cut from one animation. Fading rather than
+     * sliding, because a page that moved would move under a finger that is already on the screen --
+     * the map is a touch surface from the first frame.
+     */
+    private final UiMotion.Slide entrance =
+            new UiMotion.Slide(UiMotion.Easing.OUT_QUINT, 0.0F, UiMotion.ENTER);
+
+    /**
+     * One hover value per row of the visible window, so a tint grows under the cursor instead of
+     * appearing.
+     *
+     * <p>Indexed by the row's position in the window rather than by the place it holds: the value
+     * belongs to the band of the screen the finger is over, and a list that re-filters must not leave
+     * the highlight on whatever place happened to move into that band.
+     */
+    private final UiMotion.Slides rowHovers = new UiMotion.Slides();
+
+    /** One glow per option row, taken in the order the controls are drawn; see {@link #drawButton}. */
+    private final UiMotion.Slides controlGlow = new UiMotion.Slides();
+
+    /**
+     * Which control this frame is drawing.
+     *
+     * <p>Reset at the top of {@link #drawControls} and taken by {@link #drawButton}, which is the only
+     * caller: the controls and their order are the same every frame, so a slot number is as stable an
+     * identity as the control it belongs to, and it costs an int instead of a map.
+     */
+    private int controlSlot;
+
+    /**
+     * How far the page has come this frame, 0 to 1; see {@link #render}.
+     *
+     * <p>A field rather than a parameter because the entrance reaches the sheet, the map's geometry,
+     * every label, the rows and the footer button. At full strength {@link UiMotion#fade} returns the
+     * colour it was given, so a settled page is drawn in exactly the ink it used before it had motion.
+     */
+    private float open = 1.0F;
+
     public DestinationPickerPage() {
         this.all = Destinations.all();
         refilter();
         recentre();
         restoreRunningTrip();
+        // Started here as well as in onOpen(): the host calls openPage() and then onOpen(), but this
+        // class is only ever shown through its own openPage(), so the frame that builds it is a frame
+        // it is being opened in. Starting the entrance here means a host that never calls onOpen()
+        // still gets a page that draws at all, and the two call sites are the same instant.
+        entrance.open();
+    }
+
+    /**
+     * The page being opened, which is the point its entrance restarts from.
+     *
+     * <p>MCphone calls this on the page instance it installs, once per opening. Restarting rather than
+     * merely starting matters for the case the host reuses the instance: the page would otherwise be
+     * a table of contents that came up instantly the second time. With the animations switched off
+     * {@code jump} and {@code open} both land on the end state in the same call, so this costs
+     * nothing when the player has turned motion off.
+     */
+    @Override
+    public void onOpen() {
+        entrance.jump(0.0F);
+        entrance.open();
     }
 
     /**
@@ -378,6 +458,10 @@ public final class DestinationPickerPage implements IPhonePage {
         GuiGraphics graphics = canvas.graphics();
         Font font = canvas.font();
 
+        // Read once and shared: the map, the sheet and the rows are one page arriving, and a second
+        // read of the same slide in the same frame would be the same value anyway.
+        open = entrance.eased();
+
         // First, and geometry only: see the note on drawing order in the class javadoc.
         drawMap(canvas);
         // Then the map's own text, still clipped to the map, and still before the sheet: a label that
@@ -422,21 +506,28 @@ public final class DestinationPickerPage implements IPhonePage {
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
         HudDraw.VertexSink out = drawing.sink;
 
+        // The map is geometry, so its share of the entrance is the alpha each emitter already takes:
+        // the page's fade, one layer down. Rounded rather than truncated so a half-arrived map is not
+        // a shade darker than the sheet arriving over it.
+        int solid = (int) (0xFF * open + 0.5F);
+        int pale = (int) (0x9A * open + 0.5F);
+        int routeAlpha = (int) (0xE0 * open + 0.5F);
+
         canvas.clipped(minX, minY, maxX, maxY, () -> {
             // One stroke per road (a chain of segments), not one per segment: the joints between
             // pieces are what read as jagged on a small map, whichever mod the road came from.
             HudDraw.emitNetwork(out, RoadStore.get(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                    0.7, 0x9A, minX, minY, maxX, maxY);
+                    0.7, pale, minX, minY, maxX, maxY);
             HudDraw.emitNetwork(out, RailTrackStore.network(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                    0.7, 0x9A, minX, minY, maxX, maxY);
+                    0.7, pale, minX, minY, maxX, maxY);
             HudDraw.emitNetwork(out, MtrTransit.railLayer(),
                     pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                     0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                    0.7, 0x9A, minX, minY, maxX, maxY);
+                    0.7, pale, minX, minY, maxX, maxY);
             for (Destination place : all) {
                 double px = toScreenX(place.x());
                 double pz = toScreenZ(place.z());
@@ -449,15 +540,15 @@ public final class DestinationPickerPage implements IPhonePage {
                     continue;
                 }
                 HudDraw.emitPlaceMarker(out, px, pz,
-                        HudDraw.PLACE_MARKER_SMALL_PX * 0.5, UiTheme.place());
+                        HudDraw.PLACE_MARKER_SMALL_PX * 0.5, UiMotion.fade(UiTheme.place(), open));
             }
             Destination pick = marked;
             if (pick != null) {
                 double px = toScreenX(pick.x());
                 double pz = toScreenZ(pick.z());
                 if (!outside(px, pz, minX, minY, maxX, maxY, HudDraw.PLACE_MARKER_SMALL_PX)) {
-                    HudDraw.emitPlaceMarker(out, px, pz,
-                            HudDraw.PLACE_MARKER_SMALL_PX * 0.7, UiTheme.destination());
+                    HudDraw.emitPlaceMarker(out, px, pz, HudDraw.PLACE_MARKER_SMALL_PX * 0.7,
+                            UiMotion.fade(UiTheme.destination(), open));
                 }
             }
 
@@ -469,8 +560,10 @@ public final class DestinationPickerPage implements IPhonePage {
                 double playerX = toScreenX(minecraft.player.getX());
                 double playerZ = toScreenZ(minecraft.player.getZ());
                 if (!outside(playerX, playerZ, minX, minY, maxX, maxY, 8.0)) {
-                    HudDraw.emitDisc(out, playerX, playerZ, 3.6, UiTheme.playerHalo(), 0xFF);
-                    HudDraw.emitDisc(out, playerX, playerZ, 2.4, UiTheme.player(), 0xFF);
+                    HudDraw.emitDisc(out, playerX, playerZ, 3.6,
+                            UiMotion.fade(UiTheme.playerHalo(), open), solid);
+                    HudDraw.emitDisc(out, playerX, playerZ, 2.4,
+                            UiMotion.fade(UiTheme.player(), open), solid);
                 }
             }
 
@@ -481,7 +574,8 @@ public final class DestinationPickerPage implements IPhonePage {
                 HudDraw.emitPath(out, planned.route().points(),
                         pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
                         0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                        1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
+                        1.1, UiMotion.fade(UiTheme.route(), open), routeAlpha,
+                        minX, minY, maxX, maxY);
             }
             // Closed while the scissor is still on: the pre-1.21.6 path flushes here, and flushing
             // after the clip came off would paint the roads and markers over the sheet.
@@ -510,14 +604,19 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawRecentre(GuiGraphics graphics) {
         int[] rect = recentreRect();
-        graphics.fill(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3], UiTheme.mapButton());
+        graphics.fill(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3],
+                UiMotion.fade(UiTheme.mapButton(), open));
         int centreX = rect[0] + rect[2] / 2;
         int centreY = rect[1] + rect[3] / 2;
         // A ring and a dot: the crosshair every map uses for "you are here".
-        graphics.fill(centreX - 3, centreY - 1, centreX + 4, centreY + 2, UiTheme.crosshair());
-        graphics.fill(centreX - 1, centreY - 3, centreX + 2, centreY + 4, UiTheme.crosshair());
-        graphics.fill(centreX - 2, centreY - 2, centreX + 3, centreY + 3, UiTheme.playerHalo());
-        graphics.fill(centreX - 1, centreY - 1, centreX + 2, centreY + 2, UiTheme.destination());
+        graphics.fill(centreX - 3, centreY - 1, centreX + 4, centreY + 2,
+                UiMotion.fade(UiTheme.crosshair(), open));
+        graphics.fill(centreX - 1, centreY - 3, centreX + 2, centreY + 4,
+                UiMotion.fade(UiTheme.crosshair(), open));
+        graphics.fill(centreX - 2, centreY - 2, centreX + 3, centreY + 3,
+                UiMotion.fade(UiTheme.playerHalo(), open));
+        graphics.fill(centreX - 1, centreY - 1, centreX + 2, centreY + 2,
+                UiMotion.fade(UiTheme.destination(), open));
     }
 
     // ------------------------------------------------------------ map labels
@@ -579,7 +678,8 @@ public final class DestinationPickerPage implements IPhonePage {
             if (font.width(name) > chainScreenPx(network, grouping.chainOf(segment))) {
                 continue;
             }
-            drawAlongLine(graphics, font, name, segment, x, z, UiTheme.mapLabel());
+            drawAlongLine(graphics, font, name, segment, x, z,
+                    UiMotion.fade(UiTheme.mapLabel(), open));
         }
 
         for (RoadSegment segment : RailTrackStore.segments()) {
@@ -598,7 +698,8 @@ public final class DestinationPickerPage implements IPhonePage {
                     > chainScreenPx(layer, RoadChains.cachedGrouping(layer).chainOf(segment))) {
                 continue;
             }
-            drawAlongLine(graphics, font, name, segment, x, z, UiTheme.accentSoft());
+            drawAlongLine(graphics, font, name, segment, x, z,
+                    UiMotion.fade(UiTheme.accentSoft(), open));
         }
     }
 
@@ -659,7 +760,8 @@ public final class DestinationPickerPage implements IPhonePage {
     private int drawNoticeLine(GuiGraphics graphics, Font font, String line, int right, int y) {
         // Shadowed, so it reads on top of whatever the map has underneath at that spot -- a road, a
         // field or water, depending on where the player is standing.
-        graphics.drawString(font, line, right - font.width(line) - 2, y, UiTheme.warn(), true);
+        graphics.drawString(font, line, right - font.width(line) - 2, y,
+                UiMotion.fade(UiTheme.warn(), open), true);
         return y + 10;
     }
 
@@ -672,9 +774,9 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawSheetBackground(GuiGraphics graphics) {
         graphics.fill(canvasX, sheetTop(), canvasX + canvasWidth, canvasY + canvasHeight,
-                UiTheme.panel());
+                UiMotion.fade(UiTheme.panel(), open));
         graphics.fill(canvasX, sheetTop(), canvasX + canvasWidth, sheetTop() + 1,
-                UiTheme.panelEdge());
+                UiMotion.fade(UiTheme.panelEdge(), open));
     }
 
     /** The pull-up affordance: the line a player reads as "this comes up". */
@@ -684,7 +786,8 @@ public final class DestinationPickerPage implements IPhonePage {
         // Wider than it was drawn: the grip is how the sheet announces that it can be pulled, and at
         // eighteen by two pixels it read as a divider rather than as a handle.
         graphics.fill(midX - 12, y, midX + 12, y + 3,
-                expanded ? UiTheme.header() : UiTheme.textStrong());
+                expanded ? UiMotion.fade(UiTheme.header(), open)
+                        : UiMotion.fade(UiTheme.textStrong(), open));
     }
 
     /** The search box's rectangle, which is also its hit target. */
@@ -696,17 +799,23 @@ public final class DestinationPickerPage implements IPhonePage {
         int left = contentLeft();
         int right = contentRight();
         int y = searchY();
-        graphics.fill(left, y, right, y + SEARCH_H, UiTheme.searchBox());
-        graphics.fill(left, y, right, y + 1, searchFocused ? UiTheme.accent() : UiTheme.panelEdge());
+        graphics.fill(left, y, right, y + SEARCH_H, UiMotion.fade(UiTheme.searchBox(), open));
+        graphics.fill(left, y, right, y + 1,
+                searchFocused ? UiMotion.fade(UiTheme.accent(), open)
+                        : UiMotion.fade(UiTheme.panelEdge(), open));
 
         boolean empty = query.isEmpty();
         String text = (empty ? Component.translatable("screen.howtogo.search_hint").getString()
                 : query) + "_";
         graphics.drawString(font, font.plainSubstrByWidth(text, contentWidth() - 6), left + 3,
-                y + 3, empty ? UiTheme.textFaint() : UiTheme.textStrong(), false);
+                y + 3, empty ? UiMotion.fade(UiTheme.textFaint(), open)
+                        : UiMotion.fade(UiTheme.textStrong(), open), false);
     }
 
     private void drawControls(GuiGraphics graphics, Font font) {
+        // The glow pool is read by drawButton in drawing order, so the frame starts from its first
+        // slot. See the field's own note for why a slot number is a stable identity here.
+        controlSlot = 0;
         TravelMode[] modes = TravelMode.values();
         TravelMode active = Navigation.mode();
         for (int i = 0; i < modes.length; i++) {
@@ -740,18 +849,29 @@ public final class DestinationPickerPage implements IPhonePage {
 
     private void drawSwitch(GuiGraphics graphics, Font font, int x, int y, int width, String label,
                             boolean on) {
-        drawButton(graphics, font, x, y, width, CTRL_H, label, on, on);
+        // The chosen face is named independently of whether the switch is on right now -- see
+        // drawButton -- so that turning it off eases back to the resting face instead of jumping to
+        // whichever face the "off" state names.
+        drawButton(graphics, font, x, y, width, CTRL_H, label, on, true);
     }
 
     private void drawButton(GuiGraphics graphics, Font font, int x, int y, int width, int height,
                             String label, boolean active, boolean lit) {
-        int background = active ? (lit ? UiTheme.selection() : UiTheme.buttonOn())
-                : UiTheme.searchBox();
-        graphics.fill(x, y, x + width, y + height, background);
+        // Every chip and switch owns one slide, taken in the order the controls are drawn: the set and
+        // the order are the same every frame, so the slot number is as stable as the layout it belongs
+        // to, and nothing is allocated after the first pass over the controls.
+        float glow = controlGlow.get(controlSlot++).to(active ? 1.0F : 0.0F).eased();
+        // Mixed from the resting face to the chosen one rather than picked between them: a chip that
+        // becomes the travel mode is a decision the player just made, and the button should settle into
+        // its colour. At either end of the slide this is exactly the colour it was before.
+        int face = UiMotion.mix(UiTheme.searchBox(),
+                lit ? UiTheme.selection() : UiTheme.buttonOn(), glow);
+        graphics.fill(x, y, x + width, y + height, UiMotion.fade(face, open));
         String shown = font.plainSubstrByWidth(label, width - 2);
+        int ink = UiMotion.mix(UiTheme.textSecondary(),
+                lit ? UiTheme.onSelection() : UiTheme.onButtonOn(), glow);
         graphics.drawString(font, shown, x + Math.max(0, (width - font.width(shown)) / 2), y + 3,
-                active ? (lit ? UiTheme.onSelection() : UiTheme.onButtonOn())
-                        : UiTheme.textSecondary(), false);
+                UiMotion.fade(ink, open), false);
     }
 
     /**
@@ -783,19 +903,31 @@ public final class DestinationPickerPage implements IPhonePage {
                 }
                 Destination place = shown.get(index);
                 int rowY = top + i * ROW_H;
-                if (canvas.hovered(left, rowY, width, ROW_H - 1)) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.rowHoverTint());
-                }
+                // The row's own share of the page's entrance, so the list is revealed from the top
+                // down instead of arriving as one block. A page that has fully arrived is treated as
+                // fully arrived row by row as well: UiMotion.stagger's later rows are still a few
+                // percent short when the entrance ends, and a row left at ninety-odd percent is not a
+                // stagger, it is a row that is permanently duller than the theme says it should be.
+                float rowIn = open >= 1.0F ? 1.0F : UiMotion.stagger(i, open);
+                // Hover is eased by position in the visible window rather than by place: the band the
+                // finger is over is the band that lights up, whatever it now holds.
+                float hover = rowHovers.get(i)
+                        .to(canvas.hovered(left, rowY, width, ROW_H - 1) ? 1.0F : 0.0F).eased();
+                graphics.fill(left, rowY, right, rowY + ROW_H - 1,
+                        UiMotion.fade(UiTheme.rowHoverTint(), hover * rowIn));
                 if (place.equals(Navigation.target())) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.placeTint());
+                    graphics.fill(left, rowY, right, rowY + ROW_H - 1,
+                            UiMotion.fade(UiTheme.placeTint(), rowIn));
                 } else if (place.equals(marked)) {
-                    graphics.fill(left, rowY, right, rowY + ROW_H - 1, UiTheme.rowMarkedTint());
+                    graphics.fill(left, rowY, right, rowY + ROW_H - 1,
+                            UiMotion.fade(UiTheme.rowMarkedTint(), rowIn));
                 }
-                graphics.fill(left + 3, rowY + 7, left + 9, rowY + 13, UiTheme.place());
+                graphics.fill(left + 3, rowY + 7, left + 9, rowY + 13,
+                        UiMotion.fade(UiTheme.place(), rowIn));
                 graphics.drawString(font, font.plainSubstrByWidth(place.name(), width - 34),
-                        left + 13, rowY + 2, UiTheme.textStrong(), false);
+                        left + 13, rowY + 2, UiMotion.fade(UiTheme.textStrong(), rowIn), false);
                 graphics.drawString(font, place.coordinates(), left + 13, rowY + 11,
-                        UiTheme.header(), false);
+                        UiMotion.fade(UiTheme.header(), rowIn), false);
             }
         });
 
@@ -803,8 +935,9 @@ public final class DestinationPickerPage implements IPhonePage {
             int trackH = bottom - top;
             int thumbH = Math.max(6, trackH * rows / shown.size());
             int thumbY = top + (trackH - thumbH) * first / Math.max(1, shown.size() - rows);
-            graphics.fill(right - 1, top, right, bottom, UiTheme.scrollTrack());
-            graphics.fill(right - 1, thumbY, right, thumbY + thumbH, UiTheme.scrollThumb());
+            graphics.fill(right - 1, top, right, bottom, UiMotion.fade(UiTheme.scrollTrack(), open));
+            graphics.fill(right - 1, thumbY, right, thumbY + thumbH,
+                    UiMotion.fade(UiTheme.scrollThumb(), open));
         }
     }
 
@@ -835,7 +968,7 @@ public final class DestinationPickerPage implements IPhonePage {
         int colour = active ? UiTheme.placeText()
                 : (marked == null ? UiTheme.header() : UiTheme.textStrong());
         graphics.drawString(font, font.plainSubstrByWidth(label, contentWidth()), contentLeft(),
-                pickLineY(), colour, false);
+                pickLineY(), UiMotion.fade(colour, open), false);
     }
 
     /** What the single button at the bottom of the sheet does, given what is known so far. */
@@ -881,10 +1014,11 @@ public final class DestinationPickerPage implements IPhonePage {
             case NOTHING -> UiTheme.badgeIdle();
         };
 
-        graphics.fill(left, y, right, y + ROW_H - 1, background);
+        graphics.fill(left, y, right, y + ROW_H - 1, UiMotion.fade(background, open));
         String shown = font.plainSubstrByWidth(label, width - 4);
         graphics.drawString(font, shown, left + Math.max(0, (width - font.width(shown)) / 2), y + 6,
-                step == Step.NOTHING ? UiTheme.textFaint() : UiTheme.onSelection(), false);
+                UiMotion.fade(step == Step.NOTHING ? UiTheme.textFaint() : UiTheme.onSelection(),
+                        open), false);
     }
 
     // ------------------------------------------------------------------- input

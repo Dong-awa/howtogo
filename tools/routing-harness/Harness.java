@@ -7,6 +7,9 @@ import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.RouteAlternatives;
+import bili.dongsz.howtogo.route.RouteOption;
+import bili.dongsz.howtogo.route.RoutePreference;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.TransitPlanner;
@@ -53,6 +56,8 @@ public final class Harness {
         scenarioBridgeEndsAreNotAJunction();
         scenarioHandDrawnGridStillRoutes();
         scenarioGridIsCrossedWithOneTurn();
+        scenarioTurnWeightTidiesAnImperfectGrid();
+        scenarioAlternativesCompareRealOptions();
         scenarioStoreysSeparateRoads();
         scenarioConcatKeepsConnectors();
         scenarioTurnIsCountedFromThePlayer();
@@ -1507,6 +1512,140 @@ public final class Harness {
         Route driven = RoadRouter.findRoute(net, 0, 0, 600, 600, "the far corner", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
         expect("and the same by car", driven.isPresent() && bends(driven) <= 1);
+    }
+
+    /**
+     * A hand-drawn grid of squares that are not quite square: the tidy route wins even though a
+     * staircase across it is a little shorter.
+     *
+     * <p>A perfect grid cannot show this. Every monotone path across one is the same length, so the
+     * tie-break alone settles it and it always did. A drawn grid has corners a few blocks off, and
+     * then the staircase that leans on the shorter pieces is a few blocks shorter and wins on length
+     * -- which is what "the square grid still looks unnatural" was about. A turn has a price now, so
+     * the few blocks are not worth the corners; this checks that they are not, and that the shortest
+     * metric still gets the shorter line rather than the tidier one.
+     */
+    private static void scenarioTurnWeightTidiesAnImperfectGrid() {
+        System.out.println("== an imperfect grid still gives the tidy route ==");
+        RoadNetwork net = new RoadNetwork();
+        int size = 6;
+        int[][] x = new int[size + 1][size + 1];
+        int[][] z = new int[size + 1][size + 1];
+        for (int row = 0; row <= size; row++) {
+            for (int col = 0; col <= size; col++) {
+                // Deterministic jitter of a few blocks, the way a hand-drawn grid is: the corners are
+                // where the player clicked, not where a ruler would have put them.
+                x[row][col] = col * 100 + ((row * 7 + col * 13) % 7) - 3;
+                z[row][col] = row * 100 + ((row * 11 + col * 5) % 7) - 3;
+            }
+        }
+        for (int row = 0; row <= size; row++) {
+            for (int col = 0; col <= size; col++) {
+                if (col < size) {
+                    addRoadAt(net, RoadClass.ROAD, 64, x[row][col], z[row][col],
+                            x[row][col + 1], z[row][col + 1]);
+                }
+                if (row < size) {
+                    addRoadAt(net, RoadClass.ROAD, 64, x[row][col], z[row][col],
+                            x[row + 1][col], z[row + 1][col]);
+                }
+            }
+        }
+        double startX = x[0][0];
+        double startZ = z[0][0];
+        double goalX = x[size][size];
+        double goalZ = z[size][size];
+
+        Route fastest = RoadRouter.findRoute(net, startX, startZ, goalX, goalZ, "the far corner",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        Route shortest = RoadRouter.findRoute(net, startX, startZ, goalX, goalZ, "the far corner",
+                TravelMode.DRIVE, new RoutePreferences(RoutePreference.SHORTEST_DISTANCE,
+                        java.util.Set.of(), false));
+        expect("both are planned across the imperfect grid",
+                fastest.isPresent() && shortest.isPresent());
+        if (!fastest.isPresent() || !shortest.isPresent()) {
+            return;
+        }
+        System.out.println("   fastest " + round(fastest.totalLength()) + " blocks, "
+                + bends(fastest) + " bend(s); shortest " + round(shortest.totalLength())
+                + " blocks, " + bends(shortest) + " bend(s)");
+        expect("the fastest route takes the corners out of it (" + bends(fastest) + " bend(s))",
+                bends(fastest) <= 1);
+        expect("the shortest metric keeps the shorter line, bends and all",
+                shortest.totalLength() < fastest.totalLength());
+    }
+
+    /**
+     * One trip, several plans: different strategies, different lines, quickest first, no duplicates.
+     *
+     * <h2>The three questions this pins down</h2>
+     * The picker offers a list built by asking the router several questions about the same trip. What
+     * can go wrong is not that a question returns no route -- it is that the list is a lie: the same
+     * line three times under three labels, plans in an order that makes the times meaningless, or a
+     * third entry invented to fill the row. So this checks that two genuinely different plans come
+     * out of a network that has two ways round (a longer, quicker highway and a shorter grid), that
+     * they are ordered by time, that the plan list never exceeds three, that a network with one way
+     * through offers exactly one plan rather than duplicates, and that a destination no road reaches
+     * offers none.
+     */
+    private static void scenarioAlternativesCompareRealOptions() {
+        System.out.println("== one trip, several plans ==");
+        RoadNetwork net = new RoadNetwork();
+        // A grid of streets: the short way is 800 blocks of road at nine blocks a second.
+        addRoad(net, RoadClass.ROAD, 0, 0, 400, 0);
+        addRoad(net, RoadClass.ROAD, 0, 200, 400, 200);
+        addRoad(net, RoadClass.ROAD, 0, 400, 400, 400);
+        addRoad(net, RoadClass.ROAD, 0, 0, 0, 400);
+        addRoad(net, RoadClass.ROAD, 200, 0, 200, 400);
+        addRoad(net, RoadClass.ROAD, 400, 0, 400, 400);
+        // A highway that is longer -- nearly nine hundred blocks -- and still quicker at twelve a
+        // second, which is the shape the plan list exists for: the longer line is the faster one.
+        addRoad(net, RoadClass.HIGHWAY, 0, 0, 150, -150);
+        addRoad(net, RoadClass.HIGHWAY, 150, -150, 450, 150);
+        addRoad(net, RoadClass.HIGHWAY, 450, 150, 400, 400);
+
+        List<RouteOption> plans = RouteAlternatives.roads(net, 0, 0, 400, 400, "the far corner",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("two or three plans come out of a network with two ways round (" + plans.size() + ")",
+                plans.size() >= 2 && plans.size() <= RouteAlternatives.MAX_PLANS);
+        if (plans.size() >= 2) {
+            for (RouteOption plan : plans) {
+                System.out.println("   " + plan.label() + ": " + round(plan.length()) + " blocks, "
+                        + round(plan.seconds()) + " s, " + plan.turns() + " turn(s)");
+            }
+            RouteOption fastest = plans.get(0);
+            RouteOption shortest = plans.get(1);
+            expect("the plans are ordered by time",
+                    fastest.seconds() <= shortest.seconds() + 1.0E-6);
+            expect("the first is the longer highway, and the quicker one",
+                    fastest.length() > shortest.length() + 50
+                            && fastest.seconds() < shortest.seconds());
+            expect("the second is the shorter grid", Math.abs(shortest.length() - 800) < 20);
+            expect("and they are two different lines, not one under two labels",
+                    Math.abs(fastest.length() - shortest.length()) > 50);
+            // The count is read off the drawn line: the highway arcs twice, and a count taken from
+            // the announced maneuvers would read zero here because the streets chain into one road.
+            expect("the turn count reads the drawn line (" + fastest.turns() + ")",
+                    fastest.turns() >= 2);
+        }
+
+        // One way through: every strategy finds the same line, and the list says so once.
+        RoadNetwork oneRoad = new RoadNetwork();
+        addRoad(oneRoad, RoadClass.ROAD, 0, 0, 600, 0);
+        List<RouteOption> only = RouteAlternatives.roads(oneRoad, 0, 0, 600, 0, "the end of the road",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("a network with one way through offers one plan, not the same one repeated ("
+                + only.size() + ")", only.size() == 1);
+
+        // Two fragments: nothing is offered, and no entry is invented to fill a row.
+        RoadNetwork fragmented = new RoadNetwork();
+        addRoad(fragmented, RoadClass.ROAD, 0, 0, 100, 0);
+        addRoad(fragmented, RoadClass.ROAD, 500, 0, 600, 0);
+        List<RouteOption> none = RouteAlternatives.roads(fragmented, 0, 0, 600, 0, "over there",
+                TravelMode.DRIVE, RoutePreferences.DEFAULTS);
+        expect("a destination no road reaches offers no plans at all", none.isEmpty());
+        expect("no plan list ever exceeds three",
+                plans.size() <= RouteAlternatives.MAX_PLANS && only.size() <= RouteAlternatives.MAX_PLANS);
     }
 
     /** How many times the drawn line changes direction by a turn's worth, in degrees. */

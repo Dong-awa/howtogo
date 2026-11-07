@@ -99,6 +99,14 @@ public final class RoadConfig {
         @SerializedName("ui_theme")
         public String uiTheme = UiTheme.Mode.AUTO.id();
 
+        // Whether this mod's interfaces animate. On by default: every screen, button, row and panel
+        // in the mod was designed around the motion, and the timings are short enough that a player
+        // never waits for one. Off is for a machine where every frame counts, or for a player who
+        // simply does not want it -- and it is read on every animation rather than latched, so the
+        // switch takes effect on the next frame with no restart and no listener.
+        @SerializedName("ui_animations")
+        public boolean uiAnimations = true;
+
         // Where the map half of navigation is drawn: the navigation panel's own mini-map, or Xaero's
         // Minimap with only the readout left in this mod's HUD. An id rather than the enum name, for
         // the same reason as ui_theme above: this arm is a hand-edited JSON file. See MapDisplayMode.
@@ -324,6 +332,11 @@ public final class RoadConfig {
 // The interface theme; the two loader arms store the id and the constant respectively.
     public static void setUiTheme(UiTheme.Mode mode) {
         values.uiTheme = (mode == null ? UiTheme.Mode.AUTO : mode).id();
+    }
+
+// Whether the interface animates; see {@link #uiAnimations()} and {@code UiMotion}.
+    public static void setUiAnimations(boolean on) {
+        values.uiAnimations = on;
     }
 
 // Where the map half of navigation is drawn.
@@ -576,6 +589,18 @@ public final class RoadConfig {
     public static UiTheme.Mode uiTheme() {
         UiTheme.Mode mode = UiTheme.Mode.byId(values.uiTheme);
         return mode == null ? UiTheme.Mode.AUTO : mode;
+    }
+
+// 
+// * Whether this mod's interfaces animate, on before the config has been read.
+// *
+// * <p>Read by {@link bili.dongsz.howtogo.client.UiMotion#on()} on every animation, once per frame
+// * per animated thing, so it has to stay a field read. The default is on and the same on both
+// * arms: an interface that animates has to be the one a player who has never opened the file gets,
+// * or the motion is a setting only its author ever sees.
+// 
+    public static boolean uiAnimations() {
+        return values.uiAnimations;
     }
 
 // 
@@ -950,6 +975,8 @@ public final class RoadConfig {
      * name, which the enum's own reader accepts in any case.
      */
     private static final ModConfigSpec.EnumValue<MapDisplayMode> MAP_DISPLAY_MODE;
+    /** Whether this mod's interfaces animate; see {@link #uiAnimations()}. */
+    private static final ModConfigSpec.BooleanValue UI_ANIMATIONS;
     /** The corner the readout-only card hangs from; see {@link #compactHudAnchor()}. */
     private static final ModConfigSpec.EnumValue<HudAnchor> COMPACT_HUD_ANCHOR;
     /** How far inside that corner it sits, in pixels; see {@link #compactHudOffsetX()}. */
@@ -1074,6 +1101,29 @@ public final class RoadConfig {
                         "MCphone -- so there is no restart and no need to reload the world.")
                 .translation("howtogo.configuration.ui_theme")
                 .defineEnum("ui_theme", UiTheme.Mode.AUTO);
+
+        // Right after the theme, because the two are the same kind of decision: how the interface
+        // looks rather than what it does. On by default -- the timings in UiMotion are short enough
+        // that nothing waits for one, and the interface was laid out around the motion, so the
+        // animation is the designed state rather than an extra.
+        UI_ANIMATIONS = builder.comment(
+                        "Whether this mod's interfaces animate.",
+                        "",
+                        "On -- the default -- every screen this mod opens fades and rises into place,",
+                        "every button and row changes state over about a tenth of a second instead of",
+                        "in a single frame, panels unfold, lists travel to their new scroll position",
+                        "and the navigation panel appears when a trip starts rather than blinking",
+                        "into existence.",
+                        "",
+                        "Off makes every one of those an instantaneous change, exactly as the mod",
+                        "behaved before it animated. Nothing else about the interface changes: the",
+                        "same screens, the same controls, the same colours.",
+                        "",
+                        "It is a client setting and nothing in the world changes. A change takes",
+                        "effect on the next frame -- including on the settings screen you are looking",
+                        "at -- so it can be tried and undone without a restart.")
+                .translation("howtogo.configuration.ui_animations")
+                .define("ui_animations", true);
 
         MAP_DISPLAY_MODE = builder.comment(
                         "Where the map half of navigation is drawn.",
@@ -1797,6 +1847,21 @@ public final class RoadConfig {
     }
 
     /**
+     * Whether this mod's interfaces animate, on before the config is read.
+     *
+     * <p>Read by {@code UiMotion} on every animation -- once per frame per animated thing -- so the
+     * body is the spec read and nothing else. The declared default is on, the same as the JSON arm's:
+     * an interface that animates has to be what a player who never opened the file gets.
+     */
+    public static boolean uiAnimations() {
+        try {
+            return UI_ANIMATIONS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
+        }
+    }
+
+    /**
      * Where the map half of navigation is drawn, or the declared default before the config is read.
      *
      * <p>The declared default is {@link MapDisplayMode#HUD}: the panel that draws its own map is the
@@ -2064,6 +2129,11 @@ public final class RoadConfig {
 // The interface theme.
     public static void setUiTheme(UiTheme.Mode mode) {
         write(UI_THEME, mode == null ? UiTheme.Mode.AUTO : mode);
+    }
+
+// Whether the interface animates; see {@link #uiAnimations()} and {@code UiMotion}.
+    public static void setUiAnimations(boolean on) {
+        write(UI_ANIMATIONS, on);
     }
 
 // Where the map half of navigation is drawn.

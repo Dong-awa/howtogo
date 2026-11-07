@@ -168,6 +168,22 @@ public final class PlaceDetailScreen extends Screen {
     /** The marker square that makes the favourite switch readable as a switch, not a word. */
     private static final int TOGGLE_MARK = 6;
 
+    /*
+     * The rows the card is built from, in the order they are read. The card has no list, but its rows
+     * arrive the way a list's do: each one starts UiMotion.STAGGER milliseconds after the one above
+     * it, which is what makes the dialog look written rather than switched on. The numbers are named
+     * because a call site that passed a bare index would be a row inserted by mistake.
+     */
+    private static final int ROW_TITLE = 0;
+    private static final int ROW_SOURCE = 1;
+    private static final int ROW_ADDRESS = 2;
+    private static final int ROW_LINES = 3;
+    private static final int ROW_TYPE = 4;
+    private static final int ROW_DESCRIPTION = 5;
+    private static final int ROW_TAGS = 6;
+    private static final int ROW_FAVORITE = 7;
+    private static final int ROW_ERROR = 8;
+
     private final Screen parent;
     private final Destination place;
     /** What Done does with the record: the store, or the caller that opened this as a draft. */
@@ -216,6 +232,18 @@ public final class PlaceDetailScreen extends Screen {
 
     /** Done and cancel, built in {@link #init()} and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
+
+    /** The opacity the whole card is drawn at this frame; the row helpers read it. See {@link #render}. */
+    private float open = 1.0F;
+
+    /**
+     * The favourite switch's hover, the one control on this card that answers the cursor.
+     *
+     * <p>A pool rather than a plain slide, because it is the same primitive the list rows of this
+     * mod's screens use, and because it is a field: the switch is redrawn every frame, and a slide
+     * made per frame would restart from nothing each time and never travel.
+     */
+    private final UiMotion.Slides hovers = new UiMotion.Slides();
 
     private int cardX;
     private int cardY;
@@ -660,8 +688,14 @@ public final class PlaceDetailScreen extends Screen {
 
     // ------------------------------------------------------------------- render
 
+
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The frame's motion first, before anything is drawn: the dimming, the sheet and the rows all
+        // read this one value, and UiMotion.of is also what pumps a deferred screen swap, so it is
+        // asked exactly once per frame rather than from each row that wants it.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
         if (parent != null) {
             try {
                 parent.render(graphics, mouseX, mouseY, partialTick);
@@ -669,14 +703,25 @@ public final class PlaceDetailScreen extends Screen {
                 // The map is only backdrop here; if it cannot be re-rendered the dialog still works.
             }
         }
+        // The dialog then travels as one piece -- wash, card, rows, fields and buttons -- so it rises
+        // into place instead of being cut on. Pushed after the parent's own pass rather than before
+        // it: that backdrop is another screen's frame, and a translated one would slide the map under
+        // the dialog and leave a strip of the parent's own (unexpanded) dimming along the edge it
+        // moved away from. Everything this screen paints itself is inside the push.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
         // A modal card is painted over a wash rather than straight over the map: the description is a
         // paragraph of text, and it has to be read against the card and not against whatever the map
         // happens to be drawing under that column.
-        graphics.fill(0, 0, width, height, UiTheme.dim());
+        // Oversized by SCRIM_MARGIN on every side, and only this full-frame layer: the frame it is
+        // drawn in is translated while the dialog arrives, so a wash measured to the window would
+        // come with an undimmed strip along the edge the translation moved away from.
+        graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
+                width + UiMotion.SCRIM_MARGIN, height + UiMotion.SCRIM_MARGIN,
+                UiMotion.fade(UiTheme.dim(), open));
         HudDraw.fillRounded(graphics, cardX, cardY, cardX + cardW, cardY + cardH, CORNER_RADIUS,
-                UiTheme.panelSolid());
+                UiMotion.fade(UiTheme.panelSolid(), open));
         HudDraw.outlineRounded(graphics, cardX, cardY, cardX + cardW, cardY + cardH,
-                CORNER_RADIUS, UiTheme.panelEdge());
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panelEdge(), open));
 
         drawTitle(graphics);
         drawSource(graphics);
@@ -689,13 +734,15 @@ public final class PlaceDetailScreen extends Screen {
             // and it uses the word the kind's own section picks -- "类型" for a shop, "资源类型"
             // for a resource point.
             graphics.drawString(font, caption(PlaceSections.labelKey(place.kind())), contentX,
-                    categoryCaptionY, UiTheme.header(), false);
+                    categoryCaptionY, UiMotion.fade(UiTheme.header(),
+                            UiMotion.stagger(ROW_TYPE, open)), false);
         }
 
         graphics.drawString(font, caption(DESCRIPTION_KEY), contentX, descriptionCaptionY,
-                UiTheme.header(), false);
+                UiMotion.fade(UiTheme.header(), UiMotion.stagger(ROW_DESCRIPTION, open)), false);
 
-        graphics.drawString(font, caption(TAGS_KEY), contentX, tagsCaptionY, UiTheme.header(), false);
+        graphics.drawString(font, caption(TAGS_KEY), contentX, tagsCaptionY,
+                UiMotion.fade(UiTheme.header(), UiMotion.stagger(ROW_TAGS, open)), false);
         drawTagsCounter(graphics);
 
         // The tags box is a widget, so it draws itself; the description and the favourite switch do
@@ -712,6 +759,9 @@ public final class PlaceDetailScreen extends Screen {
         for (PanelButton button : buttons) {
             button.render(graphics, this.font, mouseX, mouseY);
         }
+        // Last, and unconditional: the displacement applies to everything this frame drew from here
+        // down, so leaving it pushed would misplace whatever the game draws after the dialog.
+        UiMotion.popFrame(graphics);
     }
 
     /**
@@ -724,16 +774,17 @@ public final class PlaceDetailScreen extends Screen {
     private void drawTitle(GuiGraphics graphics) {
         String name = place.name();
         String heading = name == null || name.isBlank() ? title.getString() : name;
+        float arrived = UiMotion.stagger(ROW_TITLE, open);
         int headingWidth = contentW;
         if (draft) {
             String badge = PlaceText.ellipsis(font, caption(DRAFT_KEY), Math.max(1, contentW / 3));
             int badgeWidth = font.width(badge);
             graphics.drawString(font, badge, contentX + contentW - badgeWidth, titleY,
-                    UiTheme.note(), false);
+                    UiMotion.fade(UiTheme.note(), arrived), false);
             headingWidth = Math.max(1, contentW - badgeWidth - GAP);
         }
         graphics.drawString(font, PlaceText.ellipsis(font, heading, Math.max(1, headingWidth)),
-                contentX, titleY, UiTheme.title(), false);
+                contentX, titleY, UiMotion.fade(UiTheme.title(), arrived), false);
     }
 
     /**
@@ -744,8 +795,10 @@ public final class PlaceDetailScreen extends Screen {
      * it is a property of the source, not of the place.
      */
     private void drawSource(GuiGraphics graphics) {
+        float arrived = UiMotion.stagger(ROW_SOURCE, open);
         String sourceCaption = caption(SOURCE_KEY);
-        graphics.drawString(font, sourceCaption, contentX, sourceY, UiTheme.header(), false);
+        graphics.drawString(font, sourceCaption, contentX, sourceY,
+                UiMotion.fade(UiTheme.header(), arrived), false);
         String label = Destinations.sourceLabel(place.source());
         int labelX = contentX + font.width(sourceCaption) + GAP;
         int pillW = Math.max(0, Math.min(contentW - (labelX - contentX), font.width(label) + 8));
@@ -753,10 +806,10 @@ public final class PlaceDetailScreen extends Screen {
             return;
         }
         HudDraw.fillRounded(graphics, labelX, sourceY - 1, labelX + pillW, sourceY + 9, 3,
-                UiTheme.chipSource());
+                UiMotion.fade(UiTheme.chipSource(), arrived));
         graphics.drawString(font,
                 PlaceText.ellipsis(font, label, Math.max(1, pillW - 4)), labelX + 4, sourceY,
-                UiTheme.onChip(), false);
+                UiMotion.fade(UiTheme.onChip(), arrived), false);
     }
 
     /**
@@ -770,7 +823,7 @@ public final class PlaceDetailScreen extends Screen {
     private void drawAddress(GuiGraphics graphics) {
         String line = PlaceAddressView.line(place.x(), place.z());
         graphics.drawString(font, PlaceText.ellipsis(font, line, contentW), contentX, addressY,
-                UiTheme.textSecondary(), false);
+                UiMotion.fade(UiTheme.textSecondary(), UiMotion.stagger(ROW_ADDRESS, open)), false);
     }
 
     /**
@@ -788,7 +841,8 @@ public final class PlaceDetailScreen extends Screen {
             return;
         }
         String lineCaption = caption(LINES_KEY);
-        graphics.drawString(font, lineCaption, contentX, linesY, UiTheme.header(), false);
+        graphics.drawString(font, lineCaption, contentX, linesY,
+                UiMotion.fade(UiTheme.header(), UiMotion.stagger(ROW_LINES, open)), false);
         int startX = contentX + font.width(lineCaption) + GAP;
         int limit = contentX + contentW;
 
@@ -823,19 +877,25 @@ public final class PlaceDetailScreen extends Screen {
             if (chipWidth <= 0) {
                 break;
             }
+            // Each chip is a row of a very short list: it arrives with the row it belongs to and one
+            // stagger step after the chip before it, so the line colours are read left to right.
+            float arrived = UiMotion.stagger(ROW_LINES + i, open);
             int fill = line.colorOr(RoadConfig.transitLineColor(line.kind()));
-            HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + chipWidth, linesY + 9, 3, fill);
+            HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + chipWidth, linesY + 9, 3,
+                    UiMotion.fade(fill, arrived));
             graphics.drawString(font, PlaceText.ellipsis(font, label, Math.max(1, chipWidth - 4)),
-                    chipX + 4, linesY, UiTheme.onChipFor(fill), false);
+                    chipX + 4, linesY, UiMotion.fade(UiTheme.onChipFor(fill), arrived), false);
             chipX += chipWidth + 3;
         }
         if (shown < lines.size()) {
             String more = "+" + (lines.size() - shown);
             int restWidth = font.width(more) + 8;
             if (chipX + restWidth <= limit) {
+                float arrived = UiMotion.stagger(ROW_LINES + shown, open);
                 HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + restWidth, linesY + 9, 3,
-                        UiTheme.chipTag());
-                graphics.drawString(font, more, chipX + 4, linesY, UiTheme.onChip(), false);
+                        UiMotion.fade(UiTheme.chipTag(), arrived));
+                graphics.drawString(font, more, chipX + 4, linesY,
+                        UiMotion.fade(UiTheme.onChip(), arrived), false);
             }
         }
     }
@@ -848,6 +908,7 @@ public final class PlaceDetailScreen extends Screen {
      * being dropped silently, which is the same rule the limits themselves follow.
      */
     private void drawError(GuiGraphics graphics) {
+        float arrived = UiMotion.stagger(ROW_ERROR, open);
         List<String> lines = PlaceText.wrap(font, error.getString(), contentW);
         for (int i = 0; i < lines.size() && i < ERROR_LINES; i++) {
             String line = lines.get(i);
@@ -855,7 +916,7 @@ public final class PlaceDetailScreen extends Screen {
                 line = PlaceText.ellipsis(font, line, contentW);
             }
             graphics.drawString(font, line, contentX, errorY + i * ERROR_LINE_HEIGHT,
-                    UiTheme.error(), false);
+                    UiMotion.fade(UiTheme.error(), arrived), false);
         }
     }
 
@@ -877,7 +938,7 @@ public final class PlaceDetailScreen extends Screen {
                 String.valueOf(PlaceDetails.MAX_TAGS)).getString();
         String shown = font.plainSubstrByWidth(text, Math.max(1, contentW / 2));
         graphics.drawString(font, shown, contentX + contentW - font.width(shown), tagsCaptionY,
-                UiTheme.textFaint(), false);
+                UiMotion.fade(UiTheme.textFaint(), UiMotion.stagger(ROW_TAGS, open)), false);
     }
 
     /**
@@ -890,17 +951,24 @@ public final class PlaceDetailScreen extends Screen {
      */
     private void drawFavorite(GuiGraphics graphics, int mouseX, int mouseY) {
         boolean hovered = insideFavorite(mouseX, mouseY);
+        // Two values, not one: how far this row has arrived with the card, which fades it, and how far
+        // the cursor has moved onto the switch, which mixes its face. They stay separate because the
+        // row must be readable at full strength once it is there, whatever the cursor is doing.
+        float arrived = UiMotion.stagger(ROW_FAVORITE, open);
+        float lit = hovers.get(0).to(hovered ? 1.0F : 0.0F).eased();
+        // A switched-on switch keeps its own face under the cursor: the fill is the answer, and a
+        // hover that repainted it would hide the state it was just set to.
         int face = favorite ? UiTheme.buttonOn()
-                : (hovered ? UiTheme.buttonHover() : UiTheme.button());
+                : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit);
         HudDraw.fillRounded(graphics, contentX, favoriteY, contentX + contentW,
-                favoriteY + TOGGLE_HEIGHT, 3, face);
+                favoriteY + TOGGLE_HEIGHT, 3, UiMotion.fade(face, arrived));
         HudDraw.drawRowMarker(graphics, contentX + 5, favoriteY + (TOGGLE_HEIGHT - TOGGLE_MARK) / 2,
-                TOGGLE_MARK, favorite ? UiTheme.accent() : UiTheme.icon());
+                TOGGLE_MARK, UiMotion.fade(favorite ? UiTheme.accent() : UiTheme.icon(), arrived));
         String label = Component.translatable(favorite ? FAVORITED_KEY : FAVORITE_KEY).getString();
         String shown = font.plainSubstrByWidth(label, contentW - TOGGLE_MARK - 12);
         graphics.drawString(font, shown, contentX + TOGGLE_MARK + 8,
                 favoriteY + (TOGGLE_HEIGHT - 8) / 2,
-                favorite ? UiTheme.onButtonOn() : UiTheme.onButton(), false);
+                UiMotion.fade(favorite ? UiTheme.onButtonOn() : UiTheme.onButton(), arrived), false);
     }
 
     private boolean insideFavorite(double mouseX, double mouseY) {

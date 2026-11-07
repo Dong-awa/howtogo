@@ -11,7 +11,9 @@ import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.RouteAlternatives;
 import bili.dongsz.howtogo.route.RouteFailure;
+import bili.dongsz.howtogo.route.RouteOption;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
@@ -26,6 +28,8 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -146,6 +150,44 @@ public final class Navigation {
     /** Time the abandoned mode would have taken, or NaN when it found no route at all. */
     private static double abandonedSeconds = Double.NaN;
     private static double walkingSeconds;
+
+    /**
+     * How much the player may move and still be served the plan list worked out from where they
+     * were, in blocks.
+     *
+     * <p>The picker's origin is the player, and a player standing still is the normal case while a
+     * list is read -- but the window can be resized, a frame can be drawn, and the mouse can nudge
+     * the player a fraction of a block. Every one of those would otherwise be a cache miss for a
+     * plan whose first step starts on the same road node either way, so the question is rounded
+     * rather than kept exact. Four blocks is small enough that the plan is still the player's own
+     * plan and large enough that a step cannot miss the cache.
+     */
+    private static final double PLANS_CACHE_ROUNDING = 4.0;
+
+    /**
+     * How many plan lists the picker may keep at once.
+     *
+     * <p>The picker re-plans on {@code init} -- so on every window resize -- and again whenever the
+     * player switches mode, flips the metric or toggles an avoid class. Each answer is up to three
+     * A* searches over a copy of the network, and asking the same question twice in one visit is the
+     * common case, not the rare one: resizing the window while reading the results, or flipping a
+     * preference back and forth to compare the two lists, re-asks a question whose answer cannot
+     * have changed. Eight entries cover the three modes times the two metrics -- the largest set the
+     * panel's own controls can ask for -- with room for an avoid-class variation beside it, and the
+     * routes held are a handful of kilobytes rather than a cache worth worrying about.
+     */
+    private static final int PLANS_CACHE_CAPACITY = 8;
+
+    /**
+     * Plan lists by the question that produced them, oldest first.
+     *
+     * <p>Kept here rather than in the picker because the picker itself is rebuilt on every resize
+     * while the question usually is not. The lifetime is the session's: the cache is forgotten when
+     * the game closes, and {@link #worldStamp} is what stops it serving a list planned on roads that
+     * have changed under it. Only the picker asks for these plans; the live navigation never does,
+     * so nothing on the guidance path depends on a cache entry being present or absent.
+     */
+    private static final Map<PlansKey, List<RouteOption>> plansCache = new LinkedHashMap<>();
 
     private Navigation() {
     }
@@ -287,6 +329,73 @@ public final class Navigation {
             tripOriginZ = destination.z();
         }
         recompute();
+    }
+
+    /**
+     * Starts navigating along a plan the picker has already worked out, as it stands.
+     *
+     * <p>The picker offers up to three plans in one mode, planned under one policy and separated
+     * only by the strategy that produced them, so the chosen plan is handed over whole rather than
+     * being planned again from the destination. Planning again would answer the question the live
+     * session asks instead of the one the player answered: the walking comparison in
+     * {@link #recomputeFrom} could replace a journey that exists with a quicker walk, and the trip
+     * started would then not be the line the picker drew and the readout described.
+     *
+     * <p>The mode is swapped to the plan's own directly rather than through {@link #setMode}, which
+     * would re-plan on the spot and throw away the plan it was just handed. The swap is still
+     * recorded as the player's choice for the session, exactly as choosing the mode in the picker
+     * does, so a config reload cannot take the mode back behind it -- see
+     * {@link #reloadConfiguredMode}.
+     *
+     * <p>Both origins are the player's current position, because the plans were planned from where
+     * the player is standing: the trip starts here, and a route re-planned later is still planned
+     * from the player's position, as {@link #recomputeFrom} has always done.
+     *
+     * <p>A null or empty plan falls back to {@link #setTarget(Destination)}: a caller holding no
+     * plan has not made a choice this method can honour, and refusing to start would be worse than
+     * planning the old way.
+     *
+     * @param destination the place the plan leads to
+     * @param plan        the plan to follow, or null/empty to plan from the destination alone
+     */
+    public static void setTarget(Destination destination, RouteOption plan) {
+        if (destination == null) {
+            return;
+        }
+        if (plan == null || !plan.isPresent()) {
+            setTarget(destination);
+            return;
+        }
+        target = destination;
+        mode = plan.mode() == null ? mode : plan.mode();
+        modeLoaded = true;
+        modeChosen = true;
+        route = plan.route();
+        transitTrip = plan.trip();
+        LocalPlayer player = Minecraft.getInstance().player;
+        double x = player != null ? player.getX() : destination.x();
+        double z = player != null ? player.getZ() : destination.z();
+        routeOriginX = x;
+        routeOriginZ = z;
+        // Pinned with the destination, exactly as the planned-from-scratch entry point pins it: a
+        // trip is this destination, from here, in this world.
+        tripOriginX = x;
+        tripOriginZ = z;
+        tripDimension = currentDimension();
+        arrived = false;
+        offRouteSince = 0L;
+        // A commit is a fresh plan, not a fallback: there is nothing to explain and nothing a new
+        // turn reading may suppress.
+        clearFallback();
+        clearWrongWay();
+        turns.reset();
+        // Logged with the strategy's own name, which is the one fact the picker showed that a
+        // "route to X for drive" line would otherwise lose: which of the offered plans was taken.
+        HowToGo.LOGGER.info(
+                "[HowToGo] route to {} for {} plan {}: {} points, {} blocks, {} turns, about {}",
+                destination.name(), mode.id(), plan.label(), route.points().size(),
+                Math.round(route.totalLength()), plan.turns(),
+                Route.formatDuration(route.estimatedSeconds()));
     }
 
     public static void clear() {
@@ -2016,6 +2125,143 @@ public final class Navigation {
             return new RoutePreview(planned, x, z, destination, failureText(why));
         }
         return new RoutePreview(planned, x, z, destination, null);
+    }
+
+    /**
+     * Every plan the picker may offer for one destination, quickest first, or an empty list.
+     *
+     * <p>Pure in the same sense {@link #preview} is: the live session -- its target, its route, its
+     * transit journey, its pinned origins, its progress -- is read for nothing and written for
+     * nothing. Opening the picker in the middle of a trip to compare a detour therefore cannot take
+     * the trip over.
+     *
+     * <p>Unlike the preview this deliberately does not fall back to walking. The preview answers
+     * "what does the chosen mode do here", and the walking fallback exists so its one line is not
+     * "nothing at all"; a results list answers "which of these ways is the way", and a walk offered
+     * as the only row of a drive would be a different journey from the one asked for. The caller
+     * keeps the old preview path for an empty answer, which is where the fallback still lives and
+     * where its explanation is still drawn.
+     *
+     * <p>Nothing is logged on failure. The picker draws the reason through {@link #preview}, which
+     * is the one place the route package's translation keys are resolved; logging a diagnostic for
+     * every toggle of a preference would bury the session's own log in lines the player will never
+     * see.
+     *
+     * <p>The list is cached by the question that produced it -- see {@link #plansCache} for why
+     * eight entries and {@link #worldStamp} for what makes an entry expire. The result is a copy,
+     * so a caller cannot edit the list another caller will be served.
+     *
+     * @param destination where the prospective trip would end, or null for no plans
+     * @return up to {@link RouteAlternatives#MAX_PLANS} plans, or an empty list when the mode has
+     *         nothing to offer
+     */
+    public static List<RouteOption> plans(Destination destination) {
+        if (destination == null) {
+            return List.of();
+        }
+        TravelMode active = mode();
+        RoutePreferences policy = RoutePreferenceStore.preferences();
+        LocalPlayer player = Minecraft.getInstance().player;
+        double x = player != null ? player.getX() : destination.x();
+        double z = player != null ? player.getZ() : destination.z();
+        PlansKey key = new PlansKey(destination, active, policy,
+                Math.round(x / PLANS_CACHE_ROUNDING), Math.round(z / PLANS_CACHE_ROUNDING),
+                currentDimension(), worldStamp());
+        List<RouteOption> cached = plansCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        List<RouteOption> plans = List.copyOf(planAlternatives(active, policy, x, z, destination));
+        plansCache.put(key, plans);
+        // Bounded by hand rather than by a subclassed map: the eviction rule is one loop, and the
+        // oldest question is what an insertion-order map's first key is.
+        while (plansCache.size() > PLANS_CACHE_CAPACITY) {
+            Iterator<PlansKey> oldest = plansCache.keySet().iterator();
+            oldest.next();
+            oldest.remove();
+        }
+        return plans;
+    }
+
+    /**
+     * One strategy question asked of the route package: the mode decides how it is asked.
+     *
+     * <p>The transit branch mirrors {@link #planRoute} exactly -- the same list of lines, the same
+     * decision about whether the shared MTR layer is worth copying, the same {@link RideRoads} --
+     * because the plans the picker compares must be plans the navigation can follow. The road branch
+     * asks for alternatives over the same merged network the live plan is planned on, for the same
+     * reason.
+     */
+    private static List<RouteOption> planAlternatives(TravelMode active, RoutePreferences policy,
+                                                      double x, double z, Destination destination) {
+        if (active == TravelMode.TRANSIT) {
+            List<TransitLine> lines = linesInPlay();
+            // Asked before the network is built, and once: a journey over lines that bring their
+            // own track makes no use of MTR's shared layer, so the copy that merges it is not paid
+            // for. See MtrTransit.everyLineRidesItsOwnTrack.
+            boolean ownTracksOnly = MtrTransit.everyLineRidesItsOwnTrack(lines);
+            RoadNetwork network = RailTrackStore.forRouting(active, policy, !ownTracksOnly);
+            RoadNetwork plain = ownTracksOnly ? network
+                    : RailTrackStore.forRouting(active, policy, false);
+            return RouteAlternatives.transit(
+                    RideRoads.of(network, plain, MtrTransit::marksEnabled, MtrTransit::trackOf),
+                    lines, x, z, destination.x(), destination.z(), destination.name(), policy);
+        }
+        RoadNetwork network = RailTrackStore.forRouting(active, policy, true);
+        return RouteAlternatives.roads(network, x, z, destination.x(), destination.z(),
+                destination.name(), active, policy);
+    }
+
+    /**
+     * A cheap version of everything a plan reads besides the request itself.
+     *
+     * <p>A cached list must stop being served the moment the world it was planned on moves, and
+     * that world is assembled from several readers: the player's roads, the rails read out of Create
+     * and MTR, the roads RoadWeaver generated, the transit lines, and the stores' own switches. Each
+     * reader already publishes a version for exactly this question -- the layer classes bump theirs
+     * when they rebuild, and the road network bumps its revision on every edit -- so the stamp is a
+     * fold of those versions rather than a hash of the geometry, which would cost more than the
+     * plan it protects.
+     *
+     * <p>The player's transit lines have no version of their own, so the live list's identity, its
+     * size and its stop counts are folded in instead. Lines are replaced when the world changes and
+     * edited only from screens that cannot be open beside the picker, so those three together catch
+     * the changes that can actually happen while a list is on screen; the stop counts also catch an
+     * import that replaced the lines' stops behind an unchanged list.
+     */
+    private static long worldStamp() {
+        RoadNetwork handDrawn = RoadStore.get();
+        // The network itself as well as its revision: a different world brings a new network whose
+        // revision starts counting from zero again, and a cache from the world just left must not
+        // answer for it.
+        long stamp = System.identityHashCode(handDrawn);
+        stamp = stamp * 31 + handDrawn.revision();
+        stamp = stamp * 31 + RailTrackStore.layerVersion();
+        stamp = stamp * 31 + MtrTransit.tracksVersion();
+        stamp = stamp * 31 + MtrMarks.version();
+        stamp = stamp * 31 + CreateTrackGraph.version();
+        stamp = stamp * 31 + RoadWeaverLayer.revision();
+        stamp = stamp * 31 + AddonRoadStore.revision();
+        List<TransitLine> lines = TransitLineStore.get();
+        stamp = stamp * 31 + System.identityHashCode(lines);
+        for (TransitLine line : lines) {
+            stamp = stamp * 31 + line.stopCount();
+        }
+        return stamp;
+    }
+
+    /**
+     * The question a cached plan list answers.
+     *
+     * <p>The origin is rounded to {@link #PLANS_CACHE_ROUNDING} blocks rather than kept exact: a
+     * plan's first step starts at a node of the road network, which a few blocks of drift does not
+     * move, and resizing the window or a frame passing must not count as a new question.
+     *
+     * <p>The destination is the record itself, so two places compare as equal exactly when the
+     * picker's own list would treat them as one place.
+     */
+    private record PlansKey(Destination destination, TravelMode mode, RoutePreferences preferences,
+                            long originX, long originZ, String dimension, long worldStamp) {
     }
 
     /**

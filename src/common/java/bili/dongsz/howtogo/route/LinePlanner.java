@@ -124,6 +124,9 @@ public final class LinePlanner {
      */
     private static final int MAX_RIDE_PLANS = 20_000;
 
+    /** How many journeys one plan offers: the recommendation and two alternatives at most. */
+    private static final int MAX_PLANS = 3;
+
     /**
      * How far the player may be asked to walk to reach a stop, in blocks.
      *
@@ -241,7 +244,8 @@ public final class LinePlanner {
      * the route's own estimate. The search therefore minimises exactly the number the readout shows,
      * which is the only way the two can be trusted to agree.
      */
-    private record Link(int target, double seconds, Route route, TravelMode mode, RideInfo info) {
+    private record Link(int target, double seconds, Route route, TravelMode mode, RideInfo info,
+                        boolean transfer) {
     }
 
     /**
@@ -281,19 +285,87 @@ public final class LinePlanner {
         return trip;
     }
 
-    private static Trip search(RideRoads roads, List<TransitLine> lines, double startX,
-                               double startZ, double goalX, double goalZ, String destinationName,
-                               RoutePreferences preferences) {
-        List<Node> nodes = buildNodes(lines);
-        if (nodes.isEmpty()) {
-            return Trip.empty();
+    /**
+     * Everything one journey search needs, built once so the alternative searches can share it.
+     *
+     * <h2>Why the graph is not rebuilt per strategy</h2>
+     * One plan is now planned several times: the recommended journey, one with fewer changes, one
+     * with less walking and one over other lines. The expensive part of a plan is not the Dijkstra --
+     * it is the rides, each of which is a road route, and they are cached in {@link Links} as the
+     * search reaches a stop. A second search over the same {@code Links} reuses every ride the first
+     * one planned and pays only for the stops it explores further, which is what makes several plans
+     * cost less than several plans' worth.
+     */
+    private record Context(List<Node> nodes, Map<Long, Integer> byPosition, Map<String, Route> cache,
+                           double serviceWait, String destinationName, RoutePreferences preferences,
+                           RoadRouter.Workspace workspace, Links links) {
+    }
+
+    /** A journey and the lines it rides, which is what "another set of lines" is asked against. */
+    private record Journey(Trip trip, Set<TransitLine> lines) {
+
+        static final Journey EMPTY = new Journey(Trip.empty(), Set.of());
+
+        boolean isPresent() {
+            return trip.isPresent();
+        }
+    }
+
+    /**
+     * What each part of a journey costs one search, so several searches can ask different questions
+     * of one graph.
+     *
+     * <p>A weight is a multiplier on the search's cost and on nothing else: the journey that comes
+     * out still reports the real time it takes, exactly as {@link RoutePreferences#weight} does for a
+     * road route. Asking for fewer changes by making each change three times as expensive finds the
+     * journey with fewer of them without telling the player that journey takes three times as long.
+     */
+    private record Weights(double walking, double transfers, double lines,
+                           Set<TransitLine> discouraged) {
+
+        /** The recommendation: the journey as it has always been planned. */
+        static final Weights NONE = new Weights(1.0, 1.0, 1.0, Set.of());
+
+        static Weights fewerTransfers() {
+            return new Weights(1.0, 3.0, 1.0, Set.of());
         }
 
-        int count = nodes.size();
+        static Weights lessWalking() {
+            return new Weights(3.0, 3.0, 1.0, Set.of());
+        }
+
+        static Weights otherLines(Set<TransitLine> lines) {
+            return new Weights(1.0, 1.0, 4.0, Set.copyOf(lines));
+        }
+
+        /** What one link costs this search. */
+        double cost(Link link) {
+            if (link.info() != null) {
+                return discouraged.contains(link.info().line()) ? link.seconds() * lines
+                        : link.seconds();
+            }
+            // A walk: an interchange between two platforms, a mixed journey's leg through the
+            // streets, or a hop with no road behind it -- all three are walking, and the two weights
+            // are how "fewer changes" and "less walking" are told apart.
+            return link.seconds() * (link.transfer() ? transfers : walking);
+        }
+    }
+
+    /**
+     * The graph and the workspaces one plan's searches share, or null when there are no stops.
+     *
+     * <p>The stop list is the whole of the graph's vertex set: a plan over a network with no stops is
+     * no journey at all, and saying so once here keeps every search below from having to.
+     */
+    private static Context prepare(RideRoads roads, List<TransitLine> lines, String destinationName,
+                                   RoutePreferences preferences) {
+        List<Node> nodes = buildNodes(lines);
+        if (nodes.isEmpty()) {
+            return null;
+        }
         Map<Long, Integer> byPosition = positions(nodes);
         Map<String, Route> cache = new HashMap<>();
-        double wait = RoadConfig.transitWaitSeconds();
-        // Read once, so one plan cannot mix links from one policy with links from another.
+        double wait = RoadConfig.transitWaitSeconds();        // Read once, so one plan cannot mix links from one policy with links from another.
         boolean mixed = RoadConfig.transitMixed();
         RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forWalks());
         // What a mixed middle leg can stand on: the walking network, filed in a grid so a stop can be
@@ -307,6 +379,100 @@ public final class LinePlanner {
         // it is every ride of every line however short the journey asked for is.
         Links links = new Links(roads, lines, nodes, byPosition, destinationName, preferences, wait,
                 workspace, mixed, walkRoads);
+        return new Context(nodes, byPosition, cache, wait, destinationName, preferences, workspace,
+                links);
+    }
+
+    private static Trip search(RideRoads roads, List<TransitLine> lines, double startX,
+                               double startZ, double goalX, double goalZ, String destinationName,
+                               RoutePreferences preferences) {
+        Context context = prepare(roads, lines, destinationName, preferences);
+        if (context == null) {
+            return Trip.empty();
+        }
+        return searchOnce(context, startX, startZ, goalX, goalZ, Weights.NONE).trip();
+    }
+
+    /**
+     * The journey planned under several strategies at once, best first, at most
+     * {@link #MAX_PLANS}.
+     *
+     * <p>The questions are asked in the order a picker shows them: the recommendation (the policy in
+     * force), then fewer changes, then less walking, then other lines. A strategy that finds the same
+     * journey again has not found a plan, it has found the same plan, so the result is deduplicated
+     * by what the journey actually does -- which line is boarded where and left where -- and later
+     * questions are only asked while there is still room for the answer.
+     *
+     * @return the journeys, best first; empty when no line can carry the trip at all
+     */
+    public static List<Trip> alternatives(RideRoads roads, List<TransitLine> lines, double startX,
+                                          double startZ, double goalX, double goalZ,
+                                          String destinationName, RoutePreferences preferences) {
+        Context context = prepare(roads, lines, destinationName, preferences);
+        if (context == null) {
+            return List.of();
+        }
+        List<Trip> journeys = new ArrayList<>(MAX_PLANS);
+        Journey best = searchOnce(context, startX, startZ, goalX, goalZ, Weights.NONE);
+        if (!best.isPresent()) {
+            return journeys;
+        }
+        journeys.add(best.trip());
+        addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                Weights.fewerTransfers()));
+        if (journeys.size() < MAX_PLANS) {
+            addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                    Weights.lessWalking()));
+        }
+        if (journeys.size() < MAX_PLANS) {
+            addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                    Weights.otherLines(best.lines())));
+        }
+        return journeys;
+    }
+
+    /** Adds a journey unless the same one is already offered: same lines boarded and left the same. */
+    private static void addIfNew(List<Trip> journeys, Journey candidate) {
+        if (!candidate.isPresent() || journeys.size() >= MAX_PLANS) {
+            return;
+        }
+        String signature = signatureOf(candidate.trip());
+        for (Trip known : journeys) {
+            if (signatureOf(known).equals(signature)) {
+                return;
+            }
+        }
+        journeys.add(candidate.trip());
+    }
+
+    /** What a journey actually does, for telling two plans apart: which line, boarded where, left where. */
+    private static String signatureOf(Trip trip) {
+        StringBuilder signature = new StringBuilder();
+        for (Trip.Ride ride : trip.rides()) {
+            signature.append('|').append(ride.line()).append(':').append(ride.boardedAt())
+                    .append('>').append(ride.leftAt());
+        }
+        return signature.toString();
+    }
+
+    /**
+     * One Dijkstra over the stop graph, with what each part of a journey costs set by {@code weights}.
+     *
+     * <p>Split out of {@link #search} so the graph behind it can be shared: the recommendation and
+     * the alternatives are the same search asked different questions, and rebuilding the rides for
+     * each question would cost several times a plan for an answer about one.
+     */
+    private static Journey searchOnce(Context context, double startX, double startZ, double goalX,
+                                      double goalZ, Weights weights) {
+        List<Node> nodes = context.nodes();
+        Map<Long, Integer> byPosition = context.byPosition();
+        Map<String, Route> cache = context.cache();
+        double wait = context.serviceWait();
+        String destinationName = context.destinationName();
+        RoutePreferences preferences = context.preferences();
+        Links links = context.links();
+        RoadRouter.Workspace workspace = context.workspace();
+        int count = nodes.size();
 
         // The search runs over two copies of the stop graph: reaching a stop before the first ride
         // (state 0) and after any ride (state 1). A public transport journey has to ride something, so
@@ -337,7 +503,7 @@ public final class LinePlanner {
             if (!walk.isPresent()) {
                 continue;
             }
-            double seeded = walk.estimatedSeconds() + wait;
+            double seeded = walk.estimatedSeconds() * weights.walking() + wait;
             int state = stateOf(index, false);
             if (seeded < dist[state]) {
                 dist[state] = seeded;
@@ -395,8 +561,9 @@ public final class LinePlanner {
                 Node node = nodes.get(stop);
                 Route walk = walk(workspace, node.at().x(), node.at().z(), goalX, goalZ,
                         destinationName, preferences, cache);
-                if (walk.isPresent() && dist[current] + walk.estimatedSeconds() < bestTotal) {
-                    bestTotal = dist[current] + walk.estimatedSeconds();
+                if (walk.isPresent()
+                        && dist[current] + walk.estimatedSeconds() * weights.walking() < bestTotal) {
+                    bestTotal = dist[current] + walk.estimatedSeconds() * weights.walking();
                     bestEnd = current;
                     bestFinish = walk;
                 }
@@ -406,7 +573,7 @@ public final class LinePlanner {
                 if (settled[target]) {
                     continue;
                 }
-                double candidate = dist[current] + link.seconds();
+                double candidate = dist[current] + weights.cost(link);
                 if (candidate < dist[target]) {
                     dist[target] = candidate;
                     fromState[target] = current;
@@ -422,7 +589,7 @@ public final class LinePlanner {
         // journey" -- was reached on that graph.
         links.reportUnplanned();
         if (bestEnd < 0) {
-            return Trip.empty();
+            return Journey.EMPTY;
         }
 
         List<PendingLeg> reversed = new ArrayList<>();
@@ -478,8 +645,17 @@ public final class LinePlanner {
         while (fromState[first] >= 0) {
             first = fromState[first];
         }
-        return Trip.of(legs, nodes.get(stopOf(first)).at().label(),
-                nodes.get(stopOf(bestEnd)).at().label());
+        // The lines the journey actually rides, kept with it: the alternative that asks for another
+        // set of lines needs to know which ones were in the way, and a ride's label cannot be turned
+        // back into the line object that carries its stops.
+        Set<TransitLine> ridden = new java.util.HashSet<>();
+        for (PendingLeg leg : reversed) {
+            if (leg.info() != null) {
+                ridden.add(leg.info().line());
+            }
+        }
+        return new Journey(Trip.of(legs, nodes.get(stopOf(first)).at().label(),
+                nodes.get(stopOf(bestEnd)).at().label()), ridden);
     }
 
     /** The search state for a stop: reached before the first ride, or after one. */
@@ -644,7 +820,7 @@ public final class LinePlanner {
                         continue;
                     }
                     links.get(index).add(new Link(target, ride.estimatedSeconds(), ride, mode,
-                            new RideInfo(line, at, next)));
+                            new RideInfo(line, at, next), false));
                 }
             }
         }
@@ -925,7 +1101,7 @@ public final class LinePlanner {
                         continue;
                     }
                     links.add(new Link(target, ride.estimatedSeconds(), ride, mode,
-                            new RideInfo(line, at, next)));
+                            new RideInfo(line, at, next), false));
                 }
             }
         }
@@ -979,7 +1155,7 @@ public final class LinePlanner {
                     continue;
                 }
                 links.add(new Link(other, hop.estimatedSeconds() + wait,
-                        hop.plusFixedSeconds(wait), TravelMode.WALK, null));
+                        hop.plusFixedSeconds(wait), TravelMode.WALK, null, true));
             }
         }
 
@@ -1059,7 +1235,7 @@ public final class LinePlanner {
                     continue;
                 }
                 links.add(new Link(other, walk.estimatedSeconds() + wait,
-                        walk.plusFixedSeconds(wait), TravelMode.WALK, null));
+                        walk.plusFixedSeconds(wait), TravelMode.WALK, null, false));
             }
         }
 

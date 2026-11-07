@@ -338,6 +338,57 @@ public final class Route {
         return Collections.unmodifiableList(points);
     }
 
+    /**
+     * How many times the drawn line changes direction by a turn's worth, in degrees.
+     *
+     * <h2>Why this is not {@link #maneuvers()}</h2>
+     * A maneuver is a turn the guidance announces, and the guidance only announces a change of
+     * <em>road</em>: a corner inside one road, or a grid whose unnamed streets are chained into one
+     * road, is a bend the player takes but nothing is said about -- correctly, because telling
+     * somebody to turn onto the road they are already on is worse than saying nothing. The picker
+     * compares plans by what the player will actually do at the controls, so it asks the polyline
+     * instead, and this is that count: the same twenty-five degrees the guidance uses, read off the
+     * drawn line. The two are not interchangeable and neither is wrong; they answer different
+     * questions about the same journey.
+     */
+    public int bends() {
+        int bends = 0;
+        for (int i = 2; i < points.size(); i++) {
+            double[] a = points.get(i - 2);
+            double[] b = points.get(i - 1);
+            double[] c = points.get(i);
+            double inX = b[0] - a[0];
+            double inZ = b[1] - a[1];
+            double outX = c[0] - b[0];
+            double outZ = c[1] - b[1];
+            if (Math.hypot(inX, inZ) < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
+                continue;
+            }
+            double delta = Math.toDegrees(
+                    Math.atan2(inX * outZ - inZ * outX, inX * outX + inZ * outZ));
+            if (Math.abs(delta) >= TURN_THRESHOLD_DEG) {
+                bends++;
+            }
+        }
+        return bends;
+    }
+
+    /**
+     * The road under each point of the route, as {@code RoadChains.Grouping#keyOf} named it.
+     *
+     * <p>One entry per point, and {@code 0} means "no road here" -- a connector off the network. It
+     * exists for the second plan: a genuinely different route is produced by handing the roads the
+     * first plan travels back to the router as a toll, and this array is what those roads are. The
+     * keys are the same chain keys the route already uses to name a turn ("turn onto such-and-such"),
+     * so a plan cannot be compared against roads that were grouped differently.
+     *
+     * @return the keys, as a copy: a route is immutable and a caller sorting or trimming the array
+     *         must not be able to change where the route says it goes
+     */
+    public int[] roadKeys() {
+        return roadKeys.clone();
+    }
+
     public String destinationName() {
         return destinationName;
     }

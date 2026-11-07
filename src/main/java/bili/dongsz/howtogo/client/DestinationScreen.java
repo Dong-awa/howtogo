@@ -10,6 +10,7 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.RouteOption;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
@@ -55,6 +56,15 @@ import java.util.Set;
  * route. A point picked on the map is not a place -- there is no record behind it -- so it keeps the
  * pin and the two-step commit and shows no card. The card is drawn rather than given a screen of its
  * own: a modal over a picker whose whole point is comparing places would hide the comparison.
+ *
+ * <h2>Where the plans live</h2>
+ * Comparing plans does not take the list band -- the places stay visible, which is the point of
+ * choosing from them. The plans are a band of their own under the readout, paid for by folding the
+ * four control rows into a one-line bar. That bar is the one control that folds and opens them:
+ * choosing a place folds them so its plans can be seen, and cancelling the choice opens them again.
+ * It is the only control for the fold -- in both directions -- and the map and the list change
+ * height with it rather than after it. See {@link #bottomGroupHeight} for how both forms are
+ * measured and {@link #placeBands} for how the bands are then placed.
  */
 public final class DestinationScreen extends Screen {
 
@@ -225,6 +235,35 @@ public final class DestinationScreen extends Screen {
      */
     private static final int PREVIEW_STATE_HEIGHT = 9;
     private static final int PREVIEW_LINE_HEIGHT = 19;
+    /**
+     * Height of one plan row, and the tighter height a short window gets.
+     *
+     * <p>22 is two lines of the font with a unit of breathing room either side, which the results
+     * band needs because a plan is a title line and a facts line. 18 is not two comfortable lines
+     * but still two, and it is the floor: below this the facts line would be clipped through its
+     * middle, and a clipped row reads as broken rather than as smaller. The band's height is the
+     * number of plans times this figure, so a short window shows shorter rows rather than fewer of
+     * them -- three plans are the whole point of the band.
+     */
+    private static final int PLAN_ROW_HEIGHT = 22;
+    private static final int PLAN_ROW_PACKED = 18;
+    /** Most plan rows the band may hold; the planner never offers more than three. */
+    private static final int MAX_PLAN_ROWS = 3;
+    /**
+     * Height of the one bar that folds the four control rows away and opens them again.
+     *
+     * <p>One control, always in the same place, rather than the two there used to be: a button row
+     * saying "路线选项" while the rows were folded, and the folded summary line above it, which also
+     * opened them. Both did the same job, so the button row is gone and the bar itself is the
+     * control -- it carries the summary on its left and a hint at its right saying what pressing it
+     * does. While the rows are open it stays where it is and says how to fold them again, which is
+     * what makes the fold reachable in both directions without a second row.
+     *
+     * <p>The packed figure is the floor the whole bottom group is measured from when the window is
+     * short, and it is still tall enough to click.
+     */
+    private static final int CONTROLS_BAR_HEIGHT = 16;
+    private static final int CONTROLS_BAR_PACKED = 14;
     private static final int CORNER_RADIUS = 5;
     private static final int MIN_MAP_HEIGHT = 42;
 
@@ -235,7 +274,84 @@ public final class DestinationScreen extends Screen {
 
     private static final int RECENTER_SIZE = 11;
 
+    /*
+     * The controls' motion is a pool indexed by slot rather than by object: a chip is a rectangle
+     * both the drawing and the hit test rebuild from the layout every frame, so there is nothing to
+     * hang a slide on. Each row of controls owns a block far wider than any row can need, so a row
+     * that grows a chip never collides with the row below it. Two slides per slot -- the cursor
+     * arriving and the control being switched on -- which is why every access is doubled.
+     */
+    private static final int CHIP_MODE = 0;
+    private static final int CHIP_PREFERENCE = 16;
+    private static final int CHIP_CLASS = 32;
+    private static final int CHIP_TRANSIT = 48;
+    private static final int CHIP_BAR = 64;
+    private static final int CHIP_FOOTER = 80;
+
     private final Screen parent;
+
+    /**
+     * The opacity the whole window is drawn at this frame: the entrance and the exit multiplied.
+     *
+     * <p>Advanced once at the top of {@link #render} and read by every pass below it, so a screen
+     * arriving fades as one surface rather than in the order its bands happen to be drawn -- and so
+     * that the exit, which is the same value falling again, needs no second code path.
+     */
+    private float open = 1.0F;
+
+    /**
+     * How far the four control rows are open this frame, from 0 folded to 1 open.
+     *
+     * <p>A slide rather than a boolean because folding is a change of layout, and a layout that
+     * changes in one frame reads as a glitch. Its target is re-read from {@link #controlsExpanded}
+     * every frame instead of being written where that state is: the bar, a chosen place, a
+     * cancelled one and {@code init} all write the state directly, and none of them has to know
+     * that the fold animates. The value is also what the vertical layout is measured from (see
+     * {@link #relayoutForFold}), because the band above the controls has to grow as they fold, not
+     * after they have finished folding.
+     */
+    private float fold = 1.0F;
+
+    /** The slide {@link #fold} is read off, resting open because that is how the panel opens. */
+    private final UiMotion.Slide controlsFold =
+            new UiMotion.Slide(UiMotion.Easing.IN_OUT_CUBIC, 1.0F, UiMotion.EXPAND);
+
+    /**
+     * How far the plan band travels while the controls fold, in pixels.
+     *
+     * <p>The same motion read backwards: the rows go up and out, so the band taking their place
+     * comes down from above. A small travel, because it is arriving into a space that is already the
+     * right size -- the movement only has to say which way it came from.
+     */
+    private static final int SUMMARY_FOLD_TRAVEL = 8;
+
+    /** Every place row's cursor arrival (even slot) and its picked-out state (the next slot). */
+    private final UiMotion.Slides rowSlides = new UiMotion.Slides();
+
+    /** The same pair for the plan rows, which are hovered and chosen the same way. */
+    private final UiMotion.Slides planSlides = new UiMotion.Slides();
+
+    /** Every control's cursor arrival and switched-on state, in the blocks the constants name. */
+    private final UiMotion.Slides chipSlides = new UiMotion.Slides();
+
+    /**
+     * The slot of the control being drawn this instant.
+     *
+     * <p>A field for the reason {@code SettingsScreen} keeps its pointer position in one: the
+     * easing has to happen inside {@link #drawButton}, which takes no slot of its own, and the only
+     * alternative is another parameter on every control in the panel. Each row writes its own slot
+     * on the line before it draws, so a slot is never read across two controls.
+     */
+    private int chipSlot;
+
+    /**
+     * How far the row being drawn has arrived, for {@link #drawNameLine}.
+     *
+     * <p>The name is the one part of a row that another method writes, and it is written in colours
+     * the row itself picks; a field rather than a parameter for the same reason as
+     * {@link #chipSlot}.
+     */
+    private float rowArrival = 1.0F;
 
     private List<Destination> all = List.of();
     private List<Destination> shown = List.of();
@@ -267,6 +383,86 @@ public final class DestinationScreen extends Screen {
     private Destination previewTarget;
     /** The plan for {@link #previewTarget}, or null when there is nothing to preview. */
     private Navigation.RoutePreview preview;
+
+    /**
+     * The plans the picker is offering, quickest first, or an empty list.
+     *
+     * <p>Drawn as a band of its own under the readout, not in the place list's band: the list has to
+     * stay visible while a route is chosen -- covering it with the results was the whole complaint
+     * this layout answers. See {@link #drawPlanList} for the band and {@link #bottomGroupHeight} for
+     * how its height is reserved.
+     *
+     * <p>Held in band order: {@link #planIndex} is an index into this list, and the map, the readout
+     * and the footer all read the same index, so the line picked out and the line started cannot
+     * disagree.
+     */
+    private List<RouteOption> plans = List.of();
+    /** Which of {@link #plans} the player has picked out; the map and the readout follow it. */
+    private int planIndex;
+    /**
+     * The plan row the cursor is over, or -1 while it is over none.
+     *
+     * <p>Worked out by the drawing and read by {@code mouseClicked}, the same arrangement the place
+     * rows use: it is the single place the row geometry is turned into a hit result, so the drawn
+     * rows and the clickable rows cannot drift apart.
+     */
+    private int hoveredPlan = -1;
+
+    /**
+     * Whether the four control rows are open, or folded under the one-line bar that replaces them.
+     *
+     * <p>Open whenever there is no destination to compare plans for, because then the controls are
+     * the bottom of the panel and the collapsed bar would hide what the panel is for. Choosing a
+     * destination folds them so the plans it produces can be seen; the bar, which is the one
+     * control for both directions, opens them again. See {@link #setControlsExpanded} for why the
+     * layout is measured again rather than the rows simply not being drawn.
+     */
+    private boolean controlsExpanded = true;
+
+    /** Height of one plan row in the current layout: {@link #PLAN_ROW_HEIGHT} or its packed twin. */
+    private int planRowSize;
+    /** Top of the plan band: the first line under the preview readout. */
+    private int planTop;
+    /** Top of the four control rows, in the place the open layout gives them. */
+    private int controlsY;
+    /** Height of the toggle bar in the current layout. */
+    private int summaryRowHeight;
+    /** Top of the bar that folds the four control rows and opens them again. */
+    private int barY;
+    /** The block the fold trades: its top and bottom are what the band above is measured from. */
+    private int stackTop;
+    private int stackBottom;
+    /**
+     * The fold value the current geometry was measured from.
+     *
+     * <p>Layout is a function of the fold while it is moving (see {@link #relayoutForFold}), and
+     * this is what says whether the frame in hand has to measure it again. A value of two is a
+     * sentinel no eased slide can produce, so the first frame always measures.
+     */
+    private float laidOutFold = 2.0F;
+
+    /**
+     * The plan band's height this frame, in pixels, followed rather than set.
+     *
+     * <p>The band's height is the number of plans times the row height, and the number of plans can
+     * change under the screen without the fold moving at all -- choosing a second place while one is
+     * already being compared is the ordinary case, and the planner offers one, two or three rows.
+     * Assigned outright, that is a jump of up to 44 pixels in the band the map and the list are
+     * measured against, which is the same visible fault the fold had. So it is followed: the block
+     * height the layout reads is this value, and every frame it moves the layout is re-measured (see
+     * {@link #settlePlansBlock}).
+     */
+    private float plansBlockShown;
+
+    /**
+     * How quickly the plan band catches up with a change in the number of plans, in seconds.
+     *
+     * <p>Shorter than a fold on purpose: this is a correction rather than a journey, and the thing
+     * being corrected is a number of rows, so it has to be over before the player reads the new
+     * rows. Same shape as {@link UiMotion#FOLLOW_SECONDS} for the same reason -- it chases a target
+     * that may move again rather than travelling to a fixed one.
+     */
+    private static final float PLAN_BLOCK_FOLLOW_SECONDS = 0.09F;
 
     /**
      * The details card, and the place it is about, or null while the list has the whole band.
@@ -406,58 +602,29 @@ public final class DestinationScreen extends Screen {
         all = Destinations.all();
         dropVanishedSelection();
         scroll = 0;
-        if (previewTarget != null) {
-            // The window may have been resized since the choice was made, and the road data may
-            // have moved on with it. Re-plan rather than trusting a preview measured in pixels ago.
-            preview = Navigation.preview(previewTarget, Navigation.mode(),
-                    RoutePreferenceStore.preferences());
+        // With nothing chosen the bottom of the panel is the controls themselves, so they are open;
+        // a resize of a panel that had a choice keeps the state the player left it in, because the
+        // resize is not a choice.
+        if (previewTarget == null) {
+            controlsExpanded = true;
         }
+        // The window may have been resized since the choice was made, and the road data may have
+        // moved on with it. Re-plan rather than trusting a list measured in pixels ago -- the
+        // navigation's plan cache makes that cheap when the question itself did not change, and
+        // with nothing chosen this simply clears the plans back to their empty state.
+        replanPlans();
 
         computePanelLayout();
-
-        mapX = panelX + PADDING;
-        searchY = panelY + PADDING + HEADER_HEIGHT;
-        mapY = searchY + SEARCH_HEIGHT + gap;
-        // The columns start on the same line when they are side by side, and the list gets its own
-        // line under the map when they are stacked. Both run down to the bottom of the band, which is
-        // where the readout begins -- so the columns' bottoms are the band's bottom by construction,
-        // and the controls below start exactly there.
-        listTop = columnsSideBySide ? mapY : mapY + mapH + gap;
-        // The details card sits at the bottom of the list band, directly under the rows it left room
-        // for. Both numbers come from the layout above, so the drawing, the wheel and the hit tests
-        // of the rows and of the card all agree about where one ends and the other begins.
-        detailsY = listTop + listBandHeight - detailsHeight;
-        previewY = mapY + bandHeight;
-        modeY = previewY + PREVIEW_LINE_HEIGHT + gap;
-        preferenceY = modeY + MODE_ROW_HEIGHT + gap;
-        classY = preferenceY + preferenceRowHeight + gap;
-        // The transit guidance switch has a row of its own rather than a fourth chip beside the other
-        // three: at the panel's narrowest the three already only just fit, and a fourth would cut every
-        // label on the row down to two or three letters. One row of its own reads in both languages and
-        // leaves room for the next switch that belongs to one mode rather than to every plan.
-        transitY = classY + classRowHeight + gap;
-        footerY = transitY + transitRowHeight + gap;
-
-        // The mode buttons share one row with a short caption; the widths are derived here, once,
-        // so the drawing and the hit tests cannot disagree about where the controls are. The
-        // preference and class rows use the same rule: a caption, then equal buttons filling what
-        // is left.
-        int captionWidth = font.width(modeCaption()) + gap;
-        modeButtonWidth = Math.max(36, (rowW - captionWidth - gap * 2) / 3);
-        modeButtonsX = rowX + captionWidth;
-
-        int preferenceCaption = Math.max(font.width(metricCaption()), font.width(majorRoadsCaption()))
-                + gap;
-        // Three switches share this row now: the metric, the major-road preference and the voice
-        // toggle. The rule is (row - caption - (n - 1) gaps) / n, the same one the class row uses
-        // with n = 6; keeping the two-control divisor here pushed the voice chip past the panel's
-        // right edge, which is the same mistake that once put the ice chip off the side.
-        preferenceButtonWidth = Math.max(30,
-                (rowW - preferenceCaption - gap * 2) / 3);
-        // Six chips need six gaps, not two: one after the caption and five between them. Dividing by
-        // six while reserving only two gaps pushed the last chip past the panel's right edge, which
-        // is what put the ice toggle off the side of the screen.
-        classButtonWidth = Math.max(24, (rowW - font.width(avoidCaption()) - gap * 6) / 6);
+        // A screen is measured, not animated, when it is opened or resized: the plan band starts at
+        // the height the plans on offer ask for instead of following up to it from zero. Re-measure
+        // the band once with that value so the columns are laid out against the band they will keep.
+        plansBlockShown = planBlockTarget();
+        computeVerticalLayout(columnsSideBySide, fold);
+        placeBands();
+        measureControls();
+        // The geometry above was measured from the fold the slide is at now; a resize is not a
+        // reason to measure it again on the first frame.
+        laidOutFold = fold;
 
         searchField = new EditBox(font, rowX, searchY, rowW, SEARCH_HEIGHT,
                 Component.translatable("screen.howtogo.search"));
@@ -473,6 +640,186 @@ public final class DestinationScreen extends Screen {
 
         recenterOnPlayer();
         applyFilter();
+    }
+
+    /**
+     * Places every band from the two anchors the panel has, once the vertical metrics are known.
+     *
+     * <p>Split out of {@link #init} because the band heights depend on state that can change while
+     * the screen is open -- whether the controls are folded, how far the fold has got, and how many
+     * plans there are -- and every such change has to move the bands below it. Measuring and
+     * placing are kept apart because they read different things: the heights come from constants
+     * and counts (see {@link #bottomGroupHeight}), while placement needs the panel's top, the
+     * band's height and the gap in force, so only placement can happen once the panel height is
+     * settled.
+     *
+     * <p>Two anchors, not one. The top anchor is the panel's top edge, which fixes the header, the
+     * search box and the top of the columns. The bottom anchor is the footer, whose bottom edge is
+     * the panel's bottom edge in every state -- so the bar above it and the block above that are
+     * placed from the bottom, and the band the columns get is whatever is left between the two.
+     * That is what lets the fold be a change of *height*: as the fold moves, the block the controls
+     * and the plans share changes size (see {@link #bottomGroupHeight}), the readout directly above
+     * it follows, and the columns stretch or give up exactly that much on the same frame. Placed
+     * from the top down instead, the readout would stay put and the bar and footer would have to
+     * move, which is a layout that changes shape rather than height.
+     *
+     * <p>The footer and the bar therefore do not move at all, and the four rows keep the place the
+     * open layout gives them rather than being re-placed every frame: the fold fades and clips one
+     * block out of the shared space while the other comes in, and a block that was also re-placed
+     * would slide through the readout on its way out.
+     */
+    private void placeBands() {
+        mapX = panelX + PADDING;
+        searchY = panelY + PADDING + HEADER_HEIGHT;
+        mapY = searchY + SEARCH_HEIGHT + gap;
+        // The columns start on the same line when they are side by side, and the list gets its own
+        // line under the map when they are stacked. Both run down to the bottom of the band, which is
+        // where the readout begins -- so the columns' bottoms are the band's bottom by construction,
+        // and the bands below start exactly there.
+        listTop = columnsSideBySide ? mapY : mapY + mapH + gap;
+        // The details card sits at the bottom of the list band, directly under the rows it left room
+        // for. Both numbers come from the layout above, so the drawing, the wheel and the hit tests
+        // of the rows and of the card all agree about where one ends and the other begins.
+        detailsY = listTop + listBandHeight - detailsHeight;
+        previewY = mapY + bandHeight;
+
+        // The bottom anchor: footer on the panel's bottom edge, the bar directly above it, and the
+        // shared block above that.
+        footerY = panelY + panelHeight - PADDING - FOOTER_HEIGHT;
+        barY = footerY - gap - summaryRowHeight;
+        stackBottom = barY - gap;
+        int plansBlock = plansBlockHeight();
+        int stack = Math.round(fold * controlsBlockHeight()
+                + (1.0F - fold) * plansBlock);
+        stackTop = stackBottom - stack;
+
+        // The four rows, in the place the open layout gives them. Their bottom is the bottom of the
+        // shared block when the controls are open, and the fold only takes height off the top.
+        controlsY = stackBottom - controlsBlockHeight();
+        modeY = controlsY;
+        preferenceY = modeY + MODE_ROW_HEIGHT + gap;
+        classY = preferenceY + preferenceRowHeight + gap;
+        // The transit guidance switch has a row of its own rather than a fourth chip beside the
+        // other three: at the panel's narrowest the three already only just fit, and a fourth
+        // would cut every label on the row down to two or three letters. One row of its own
+        // reads in both languages and leaves room for the next switch that belongs to one mode
+        // rather than to every plan.
+        transitY = classY + classRowHeight + gap;
+        // The plans are bottom-aligned in the same block, so they sit directly above the bar when
+        // the controls are folded and cannot move as the block above them grows.
+        planTop = stackBottom - plansBlock;
+    }
+
+    /**
+     * Measures the four control rows' buttons from the panel's width and the gap in force.
+     *
+     * <p>The mode buttons share one row with a short caption, and the widths are derived here rather
+     * than where the rows are drawn so the drawing and the hit tests cannot disagree about where the
+     * controls are. The preference and class rows use the same rule: a caption, then equal buttons
+     * filling what is left.
+     *
+     * <p>Called on every relayout, not only from {@link #init}, because the gap can change when the
+     * controls are opened or folded -- a short window packs -- and a row measured against the other
+     * gap puts its last chip past the panel's edge. That is the mistake that once put the ice toggle
+     * off the side of the screen.
+     */
+    private void measureControls() {
+        int captionWidth = font.width(modeCaption()) + gap;
+        modeButtonWidth = Math.max(36, (rowW - captionWidth - gap * 2) / 3);
+        modeButtonsX = rowX + captionWidth;
+
+        int preferenceCaption = Math.max(font.width(metricCaption()), font.width(majorRoadsCaption()))
+                + gap;
+        // Three switches share this row now: the metric, the major-road preference and the voice
+        // toggle. The rule is (row - caption - (n - 1) gaps) / n, the same one the class row uses
+        // with n = 6; keeping the two-control divisor here pushed the voice chip past the panel's
+        // right edge, which is the same mistake that once put the ice chip off the side.
+        preferenceButtonWidth = Math.max(30, (rowW - preferenceCaption - gap * 2) / 3);
+        // Six chips need six gaps, not two: one after the caption and five between them. Dividing by
+        // six while reserving only two gaps pushed the last chip past the panel's right edge, which
+        // is what put the ice toggle off the side of the screen.
+        classButtonWidth = Math.max(24, (rowW - font.width(avoidCaption()) - gap * 6) / 6);
+    }
+
+    /**
+     * Re-measures and re-places the whole panel after the content changed under a fixed window.
+     *
+     * <p>Called when the plans change, when the controls open or close, and when a choice is
+     * cleared: all three change how much of the panel the bottom group needs, and the band above it
+     * is whatever is left. Only the vertical layout can move -- the window, the panel's width and
+     * its height are the same -- so the search box stays where {@link #init} built it and only the
+     * bands and the scroll clamp are recomputed.
+     */
+    private void relayout() {
+        computePanelLayout();
+        placeBands();
+        measureControls();
+        laidOutFold = fold;
+        // The bands have moved, so the hover results the last frame recorded no longer describe
+        // anything. They are clear until the next draw sets them again, which stops a click in the
+        // frame the layout changed from landing on whatever used to be under the cursor.
+        hoveredRow = -1;
+        hoveredPlan = -1;
+        // The list band may have grown or shrunk, so the wheel's clamp is re-applied from the same
+        // row metrics the drawing will use.
+        int maxScroll = Math.max(0, shown.size() - visibleRows);
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
+    }
+
+    /**
+     * Re-measures the vertical layout for a fold or plan-band value that has moved since last frame.
+     *
+     * <p>This is what makes the map and the list change height as the controls fold rather than in
+     * the frame the fold started: the bottom group is measured from the fold (see
+     * {@link #bottomGroupHeight}) and the band the columns get is the remainder, so the columns grow
+     * exactly as fast as the fold gives the space back. The plan band's own height is followed in
+     * the same way for the case where the fold is still and the number of plans changed; see
+     * {@link #settlePlansBlock}. Called from {@link #render}, once per frame that either of them
+     * actually moved; with {@code ui_animations} off both land on their targets in the frame the
+     * click happened and this is the state change it replaced.
+     *
+     * <p>No hover reset here, unlike {@link #relayout}: the cursor is over something and the rows
+     * are being drawn this frame anyway, so the drawing recomputes the hover result from the geometry
+     * that is in force. The wheel's clamp is re-applied because the list band may have changed while
+     * the wheel is still being turned.
+     *
+     * @param openness how far the four control rows are open this frame, 0 folded to 1 open
+     */
+    private void relayoutForFold(float openness) {
+        computeVerticalLayout(columnsSideBySide, openness);
+        placeBands();
+        laidOutFold = openness;
+        int maxScroll = Math.max(0, shown.size() - visibleRows);
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
+    }
+
+    /**
+     * Opens or folds the four control rows at the player's request, and re-places the bands.
+     *
+     * <p>One entry point because the bar is both controls -- opening the rows and folding them away
+     * again -- and a state written in two places is a state that can disagree with itself.
+     */
+    private void setControlsExpanded(boolean expanded) {
+        if (controlsExpanded == expanded) {
+            return;
+        }
+        controlsExpanded = expanded;
+        relayout();
+    }
+
+    /**
+     * Re-plans after a control that changes the plans was used, and folds the controls so the plans
+     * it produced can be seen.
+     *
+     * <p>Folding is not the control's own choice but the panel's: the row the player just used is
+     * about to disappear under the plans, and leaving the panel open would hide the answer to the
+     * change they made. The bar gets the four rows back in one press, which is why the fold has to
+     * be reachable in both directions.
+     */
+    private void replanAndShowPlans() {
+        controlsExpanded = false;
+        replanPlans();
+        relayout();
     }
 
     /**
@@ -518,7 +865,7 @@ public final class DestinationScreen extends Screen {
         listPaneX = sideBySide ? rowX + mapPaneW + COLUMN_GAP : rowX;
         columnsSideBySide = sideBySide;
         mapW = mapPaneW;
-        computeVerticalLayout(sideBySide);
+        computeVerticalLayout(sideBySide, fold);
         panelY = Math.max(4, (height - panelHeight) / 2);
     }
 
@@ -531,64 +878,186 @@ public final class DestinationScreen extends Screen {
      * two of them can be computed from different assumptions and end up overlapping.
      *
      * <p>Three parts. Fixed at the top: the padding, the header and the search box. Anchored at the
-     * bottom: the readout and every control under it, measured as one group so the band above can be
-     * derived from what is left rather than guessed -- which is what keeps those controls on the
-     * panel and off the columns. Stretchy in between: the columns, which take the whole band. Side by
-     * side the map and the list share it and both run to its bottom; stacked the map takes its share
-     * and the list has a band of its own below, stretched by the same rule.
+     * bottom: the readout, the shared block the controls and the plans trade, the bar and the
+     * footer, measured as one group so the band above can be derived from what is left rather than
+     * guessed -- which is what keeps those pieces on the panel and off the columns. Stretchy in
+     * between: the columns, which take the whole band. Side by side the map and the list share it
+     * and both run to its bottom; stacked the map takes its share and the list has a band of its own
+     * below, stretched by the same rule.
+     *
+     * <p>The bottom group is a function of the fold, not only of the state: the four rows and the
+     * plan band trade places over the fold (see {@link #bottomGroupHeight}), so the group is
+     * measured from the fold value of the frame in hand. That is the whole of what makes the map and
+     * the list change height smoothly when an option is used -- they are given the band that is
+     * left, so the band grows exactly as fast as the group shrinks.
+     *
+     * <p>Whether the window is short, on the other hand, is decided from the two ends of the fold
+     * rather than from where it has got to: a packing rule that read the animated height could
+     * tighten the window halfway through the fold and make the panel jump, which is the one thing
+     * the animation exists to avoid.
      *
      * @param sideBySide whether the map and the list share a band or are stacked
+     * @param openness   how far the four control rows are open, 0 folded to 1 open
      */
-    private void computeVerticalLayout(boolean sideBySide) {
+    private void computeVerticalLayout(boolean sideBySide, float openness) {
         gap = GAP;
         preferenceRowHeight = PREFERENCE_ROW_HEIGHT;
         classRowHeight = CLASS_ROW_HEIGHT;
         transitRowHeight = PREFERENCE_ROW_HEIGHT;
-        // The bottom group -- the readout and everything under it -- is measured first and then
-        // anchored: the columns get whatever is left above it. That is what puts the controls against
-        // the panel's bottom edge rather than just under the list, and it is also what keeps them on
-        // the panel, since the band they are subtracted from is the panel itself. Five gaps between
-        // the six elements of the group, and the footer's own padding below it.
-        int bottomGroup = PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight
-                + classRowHeight + transitRowHeight + FOOTER_HEIGHT + PADDING + gap * 5;
+        summaryRowHeight = CONTROLS_BAR_HEIGHT;
+        planRowSize = PLAN_ROW_HEIGHT;
         int panel = clamp(height - MARGIN * 2, MIN_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, height));
-        int band = panel - (headerHeight() + bottomGroup + gap);
+        // The bottom group -- the readout and everything under it -- is measured first and then
+        // anchored: the columns get whatever is left above it. That is what puts the bar against the
+        // panel's bottom edge rather than just under the list, and it is also what keeps the bottom
+        // group on the panel, since the band it is subtracted from is the panel itself. The short-
+        // window test uses the taller of the two ends of the fold, and the number of plans rather
+        // than where the plan band's follow currently is: both are properties of the state, so the
+        // decision cannot change halfway through an animation and repack the panel under it.
+        int band = panel - (headerHeight()
+                + bottomGroupFor(Math.max(controlsBlockHeight(), planBlockTarget())) + gap);
         if (band < MIN_MAP_HEIGHT + MIN_LIST_ROW) {
-            // A window too short for comfortable rows: tighten every gap and both control rows, then
-            // measure the band again from the same expression rather than from a second guess at it.
+            // A window too short for comfortable rows: tighten every gap, the control rows, the bar
+            // and the plan rows, then measure the band again from the same expression rather than
+            // from a second guess at it.
             gap = GAP_PACKED;
             preferenceRowHeight = PREFERENCE_ROW_PACKED;
             classRowHeight = CLASS_ROW_PACKED;
             transitRowHeight = PREFERENCE_ROW_PACKED;
-            bottomGroup = PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight
-                    + classRowHeight + transitRowHeight + FOOTER_HEIGHT + PADDING + gap * 5;
-            band = panel - (headerHeight() + bottomGroup + gap);
+            summaryRowHeight = CONTROLS_BAR_PACKED;
+            planRowSize = PLAN_ROW_PACKED;
         }
+        // The band for the fold in hand: the taller the bottom group, the shorter the columns.
+        band = panel - (headerHeight() + bottomGroupHeight(openness) + gap);
 
         // Side by side both columns share the band, so both fill it and end on the same line. Stacked
-        // they cannot both fill one band, so the band is split between them -- the map's share, then
-        // the list's with the column gap taken out -- and each is then stretched to its own share.
-        // Measuring the list from its share rather than from "whatever the map leaves" is what stops
-        // the map eating the list, which it would now that it is no longer capped.
-        int listBand = sideBySide ? band : (band - gap) * (100 - MAP_BAND_SHARE) / 100;
+        // they cannot both fill one band, so the band is split between them: the list keeps its
+        // share (a proportion, floored at one row) and the map takes what is left. That is what keeps
+        // the two from overlapping when the window is too short for both minimums -- before, the map
+        // held its own minimum and pushed the list past the band's bottom, and the rows were painted
+        // over the readout below.
+        int listBand;
+        int mapHeight;
+        if (sideBySide) {
+            listBand = band;
+            mapHeight = band;
+        } else {
+            int room = Math.max(0, band - gap);
+            if (room >= MIN_MAP_HEIGHT + MIN_LIST_ROW) {
+                int share = room * (100 - MAP_BAND_SHARE) / 100;
+                listBand = Math.max(MIN_LIST_ROW, Math.min(room - MIN_MAP_HEIGHT, share));
+                mapHeight = room - listBand;
+            } else {
+                // Too short for both minimums: the list keeps its row and the map takes the
+                // remainder, small but honest -- a shrunken map is visible, an overlapping readout
+                // is a bug.
+                listBand = Math.min(room, MIN_LIST_ROW);
+                mapHeight = Math.max(0, room - listBand);
+            }
+        }
         listBandHeight = listBand;
         // The rows and the details card are measured from the same band by the same method, so the
         // toggle path can re-run it when a place is selected without recomputing the whole layout.
         applyListBand(listBand);
         // The map runs from the top of the band down to the top of the list, so the two always meet
-        // exactly with only the column gap between them -- the split is a proportion, and letting it
-        // round on both sides left a pixel of dead space. Nothing else caps the map: the pane ends up
+        // exactly with only the column gap between them. Nothing else caps the map: the pane ends up
         // taller than it is wide, which is what stretching it to its band means. MAP_BAND_SHARE
         // decides the width split and the stacked height split, not a limit on either.
-        mapH = sideBySide ? band : Math.max(MIN_MAP_HEIGHT, band - listBand - gap);
-        if (mapH > band) {
-            mapH = band;
-        }
-        // The band's height is kept because `init` needs its bottom to place the readout: that is the
-        // line both columns run down to, whichever of them happens to be the taller one.
+        mapH = mapHeight;
+        // The band's height is kept because the placement needs its bottom to start the readout --
+        // the line both columns run down to, whichever of them happens to be the taller one.
         bandHeight = band;
 
         panelHeight = panel;
+    }
+
+    /**
+     * The height of everything below the columns: readout, the shared block, the bar, the footer.
+     *
+     * <p>The one expression the vertical layout is derived from, so the placement cannot measure a
+     * different group than the band was taken out of. Its content, top to bottom:
+     *
+     * <ul>
+     *   <li>the two-line readout, always;</li>
+     *   <li>the block the controls and the plans trade -- {@link #controlsBlockHeight} at the open
+     *       end, {@link #plansBlockHeight} at the folded one, interpolated by {@code openness} in
+     *       between. This is the figure the map and the list breathe with: measured from a flag
+     *       instead, it would change in one frame when the flag did;</li>
+     *   <li>the bar that toggles the fold, which never moves;</li>
+     *   <li>the footer, and the padding under it;</li>
+     *   <li>three gaps: readout to block, block to bar, bar to footer. The gaps *inside* the block
+     *       belong to the block's own two heights, not here, so the block can be interpolated as one
+     *       number.</li>
+     * </ul>
+     *
+     * <p>This is the figure that would silently grow if a band were added and only the placement
+     * were taught about it, and it is why every change to the bottom of the panel has to be made
+     * here as well.
+     *
+     * @param openness how far the four control rows are open, 0 folded to 1 open
+     */
+    private int bottomGroupHeight(float openness) {
+        float open = UiMotion.clamp01(openness);
+        int block = Math.round(open * controlsBlockHeight()
+                + (1.0F - open) * plansBlockHeight());
+        return bottomGroupFor(block);
+    }
+
+    /** The bottom group's height for a given height of the block the controls and the plans share. */
+    private int bottomGroupFor(int block) {
+        return PREVIEW_LINE_HEIGHT + PADDING + summaryRowHeight + FOOTER_HEIGHT
+                + block + gap * 3;
+    }
+
+    /** The four control rows and the gaps between them: what the fold trades for the plans. */
+    private int controlsBlockHeight() {
+        return MODE_ROW_HEIGHT + preferenceRowHeight + classRowHeight + transitRowHeight + gap * 3;
+    }
+
+    /**
+     * Height of the plan band in the current layout: one row per plan, zero when there are none.
+     *
+     * <p>Read from {@link #plansBlockShown} rather than computed from the list, because the list can
+     * change in one frame and the space it takes must not: see that field for why. The rounded value
+     * is what every caller uses, so the drawing, the click tests and the band above all agree on a
+     * whole-pixel height.
+     */
+    private int plansBlockHeight() {
+        return Math.round(plansBlockShown);
+    }
+
+    /**
+     * The height the plan band is heading for: one row per plan, zero when there are none.
+     *
+     * <p>The target, not the current value, and asked by the vertical layout's short-window test --
+     * that decision has to be a property of the window and the number of plans, not of where the
+     * follow happens to be, or the panel would repack itself halfway through a change and jump.
+     *
+     * <p>The band is measured from the rows rather than the rows from the band, the opposite of the
+     * place list's rule. There are at most three plans and every one of them has to stay visible, so
+     * the count is the fixed thing and the band follows; every row is then the same height, and the
+     * remainder the place list has to spread out does not arise.
+     */
+    private int planBlockTarget() {
+        if (plans.isEmpty()) {
+            return 0;
+        }
+        return Math.min(plans.size(), MAX_PLAN_ROWS) * planRowSize;
+    }
+
+    /**
+     * Advances the plan band one frame towards its target height, and reports whether it moved.
+     *
+     * <p>The one thing that makes a change in the number of plans a change of height rather than a
+     * jump: the vertical layout reads {@link #plansBlockShown}, so every frame it moves has to be
+     * re-measured, and that is what the answer is for. With {@code ui_animations} off the follow
+     * lands on the target in one call, which is exactly the jump the setting asks for.
+     */
+    private boolean settlePlansBlock() {
+        float before = plansBlockShown;
+        plansBlockShown = UiMotion.follow(plansBlockShown, planBlockTarget(),
+                PLAN_BLOCK_FOLLOW_SECONDS);
+        return plansBlockShown != before;
     }
 
     /**
@@ -711,12 +1180,16 @@ public final class DestinationScreen extends Screen {
 
         int nameRoom = noteFits ? width - noteWidth : width;
         String shownName = font.plainSubstrByWidth(name, nameRoom);
-        graphics.drawString(font, shownName, x, y, readableColor(destination), false);
+        // Both lines are faded by how far the row has arrived, so the name and its note come in
+        // together with the row they belong to rather than a frame ahead of it.
+        graphics.drawString(font, shownName, x, y,
+                UiMotion.fade(readableColor(destination), rowArrival), false);
 
         if (noteFits) {
             // A shade lighter than the row's other text: the note shares the name's line, beside a
             // name that many sources colour, so it has to read as an aside without competing with it.
-            graphics.drawString(font, note, x + font.width(shownName), y, UiTheme.sourceNote(), false);
+            graphics.drawString(font, note, x + font.width(shownName), y,
+                    UiMotion.fade(UiTheme.sourceNote(), rowArrival), false);
         }
     }
 
@@ -831,13 +1304,29 @@ public final class DestinationScreen extends Screen {
             boolean isActive = samePlace(active, destination);
             boolean isPreview = samePlace(previewTarget, destination);
 
+            // Two values per row, not one: how far the row has arrived as part of the list's
+            // entrance, and how far the cursor has moved onto it. They multiply below, because a row
+            // the cursor is already on when the screen opens still has to arrive before it can be
+            // tinted. Both slides live in one pool keyed by the row's position in the list, which is
+            // what a highlight belongs to: it marks the row under the cursor, not the place.
+            float arrived = UiMotion.stagger(i, open);
+            float lit = rowSlides.get(i * 2).to(hovered ? 1.0F : 0.0F).eased();
+            float picked = rowSlides.get(i * 2 + 1)
+                    .to(isActive || isPreview ? 1.0F : 0.0F).eased();
+
             if (hovered) {
                 hoveredRow = i;
-                graphics.fill(listPaneX, rowY, listPaneX + listPaneW,
-                        rowBottom - 1, UiTheme.rowHoverTint());
-            } else if (isActive || isPreview) {
-                graphics.fill(listPaneX, rowY, listPaneX + listPaneW,
-                        rowBottom - 1, UiTheme.rowActiveTint());
+            }
+            // The row's two states are the two overlays it has always had, chosen between by a mix
+            // rather than by an if: a row that gains the cursor travels from the picked-out tint to
+            // the cursor tint instead of swapping one for the other, and a row that stops being
+            // picked out fades rather than blinking. The strength drawn is the larger of the two,
+            // which is the precedence the hover test had when it was an else-if.
+            float shownTint = Math.max(lit, picked);
+            if (shownTint * arrived > 0.004F) {
+                graphics.fill(listPaneX, rowY, listPaneX + listPaneW, rowBottom - 1,
+                        UiMotion.fade(UiMotion.mix(UiTheme.rowActiveTint(),
+                                UiTheme.rowHoverTint(), lit), shownTint * arrived));
             }
 
             int textX = listPaneX + 6 + ROW_MARKER_STEP;
@@ -861,32 +1350,37 @@ public final class DestinationScreen extends Screen {
             // background so a hovered or active row does not paint over it, and it is the same mark
             // the maps draw for a place, sized down to a list.
             HudDraw.drawRowMarker(graphics, listPaneX + 3, nameY + 2, ROW_MARKER,
-                    destination.hasColor() ? destination.color() : UiTheme.place());
+                    UiMotion.fade(destination.hasColor() ? destination.color() : UiTheme.place(),
+                            arrived));
             int badgeX = listPaneX + listPaneW - 6 - badgeWidth;
             if (badgeWidth > 0) {
                 // Shapes before strings: a string flushes the batch the fills written after it would
                 // have joined, so the pill's face is painted with the row's other fills.
                 HudDraw.fillRounded(graphics, badgeX, secondY - 1, badgeX + badgeWidth,
-                        secondY + 9, 2, UiTheme.rowMarkedTint());
+                        secondY + 9, 2, UiMotion.fade(UiTheme.rowMarkedTint(), arrived));
             }
             // No selection flag: the name keeps the source's colour whether or not the row is
-            // picked out, and the row's background is what marks it.
+            // picked out, and the row's background is what marks it. The name line is told how far
+            // the row has arrived rather than handed colours to fade, because the colours it picks
+            // are the place's own and only it knows them.
+            rowArrival = arrived;
             drawNameLine(graphics, destination, textX, nameY, nameWidth);
 
             // The second line is the coordinates normally, and the player's own summary when the
             // search is what found the row: the row is on screen because of what was written about
             // it, so that is the line that should say so.
             graphics.drawString(font, secondLine(destination, secondWidth), textX, secondY,
-                    UiTheme.textMuted(), false);
+                    UiMotion.fade(UiTheme.textMuted(), arrived), false);
 
             graphics.drawString(font, distance,
-                    listPaneX + listPaneW - 6 - distanceWidth, nameY, UiTheme.textMuted(), false);
+                    listPaneX + listPaneW - 6 - distanceWidth, nameY,
+                    UiMotion.fade(UiTheme.textMuted(), arrived), false);
 
             if (badgeWidth > 0) {
                 String shownBadge = PlaceText.ellipsis(font, badge, Math.max(1, badgeWidth - 4));
                 graphics.drawString(font, shownBadge,
                         badgeX + Math.max(2, (badgeWidth - font.width(shownBadge)) / 2),
-                        secondY, UiTheme.textSecondary(), false);
+                        secondY, UiMotion.fade(UiTheme.textSecondary(), arrived), false);
             }
         }
 
@@ -897,8 +1391,10 @@ public final class DestinationScreen extends Screen {
             int thumbHeight = Math.max(12, (bottom - listTop) * visibleRows / shown.size());
             int thumbY = listTop + (int) ((bottom - listTop - thumbHeight)
                     * ((double) scroll / maxScroll));
-            graphics.fill(trackX, listTop, trackX + 2, bottom, UiTheme.scrollTrack());
-            graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, UiTheme.scrollThumb());
+            graphics.fill(trackX, listTop, trackX + 2, bottom,
+                    UiMotion.fade(UiTheme.scrollTrack(), open));
+            graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight,
+                    UiMotion.fade(UiTheme.scrollThumb(), open));
         }
     }
 
@@ -1016,38 +1512,107 @@ public final class DestinationScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        // Dimming is handled in render so the panel sits between it and the widgets.
+        // Dimming is handled in render so the panel sits between it and the widgets, and so the
+        // dimming, the sheet and everything on it are faded by one opacity; see #open.
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(0, 0, width, height, UiTheme.dim());
+        // The motion state first, before a pixel is drawn: UiMotion.of advances the entrance and the
+        // exit once per frame -- it is also what pumps a deferred screen swap, which is why nothing
+        // else in this screen calls it -- and every pass below reads the opacity it answers with.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The whole frame travels as one surface, before the first pixel: a sheet that fades in where
+        // it already is reads as a cut, and ten pixels of rise over the two hundred of the entrance
+        // is what turns that cut into a window arriving. Pressed here so the dimming, the panel, the
+        // map, the rows -- and the widgets {@code super.render} draws at the end -- move together,
+        // and popped as the last statement, so the pose the game handed in is the pose it gets back.
+        // The game builds a fresh graphics object every frame, so there is nothing to unwind if a
+        // frame is skipped. Row displacement inside the panel is a pose of its own (see
+        // {@link #foldRowY}); this one is only the entrance and the exit.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
+        // The fold follows the panel's own state rather than being written where that state is, so
+        // the rows and the plans animate for whichever of the several paths changed it. The
+        // duration is chosen per direction from the tokens, from wherever the value currently is.
+        fold = controlsFold
+                .duration(controlsExpanded ? UiMotion.EXPAND : UiMotion.COLLAPSE)
+                .to(controlsExpanded ? 1.0F : 0.0F)
+                .eased();
+        // The vertical layout is measured from the fold, not from the flag the fold is heading for:
+        // the band above the controls is the remainder of the panel, so measuring it here is what
+        // makes the map and the list grow and shrink *with* the fold instead of after it. The plan
+        // band's own height is followed on the same principle, for the case where the fold is not
+        // moving at all and the number of plans changes -- choosing a second place while one is
+        // already being compared. Both are cheap arithmetic, and this only runs on a frame where one
+        // of them actually moved.
+        boolean blockMoved = settlePlansBlock();
+        if (fold != laidOutFold || blockMoved) {
+            relayoutForFold(fold);
+        }
+
+        // The scrim reaches past the frame on every side, because the frame above is displaced by up
+        // to UiMotion.RISE while the screen arrives: a dimming drawn from the frame's own corner
+        // would leave an undimmed strip along the edge the entrance uncovered.
+        graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
+                width + UiMotion.SCRIM_MARGIN, height + UiMotion.SCRIM_MARGIN,
+                UiMotion.fade(UiTheme.dim(), open));
 
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, UiTheme.panel());
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), open));
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, UiTheme.panelEdge());
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panelEdge(), open));
 
-        graphics.drawString(font, title, panelX + PADDING, panelY + PADDING, UiTheme.header(), false);
+        graphics.drawString(font, title, panelX + PADDING, panelY + PADDING,
+                UiMotion.fade(UiTheme.header(), open), false);
 
         drawPickerMap(graphics, mouseX, mouseY);
         drawList(graphics, mouseX, mouseY);
         drawDetailsPanel(graphics, mouseX, mouseY);
         drawPreviewSummary(graphics);
-        drawModeSelector(graphics, mouseX, mouseY);
-        drawPreferenceControls(graphics, mouseX, mouseY);
-        drawClassControls(graphics, mouseX, mouseY);
-        drawTransitControls(graphics, mouseX, mouseY);
+        // Under the readout: the plans while the controls are folded, then the four rows while they
+        // are open, then the one bar that toggles between the two, then the footer.
+        drawPlanList(graphics, mouseX, mouseY);
+        // Both forms of the controls are drawn off the one fold value, and that is the whole of the
+        // hand-over: the rows leave upward while fading, the plans come down into the space they
+        // give up while arriving, and the block they share changes height on the same value -- so
+        // the band above them moves with the hand-over rather than before or after it.
+        //
+        // The rows are drawn whenever the fold is off its collapsed end, not only while the controls
+        // are logically open: a fold that stopped drawing them the instant the state changed was a
+        // cut from four rows to one line, with nothing in between. Nothing here decides what is
+        // clickable -- every row hit test still asks the layout and the logical state.
+        //
+        // Clipped to the block the fold has left them. That block's top is the line the band above
+        // is growing down to, so without the clip the rows would be painted across the readout for
+        // the length of the fold; with it, the band appears to close over them, which is the same
+        // motion read as the rows being pushed out of their room.
+        if (fold > 0.004F && stackBottom > stackTop) {
+            UiMotion.clip(graphics, panelX, stackTop, panelX + panelW, stackBottom);
+            drawModeSelector(graphics, mouseX, mouseY);
+            drawPreferenceControls(graphics, mouseX, mouseY);
+            drawClassControls(graphics, mouseX, mouseY);
+            drawTransitControls(graphics, mouseX, mouseY);
+            graphics.disableScissor();
+        }
+        // The bar is always there, in both forms, because it is the one control for the fold: what
+        // it says on the right changes, where it is does not.
+        drawControlsSummary(graphics, mouseX, mouseY);
         drawFooter(graphics, mouseX, mouseY);
 
         super.render(graphics, mouseX, mouseY, partialTick);
+        // Last statement of the frame: nothing above drew outside the displacement, and the pose is
+        // back where the game left it for whatever is drawn after this screen.
+        UiMotion.popFrame(graphics);
     }
 
     /**
-     * The destination list, in whichever column it was given.
+     * The place list, in whichever column it was given, always visible.
      *
      * <p>The hovered row is worked out here and read by {@code mouseClicked}, so the list column's
-     * own bounds are the only thing that decides what is under the cursor.
+     * own bounds are the only thing that decides what is under the cursor. The plans no longer take
+     * this band: they are drawn below the readout (see {@link #drawPlanList}), because covering the
+     * list the player is choosing from was the complaint the new layout answers.
      */
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         hoveredRow = -1;
@@ -1056,10 +1621,170 @@ public final class DestinationScreen extends Screen {
                     Component.translatable(all.isEmpty()
                             ? "screen.howtogo.no_destinations"
                             : "screen.howtogo.no_matches").getString(),
-                    listPaneX + 4, listTop + 4, UiTheme.textMuted(), false);
+                    listPaneX + 4, listTop + 4, UiMotion.fade(UiTheme.textMuted(), open), false);
             return;
         }
         drawRows(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The plan band: up to three plans, one row each, the chosen one picked out.
+     *
+     * <p>It sits between the readout and the bar rather than in the list's band, so the places stay
+     * visible while a route is compared. It exists while the controls are folded and there is at
+     * least one plan -- and while the fold is travelling, because it is the other half of the block
+     * the four rows leave: it comes down into the space they give up and rises back out of it when
+     * they are opened again. Folding the controls is what gives the plans their room, and the bar is
+     * what folds them.
+     *
+     * <p>The rows are bottom-aligned in that block, so the band does not move while the fold changes
+     * the block's height; the fold is expressed by its own alpha and travel, not by re-placing it.
+     * Rows are the full panel width and every one of them is the same height, because the band is
+     * measured from the rows (see {@link #plansBlockHeight}) rather than the other way round. Each is
+     * clickable across its whole width, which takes nothing from the place list's hit tests: the
+     * band lies entirely below them.
+     */
+    private void drawPlanList(GuiGraphics graphics, int mouseX, int mouseY) {
+        hoveredPlan = -1;
+        if (plans.isEmpty() || fold >= 0.996F) {
+            // No band to draw: there is nothing to compare, or the fold has finished opening and the
+            // band's own share of it is gone. The reset above still matters -- a stale row index
+            // would take a click meant for the rows below.
+            return;
+        }
+        int rows = Math.min(plans.size(), MAX_PLAN_ROWS);
+        // The band is what folding the controls uncovers, so its rows arrive with the fold rather
+        // than with the screen: a plan appears as the row holding it does, not in the frame the
+        // place was clicked. Multiplied with the entrance, which has long finished by then.
+        float bandArrival = 1.0F - fold;
+        // The other half of the exchange the four rows make: they leave upwards, so the band comes
+        // down into the space they give up, and rises back out of it as they are opened again. Off
+        // the same {@link #fold} as its alpha, so the band cannot finish fading before it has moved.
+        int bandShift = -Math.round(fold * SUMMARY_FOLD_TRAVEL);
+        for (int i = 0; i < rows; i++) {
+            // The row is drawn shifted and hovered where the layout put it: the click that chooses a
+            // plan is decided from planRowTop, so a band in mid-fold cannot move what is under the
+            // pointer (rule 1 of docs/UI_MOTION.md).
+            int laidOut = planRowTop(i);
+            int top = laidOut + bandShift;
+            int bottom = top + planRowSize;
+            boolean hovered = mouseX >= rowX && mouseX <= rowX + rowW
+                    && mouseY >= laidOut && mouseY < laidOut + planRowSize;
+            boolean selected = i == planIndex;
+            // The same two values a place row carries: the cursor's arrival and being the chosen
+            // one, both eased, so choosing a plan moves the mark rather than moving it at once.
+            float arrived = UiMotion.stagger(i, open) * bandArrival;
+            float lit = planSlides.get(i * 2).to(hovered ? 1.0F : 0.0F).eased();
+            float chosen = planSlides.get(i * 2 + 1).to(selected ? 1.0F : 0.0F).eased();
+
+            if (hovered) {
+                hoveredPlan = i;
+            }
+            float shownTint = Math.max(lit, chosen);
+            if (shownTint * arrived > 0.004F) {
+                graphics.fill(rowX, top, rowX + rowW, bottom - 1,
+                        UiMotion.fade(UiMotion.mix(UiTheme.rowActiveTint(),
+                                UiTheme.rowHoverTint(), lit), shownTint * arrived));
+            }
+            if (chosen * arrived > 0.004F) {
+                // Edge as well as fill. A tint alone is easy to miss on a row the reader's eye is
+                // not on, while the accent edge says which row the footer's start button will start
+                // -- which is the one thing the row is selected for. Shapes belong before the text
+                // pass of the same row; these are GuiGraphics fills, so neither ordering nor the
+                // vertex batches elsewhere in this screen are involved.
+                HudDraw.outlineRounded(graphics, rowX, top, rowX + rowW, bottom - 1, 3,
+                        UiMotion.fade(UiTheme.accent(), chosen * arrived));
+            }
+            RouteOption plan = plans.get(i);
+            String title = planTitle(i, plan);
+            String time = Route.formatDuration(plan.seconds());
+            int timeWidth = font.width(time);
+            int textX = rowX + 6;
+            int titleWidth = Math.max(16, rowW - 12 - timeWidth - 4);
+            // Two lines, always: a plan row is a title and a facts line, and both heights the
+            // layout picks are tall enough for the pair. They are centred as a pair rather than
+            // pinned to the row's top, so a row stretched on a tall window looks the same.
+            int lineY = top + (planRowSize - 17) / 2;
+            // The chosen row's three colours are mixed rather than picked between, so a plan that
+            // stops being the chosen one gives the accent back over the same slide that took it.
+            graphics.drawString(font, font.plainSubstrByWidth(title, titleWidth), textX, lineY,
+                    UiMotion.fade(UiMotion.mix(UiTheme.textStrong(), UiTheme.accent(), chosen),
+                            arrived), false);
+            graphics.drawString(font, time, rowX + rowW - 6 - timeWidth, lineY,
+                    UiMotion.fade(UiMotion.mix(UiTheme.textMuted(), UiTheme.accent(), chosen),
+                            arrived), false);
+            graphics.drawString(font, font.plainSubstrByWidth(planFacts(plan), rowW - 12), textX,
+                    lineY + 9,
+                    UiMotion.fade(UiMotion.mix(UiTheme.textMuted(), UiTheme.textSecondary(), chosen),
+                            arrived), false);
+        }
+    }
+
+    /**
+     * Top of plan row {@code index}.
+     *
+     * <p>One function for the drawing and the click test, so the row under the cursor is the row
+     * that was painted under it -- the same rule the place list's {@link #rowTop} exists for. Every
+     * row is {@link #planRowSize} tall, because the band was measured from them, so there is no
+     * remainder to carry and the last row ends exactly where the controls begin.
+     */
+    private int planRowTop(int index) {
+        return planTop + index * planRowSize;
+    }
+
+    /**
+     * The first line of a result row: which plan it is, and the strategy that produced it.
+     *
+     * <p>The ordinal is the question ("one of three"), the strategy is the answer ("why this one"),
+     * and both are needed: the rows are sorted by time, so the second row is not "the slower
+     * strategy" but "the strategy asked for second that came out slower". Both strings are localised
+     * through translation keys like every other picker string.
+     */
+    private String planTitle(int index, RouteOption plan) {
+        return Component.translatable("screen.howtogo.plan.title", planOrdinal(index),
+                plan.label()).getString();
+    }
+
+    /** "Plan one", "plan two", "plan three", localised, for the position in the list. */
+    private static String planOrdinal(int index) {
+        String key = switch (index) {
+            case 0 -> "screen.howtogo.plan.first";
+            case 1 -> "screen.howtogo.plan.second";
+            default -> "screen.howtogo.plan.third";
+        };
+        return Component.translatable(key).getString();
+    }
+
+    /**
+     * The second line of a result row: the numbers that separate one plan from another.
+     *
+     * <p>For a world journey they are the distance and the turns; for a public transport journey
+     * turns are not what is compared -- the journey's own facts are the changes and the walking, and
+     * those are what the numbers say. Asking the plan rather than the route for them is what keeps
+     * the shown figure and the followed figure the same calculation; see {@link RouteOption}.
+     */
+    private static String planFacts(RouteOption plan) {
+        String distance = Route.formatDistance(plan.length());
+        if (plan.mode() == TravelMode.TRANSIT) {
+            return Component.translatable("screen.howtogo.plan.transit_facts", distance,
+                    plan.transfers(), Route.formatDistance(plan.walked())).getString();
+        }
+        return Component.translatable("screen.howtogo.plan.facts", distance, plan.turns())
+                .getString();
+    }
+
+    /**
+     * The plan the map, the readout and the footer are all about, or null when there are none.
+     *
+     * <p>Clamped rather than trusted: the index is written by several paths, and a read a frame
+     * behind a re-plan must show a plan rather than throw. There is no case where the clamp changes
+     * an answer -- every writer stores an index into the list it was written beside.
+     */
+    private RouteOption selectedPlan() {
+        if (plans.isEmpty()) {
+            return null;
+        }
+        return plans.get(Math.max(0, Math.min(planIndex, plans.size() - 1)));
     }
 
     /**
@@ -1070,6 +1795,9 @@ public final class DestinationScreen extends Screen {
      * be called from inside the map's quad sequence. It is asked for the details every frame rather
      * than handed a copy, because the favourite toggle writes the store and the star has to follow
      * without this screen knowing that it changed.
+     *
+     * <p>Always drawn while a place is selected, whether or not plans are being compared: the card
+     * belongs to the list band and the plans were moved out of that band precisely so it can stay.
      */
     private void drawDetailsPanel(GuiGraphics graphics, int mouseX, int mouseY) {
         if (detailsPlace == null || detailsHeight <= 0) {
@@ -1176,8 +1904,10 @@ public final class DestinationScreen extends Screen {
     }
 
     private void drawPickerMap(GuiGraphics graphics, int mouseX, int mouseY) {
-        graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1, UiTheme.panelEdge());
-        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH, UiTheme.mapBackdrop());
+        graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1,
+                UiMotion.fade(UiTheme.panelEdge(), open));
+        graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH,
+                UiMotion.fade(UiTheme.mapBackdrop(), open));
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
@@ -1203,6 +1933,11 @@ public final class DestinationScreen extends Screen {
         double maxX = mapX + mapW;
         double maxY = mapY + mapH;
         double reach = viewRadius * 1.5;
+        // Every line on this map carries its own alpha rather than a colour with one baked in, so
+        // the screen's opacity is applied here, once: the map's roads and its routes arrive with the
+        // sheet instead of being painted at full strength over it.
+        int roadAlpha = (int) (0x9A * open);
+        int routeAlpha = (int) (0xE0 * open);
 
         // Where every place sits on this map, worked out once and handed to both the marker pass and
         // the hover readout below. The two used to ask for it separately, which meant asking every
@@ -1217,39 +1952,60 @@ public final class DestinationScreen extends Screen {
         double m11 = scale;
         double m12 = centerY - mapCenterZ * scale;
         HudDraw.emitNetwork(last, network, m00, 0, m02, 0, m11, m12,
-                0.7, 0x9A, minX, minY, maxX, maxY);
+                0.7, roadAlpha, minX, minY, maxX, maxY);
 
         // The machine-read rails -- Create's tracks and MTR's -- drawn with the roads and before the
         // labels: a station on the list should be a station the player can see the line to, and for a
         // station that exists only in MTR that line is the one MTR's own rails run along. The whole
         // quad sequence stays ahead of the name pass below, which is what keeps the emit order legal.
         HudDraw.emitNetwork(last, RailTrackStore.network(), m00, 0, m02, 0, m11, m12,
-                0.7, 0x9A, minX, minY, maxX, maxY);
+                0.7, roadAlpha, minX, minY, maxX, maxY);
         HudDraw.emitNetwork(last, MtrTransit.railLayer(), m00, 0, m02, 0, m11, m12,
-                0.7, 0x9A, minX, minY, maxX, maxY);
+                0.7, roadAlpha, minX, minY, maxX, maxY);
 
         // The roads read out of RoadWeaver, drawn with the roads: a route to one of its villages is
         // planned partly over them, and a preview that omitted them would show a line across ground
         // it cannot explain. Drawn chain by chain so a long road is one continuous stroke, and boxed
         // by the view rectangle -- the layer can hold a whole region's worth.
         HudDraw.emitNetworkInBox(last, RoadWeaverLayer.drawnNetwork(), m00, 0, m02, 0, m11, m12,
-                0.7, 0x9A, minX, minY, maxX, maxY,
+                0.7, roadAlpha, minX, minY, maxX, maxY,
                 mapCenterX - reach, mapCenterZ - reach, mapCenterX + reach, mapCenterZ + reach);
 
         Route route = Navigation.route();
         if (route.isPresent()) {
             HudDraw.emitPath(last, route.points(), m00, 0, m02, 0, m11, m12,
-                    1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
+                    1.1, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
         }
 
         // The preview goes down in the same ink as the live route, so a route looked at before
         // committing and the same route afterwards read as the same thing. Drawn after it because
         // a preview is only ever the newer of the two, and would otherwise hide under the line it
         // is being compared with.
-        Navigation.RoutePreview planned = preview;
-        if (planned != null && planned.isPresent()) {
-            HudDraw.emitPath(last, planned.route().points(), m00, 0, m02, 0, m11, m12,
-                    1.1, UiTheme.route(), 0xE0, minX, minY, maxX, maxY);
+        if (!plans.isEmpty()) {
+            // Every plan at once, so the comparison is made on the map as well as in the list: the
+            // chosen one in the accent colour and at the live route's width, the others thin and
+            // faded so they recede without disappearing. The unchosen lines are emitted first, so
+            // the chosen one is never hidden under a line it is being compared with.
+            //
+            // These keep their own fixed alphas rather than the screen's: a plan can only exist
+            // once a destination has been chosen, which is long after the entrance has finished, so
+            // there is nothing here for the opacity to scale.
+            for (int i = 0; i < plans.size(); i++) {
+                if (i != planIndex) {
+                    drawPlanLine(last, plans.get(i), false, m00, m02, m11, m12,
+                            minX, minY, maxX, maxY);
+                }
+            }
+            if (planIndex >= 0 && planIndex < plans.size()) {
+                drawPlanLine(last, plans.get(planIndex), true, m00, m02, m11, m12,
+                        minX, minY, maxX, maxY);
+            }
+        } else {
+            Navigation.RoutePreview planned = preview;
+            if (planned != null && planned.isPresent()) {
+                HudDraw.emitPath(last, planned.route().points(), m00, 0, m02, 0, m11, m12,
+                        1.1, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
+            }
         }
 
         double originX = Navigation.tripOriginX();
@@ -1259,11 +2015,19 @@ public final class DestinationScreen extends Screen {
                     centerY + (originZ - mapCenterZ) * scale, UiTheme.origin(), minX, minY, maxX, maxY);
         }
         // A preview starts at the player rather than at a pinned trip origin, so without a live
-        // trip its start has to be marked from the preview itself or the route line begins nowhere.
-        if (Double.isNaN(originX) && planned != null) {
-            marker(last, centerX + (planned.originX() - mapCenterX) * scale,
-                    centerY + (planned.originZ() - mapCenterZ) * scale, UiTheme.origin(),
-                    minX, minY, maxX, maxY);
+        // trip its start has to be marked or the route line begins nowhere. The old preview carried
+        // that position itself; a results list does not -- every plan starts at the player -- so the
+        // player's own position stands in for it there.
+        if (Double.isNaN(originX)) {
+            if (preview != null) {
+                marker(last, centerX + (preview.originX() - mapCenterX) * scale,
+                        centerY + (preview.originZ() - mapCenterZ) * scale, UiTheme.origin(),
+                        minX, minY, maxX, maxY);
+            } else if (!plans.isEmpty()) {
+                marker(last, centerX + (playerX - mapCenterX) * scale,
+                        centerY + (playerZ - mapCenterZ) * scale, UiTheme.origin(),
+                        minX, minY, maxX, maxY);
+            }
         }
         Destination target = Navigation.target();
         if (target != null) {
@@ -1301,9 +2065,9 @@ public final class DestinationScreen extends Screen {
         if (insideMap(mouseX, mouseY)) {
             if (crosshairFits(mouseX, mouseY)) {
                 graphics.fill((int) mouseX - 4, (int) mouseY, (int) mouseX + 5, (int) mouseY + 1,
-                        UiTheme.crosshair());
+                        UiMotion.fade(UiTheme.crosshair(), open));
                 graphics.fill((int) mouseX, (int) mouseY - 4, (int) mouseX + 1, (int) mouseY + 5,
-                        UiTheme.crosshair());
+                        UiMotion.fade(UiTheme.crosshair(), open));
             }
 
             double worldX = mapCenterX + (mouseX - centerX) / scale;
@@ -1340,7 +2104,8 @@ public final class DestinationScreen extends Screen {
                     labelX = (int) mouseX - 5 - width;
                 }
                 if (labelX >= minX + 1 && labelX + width <= maxX - 1) {
-                    graphics.drawString(font, label, labelX, labelY, UiTheme.textStrong(), true);
+                    graphics.drawString(font, label, labelX, labelY,
+                            UiMotion.fade(UiTheme.textStrong(), open), true);
                     if (labelLines > 1) {
                         // Clamped rather than hung off the name's own position: the name may have
                         // been flipped to the cursor's left, and the summary is measured against the
@@ -1349,7 +2114,7 @@ public final class DestinationScreen extends Screen {
                         int summaryX = (int) Math.max(minX + 1,
                                 Math.min(labelX, maxX - 1 - summaryWidth));
                         graphics.drawString(font, summary, summaryX, labelY + LABEL_HEIGHT,
-                                UiTheme.textSecondary(), true);
+                                UiMotion.fade(UiTheme.textSecondary(), open), true);
                     }
                 }
             }
@@ -1359,12 +2124,36 @@ public final class DestinationScreen extends Screen {
         int bx = mapX + mapW - RECENTER_SIZE - 2;
         int by = mapY + 2;
         HudDraw.fillRounded(graphics, bx, by, bx + RECENTER_SIZE, by + RECENTER_SIZE, 2,
-                UiTheme.mapButton());
-        int iconColor = UiTheme.icon();
+                UiMotion.fade(UiTheme.mapButton(), open));
+        int iconColor = UiMotion.fade(UiTheme.icon(), open);
         graphics.fill(bx + 2, by + RECENTER_SIZE / 2, bx + RECENTER_SIZE - 2,
                 by + RECENTER_SIZE / 2 + 1, iconColor);
         graphics.fill(bx + RECENTER_SIZE / 2, by + 2, bx + RECENTER_SIZE / 2 + 1,
                 by + RECENTER_SIZE - 2, iconColor);
+    }
+
+    /**
+     * One plan's line on the picker map.
+     *
+     * <p>The chosen plan is drawn in the accent colour at the width the live route uses, and the
+     * others thinner and faded: three lines of equal strength would leave the player unable to tell
+     * which one the readout and the footer are about. Both are still drawn in the route family's
+     * ink rather than in a palette of their own, because they are routes and not a different kind of
+     * object -- what separates them is emphasis, not identity.
+     *
+     * <p>Emitted through the shared block's sink like every other line on this map, so it must be
+     * called before the name pass: a string written by {@code GuiGraphics} flushes the batch these
+     * quads are written to.
+     */
+    private static void drawPlanLine(HudDraw.VertexSink out, RouteOption plan, boolean selected,
+                                     double m00, double m02, double m11, double m12,
+                                     double minX, double minY, double maxX, double maxY) {
+        if (plan == null || !plan.isPresent()) {
+            return;
+        }
+        HudDraw.emitPath(out, plan.route().points(), m00, 0, m02, 0, m11, m12,
+                selected ? 1.1 : 0.7, selected ? UiTheme.accent() : UiTheme.route(),
+                selected ? 0xE0 : 0x70, minX, minY, maxX, maxY);
     }
 
     /**
@@ -1519,24 +2308,45 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------ footer
 
     /**
-     * Travel-mode row: one button per mode, the active one picked out in the accent colour.
+     * Where one of the four control rows is drawn this frame: its laid-out top, raised by the fold.
+     *
+     * <p>The drawing half of the fold, and only the drawing half. The rows keep the top the layout
+     * gave them and are moved by this every frame, so the animation never has to write a position:
+     * the places a click is tested against are the ones the layout computed, and a row that is
+     * halfway out of the panel is still exactly where it was when the pointer found it.
+     *
+     * <p>The travel is the whole height of the block the rows occupy, not a token 22 pixels, and
+     * that is what keeps the hand-over clean: the plans arrive in the *bottom* of that block (they
+     * are bottom-aligned, directly above the bar), so the rows have to have left that space by the
+     * time the plans are half-arrived. A shorter travel leaves two half-transparent texts written
+     * over one another for the length of the fold, which is exactly what reads as a glitch.
+     */
+    private int foldRowY(int rowY) {
+        return rowY - Math.round((1.0F - fold) * controlsBlockHeight());
+    }
+
+    /**
+     * Travel-mode row: one button per mode, the active one filled with the selection colour.
      *
      * <p>All three are shown at once rather than cycled through, because the choice changes the
      * route as well as the estimate, and seeing which one is on is the point of the row.
      */
     private void drawModeSelector(GuiGraphics graphics, int mouseX, int mouseY) {
+        int y = foldRowY(modeY);
         graphics.drawString(font, modeCaption(), rowX,
-                modeY + (MODE_ROW_HEIGHT - 8) / 2, UiTheme.textMuted(), false);
+                y + (MODE_ROW_HEIGHT - 8) / 2,
+                UiMotion.fade(UiTheme.textMuted(), open * fold), false);
 
         TravelMode active = Navigation.mode();
         int x = modeButtonsX;
+        int slot = 0;
         for (TravelMode mode : TravelMode.values()) {
-            boolean selected = mode == active;
-            drawButton(graphics, x, modeY, modeButtonWidth, MODE_ROW_HEIGHT, mode.label(),
-                    selected ? UiTheme.rowActiveTint() : UiTheme.button(),
-                    UiTheme.buttonHover(),
-                    selected ? UiTheme.accent() : UiTheme.textStrong(),
-                    isInside(mouseX, mouseY, x, modeY, modeButtonWidth, MODE_ROW_HEIGHT));
+            // A segmented control is a row of chips like any other, so each of them is drawn as one:
+            // the only difference is that exactly one of them is always found to be on.
+            chipSlot = CHIP_MODE + slot;
+            control(graphics, mouseX, mouseY, x, y, modeButtonWidth, MODE_ROW_HEIGHT,
+                    mode.label(), mode == active);
+            slot++;
             x += modeButtonWidth + gap;
         }
     }
@@ -1552,14 +2362,19 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * What the preview says: the trip, or why there is no trip.
+     * What the readout says: the chosen plan, the one plan there is, or why there is no plan.
      *
-     * <p>Laid out as two lines because the two cases say different kinds of thing. A trip is the
-     * mode and its cost, and never changes shape. A failed combination is a sentence from the
-     * router, which is the only thing that turns "there is no route" into something the player can
-     * act on -- so it gets a line of its own to be read in, rather than being clipped to make room
-     * for a distance and a time that do not exist. Showing nothing at all would look like the
-     * picker had simply stopped working.
+     * <p>Laid out as two lines because the two kinds of answer say different kinds of thing. With
+     * plans, the first line names the one being compared -- which of the three and the strategy
+     * that produced it -- and the second gives its cost, so the row, the map's chosen line and this
+     * readout all describe one plan. Without plans, the old single preview keeps its old two lines:
+     * the state line says which mode the answer is for, and the second line is the trip or the
+     * router's sentence explaining why there is none.
+     *
+     * <p>A failed combination is a sentence from the router, which is the only thing that turns
+     * "there is no route" into something the player can act on, so it gets a line of its own to be
+     * read in rather than being clipped to make room for a distance and a time that do not exist.
+     * Showing nothing at all would look like the picker had simply stopped working.
      */
     private void drawPreviewSummary(GuiGraphics graphics) {
         if (previewTarget == null) {
@@ -1567,7 +2382,21 @@ public final class DestinationScreen extends Screen {
             // empty -- the preview is the whole reason the picker no longer commits on one click.
             graphics.drawString(font, Component.translatable("screen.howtogo.preview_hint")
                             .getString(),
-                    rowX, previewY, UiTheme.textMuted(), false);
+                    rowX, previewY, UiMotion.fade(UiTheme.textMuted(), open), false);
+            return;
+        }
+        RouteOption selected = selectedPlan();
+        if (selected != null) {
+            // The state line names the comparison's chosen plan, in the same words as its row, so
+            // the readout and the list are read as one statement rather than two.
+            graphics.drawString(font, planTitle(planIndex, selected), rowX, previewY,
+                    UiMotion.fade(UiTheme.textMuted(), open), false);
+            String text = Component.translatable("screen.howtogo.preview_route",
+                    Route.formatDistance(selected.length()),
+                    Route.formatDuration(selected.seconds())).getString();
+            graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
+                    rowX, previewY + PREVIEW_STATE_HEIGHT, UiMotion.fade(UiTheme.accent(), open),
+                    false);
             return;
         }
         TravelMode active = Navigation.mode();
@@ -1575,7 +2404,7 @@ public final class DestinationScreen extends Screen {
         // still says which one failed -- the reason below it is the router's own sentence.
         graphics.drawString(font, Component.translatable("screen.howtogo.preview_state",
                         active.label()).getString(),
-                rowX, previewY, UiTheme.textMuted(), false);
+                rowX, previewY, UiMotion.fade(UiTheme.textMuted(), open), false);
 
         boolean present = preview != null && preview.isPresent();
         String text;
@@ -1592,30 +2421,35 @@ public final class DestinationScreen extends Screen {
         // all reads as a warning.
         graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
                 rowX, previewY + PREVIEW_STATE_HEIGHT,
-                present ? UiTheme.accent() : UiTheme.warn(), false);
+                UiMotion.fade(present ? UiTheme.accent() : UiTheme.warn(), open), false);
     }
 
     /**
      * The metric, the major-road preference and the voice switch, as buttons that take effect on
      * the spot.
      *
-     * <p>The first two change what "best" means, so both re-plan the preview from
+     * <p>The first two change what "best" means, so both re-plan the comparison from
      * {@code mouseClicked}: a toggle whose effect only appears after the screen is reopened is a
-     * setting, not a control. Speech changes nothing about the route, so the voice switch has no
-     * preview to re-plan -- it is here rather than on a settings page because a toggle the player
+     * setting, not a control. Speech changes nothing about the routes, so the voice switch has
+     * nothing to re-plan -- it is here rather than on a settings page because a toggle the player
      * cannot find is a toggle that does not exist.
      */
     private void drawPreferenceControls(GuiGraphics graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
+        int y = foldRowY(preferenceY);
 
         graphics.drawString(font, metricCaption(), rowX,
-                preferenceY + (preferenceRowHeight - 8) / 2, UiTheme.textMuted(), false);
+                y + (preferenceRowHeight - 8) / 2,
+                UiMotion.fade(UiTheme.textMuted(), open * fold), false);
 
-        control(graphics, mouseX, mouseY, preferenceButtonX(0), preferenceY, preferenceButtonWidth,
+        chipSlot = CHIP_PREFERENCE;
+        control(graphics, mouseX, mouseY, preferenceButtonX(0), y, preferenceButtonWidth,
                 preferenceRowHeight, preferences.metric().label(), true);
-        control(graphics, mouseX, mouseY, preferenceButtonX(1), preferenceY, preferenceButtonWidth,
+        chipSlot = CHIP_PREFERENCE + 1;
+        control(graphics, mouseX, mouseY, preferenceButtonX(1), y, preferenceButtonWidth,
                 preferenceRowHeight, majorRoadsCaption(), preferences.preferMajorRoads());
-        control(graphics, mouseX, mouseY, preferenceButtonX(2), preferenceY, preferenceButtonWidth,
+        chipSlot = CHIP_PREFERENCE + 2;
+        control(graphics, mouseX, mouseY, preferenceButtonX(2), y, preferenceButtonWidth,
                 preferenceRowHeight, voiceCaption(), RoutePreferenceStore.voiceAnnouncements());
     }
 
@@ -1628,13 +2462,16 @@ public final class DestinationScreen extends Screen {
      */
     private void drawClassControls(GuiGraphics graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
+        int y = foldRowY(classY);
 
         graphics.drawString(font, avoidCaption(), rowX,
-                classY + (classRowHeight - 8) / 2, UiTheme.textMuted(), false);
+                y + (classRowHeight - 8) / 2,
+                UiMotion.fade(UiTheme.textMuted(), open * fold), false);
 
         RoadClass[] classes = RoadClass.values();
         for (int i = 0; i < classes.length; i++) {
-            control(graphics, mouseX, mouseY, classButtonX(i), classY, classButtonWidth, classRowHeight,
+            chipSlot = CHIP_CLASS + i;
+            control(graphics, mouseX, mouseY, classButtonX(i), y, classButtonWidth, classRowHeight,
                     classCaption(classes[i]), preferences.avoids(classes[i]));
         }
     }
@@ -1655,10 +2492,13 @@ public final class DestinationScreen extends Screen {
      * nothing about the route, so nothing is re-planned when it is pressed.
      */
     private void drawTransitControls(GuiGraphics graphics, int mouseX, int mouseY) {
+        int y = foldRowY(transitY);
         graphics.drawString(font, transitCaption(), rowX,
-                transitY + (transitRowHeight - 8) / 2, UiTheme.textMuted(), false);
+                y + (transitRowHeight - 8) / 2,
+                UiMotion.fade(UiTheme.textMuted(), open * fold), false);
         int[] rect = transitRect();
-        control(graphics, mouseX, mouseY, rect[0], rect[1], rect[2], transitRowHeight,
+        chipSlot = CHIP_TRANSIT;
+        control(graphics, mouseX, mouseY, rect[0], y, rect[2], transitRowHeight,
                 boardOnlyCaption(), RoutePreferenceStore.transitBoardOnly());
     }
 
@@ -1668,12 +2508,27 @@ public final class DestinationScreen extends Screen {
      * <p>A plain button and its state rather than a checkbox: the same hover feedback as every
      * other control in the panel, and no widget to keep in step with a value that lives outside it.
      * Where it was clicked is decided in {@code mouseClicked}, which uses the same coordinates.
+     *
+     * <p>Its two states are mixed into the face rather than picked between, because a toggle that
+     * is switched on is a change the player made: the chosen face travels from {@link UiTheme#button()}
+     * to the accent wash this panel has always used for a chosen control, and the label travels with
+     * it, over its own slide. The cursor's face is then mixed over that by {@link #drawButton}, which
+     * is where the hover lives for every control in the panel.
+     *
+     * <p>Both endpoints are the colours the panel used before it animated -- the travel is the only
+     * new thing, so a chip resting at the far end of the mix is pixel-for-pixel the chip it used to be.
      */
     private void control(GuiGraphics graphics, int mouseX, int mouseY, int x, int y, int w, int h,
                          String label, boolean on) {
+        boolean hovered = isInside(mouseX, mouseY, x, y, w, h);
+        float chosen = chipSlides.get(chipSlot * 2 + 1).to(on ? 1.0F : 0.0F).eased();
+        int resting = UiMotion.mix(UiTheme.button(), UiTheme.rowActiveTint(), chosen);
+        int text = UiMotion.mix(UiTheme.textStrong(), UiTheme.accent(), chosen);
+        // Faded by the fold here rather than inside the button: the fold belongs to this row of the
+        // panel, while the same button draws the footer, which never folds.
         drawButton(graphics, x, y, w, h, font.plainSubstrByWidth(label, w - 4),
-                on ? UiTheme.rowActiveTint() : UiTheme.button(), UiTheme.buttonHover(),
-                on ? UiTheme.accent() : UiTheme.textStrong(), isInside(mouseX, mouseY, x, y, w, h));
+                UiMotion.fade(resting, fold), UiMotion.fade(UiTheme.buttonHover(), fold),
+                UiMotion.fade(text, fold), hovered);
     }
 
     private static String metricCaption() {
@@ -1753,6 +2608,80 @@ public final class DestinationScreen extends Screen {
         return isInside((int) mouseX, (int) mouseY, rect[0], rect[1], rect[2], transitRowHeight);
     }
 
+    // ------------------------------------------------------------ the fold bar
+
+    /**
+     * The one bar that folds the four control rows away and opens them again.
+     *
+     * <p>Always in the same place, in both forms: at the bottom of the group, directly above the
+     * footer. While the rows are folded it says what they are set to, and a hint at its right end
+     * says that pressing it opens them; while they are open it says the same setting and the hint
+     * says that pressing it folds them. That is the whole of the control -- the separate button that
+     * used to sit here saying "路线选项" was a second way of doing what the summary above it already
+     * did, and a control that only works in one direction is not an affordance, it is a trap: a
+     * player who opened the rows to look at the options had no way to give the plans their room back.
+     *
+     * <p>Drawn as text on a hover tint rather than as a filled button so it reads as a statement
+     * about the state that happens to be clickable, which is what the folded summary always did; the
+     * hint is in the panel's body ink rather than the muted one so that it is the part read as the
+     * instruction. The summary text is cut to leave the hint its room, because a summary at its
+     * longest would otherwise be written under it.
+     */
+    private void drawControlsSummary(GuiGraphics graphics, int mouseX, int mouseY) {
+        float lit = chipSlides.get(CHIP_BAR * 2).to(barAt(mouseX, mouseY) ? 1.0F : 0.0F).eased();
+        if (lit > 0.004F) {
+            graphics.fill(rowX, barY, rowX + rowW, barY + summaryRowHeight,
+                    UiMotion.fade(UiTheme.rowHoverTint(), lit * open));
+        }
+        String hint = Component.translatable(controlsExpanded
+                ? "screen.howtogo.controls.hide" : "screen.howtogo.controls.show").getString();
+        int hintWidth = font.width(hint);
+        int lineY = barY + (summaryRowHeight - 8) / 2;
+        graphics.drawString(font,
+                font.plainSubstrByWidth(controlsSummaryText(), rowW - 18 - hintWidth),
+                rowX + 6, lineY, UiMotion.fade(UiTheme.textMuted(), open), false);
+        graphics.drawString(font, hint, rowX + rowW - 6 - hintWidth, lineY,
+                UiMotion.fade(UiTheme.text(), open), false);
+    }
+
+    /**
+     * What the controls are set to: the mode, the metric, and whichever preferences are on.
+     *
+     * <p>The four rows are four questions -- how to travel, what "best" means, which classes to keep
+     * out and whether to hear stops or turns -- and the bar answers them in the order the rows ask
+     * them, so a player who folded the panel can still see why the plans look the way they do
+     * without opening it. Only the switches that are on are named: a summary that listed "major
+     * roads: off" as well would be longer without saying anything more.
+     */
+    private String controlsSummaryText() {
+        RoutePreferences preferences = RoutePreferenceStore.preferences();
+        List<String> parts = new ArrayList<>();
+        parts.add(Navigation.mode().label());
+        parts.add(preferences.metric().label());
+        if (preferences.preferMajorRoads()) {
+            parts.add(majorRoadsCaption());
+        }
+        if (preferences.avoidsAny()) {
+            List<String> avoided = new ArrayList<>();
+            for (RoadClass roadClass : RoadClass.values()) {
+                if (preferences.avoids(roadClass)) {
+                    avoided.add(classCaption(roadClass));
+                }
+            }
+            parts.add(Component.translatable("screen.howtogo.avoiding",
+                    String.join("/", avoided)).getString());
+        }
+        if (RoutePreferenceStore.transitBoardOnly()) {
+            parts.add(Component.translatable("screen.howtogo.controls.board_only").getString());
+        }
+        return String.join(" · ", parts);
+    }
+
+    /** True when the cursor is on the bar that folds and opens the four control rows. */
+    private boolean barAt(double mouseX, double mouseY) {
+        return isInside((int) mouseX, (int) mouseY, rowX, barY, rowW, summaryRowHeight);
+    }
+
     /**
      * The metric, major-road or voice toggle at the given index, as an x coordinate.
      *
@@ -1777,33 +2706,104 @@ public final class DestinationScreen extends Screen {
         return null;
     }
 
+    /**
+     * The footer: start the chosen plan, cancel the choice, or leave the picker.
+     *
+     * <p>Three buttons while there are plans to start, in the order the choice is made: the action
+     * on the left where the picker has always put it, "cancel the choice" in the middle, and the way
+     * out of the screen on the right. Without plans the old behaviour stands unchanged -- the action
+     * (or "stop") and cancel -- because there is no choice to cancel separately from the destination
+     * itself; the readout above already says the single answer.
+     */
     private void drawFooter(GuiGraphics graphics, int mouseX, int mouseY) {
+        int count = footerButtonCount();
+        int buttonWidth = footerButtonWidth(count);
+        if (count == 3) {
+            // A three-button footer divides the row into 80-unit buttons on the narrowest panel this
+            // screen builds, so the start label is the short one: "Start navigating" is the long
+            // form used where a single wide button has room for it.
+            chipSlot = CHIP_FOOTER;
+            drawButton(graphics, footerButtonX(0), footerY, buttonWidth,
+                    Component.translatable("screen.howtogo.plan.start").getString(),
+                    UiTheme.accent(), UiTheme.accentHover(), UiTheme.onSelection(),
+                    isInside(mouseX, mouseY, footerButtonX(0), footerY, buttonWidth));
+            chipSlot = CHIP_FOOTER + 1;
+            drawButton(graphics, footerButtonX(1), footerY, buttonWidth,
+                    Component.translatable("screen.howtogo.plan.clear").getString(),
+                    UiTheme.button(), UiTheme.buttonHover(), UiTheme.onButton(),
+                    isInside(mouseX, mouseY, footerButtonX(1), footerY, buttonWidth));
+            chipSlot = CHIP_FOOTER + 2;
+            drawButton(graphics, footerButtonX(2), footerY, buttonWidth,
+                    Component.translatable("gui.cancel").getString(),
+                    UiTheme.button(), UiTheme.buttonHover(), UiTheme.onButton(),
+                    isInside(mouseX, mouseY, footerButtonX(2), footerY, buttonWidth));
+            return;
+        }
         Destination action = actionDestination();
         boolean navigating = Navigation.target() != null;
-        boolean twoButtons = action != null || navigating;
 
-        int buttonWidth = twoButtons ? (rowW - PADDING) / 2 : rowW;
         int leftX = rowX;
-        int rightX = twoButtons ? leftX + buttonWidth + PADDING : leftX;
+        int rightX = count == 2 ? leftX + buttonWidth + PADDING : leftX;
 
+        // Cancel is the last slot in every division, so a footer that loses or gains a button does
+        // not hand its hover value to a different label.
         if (action != null) {
             // Offered whenever something is picked, whether or not it routes: a trip that cannot be
             // planned is still the one the player asked for, and the preview line above has already
             // said why it will not help.
+            chipSlot = CHIP_FOOTER;
             drawButton(graphics, leftX, footerY, buttonWidth,
                     Component.translatable("screen.howtogo.go_here").getString(),
                     UiTheme.accent(), UiTheme.accentHover(), UiTheme.onSelection(),
                     isInside(mouseX, mouseY, leftX, footerY, buttonWidth));
         } else if (navigating) {
+            chipSlot = CHIP_FOOTER;
             drawButton(graphics, leftX, footerY, buttonWidth,
                     Component.translatable("screen.howtogo.stop").getString(),
                     UiTheme.danger(), UiTheme.dangerHover(), UiTheme.onSelection(),
                     isInside(mouseX, mouseY, leftX, footerY, buttonWidth));
         }
+        chipSlot = CHIP_FOOTER + 2;
         drawButton(graphics, rightX, footerY, buttonWidth,
                 Component.translatable("gui.cancel").getString(),
                 UiTheme.button(), UiTheme.buttonHover(), UiTheme.onButton(),
                 isInside(mouseX, mouseY, rightX, footerY, buttonWidth));
+    }
+
+    /**
+     * How many buttons the footer has, which is the only thing that decides its division.
+     *
+     * <p>Three while plans are compared, two for the old behaviour -- the action (or "stop") and
+     * cancel -- and one when there is nothing to act on, so cancel takes the whole row. Asked by
+     * both the drawing and the click test, so the two cannot disagree about where the buttons are.
+     */
+    private int footerButtonCount() {
+        if (!plans.isEmpty()) {
+            return 3;
+        }
+        return actionDestination() != null || Navigation.target() != null ? 2 : 1;
+    }
+
+    /**
+     * Width of each footer button, so the buttons and their gaps add up to {@link #rowW}.
+     *
+     * <p>The two-button figure is the one the picker has always used -- a gap of {@link #PADDING}
+     * between the pair -- and the three-button case is the same rule with two gaps, so switching
+     * between the results footer and the old one does not move the left button. A floor of one unit
+     * avoids dividing by a width that no window can produce.
+     */
+    private int footerButtonWidth(int count) {
+        return count == 1 ? rowW : Math.max(1, (rowW - PADDING * (count - 1)) / count);
+    }
+
+    /**
+     * Left edge of a footer button: the same division its width came from, not a second copy.
+     *
+     * <p>Both the drawing and the click test ask this, so a click on a footer button cannot land
+     * where a different rule put the label.
+     */
+    private int footerButtonX(int index) {
+        return rowX + index * (footerButtonWidth(footerButtonCount()) + PADDING);
     }
 
     /** Where the action button would commit to: a fresh pin first, then the previewed choice. */
@@ -1822,7 +2822,14 @@ public final class DestinationScreen extends Screen {
      * <p>The label colour follows the face rather than the other way round: a button filled with the
      * accent or with the danger colour carries white text in both styles, and the neutral cancel
      * button carries the panel's own text colour, which is what makes it read as neutral rather than
-     * as a second action.
+     * as a second action. That is also why the label is not mixed with the face: it is chosen for
+     * contrast against the resting colour and interpolating it would pass through shades nobody
+     * picked for legibility, so only the face travels.
+     *
+     * <p>The face is the one thing every control in this panel draws through, so the hover lives
+     * here and not at each call site: it mixes from the resting colour to the cursor colour over the
+     * slot's own slide, which is why a chip and the button under the cursor next to it are never at
+     * different points in the same fade.
      */
     private void drawButton(GuiGraphics graphics, int x, int y, int w,
                             String label, int base, int hover, int textColor, boolean hovered) {
@@ -1831,9 +2838,11 @@ public final class DestinationScreen extends Screen {
 
     private void drawButton(GuiGraphics graphics, int x, int y, int w, int h,
                             String label, int base, int hover, int textColor, boolean hovered) {
-        HudDraw.fillRounded(graphics, x, y, x + w, y + h, 3, hovered ? hover : base);
+        float lit = chipSlides.get(chipSlot * 2).to(hovered ? 1.0F : 0.0F).eased();
+        HudDraw.fillRounded(graphics, x, y, x + w, y + h, 3,
+                UiMotion.fade(UiMotion.mix(base, hover, lit), open));
         graphics.drawString(font, label, x + (w - font.width(label)) / 2,
-                y + (h - 8) / 2, textColor, false);
+                y + (h - 8) / 2, UiMotion.fade(textColor, open), false);
     }
 
     private static boolean isInside(int mouseX, int mouseY, int x, int y, int w) {
@@ -1849,23 +2858,52 @@ public final class DestinationScreen extends Screen {
     @Override
     // 1.21.9 turned key input into a record; the body only needs the key code, so it is unpacked on
     // entry and reads the same on either side. ESC is intercepted here, before the screen's own
-    // handler, which closes the screen: with a place's details open it is the way back to the full
-    // list, not out of the picker.
+    // handler, which closes the screen: it walks out one layer at a time -- the details card, then
+    // the choice it was made for, and only then the picker itself. A picker that closed on the first
+    // ESC after a place was chosen would take the choice away as if it had never been made.
     //? if >=1.21.9 {
     /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
         int keyCode = event.key();
     *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
     //?}
-        if (keyCode == InputConstants.KEY_ESCAPE && detailsPlace != null) {
-            setDetailsPlace(null);
-            return true;
+        if (keyCode == InputConstants.KEY_ESCAPE) {
+            if (detailsPlace != null) {
+                setDetailsPlace(null);
+                return true;
+            }
+            if (previewTarget != null || pendingPick != null) {
+                clearSelection();
+                return true;
+            }
+        }
+        if (!controlsExpanded && !plans.isEmpty()) {
+            // 1/2/3 choose a plan. Number keys rather than arrows because the band is at most three
+            // rows and already on screen: one press per plan instead of walking a cursor. Only while
+            // the band is visible -- a key that selects something hidden would change what the
+            // footer's start button starts without showing the change.
+            int chosen = chosenPlanKey(keyCode);
+            if (chosen >= 0) {
+                planIndex = chosen;
+                return true;
+            }
         }
         //? if >=1.21.9 {
         /*return super.keyPressed(event);
         *///?} else {
         return super.keyPressed(keyCode, scanCode, modifiers);
         //?}
+    }
+
+    /**
+     * The plan index a number key selects, or -1.
+     *
+     * <p>Out-of-range numbers are ignored rather than clamped: a "3" pressed when there are two
+     * plans is not a request for the second one, it is a key aimed at a list that is not there.
+     */
+    private int chosenPlanKey(int keyCode) {
+        int index = keyCode - InputConstants.KEY_1;
+        return index >= 0 && index < plans.size() ? index : -1;
     }
 
     @Override
@@ -1887,7 +2925,9 @@ public final class DestinationScreen extends Screen {
         }
         // The details card comes before everything else: it lies inside the list column, so a click
         // on one of its controls would otherwise be read as a click on the row behind it, and a
-        // click on the card's empty space as the beginning of a map drag or a pin below it.
+        // click on the card's empty space as the beginning of a map drag or a pin below it. It is
+        // drawn whenever a place is selected, whether or not the plans are showing, so there is no
+        // state in which it must be skipped.
         if (detailsPlace != null) {
             PlaceDetailPanel.Action action = detailPanel.actionAt(mouseX, mouseY);
             if (action != PlaceDetailPanel.Action.NONE) {
@@ -1929,48 +2969,89 @@ public final class DestinationScreen extends Screen {
             selectPreview(chosen);
             return true;
         }
+        if (!controlsExpanded && hoveredPlan >= 0 && hoveredPlan < plans.size()) {
+            // Chooses a plan, does not start it: the footer's start button is what commits, and the
+            // map and the readout follow the choice on the next frame. Re-planning here would
+            // answer a question the click did not ask.
+            planIndex = hoveredPlan;
+            return true;
+        }
 
-        TravelMode clickedMode = modeAt(mouseX, mouseY);
-        if (clickedMode != null) {
-            // Switches the mode and re-plans the preview in one go, so the map redraws with the
-            // route the mode implies while the choice is still being made.
-            Navigation.setMode(clickedMode);
-            replanPreview();
+        // The bar is the one control for the fold, in both directions: while the rows are folded it
+        // opens them, while they are open it folds them away again and gives the plans their room
+        // back. It sits under the rows in both forms and never overlaps one, so it is tested before
+        // them rather than as an else branch of the open state.
+        if (barAt(mouseX, mouseY)) {
+            setControlsExpanded(!controlsExpanded);
             return true;
         }
-        if (metricAt(mouseX, mouseY)) {
-            RoutePreferenceStore.toggleMetric();
-            replanPreview();
-            return true;
-        }
-        if (majorRoadsAt(mouseX, mouseY)) {
-            RoutePreferenceStore.togglePreferMajorRoads();
-            replanPreview();
-            return true;
-        }
-        if (voiceAt(mouseX, mouseY)) {
-            // No re-plan: speech is not an input to a route, so the map has nothing to redraw.
-            RoutePreferenceStore.toggleVoiceAnnouncements();
-            return true;
-        }
-        if (transitAt(mouseX, mouseY)) {
-            // No re-plan either: the guidance says different things about the same journey.
-            RoutePreferenceStore.toggleTransitBoardOnly();
-            return true;
-        }
-        RoadClass clickedClass = classAt(mouseX, mouseY);
-        if (clickedClass != null) {
-            RoutePreferenceStore.toggleAvoided(clickedClass);
-            replanPreview();
-            return true;
+
+        if (controlsExpanded) {
+            TravelMode clickedMode = modeAt(mouseX, mouseY);
+            if (clickedMode != null) {
+                // Switches the mode and re-plans the plans in one go, so the band and the map redraw
+                // with the routes the mode implies while the choice is still being made. The rows
+                // fold afterwards (see replanAndShowPlans) so the answer is not hidden by them.
+                Navigation.setMode(clickedMode);
+                replanAndShowPlans();
+                return true;
+            }
+            if (metricAt(mouseX, mouseY)) {
+                RoutePreferenceStore.toggleMetric();
+                replanAndShowPlans();
+                return true;
+            }
+            if (majorRoadsAt(mouseX, mouseY)) {
+                RoutePreferenceStore.togglePreferMajorRoads();
+                replanAndShowPlans();
+                return true;
+            }
+            if (voiceAt(mouseX, mouseY)) {
+                // No re-plan: speech is not an input to a route, so the map has nothing to redraw.
+                RoutePreferenceStore.toggleVoiceAnnouncements();
+                return true;
+            }
+            if (transitAt(mouseX, mouseY)) {
+                // No re-plan either: the guidance says different things about the same journey.
+                RoutePreferenceStore.toggleTransitBoardOnly();
+                return true;
+            }
+            RoadClass clickedClass = classAt(mouseX, mouseY);
+            if (clickedClass != null) {
+                RoutePreferenceStore.toggleAvoided(clickedClass);
+                replanAndShowPlans();
+                return true;
+            }
         }
 
         Destination action = actionDestination();
         boolean navigating = Navigation.target() != null;
-        boolean twoButtons = action != null || navigating;
-        int buttonWidth = twoButtons ? (rowW - PADDING) / 2 : rowW;
+        if (!plans.isEmpty()) {
+            int buttonWidth = footerButtonWidth(3);
+            if (isInside((int) mouseX, (int) mouseY, footerButtonX(0), footerY, buttonWidth)) {
+                // The chosen plan, not "the fastest one": the row the player picked is the row the
+                // readout named and the map drew in the accent colour.
+                commitPlan(planIndex);
+                return true;
+            }
+            if (isInside((int) mouseX, (int) mouseY, footerButtonX(1), footerY, buttonWidth)) {
+                clearSelection();
+                return true;
+            }
+            if (isInside((int) mouseX, (int) mouseY, footerButtonX(2), footerY, buttonWidth)) {
+                onClose();
+                return true;
+            }
+            //? if >=1.21.9 {
+            /*return super.mouseClicked(new MouseButtonEvent(mouseX, mouseY,
+                    new MouseButtonInfo(button, 0)), false);
+            *///?} else {
+            return super.mouseClicked(mouseX, mouseY, button);
+            //?}
+        }
+        int buttonWidth = footerButtonWidth(footerButtonCount());
         int leftX = rowX;
-        int rightX = twoButtons ? leftX + buttonWidth + PADDING : leftX;
+        int rightX = footerButtonCount() == 2 ? leftX + buttonWidth + PADDING : leftX;
 
         if (action != null && isInside((int) mouseX, (int) mouseY, leftX, footerY, buttonWidth)) {
             commit(action);
@@ -1995,17 +3076,44 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Chooses a destination to preview, planning the route it implies and opening its details.
+     * Chooses a destination to compare plans for, and opens its details.
      *
-     * <p>A real place opens its details card, because the list and the map now both choose on one
-     * click and the details are what that click was for. A point picked on the map is not a place --
-     * it has no record to show and nothing to edit -- so it closes the card rather than opening an
-     * empty one.
+     * <p>A real place opens its details card, because the list and the map both choose on one click
+     * and the details are what that click was for; the card stays visible, because the plans are
+     * drawn below the list rather than over it. A point picked on the map is not a place -- it has no
+     * record to show and nothing to edit -- so it closes the card rather than opening an empty one.
+     *
+     * <p>The controls fold with the choice: the four rows are what the plan band takes its room
+     * from, so leaving them open would leave the plans they produced hidden. The bar opens them
+     * again, and clicking it once more folds them away.
      */
     private void selectPreview(Destination destination) {
         previewTarget = destination;
         setDetailsPlace(Destinations.isPlace(destination) ? destination : null);
-        replanPreview();
+        replanAndShowPlans();
+    }
+
+    /**
+     * Forgets the chosen destination, and gives the panel back to the places and the open controls.
+     *
+     * <p>What the footer's "cancel the choice" does, and what ESC does once the details card is
+     * closed. The place list and its card are untouched -- they were never hidden -- and the four
+     * control rows come back with the space the plans had taken: a selection cancelled is a panel
+     * with nothing being compared, which is exactly the state the panel opens in.
+     *
+     * <p>The map pin goes with the choice: a pin with no plan under it is a point the player has
+     * already stopped choosing. The old single preview is cleared too, so the readout says what to
+     * do rather than describing a route nothing is about. The details card is not cleared -- it
+     * belongs to the places, not to the choice, and is closed by its own controls.
+     */
+    private void clearSelection() {
+        plans = List.of();
+        planIndex = 0;
+        preview = null;
+        previewTarget = null;
+        pendingPick = null;
+        controlsExpanded = true;
+        relayout();
     }
 
     /**
@@ -2034,7 +3142,18 @@ public final class DestinationScreen extends Screen {
         }
         switch (action) {
             case FAVORITE -> PlaceDetailStore.toggleFavorite(place);
-            case NAVIGATE -> commit(place);
+            // Plan one while there are plans. The card is beside the plan band, not over it, so this
+            // is reachable in the folded state; its contract is that a navigate press commits the
+            // best plan on offer rather than planning a fourth one behind the band. Without plans
+            // the old behaviour stands: hand the destination over and let the live planning do what
+            // it always did.
+            case NAVIGATE -> {
+                if (!plans.isEmpty()) {
+                    commitPlan(0);
+                } else {
+                    commit(place);
+                }
+            }
             case EDIT -> editDetailsPlace(place);
             case BACK -> setDetailsPlace(null);
             default -> {
@@ -2082,6 +3201,9 @@ public final class DestinationScreen extends Screen {
         if (Destinations.isPlace(previewTarget) && !all.contains(previewTarget)) {
             previewTarget = null;
             preview = null;
+            // Nothing is being compared any more, so the panel goes back to the state it opens in:
+            // the four control rows, open. The layout below is measured after this runs.
+            controlsExpanded = true;
         }
     }
 
@@ -2109,29 +3231,65 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Re-plans the preview for the current destination, mode and preferences.
+     * Re-plans the plans for the current destination, mode and preferences.
      *
-     * <p>Called from every control that changes one of the three, so what the map shows is always
-     * the answer to the settings currently on screen. Everything this reads is the live session, and
-     * {@link Navigation#preview} writes none of it, so comparing routes here cannot disturb a trip
+     * <p>Called when a destination is chosen and from every control that changes one of the three --
+     * through {@link #replanAndShowPlans}, which also folds the controls so the answer is visible --
+     * and from {@code init}, so the band and the map always show the answer to the settings on
+     * screen. The chosen row goes back to the first plan on every re-plan: the rows are sorted by
+     * time, so row two of a new list is not the row two the player was looking at, and keeping the
+     * index would silently switch the plan they had picked.
+     *
+     * <p>Everything this reads is the live session, and neither {@link Navigation#plans} nor
+     * {@link Navigation#preview} writes any of it, so comparing routes here cannot disturb a trip
      * that is already running.
+     *
+     * <p>When the alternatives list is empty -- the mode has one answer, or none -- the old single
+     * preview is planned as well. That is not a second opinion: it is the only thing that can carry
+     * the router's sentence explaining why there is no route, and it is what the screen drew before
+     * there was a comparison. It costs one extra search only in the case where there is nothing to
+     * compare.
      */
-    private void replanPreview() {
+    private void replanPlans() {
+        planIndex = 0;
         if (previewTarget == null) {
+            plans = List.of();
             preview = null;
             return;
         }
-        preview = Navigation.preview(previewTarget, Navigation.mode(),
-                RoutePreferenceStore.preferences());
+        plans = Navigation.plans(previewTarget);
+        preview = plans.isEmpty()
+                ? Navigation.preview(previewTarget, Navigation.mode(),
+                        RoutePreferenceStore.preferences())
+                : null;
     }
 
     /**
-     * Starts navigating to the chosen destination.
+     * Starts the trip along the chosen plan.
      *
-     * <p>Only the destination is handed over; {@link Navigation#setTarget} plans the route itself,
-     * under the mode and policy in force. During the preview it is the selected mode that is shown
-     * rather than the walking baseline, and the live plan is where that baseline applies -- which is
-     * why the HUD can end up saying the trip was planned on foot when the preview showed a drive.
+     * <p>The plan is handed over whole rather than the destination alone: see
+     * {@link Navigation#setTarget(Destination, RouteOption)} for why planning again on commit would
+     * answer a question the player did not ask. The index is clamped defensively even though the
+     * list can only be read through the same index that was set beside it.
+     */
+    private void commitPlan(int index) {
+        if (previewTarget == null || plans.isEmpty()) {
+            return;
+        }
+        RouteOption plan = plans.get(Math.max(0, Math.min(index, plans.size() - 1)));
+        pendingPick = null;
+        Navigation.setTarget(previewTarget, plan);
+        onClose();
+    }
+
+    /**
+     * Starts navigating to the chosen destination, planning the route from the destination alone.
+     *
+     * <p>The path kept for the case with no plans: the mode has one answer or none, so there is no
+     * comparison to honour and the live planning decides -- under the mode and policy in force, and
+     * with the walking baseline of {@link Navigation#setTarget} applying as it always has. That is
+     * why the HUD can end up saying the trip was planned on foot when the preview showed a drive;
+     * the plan-band path, which hands the chosen plan over whole, does not have that gap.
      */
     private void commit(Destination destination) {
         pendingPick = null;

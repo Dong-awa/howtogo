@@ -161,6 +161,16 @@ public final class RoadNameScreen extends Screen {
     /** The done and cancel buttons, built in {@link #init()} and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
 
+    /** The opacity the prompt is drawn at this frame; the row helpers read it. See {@link #render}. */
+    private float open = 1.0F;
+
+    /**
+     * One hover slide per kind chip, so the chip under the cursor is a chip lighting up rather than
+     * one being replaced. Keyed by the position in the row, and a field, so a chip redrawn sixty
+     * times a second costs nothing and a row of four chips that is swept across never allocates.
+     */
+    private final UiMotion.Slides kindHovers = new UiMotion.Slides();
+
     /** Names only: roads, railways, and anything else with no kind. */
     public RoadNameScreen(Screen parent, String titleKey, String initialValue,
                           double anchorX, double anchorY, Consumer<String> onAccept) {
@@ -479,7 +489,7 @@ public final class RoadNameScreen extends Screen {
         }
         graphics.drawString(this.font, this.font.plainSubstrByWidth(beside,
                         FIELD_WIDTH - LAYER_FIELD_WIDTH - 4), fieldX + LAYER_FIELD_WIDTH + 4, y + 4,
-                colour, false);
+                UiMotion.fade(colour, open), false);
     }
 
     private int typeY() {
@@ -513,16 +523,23 @@ public final class RoadNameScreen extends Screen {
             boolean selected = kinds[i] == selectedKind;
             boolean hovered = mouseX >= x && mouseX < x + typeWidth()
                     && mouseY >= y && mouseY < y + TYPE_HEIGHT;
+            // The chosen chip keeps its own face whatever the cursor does -- it is the answer, not a
+            // button -- and every other one is mixed towards the hover face by its own slide. The
+            // chips also arrive one stagger step apart, so the row is read left to right.
+            float lit = kindHovers.get(i).to(hovered && !selected ? 1.0F : 0.0F).eased();
+            float arrived = UiMotion.stagger(i, open);
             int background = selected ? UiTheme.selectionSoft()
-                    : (hovered ? UiTheme.buttonHover() : UiTheme.button());
-            graphics.fill(x, y, x + typeWidth(), y + TYPE_HEIGHT, background);
+                    : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit);
+            graphics.fill(x, y, x + typeWidth(), y + TYPE_HEIGHT,
+                    UiMotion.fade(background, arrived));
 
             String label = Component.translatable("screen.howtogo.place_kind." + kinds[i].id())
                     .getString();
             String shown = this.font.plainSubstrByWidth(label, typeWidth() - 2);
             graphics.drawString(this.font, shown,
                     x + Math.max(0, (typeWidth() - this.font.width(shown)) / 2), y + 4,
-                    selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(), false);
+                    UiMotion.fade(selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(),
+                            arrived), false);
         }
     }
 
@@ -626,6 +643,11 @@ public final class RoadNameScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The frame's motion first, before the parent is re-rendered and before the sheet is drawn:
+        // everything this prompt paints reads this one value, and UiMotion.of is also what pumps a
+        // deferred screen swap, so it is asked exactly once per frame.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
         if (parent != null) {
             try {
                 parent.render(graphics, mouseX, mouseY, partialTick);
@@ -634,15 +656,22 @@ public final class RoadNameScreen extends Screen {
                 // prompt to be usable.
             }
         }
+        // The prompt then travels as one piece -- edge, sheet, fields, chips and buttons -- so it
+        // rises into place rather than being cut on. Pushed after the parent's pass rather than
+        // before it: that backdrop is another screen's frame, and a translated one would slide the
+        // map under the prompt and leave a strip of the parent's own dimming along its edge.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
 
         // A window edge and an opaque sheet rather than a tint over the map: the prompt has to be
         // readable on top of whatever the map happens to be drawing under it, and the title is the
-        // first thing on it that says what is being named.
+        // first thing on it that says what is being named. Both fade in with the prompt, so it
+        // arrives over the map instead of appearing on it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.windowEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
+                UiMotion.fade(UiTheme.windowEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panelSolid(), open));
         graphics.drawString(this.font, this.title, panelX + PANEL_PAD, panelY + PANEL_PAD,
-                UiTheme.title(), false);
+                UiMotion.fade(UiTheme.title(), open), false);
 
         super.render(graphics, mouseX, mouseY, partialTick);
         if (isPlaceEditor()) {
@@ -657,12 +686,15 @@ public final class RoadNameScreen extends Screen {
             drawLayerRow(graphics);
         }
         if (error != null) {
-            graphics.drawString(this.font, error.getString(), fieldX, errorY(), UiTheme.error(),
-                    false);
+            graphics.drawString(this.font, error.getString(), fieldX, errorY(),
+                    UiMotion.fade(UiTheme.error(), open), false);
         }
         // The panel's last row, drawn last: the kind row and the error line above it are this class's
         // own drawing, and a button painted before its own row of chips could have one across it.
         drawButtons(graphics, mouseX, mouseY);
+        // Last, and unconditional: everything above was drawn inside the displacement pushed at the
+        // top of this method, and the game's matrix has to be handed back unshifted.
+        UiMotion.popFrame(graphics);
     }
 
     /**

@@ -4,7 +4,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 
 /**
- * The two things this mod does to the game's screen stack, in the shape each node wants.
+ * The three things this mod does to the game's screen stack, in the shape each node wants: read the
+ * screen, replace it, and -- since the interface animates -- swap it a hundred and forty milliseconds
+ * after the player asked for the swap rather than in the same call.
  *
  * <h2>Why the shapes differ</h2>
  * Reading and replacing the current screen used to be a field on the game -- {@code minecraft.screen},
@@ -26,8 +28,50 @@ import net.minecraft.client.gui.screens.Screen;
  *       match every other field of that name, and {@code .setScreen(} would match the game's own
  *       method and this file's.
  * </ul>
+ *
+ * <h2>Why a swap waits for an animation</h2>
+ * {@link UiMotion} knows how a screen leaves, but only the stack knows when. So {@link #set} starts the
+ * leaving screen's exit and records what it was asked to show; the frame in which that exit finishes
+ * -- or {@link #EXIT_TIMEOUT_NANOS} later, whichever comes first -- {@link #pump} installs it. The
+ * outgoing screen keeps drawing for those hundred and forty milliseconds, which is the whole point:
+ * a screen that vanished on the click would have no exit to show.
+ *
+ * <p>Three rules keep that deferral from being a way to break navigation:
+ *
+ * <ul>
+ *   <li>Only a screen the mod is animating is deferred -- see {@link UiMotion#tracked}, which is true
+ *       of the mod's own screens and of nothing else. A vanilla screen is replaced at once, because
+ *       nothing would draw its exit anyway.</li>
+ *   <li>If the game replaces the screen itself while a swap is pending -- a disconnect, a crash
+ *       report, another mod -- the pending swap is dropped rather than installed over whatever the
+ *       game decided to show. That is the one case in which a deferred swap could resurrect a screen,
+ *       so it is checked every frame rather than trusted.</li>
+ *   <li>A second {@link #set} while one is pending is swallowed, so a click during the exit cannot
+ *       queue a second screen behind the first.</li>
+ * </ul>
  */
 public final class Screens {
+
+    /** How long the swap waits for an exit animation before installing regardless. */
+    private static final long EXIT_TIMEOUT_NANOS = 400_000_000L;
+
+    /** The screen waiting for the current one to finish leaving; null when the swap closes the GUI. */
+    private static Screen pendingTarget;
+    /**
+     * Whether a swap is in flight.
+     *
+     * <p>A flag of its own, and this is worth being blunt about: the first version of this file used
+     * {@code pendingTarget != null} as the flag, and closing a screen records a null target, so
+     * closing the main screen started the exit and then never performed the swap. The screen stayed
+     * installed at zero opacity with the world visible through it, still taking every keystroke --
+     * a frozen game behind an invisible window. "Is a swap pending" and "what is it pending on" are
+     * two questions, and a null answer to the second one is a perfectly good answer.
+     */
+    private static boolean swapping;
+    /** The screen that is drawing its exit right now, or null when no swap is in flight. */
+    private static Screen leaving;
+    /** When the swap stops waiting for the animation, in {@link System#nanoTime()} terms. */
+    private static long deadlineNanos;
 
     private Screens() {
     }
@@ -55,8 +99,129 @@ public final class Screens {
         return screen != null && current() == screen;
     }
 
-    /** Replaces the showing screen, or closes it when given null. */
+    /**
+     * Replaces the showing screen, or closes it when given null.
+     *
+     * <p>The replacement is deferred by one exit animation when the screen being replaced is one of
+     * the mod's own; see the class note. Every call site in the mod goes through here, which is what
+     * makes that one animation cover every way out of every screen -- a footer button, Escape, the
+     * end of an import, a command.
+     */
     public static void set(Screen screen) {
+        if (defer(current(), screen)) {
+            return;
+        }
+        install(screen);
+    }
+
+    /**
+     * Whether a swap is in flight, which is the window in which the interface is on its way out.
+     *
+     * <p>For a caller that has to answer input differently while the screen is leaving; the screens
+     * themselves do not need it, because a second {@link #set} is swallowed anyway.
+     */
+    public static boolean swapping() {
+        return swapping;
+    }
+
+    /**
+     * The frame's pump for a deferred swap.
+     *
+     * <p>Called once per frame by the screen that is drawing -- {@link UiMotion#of} is where, since
+     * every screen asks it for its own animation state. A screen that is still drawing is a screen
+     * that can still finish leaving, so the pump belongs to exactly the code that knows that.
+     */
+    static void pump() {
+        if (!swapping) {
+            return;
+        }
+        if (current() != leaving) {
+            // The game (or another mod) put something else on screen during the exit: drop the swap
+            // rather than install a screen over it.
+            clear();
+            return;
+        }
+        if (System.nanoTime() < deadlineNanos && !UiMotion.left(leaving)) {
+            return;
+        }
+        Screen target = pendingTarget;
+        Screen gone = leaving;
+        clear();
+        if (gone != null) {
+            UiMotion.forget(gone);
+        }
+        install(target);
+    }
+
+    /** Forgets the swap in flight, whichever end it reached. */
+    private static void clear() {
+        swapping = false;
+        pendingTarget = null;
+        leaving = null;
+    }
+
+    /**
+     * Starts the exit animation when the swap is one that can be animated, and records the target.
+     *
+     * <p>Answers whether the caller should skip the swap: true when the exit was started, or when one
+     * was already in flight and this request is dropped.
+     *
+     * <p>A pending swap is only allowed to swallow a request while it can still happen -- while the
+     * leaving screen is still the one on show and the deadline has not passed. Without that test a
+     * single missed pump would leave a swap recorded forever and every later {@link #set} swallowed
+     * with it, which is the difference between one animation not finishing and the mod's navigation
+     * being dead until the game is restarted. A stale record is dropped instead, and the request in
+     * hand goes through unanimated.
+     */
+    private static boolean defer(Screen current, Screen target) {
+        if (swapping) {
+            if (current == leaving && System.nanoTime() < deadlineNanos) {
+                return true;
+            }
+            clear();
+        }
+        if (!UiMotion.on() || current == null || current == target) {
+            return false;
+        }
+        if (!UiMotion.beginLeave(current)) {
+            return false;
+        }
+        swapping = true;
+        pendingTarget = target;
+        leaving = current;
+        deadlineNanos = System.nanoTime() + EXIT_TIMEOUT_NANOS;
+        return true;
+    }
+
+    /**
+     * Installs a screen, at the start of its entrance.
+     *
+     * <p>The state of every other screen is deliberately left alone. Screen instances are reused as
+     * parents -- a picker holds the main screen and returns to that same object -- and two of the
+     * mod's screens draw their parent underneath themselves, so a parent whose state was dropped
+     * here would fade in again behind its own child. Reopening is enough: an instance that is shown
+     * a second time gets its entrance, and one that was merely drawn underneath keeps the state it
+     * already had. States of screens that are genuinely gone are collected with the screens.
+     *
+     * <h2>Only a screen the mod animates is adopted</h2>
+     * Reopening <em>creates</em> a screen's animation state, and a screen's animation state is what
+     * makes {@link #defer} willing to wait for its exit -- an exit that only a screen calling
+     * {@link UiMotion#of} can ever finish, because that is the pump. So a screen that is merely
+     * handed back to the game without the mod ever drawing it must not be adopted here: it would be
+     * recorded as something whose exit can be waited for, and every later request to leave it would
+     * be deferred to a frame that never comes. That is exactly what returning from one of the mod's
+     * panels to Xaero's world map looked like -- the map was reopened, adopted, and from then on
+     * pressing N or L anywhere in it did nothing at all until the map was closed and a fresh map
+     * screen (a different instance, so not adopted) was opened.
+     *
+     * <p>A screen that is not animated yet loses nothing by this test: its first frame of
+     * {@link UiMotion#of} is what opens it, and a screen arriving for the first time is opened from
+     * the start, which is the same entrance it would have been given here.
+     */
+    private static void install(Screen screen) {
+        if (UiMotion.tracked(screen)) {
+            UiMotion.reopen(screen);
+        }
         //? if >=26.2 {
         /*Minecraft.getInstance().gui.setScreen(screen);
         *///?} else {

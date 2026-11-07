@@ -98,6 +98,35 @@ public final class MapDataScreen extends Screen {
     private int visibleRows;
     private int listScroll;
 
+    /**
+     * Where the list is actually drawn from, which chases {@link #listScroll} instead of jumping.
+     *
+     * <p>The target stays a whole number because that is what the wheel moves and what
+     * {@link #rowAt} is written in; only the drawing travels. See {@link #shownScroll()}.
+     */
+    private float scrollShown;
+
+    /**
+     * This frame's entrance and exit opacity, 0 to 1.
+     *
+     * <p>A field rather than a local in {@link #render} because the sheet is drawn from
+     * {@link #renderBackground}, which the parent calls from inside its own render: the background
+     * has to fade on the same number the rest of the frame does, and it runs first.
+     */
+    private float open = 1.0F;
+
+    /**
+     * How far the cursor's arrival has got on each row of the list, one slide per row position.
+     *
+     * <p>Indexed by where the row sits on screen rather than by which archive it holds: the cursor is
+     * in a place, so the tint under it has to stay in that place while the list scrolls beneath it.
+     */
+    private final UiMotion.Slides rowSlides = new UiMotion.Slides();
+
+    /** The cursor's arrival on the unlinked-details line, the one control this screen draws itself. */
+    private final UiMotion.Slide orphanHover =
+            UiMotion.Slide.of(UiMotion.Easing.OUT_CUBIC, UiMotion.HOVER);
+
     /** The two footer rows, built in {@link #init()} and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
 
@@ -153,6 +182,10 @@ public final class MapDataScreen extends Screen {
         visibleRows = Math.max(1, (listBottom - listY) / ROW_HEIGHT);
         listH = visibleRows * ROW_HEIGHT;
         listScroll = clampScroll(listScroll);
+        // The geometry has just changed, so the drawn position is set rather than slid: a re-layout
+        // (a resize, a return from the import screen) is not a scroll, and travelling from the old
+        // position would read as the list moving on its own.
+        scrollShown = listScroll;
 
         // The same six slots, now drawn by this screen rather than handed to the widget list: a
         // vanilla button is a grey system widget in a panel that is otherwise this mod's own, which
@@ -325,8 +358,21 @@ public final class MapDataScreen extends Screen {
             return -1;
         }
         int row = (int) ((mouseY - listY) / ROW_HEIGHT);
-        int index = listScroll + row;
+        int index = shownScroll() + row;
         return row >= 0 && row < visibleRows && index < candidates.size() ? index : -1;
+    }
+
+    /**
+     * The row the list is drawn from this frame: the smoothed position, rounded to whole rows.
+     *
+     * <p>One function for the drawing and for {@link #rowAt}, and that is the whole of why a smoothed
+     * scroll is safe here: the row painted under the cursor and the row a click opens are chosen by
+     * the same number, so they cannot disagree by the fraction of a row the scroll is still
+     * travelling through. The clamp is what keeps a value caught mid-flight inside the list when the
+     * list itself has just got shorter (an export prunes the folder).
+     */
+    private int shownScroll() {
+        return clampScroll(Math.round(scrollShown));
     }
 
     private int clampScroll(int scroll) {
@@ -349,14 +395,29 @@ public final class MapDataScreen extends Screen {
     *///?}
 
         // The edge and sheet belong to renderBackground so that everything render() draws afterwards --
-        // the buttons and the context lines -- lands on top of the panel rather than behind it.
+        // the buttons and the context lines -- lands on top of the panel rather than behind it. Both
+        // are drawn at the frame's opacity: the sheet is the first thing to arrive and the last thing
+        // to leave, so everything drawn over it goes with it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiTheme.windowEdge());
-        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH, UiTheme.panelSolid());
+                UiMotion.fade(UiTheme.windowEdge(), open));
+        graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
+                UiMotion.fade(UiTheme.panelSolid(), open));
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // One call for this frame, before a pixel is drawn: it advances the entrance and the exit and
+        // drives the deferred swap the exit is holding up. Every colour below is read at the opacity
+        // it answers with, which is what makes the whole sheet arrive as one surface.
+        UiMotion.ScreenState motion = UiMotion.of(this);
+        open = motion.opacity();
+        // The frame is displaced, not only faded: a sheet that appears where it stays reads as a cut.
+        // Pushed before any pixel -- the background 1.20.1 asks for by hand below included -- so the
+        // panel, the context lines and the footer buttons travel together as the one surface they are.
+        // The game builds a fresh pose for every frame, so the pop at the end of this method is all the
+        // bookkeeping this needs; nothing here can leak into the screen drawn after this one.
+        UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
+
         // super.render first, for the sheet it draws through renderBackground; then the context lines;
         // then the buttons, last, so no line of context can land on a label.
         // 1.20.2 is where the game started drawing that background from Screen.render itself; 1.20.1
@@ -371,11 +432,14 @@ public final class MapDataScreen extends Screen {
         int y = panelY + PAD;
 
         listScroll = clampScroll(listScroll);
-        graphics.drawString(this.font, this.title, x, y, UiTheme.title(), false);
+        // The wheel moves the target; this frame is drawn from where the list has got to on its way
+        // there. shownScroll() is the single place the two are reconciled -- see rowAt.
+        scrollShown = UiMotion.follow(scrollShown, listScroll, UiMotion.FOLLOW_SECONDS);
+        graphics.drawString(this.font, this.title, x, y, UiMotion.fade(UiTheme.title(), open), false);
 
         y += LINE_HEIGHT + 4;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.world",
-                WorldFiles.currentWorldKey()), UiTheme.text());
+                WorldFiles.currentWorldKey()), UiMotion.fade(UiTheme.text(), open));
         y += LINE_HEIGHT;
         String directory = MapDataTransfer.worldLoaded()
                 ? MapDataTransfer.dataDirectory().getFileName().toString() : "?";
@@ -383,26 +447,28 @@ public final class MapDataScreen extends Screen {
                 ? Component.translatable("screen.howtogo.mapdata.directory_only", directory)
                 : Component.translatable("screen.howtogo.mapdata.directory", directory, stats.files,
                         MapDataTransfer.humanSize(stats.bytes));
-        drawLine(graphics, x, y, room, directoryLine, UiTheme.textSecondary());
+        drawLine(graphics, x, y, room, directoryLine, UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.export_hint"),
-                UiTheme.textSecondary());
+                UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room, Component.translatable("screen.howtogo.mapdata.import_hint"),
-                UiTheme.textSecondary());
+                UiMotion.fade(UiTheme.textSecondary(), open));
         y += LINE_HEIGHT;
         drawLine(graphics, x, y, room,
-                Component.translatable("screen.howtogo.mapdata.overwrite_warning"), UiTheme.note());
+                Component.translatable("screen.howtogo.mapdata.overwrite_warning"),
+                UiMotion.fade(UiTheme.note(), open));
 
         int headerY = listY - LINE_HEIGHT - 1;
-        drawLine(graphics, x, headerY, room, Component.translatable("screen.howtogo.mapdata.list",
-                candidates.size()), UiTheme.textSecondary());
+        drawLine(graphics, x, headerY, room,
+                Component.translatable("screen.howtogo.mapdata.list", candidates.size()),
+                UiMotion.fade(UiTheme.textSecondary(), open));
         drawList(graphics, mouseX, mouseY);
 
         int statusY = listY + listH + 4;
         if (status != null) {
             drawLine(graphics, x, statusY, room, status,
-                    statusError ? UiTheme.error() : UiTheme.okSoft());
+                    UiMotion.fade(statusError ? UiTheme.error() : UiTheme.okSoft(), open));
         }
 
         // The unlinked-detail count sits on the second status line the footer already reserves. That
@@ -411,16 +477,23 @@ public final class MapDataScreen extends Screen {
         // place is gone is still on the panel rather than in a log nobody reads.
         orphanLineY = listY + listH + 4 + LINE_HEIGHT;
         boolean overOrphans = overOrphanLine(mouseX, mouseY);
+        // The line is a link rather than a button, so its own hover is the only thing that says it
+        // can be clicked: it slides between the two accents the way a button's face does, and with
+        // nothing to clean up it stays the quiet note it is.
+        float orphanLit = orphanHover.to(overOrphans ? 1.0F : 0.0F).eased();
         int orphanColour = orphanCount > 0
-                ? (overOrphans ? UiTheme.accentHover() : UiTheme.accent())
+                ? UiMotion.mix(UiTheme.accent(), UiTheme.accentHover(), orphanLit)
                 : UiTheme.textFaint();
         // Ellipsised rather than hard-cut: the sentence is longer than the panel in some languages,
-        // and a visible "…" says the line was shortened instead of letting it end mid-word.
+        // and a visible "鈥? says the line was shortened instead of letting it end mid-word.
         String orphanLine = PlaceText.ellipsis(this.font,
                 Component.translatable("screen.howtogo.mapdata.orphans", orphanCount).getString(),
                 room);
-        graphics.drawString(this.font, orphanLine, x, orphanLineY, orphanColour, false);
+        graphics.drawString(this.font, orphanLine, x, orphanLineY,
+                UiMotion.fade(orphanColour, open), false);
         drawButtons(graphics, mouseX, mouseY);
+        // Last statement of the frame: the displacement covered every pass above and stops here.
+        UiMotion.popFrame(graphics);
     }
 
     /**
@@ -442,56 +515,72 @@ public final class MapDataScreen extends Screen {
         if (candidates.isEmpty()) {
             drawLine(graphics, listX, listY, listW,
                     Component.translatable("screen.howtogo.mapdata.no_archives"),
-                    UiTheme.textFaint());
+                    UiMotion.fade(UiTheme.textFaint(), open));
             return;
         }
+        int top = shownScroll();
         int hovered = rowAt(mouseX, mouseY);
-        graphics.enableScissor(listX, listY, listX + listW, listY + listH);
-        for (int row = 0; row < visibleRows && listScroll + row < candidates.size(); row++) {
-            int index = listScroll + row;
+        UiMotion.clip(graphics, listX, listY, listX + listW, listY + listH);
+        for (int row = 0; row < visibleRows && top + row < candidates.size(); row++) {
+            int index = top + row;
             MapDataTransfer.Candidate candidate = candidates.get(index);
             int y = listY + row * ROW_HEIGHT;
+            // How far this row has arrived, and how far the cursor has got onto it. The first is what
+            // leads the eye down the list on the way in; the second is what stops the highlight
+            // blinking from row to row as the pointer is swept down them. Neither carries geometry:
+            // the band is drawn where it always was, at the row's own height.
+            float arrived = UiMotion.stagger(row, open);
+            float hover = rowSlides.get(row).to(index == hovered ? 1.0F : 0.0F).eased();
+            float shade = open * arrived;
             // A band under every row, always, not only under the cursor: a row here is opened by a
             // click, so the row is the thing to click, and a list of bare text lines reads as a
             // directory listing rather than as a list of things that can be picked. The hovered row's
             // fill is painted over it, so the band is the resting shape of a row and the blue is what
             // the cursor does to it.
-            graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, UiTheme.rowSurface());
-            if (index == hovered) {
-                graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1, UiTheme.selection());
+            graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1,
+                    UiMotion.fade(UiTheme.rowSurface(), shade));
+            if (hover > 0.0F) {
+                graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 1,
+                        UiMotion.fade(UiTheme.selection(), hover * shade));
             }
             // The marker says where the archive came from before the detail line is read: a backup is
             // the one entry on this list that does something other than bring a map in, and telling
             // it apart by colour is what keeps it from being clicked as if it were one.
-            HudDraw.drawRowMarker(graphics, listX + 2, y + 3, ROW_MARKER, originColour(candidate));
+            HudDraw.drawRowMarker(graphics, listX + 2, y + 3, ROW_MARKER,
+                    UiMotion.fade(originColour(candidate), shade));
 
             String fileName = candidate.file.getFileName().toString();
             graphics.drawString(this.font,
                     this.font.plainSubstrByWidth(fileName, listW - 4 - ROW_MARKER_STEP),
                     listX + 2 + ROW_MARKER_STEP, y + 2,
-                    index == hovered ? UiTheme.onSelection() : UiTheme.text(), false);
+                    UiMotion.fade(UiMotion.mix(UiTheme.text(), UiTheme.onSelection(), hover), shade),
+                    false);
             int nameRoom = Math.min(this.font.width(fileName), listW - 4 - ROW_MARKER_STEP) + GAP;
             String detail = detailOf(candidate);
             // The hovered row is a filled selection, so both of its text ranks swap to the pair that
             // reads on that fill. Away from the cursor a backup says what it is in the note colour:
             // "this one would roll the map back" is the one detail on a row that must not be missed.
-            int detailColor = index == hovered ? UiTheme.onSelectionDetail()
-                    : candidate.origin == MapDataTransfer.Origin.BACKUP
-                            ? UiTheme.note() : UiTheme.textFaint();
+            // Mixed rather than tested: at rest and under the cursor the mix lands exactly on the old
+            // pair of colours, and on the way it is the same pair travelled between.
+            int detailResting = candidate.origin == MapDataTransfer.Origin.BACKUP
+                    ? UiTheme.note() : UiTheme.textFaint();
             graphics.drawString(this.font,
                     this.font.plainSubstrByWidth(detail,
                             Math.max(8, listW - nameRoom - 4 - ROW_MARKER_STEP)),
-                    listX + 2 + ROW_MARKER_STEP + nameRoom, y + 2, detailColor, false);
+                    listX + 2 + ROW_MARKER_STEP + nameRoom, y + 2,
+                    UiMotion.fade(UiMotion.mix(detailResting, UiTheme.onSelectionDetail(), hover),
+                            shade),
+                    false);
         }
         graphics.disableScissor();
 
         // The count, only when the list continues past its edge: without it a scrolled list looks
         // complete, which is how a player concludes their file never arrived.
         if (candidates.size() > visibleRows) {
-            String count = Math.min(candidates.size(), listScroll + visibleRows) + "/"
+            String count = Math.min(candidates.size(), top + visibleRows) + "/"
                     + candidates.size();
             graphics.drawString(this.font, count, listX + listW - this.font.width(count),
-                    listY - LINE_HEIGHT - 1, UiTheme.textFaint(), false);
+                    listY - LINE_HEIGHT - 1, UiMotion.fade(UiTheme.textFaint(), open), false);
         }
     }
 
@@ -517,8 +606,8 @@ public final class MapDataScreen extends Screen {
      * big.
      *
      * <p>The origin is first and explicit because a backup is the one row in this list that can
-     * destroy a map if it is mistaken for a file to import — it is an automatic copy of the map that
-     * was there before an earlier import, so importing it rolls the map back. Saying "备份" on the
+     * destroy a map if it is mistaken for a file to import 鈥?it is an automatic copy of the map that
+     * was there before an earlier import, so importing it rolls the map back. Saying "澶囦唤" on the
      * row is the difference between an undo and an accident.
      */
     private String detailOf(MapDataTransfer.Candidate candidate) {
