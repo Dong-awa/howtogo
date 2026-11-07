@@ -5,28 +5,8 @@ import com.ibm.icu.text.Transliterator;
 
 import java.text.Normalizer;
 
-/**
- * Chinese as Latin letters, for the parts of a file name a player has to be able to tell apart.
- *
- * <h2>Why the world directory needs this</h2>
- * The per-world data directory is named after the world, and a file name can only hold a few
- * characters. Replacing everything else with {@code _} is safe but useless for a Chinese world name:
- * {@code 新世界} and {@code 旧世界} both become the same run of underscores, and a player opening
- * {@code config/howtogo} cannot tell which directory is which. Transliterating the name to pinyin
- * first -- {@code xin_shi_jie} -- keeps both the file-name safety and the ability to recognise a
- * world at a glance, and it is what a Chinese player would type to look for it anyway.
- *
- * <h2>Where the pinyin comes from</h2>
- * ICU4J's {@code Han-Latin} transliterator, which Minecraft itself already ships as a library (it
- * uses ICU for text handling), so this adds no dependency to the mod and no table to keep up to
- * date. ICU writes the syllables with tone marks and spaces; the marks are stripped and the spaces
- * are left for the caller's file-name sanitiser to turn into separators, which gives
- * {@code xin_shi_jie}.
- *
- * <p>ICU is looked up once and allowed to be missing: if a launcher or a future Minecraft does not
- * have it, {@link #latin} hands the text back unchanged and the caller falls back to the old
- * underscore rule, so a world directory is never lost over a transliteration.
- */
+// 此文件用于把中文字符改为拼音存储
+
 final class Pinyin {
 
     /** The transliterator, or null when ICU is not on this classpath after all. */

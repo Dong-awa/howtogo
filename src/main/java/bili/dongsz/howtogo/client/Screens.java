@@ -147,9 +147,9 @@ public final class Screens {
         Screen target = pendingTarget;
         Screen gone = leaving;
         clear();
-        if (gone != null) {
-            UiMotion.forget(gone);
-        }
+        // Settle rather than drop: a screen the new one draws as its backdrop has to be static behind
+        // it, and a dropped state would make that backdrop play an entrance of its own.
+        UiMotion.release(gone);
         install(target);
     }
 
@@ -181,6 +181,14 @@ public final class Screens {
             clear();
         }
         if (!UiMotion.on() || current == null || current == target) {
+            return false;
+        }
+        // A screen that re-renders its parent underneath itself is a dialog over it, not a
+        // replacement for it: the parent is still on screen, at full strength. There is nothing to
+        // fade out, and fading it would be undone one frame later when the dialog redrew it -- which
+        // reads as the whole big interface flashing on its way to the dialog. So the dialog is
+        // installed at once and the parent never leaves. See {@link ParentBackdrop}.
+        if (target instanceof ParentBackdrop) {
             return false;
         }
         if (!UiMotion.beginLeave(current)) {
@@ -216,12 +224,12 @@ public final class Screens {
      *
      * <p>A screen that is not animated yet loses nothing by this test: its first frame of
      * {@link UiMotion#of} is what opens it, and a screen arriving for the first time is opened from
-     * the start, which is the same entrance it would have been given here.
+     * the start, which is the same entrance it would have been given here. A screen that was drawn as
+     * the backdrop of the one it replaces is revealed as it stands rather than played in again; see
+     * {@link UiMotion#adopt}.
      */
     private static void install(Screen screen) {
-        if (UiMotion.tracked(screen)) {
-            UiMotion.reopen(screen);
-        }
+        UiMotion.adopt(screen);
         //? if >=26.2 {
         /*Minecraft.getInstance().gui.setScreen(screen);
         *///?} else {

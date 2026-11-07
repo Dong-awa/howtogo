@@ -156,6 +156,14 @@ public final class RoadEditSession {
         if (editor == null || boundNetwork != network) {
             editor = new RoadEditor(network);
             boundNetwork = network;
+            // The station rule has two halves and this class owns one of them: the editor knows the
+            // saved roads, and the client knows the railway layer, which is not in the saved file.
+            // The missing half is handed over here, once, rather than at each panel that happens to
+            // ask -- the reclassify/demote passes run after every road edit, long after any panel has
+            // closed, and the version that only set it when a panel opened demoted every station
+            // standing beside a track on the next edit. The predicate reads a static network, so one
+            // object serves the session.
+            editor.setStationOverride(RoadEditSession::nearTrack);
         }
         return editor;
     }
@@ -573,11 +581,6 @@ public final class RoadEditSession {
         if (RoadStore.get().node(nodeId) == null) {
             return;
         }
-        // The station rule has two halves and this class can only see one of them: the editor knows the
-        // saved roads, and the client knows the railway layer, which is not in the saved file. The
-        // missing half is handed to the editor rather than checked alongside it, so that the screen and
-        // the save ask the same question and cannot disagree.
-        places.setStationOverride(RoadEditSession::nearTrack);
         double anchorX = mouseScreenX();
         double anchorY = mouseScreenZ();
         pendingAction = () -> {
@@ -620,7 +623,6 @@ public final class RoadEditSession {
             return;
         }
         RoadEditor places = editor();
-        places.setStationOverride(RoadEditSession::nearTrack);
         pendingAction = () -> {
             RoadNode node = RoadStore.get().node(nodeId);
             if (node == null) {

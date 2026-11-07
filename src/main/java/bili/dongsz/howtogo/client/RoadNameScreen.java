@@ -50,7 +50,7 @@ import java.util.function.Predicate;
  * in a field (rather than in the widget alone) is what makes the round trip through the dialog lossless
  * -- the dialog replaces this screen, and {@code init} runs again on the way back.
  */
-public final class RoadNameScreen extends Screen {
+public final class RoadNameScreen extends Screen implements ParentBackdrop {
 
     public static final String TITLE_ROAD = "screen.howtogo.name_road";
     public static final String TITLE_POI = "screen.howtogo.name_poi";

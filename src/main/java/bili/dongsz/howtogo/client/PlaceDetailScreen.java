@@ -54,7 +54,7 @@ import java.util.function.Consumer;
  * the player reopens the dialog. Refusing with {@link #OVER_LIMIT_KEY} and staying open is the
  * difference between "that was too long, shorten it" and "what I wrote is gone".
  */
-public final class PlaceDetailScreen extends Screen {
+public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
 
     /**
      * The dialog's own name: this is the editor, not the read-only card, so it says "edit".

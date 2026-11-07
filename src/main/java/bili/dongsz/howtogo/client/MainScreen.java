@@ -123,6 +123,36 @@ public final class MainScreen extends Screen {
     private double centerZ;
     private double scale = DEFAULT_SCALE;
     private boolean viewInitialised;
+    /**
+     * Where the view is heading, in world blocks and in the log of the zoom, plus the speed a drag
+     * left behind.
+     *
+     * <p>The map is steered, not set. A drag moves the shown value directly -- a map that lags the
+     * hand holding it is not smooth, it is late -- and leaves its speed behind as a coast; the wheel,
+     * "back to me" and the route fit are aims that the shown value travels to. Zoom is steered as a
+     * logarithm because {@link #scale} is pixels per block: the same additive step is a different
+     * visual change at 0.02 and at 4, so interpolating the number itself would crawl at the far end
+     * and jump at the near one.
+     */
+    private double targetX;
+    private double targetZ;
+    private double targetLogScale = Math.log(DEFAULT_SCALE);
+    /** Blocks per second the view is still coasting at, after a drag; zero when it has stopped. */
+    private double momentumX;
+    private double momentumZ;
+    /** When the last drag step arrived, for turning pixel deltas into blocks per second. */
+    private long lastDragNanos;
+    /**
+     * How fast the shown camera catches up with an aimed one, in seconds.
+     *
+     * <p>Short: long enough that the wheel and a route fit are movements rather than cuts, short
+     * enough that a player who lets go of the map is not left watching it settle.
+     */
+    private static final float CAMERA_FOLLOW_SECONDS = 0.075F;
+    /** Time constant of the post-drag coast; a throw is over in about a third of a second. */
+    private static final float CAMERA_INERTIA_SECONDS = 0.16F;
+    /** The route last fitted, so a route that has not changed is fitted once and not every frame. */
+    private Destination fittedTarget;
 
     private boolean dragging;
     private double lastMouseX;
@@ -203,6 +233,14 @@ public final class MainScreen extends Screen {
             centerX = player != null ? player.getX() : 0;
             centerZ = player != null ? player.getZ() : 0;
         }
+        // A screen being opened (or resized) is not a movement: the first frame shows the view where
+        // it is aimed, with no coast left over from wherever it was before.
+        targetX = centerX;
+        targetZ = centerZ;
+        targetLogScale = Math.log(scale);
+        momentumX = 0;
+        momentumZ = 0;
+        lastDragNanos = 0;
 
         int inner = panelW - PAD * 2;
         int row2Y = panelY + panelH - PAD - BUTTON_HEIGHT;
@@ -578,6 +616,12 @@ public final class MainScreen extends Screen {
             dragging = true;
             lastMouseX = mouseX;
             lastMouseY = mouseY;
+            // Grabbing the map stops a coast in its tracks: the hand on the map is the authority,
+            // and a view that keeps drifting under it is the one thing that makes a drag feel out
+            // of control.
+            momentumX = 0;
+            momentumZ = 0;
+            lastDragNanos = 0;
             // Which marker the press was on, and where it started: the release needs both to tell a
             // click from a drag.
             pressedPlace = placeAt(mouseX, mouseY);
@@ -609,8 +653,24 @@ public final class MainScreen extends Screen {
             if (Math.hypot(mouseX - pressX, mouseY - pressY) > CLICK_SLOP_PX) {
                 pressMoved = true;
             }
-            centerX -= dragX / scale;
-            centerZ -= dragY / scale;
+            double blocksX = dragX / scale;
+            double blocksZ = dragY / scale;
+            centerX -= blocksX;
+            centerZ -= blocksZ;
+            // During a drag the map is the player's hand, so there is nothing to smooth: the shown
+            // value and the aim move together, and what the drag leaves behind is the speed.
+            targetX = centerX;
+            targetZ = centerZ;
+            long now = System.nanoTime();
+            if (lastDragNanos != 0) {
+                double seconds = (now - lastDragNanos) / 1.0E9;
+                // A step under a millisecond is the same frame's mouse events, not a speed.
+                if (seconds > 0.001) {
+                    momentumX = -blocksX / seconds;
+                    momentumZ = -blocksZ / seconds;
+                }
+            }
+            lastDragNanos = now;
             lastMouseX = mouseX;
             lastMouseY = mouseY;
             return true;
@@ -634,6 +694,14 @@ public final class MainScreen extends Screen {
     //?}
         if (dragging && button == MouseButton.LEFT) {
             dragging = false;
+            // A throw that ended with the hand still has no speed: the last drag step is only a
+            // velocity if it was the last thing that happened, so a press and release with the
+            // cursor held still must not send the map anywhere.
+            if (System.nanoTime() - lastDragNanos > 120_000_000L) {
+                momentumX = 0;
+                momentumZ = 0;
+            }
+            lastDragNanos = 0;
             Destination pressed = pressedPlace;
             pressedPlace = null;
             // The click is decided on release, because only then is it known whether the gesture was
@@ -671,13 +739,21 @@ public final class MainScreen extends Screen {
             /*return super.mouseScrolled(mouseX, mouseY, scrollY);
             *///?}
         }
+        // The world point under the cursor, in the camera being looked at, and the zoom aimed at
+        // instead of applied: the wheel sets the aim and {@link #stepCamera} travels to it, so a
+        // notch is a movement rather than a cut. The aim's centre is then solved so that the same
+        // world point stays under the cursor at the *aimed* zoom, which is what keeps the anchor
+        // glued to the pointer for the whole travel rather than only at its end.
         double worldX = worldXAt(mouseX);
         double worldZ = worldYAt(mouseY);
-        double next = Mth.clamp(scale * Math.pow(ZOOM_STEP, scrollY), MIN_SCALE, MAX_SCALE);
-        if (next != scale) {
-            scale = next;
-            centerX = worldX - (mouseX - (mapX + mapW / 2.0)) / scale;
-            centerZ = worldZ - (mouseY - (mapY + mapH / 2.0)) / scale;
+        double next = Mth.clamp(Math.exp(targetLogScale) * Math.pow(ZOOM_STEP, scrollY),
+                MIN_SCALE, MAX_SCALE);
+        if (next != Math.exp(targetLogScale)) {
+            targetLogScale = Math.log(next);
+            targetX = worldX - (mouseX - (mapX + mapW / 2.0)) / next;
+            targetZ = worldZ - (mouseY - (mapY + mapH / 2.0)) / next;
+            momentumX = 0;
+            momentumZ = 0;
         }
         return true;
     }
@@ -700,6 +776,101 @@ public final class MainScreen extends Screen {
 
     private double screenY(double worldZ) {
         return mapY + mapH / 2.0 + (worldZ - centerZ) * scale;
+    }
+
+    /**
+     * One frame of camera motion: the coast after a drag, the route fit, then the chase to the aim.
+     *
+     * <p>The only place the shown camera is written. It runs at the top of {@link #render}, before
+     * anything is projected or hit-tested, so the map on screen and the map under the pointer are
+     * the same map at every point of an animated pan -- the difference from a still frame is only
+     * that the numbers are still moving.
+     *
+     * <p>With {@code ui_animations} off everything collapses to its end state in the same call: no
+     * coast, no travel, which is the camera this screen had before it moved.
+     */
+    private void stepCamera() {
+        if (!UiMotion.on()) {
+            centerX = targetX;
+            centerZ = targetZ;
+            scale = Math.exp(targetLogScale);
+            momentumX = 0;
+            momentumZ = 0;
+            return;
+        }
+        float dt = UiMotion.frameDelta();
+        if (!dragging && (momentumX != 0 || momentumZ != 0)) {
+            targetX += momentumX * dt;
+            targetZ += momentumZ * dt;
+            double decay = Math.exp(-dt / CAMERA_INERTIA_SECONDS);
+            momentumX *= decay;
+            momentumZ *= decay;
+            // Under a tenth of a block a second is invisible, and letting it run would keep the map
+            // creeping for seconds after the throw looked finished.
+            if (Math.abs(momentumX) + Math.abs(momentumZ) < 0.1) {
+                momentumX = 0;
+                momentumZ = 0;
+            }
+        }
+        aimAtRoute();
+        centerX = UiMotion.chase(centerX, targetX, CAMERA_FOLLOW_SECONDS, 0.01);
+        centerZ = UiMotion.chase(centerZ, targetZ, CAMERA_FOLLOW_SECONDS, 0.01);
+        // Chased on the logarithm: a scale is pixels per block, so the same step means a different
+        // visual change at every zoom level and interpolating the number itself would crawl when
+        // zoomed out and jump when zoomed in.
+        scale = Math.exp(UiMotion.chase(Math.log(scale), targetLogScale, CAMERA_FOLLOW_SECONDS,
+                0.001));
+    }
+
+    /**
+     * Aims the view at the trip's route, once per route.
+     *
+     * <p>Starting a trip from the picker closes this screen with the map wherever the player left
+     * it, which for a long trip can be a view that does not contain either end. The route is what
+     * the screen is about while a trip is running, so it gets the frame: the aim is fitted to the
+     * route's own polyline and the shown camera is left to travel there, which is what makes it a
+     * pull rather than a cut. Fitted once per destination: recomputing it every frame would fight
+     * the player's own drags while the trip runs.
+     */
+    private void aimAtRoute() {
+        Destination target = Navigation.target();
+        Route route = Navigation.route();
+        if (target == null || route == null || !route.isPresent()) {
+            fittedTarget = null;
+            return;
+        }
+        if (samePlace(target, fittedTarget)) {
+            return;
+        }
+        double minX = Double.MAX_VALUE;
+        double minZ = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double maxZ = -Double.MAX_VALUE;
+        for (double[] point : route.points()) {
+            minX = Math.min(minX, point[0]);
+            maxX = Math.max(maxX, point[0]);
+            minZ = Math.min(minZ, point[1]);
+            maxZ = Math.max(maxZ, point[1]);
+        }
+        var player = Minecraft.getInstance().player;
+        if (player != null) {
+            minX = Math.min(minX, player.getX());
+            maxX = Math.max(maxX, player.getX());
+            minZ = Math.min(minZ, player.getZ());
+            maxZ = Math.max(maxZ, player.getZ());
+        }
+        // Room to read, as a share of the span so a short trip and a long one are both given the
+        // frame rather than a fixed number of blocks.
+        double spanX = Math.max(1.0, maxX - minX);
+        double spanZ = Math.max(1.0, maxZ - minZ);
+        double aspect = mapH > 0 && mapW > 0 ? (double) mapH / mapW : 1.0;
+        double needed = Math.max(spanX, spanZ / Math.max(0.2, aspect)) * 0.62 * 1.15 + 24.0;
+        double fittedScale = Mth.clamp(needed > 0 ? (mapW / (needed * 2.0)) : DEFAULT_SCALE,
+                MIN_SCALE, MAX_SCALE);
+        targetX = (minX + maxX) * 0.5;
+        targetZ = (minZ + maxZ) * 0.5;
+        targetLogScale = Math.log(fittedScale);
+        fittedTarget = target;
     }
 
     // ----------------------------------------------------------------- drawing
@@ -744,6 +915,10 @@ public final class MainScreen extends Screen {
         // game may skip would leave a screen that never finishes leaving.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        // The camera first: the map, the route, the markers, the labels and every hit test below
+        // read the same three numbers this advances, so a frame of an animated pan cannot show one
+        // thing and offer another.
+        stepCamera();
         // The frame itself is displaced, not only faded: a sheet that appears in place reads as a cut,
         // and a cut is what makes an interface feel assembled rather than designed. Pushed before any
         // pixel is drawn -- including the background 1.20.1 asks for by hand below -- so the

@@ -757,12 +757,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * they are not. The three passes ask this one question so that they cannot disagree about when
      * they are hidden.
      *
-     * <p>The two panels are the ones the map itself opens. The panels opened from the main screen
-     * (the destination picker, the archive screen) are not over the map and do not need this.
+     * <p>Asked of {@link ParentBackdrop} rather than of a list of screen classes: the panels are
+     * the ones that re-render the map underneath themselves, and that is exactly what the marker
+     * declares. A panel added later is covered by declaring it, with no second list to keep in step.
      */
     private static boolean panelOverMap() {
         Screen screen = Screens.of(Minecraft.getInstance());
-        return screen instanceof TransitLineScreen || screen instanceof RoadNameScreen;
+        // "Is the screen on show a dialog over the map", which is what ParentBackdrop declares: the
+        // two panels the map itself opens, and the place-details dialog opened from the place
+        // panel's More button. Enumerating screen classes here missed that last one, and it is a
+        // dialog over a dialog over the map -- the labels were drawn over the details it was editing.
+        return screen instanceof ParentBackdrop;
     }
 
     private void renderEditOverlay(RoadElement element, ElementRenderInfo info, PoseStack.Pose pose,

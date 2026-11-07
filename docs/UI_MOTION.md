@@ -114,6 +114,14 @@ public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTi
 再也打不开**，必须退出全屏地图再进来（新实例没被登记）才恢复。界面的第一次入场丢失不了：没有状态
 的界面在第一帧 `UiMotion.of` 里从 0 开始，和 `install` 里重置是一样的动画。
 
+**叠加的小面板不播父界面的退场（`ParentBackdrop`）。** 有一类界面是"盖在另一个界面上的对话框"：
+它们自己调用 `parent.render(...)` 把父界面重画在下面（命名面板、线路编辑、地点详情都这样，父界面
+往往是世界地图）。这类界面的目标是 `ParentBackdrop`，`Screens.set` 直接安装、**不**启动父界面的退场：
+父界面根本没离开，它还要被画在下面当背景，播退场只会让它淡出、然后被对话框重画回全亮——看起来
+就是"大界面重新弹了一遍"。反过来，关闭对话框时父界面是**被重新露出**而不是被重新打开：`UiMotion.of`
+发现它在被当作背景绘制时记下 `underneath`，`UiMotion.adopt` 据此让它直接落到全开状态，不再播一次
+入场。两件事合起来才是"小面板进出、大界面不动"。新增对话框时声明这个标记即可，不要另写一套判断。
+
 ## 6. 各类控件的规定动作
 
 | 对象 | 动作 | 做法 |
@@ -123,7 +131,8 @@ public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTi
 | 列表行 | 光标底色缓动 + 逐行入场 | `Row` 自带 `hover` Slide；底色 `fade(rowHoverTint, h * stagger)` |
 | 勾选框 / chip | 光标：外描边 alpha 缓动 | 描边 `fade(overlayHoverEdge, h)` |
 | 折叠面板（下拉） | **位移推开 + 高度插值 + alpha** | 行从标题下方"展开"到各自位置（`drawnY = from + (y-from)*t`），面板底边同步插值；命中仍按逻辑状态 |
-| 目的地选择器（四行选项 ↔ 方案行） | **共享块高度逐帧插值 + 行块上移 + 裁切** | 底部锚定页脚、顶部锚定面板顶；`bottomGroupHeight(fold)` 每帧插值，地图与地点列表拿到的是剩下的高度，所以它们和选项块一起光滑变高变低；四行按 `(1-fold)×块高` 上移并被 `UiMotion.clip` 裁在块内，方案行从块底淡入并下沉 8px |
+| 目的地选择器（四行选项 ↔ 方案行） | **共享块高度逐帧插值 + 行块自下而上 + 裁切** | 底部锚定页脚、顶部锚定面板顶；`bottomGroupHeight(fold)` 每帧插值，地图与地点列表拿到的是剩下的高度，所以它们和选项块一起光滑变高变低；四行按 `(1-fold)×块高` **向下**偏移、从栏后升起并被 `UiMotion.clip` 裁在块内，方案行按 `fold×自身高` 从块顶退场（方向相反，两段文字才不会叠在一起）。方案行数变化（1/2/3 条）也走跟随，不瞬跳 |
+| 自绘地图的相机（K 主界面、目的地小地图） | **拖拽 1:1 + 松手惯性 + 瞄准式跟随** | 拖拽时显示值与目标同步移动（地图跟着手，不加延迟），同时记录速度；松手后目标按 `CAMERA_INERTIA_SECONDS` 衰减滑行，显示值用 `UiMotion.chase` 追目标。滚轮/回中/路线自适应只改目标，显示值追过去；缩放插值在**对数空间**（像素/方块，线性插值会远慢近跳）。绘制与命中读同一份显示值 |
 | 列表滚动 | 平滑跟随 + 半像素吸附 | `scrollShown = follow(scrollShown, scrollTarget, FOLLOW_SECONDS)`，绘制与命中用同一取整值 |
 | HUD 卡片 | 竖向滑入 + 淡入 | 局部 `pushFrame(0, (1-open) * HUD_RISE)`；`open < 0.01` 仍整帧早退 |
 | 地图内容 | 入场时 alpha 缩放 | `HudDraw.emit*(..., (int)(0xD0 * open), ...)` |

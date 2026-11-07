@@ -1237,12 +1237,30 @@ public final class RoadEditor {
      * <p>Only the kind changes. The node stays a {@link RoadNode.Type#POI}, which is both what makes
      * it survive pruning -- a place is exempt from it -- and what keeps it a place rather than a bare
      * road vertex.
+     *
+     * <h2>Why the client's half of the rule is asked here too</h2>
+     * "Is this point still on something a train or a line can stop at" is the same question
+     * {@link #stationAllowed} answers, and this method used to answer a narrower version of it: any
+     * segment of the saved network touching the node. But a station beside a railway is on the
+     * railway, and the railway is not in the saved network at all -- Create's tracks and MTR's are
+     * read out of the world and are read-only, so their distance test only exists on the client, in
+     * the {@code stationOverride} handed in by {@link #setStationOverride}. Without asking it, every
+     * demotion pass -- and one runs after every road edit -- turned a station that had never moved
+     * into an ordinary place, which the player sees as the type resetting itself. A station that is
+     * still beside its track is still a station; only one that is beside nothing is demoted.
      */
     private void demoteOrphanStations(Map<Integer, Integer> degree) {
         for (RoadNode node : network.nodesSnapshot()) {
-            if (node.placeKind() == PlaceKind.STATION && degree.getOrDefault(node.id(), 0) == 0) {
-                node.setPlaceKind(PlaceKind.PLACE);
+            if (node.placeKind() != PlaceKind.STATION) {
+                continue;
             }
+            if (degree.getOrDefault(node.id(), 0) > 0) {
+                continue;
+            }
+            if (stationOverride != null && stationOverride.test(node.id())) {
+                continue;
+            }
+            node.setPlaceKind(PlaceKind.PLACE);
         }
     }
 

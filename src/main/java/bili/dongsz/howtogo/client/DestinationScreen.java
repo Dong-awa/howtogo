@@ -316,15 +316,6 @@ public final class DestinationScreen extends Screen {
     private final UiMotion.Slide controlsFold =
             new UiMotion.Slide(UiMotion.Easing.IN_OUT_CUBIC, 1.0F, UiMotion.EXPAND);
 
-    /**
-     * How far the plan band travels while the controls fold, in pixels.
-     *
-     * <p>The same motion read backwards: the rows go up and out, so the band taking their place
-     * comes down from above. A small travel, because it is arriving into a space that is already the
-     * right size -- the movement only has to say which way it came from.
-     */
-    private static final int SUMMARY_FOLD_TRAVEL = 8;
-
     /** Every place row's cursor arrival (even slot) and its picked-out state (the next slot). */
     private final UiMotion.Slides rowSlides = new UiMotion.Slides();
 
@@ -501,6 +492,37 @@ public final class DestinationScreen extends Screen {
     private double mapCenterZ;
     private double viewRadius = DEFAULT_VIEW_RADIUS;
 
+    /*
+     * The camera is steered rather than set: the two pairs of numbers below are the same statement
+     * "where the view is" at two moments in time.
+     *
+     * During a drag the shown value is moved directly by the cursor, because a map that lags the hand
+     * holding it is not smooth, it is late -- the whole point of a drag is that it is the player's.
+     * What the drag leaves behind is momentum: on release the target keeps travelling and decays, and
+     * the shown value chases it, which is the "ring" a map has when it is thrown. Everything else --
+     * the wheel, the back-to-me button, fitting the view to a planned route -- is aimed: the target
+     * is set and the shown value travels to it over {@link #CAMERA_FOLLOW_SECONDS}.
+     */
+    private double targetCenterX;
+    private double targetCenterZ;
+    private double targetViewRadius = DEFAULT_VIEW_RADIUS;
+    /** Blocks per second the view is still coasting at, after a drag; zero when it has stopped. */
+    private double momentumX;
+    private double momentumZ;
+    /** When the last drag step arrived, for turning pixel deltas into blocks per second. */
+    private long lastDragNanos;
+    /**
+     * How fast the shown camera catches up with an aimed one, in seconds.
+     *
+     * <p>Short: long enough that a wheel notch or a route fit is a movement rather than a cut, short
+     * enough that a player who lets go of the map is not left watching it settle.
+     */
+    private static final float CAMERA_FOLLOW_SECONDS = 0.075F;
+    /** Time constant of the post-drag coast; a throw is over in about a third of a second. */
+    private static final float CAMERA_INERTIA_SECONDS = 0.16F;
+    /** Zoom is chased on a logarithmic radius, so this is the snap in that space (about 0.1%). */
+    private static final double CAMERA_RADIUS_SNAP = 0.001;
+
     /** Where the mouse went down inside the map, so a click can be told apart from a drag. */
     private boolean mapPressed;
     private double mapPressX;
@@ -639,6 +661,8 @@ public final class DestinationScreen extends Screen {
         setInitialFocus(searchField);
 
         recenterOnPlayer();
+        // A screen being opened is not a movement: the first frame shows the view where it is aimed.
+        snapCamera();
         applyFilter();
     }
 
@@ -1435,14 +1459,140 @@ public final class DestinationScreen extends Screen {
                 + transitRowHeight + FOOTER_HEIGHT + PADDING;
     }
 
-    /** Puts the player back in the middle of the picker map at the default zoom. */
+    /**
+     * Puts the player back in the middle of the picker map, at the default zoom, without a cut.
+     *
+     * <p>The button is a jump in intent rather than in space: the view is aimed at the player and
+     * travels there, so a map panned a long way away is not replaced by another map -- it is pulled
+     * back. {@link #init} uses the same numbers, but it also snaps them (see {@link #snapCamera}),
+     * because the first frame of a screen is not a movement.
+     */
     private void recenterOnPlayer() {
         Minecraft mc = Minecraft.getInstance();
+        double x = mapCenterX;
+        double z = mapCenterZ;
         if (mc.player != null) {
-            mapCenterX = mc.player.getX();
-            mapCenterZ = mc.player.getZ();
+            x = mc.player.getX();
+            z = mc.player.getZ();
         }
-        viewRadius = DEFAULT_VIEW_RADIUS;
+        targetCenterX = x;
+        targetCenterZ = z;
+        targetViewRadius = DEFAULT_VIEW_RADIUS;
+        momentumX = 0;
+        momentumZ = 0;
+    }
+
+    /** Puts the shown camera on its target, for a view that is being established rather than moved. */
+    private void snapCamera() {
+        mapCenterX = targetCenterX;
+        mapCenterZ = targetCenterZ;
+        viewRadius = targetViewRadius;
+        momentumX = 0;
+        momentumZ = 0;
+        lastDragNanos = 0;
+    }
+
+    /**
+     * One frame of camera motion: the coast after a drag, then the shown value's travel to the aim.
+     *
+     * <p>Called at the top of {@link #render}, before anything is drawn, and it is the only place the
+     * shown camera is written. The map, its labels, the place markers, the route preview and every
+     * hit test read the same three numbers ({@link #mapCenterX}, {@link #mapCenterZ},
+     * {@link #viewRadius}), so what is under the pointer is what was drawn under it at every point of
+     * an animated pan -- the difference from a still frame is only that the numbers are still moving.
+     *
+     * <p>With {@code ui_animations} off both halves collapse: the coast is not applied and the chase
+     * lands on its target in the same call, which is the camera this screen had before it moved.
+     */
+    private void stepCamera() {
+        if (!UiMotion.on()) {
+            snapCamera();
+            return;
+        }
+        float dt = UiMotion.frameDelta();
+        if (!mapPressed && (momentumX != 0 || momentumZ != 0)) {
+            targetCenterX += momentumX * dt;
+            targetCenterZ += momentumZ * dt;
+            double decay = Math.exp(-dt / CAMERA_INERTIA_SECONDS);
+            momentumX *= decay;
+            momentumZ *= decay;
+            // Under a tenth of a block a second is invisible, and letting it run would keep the map
+            // creeping for seconds after the throw looked finished.
+            if (Math.abs(momentumX) + Math.abs(momentumZ) < 0.1) {
+                momentumX = 0;
+                momentumZ = 0;
+            }
+        }
+        mapCenterX = UiMotion.chase(mapCenterX, targetCenterX, CAMERA_FOLLOW_SECONDS, 0.01);
+        mapCenterZ = UiMotion.chase(mapCenterZ, targetCenterZ, CAMERA_FOLLOW_SECONDS, 0.01);
+        // Zoom is chased on the radius's logarithm: a radius is a span, so the same step means a
+        // different visual change at 40 and at 3000 blocks, and interpolating the number itself
+        // would make the far zoom crawl and the near zoom jump.
+        double logRadius = Math.log(viewRadius);
+        double logTarget = Math.log(targetViewRadius);
+        double logNext = UiMotion.chase(logRadius, logTarget, CAMERA_FOLLOW_SECONDS,
+                CAMERA_RADIUS_SNAP);
+        viewRadius = Math.exp(logNext);
+    }
+
+    /**
+     * Aims the view at a set of points, with room to read them.
+     *
+     * <p>What a selection asks for: the plans it produced are only worth offering if the player can
+     * see them, and the first place selected is usually chosen at the default zoom, which is far too
+     * wide for one trip and far too narrow for a long one. The aim is computed from the points the
+     * plans would be drawn along, not from the place list, so the view that comes back holds exactly
+     * the lines the map is about to draw.
+     */
+    private void aimAtPlans() {
+        double minX = Double.MAX_VALUE;
+        double minZ = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double maxZ = -Double.MAX_VALUE;
+        boolean any = false;
+        for (RouteOption plan : plans) {
+            Route route = plan.route();
+            if (route == null || !route.isPresent()) {
+                continue;
+            }
+            for (double[] point : route.points()) {
+                any = true;
+                minX = Math.min(minX, point[0]);
+                maxX = Math.max(maxX, point[0]);
+                minZ = Math.min(minZ, point[1]);
+                maxZ = Math.max(maxZ, point[1]);
+            }
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (!any) {
+            return;
+        }
+        if (mc.player != null) {
+            // The player is where every plan starts, even when the route's own first point is the
+            // road it was snapped to: the view that leaves them off screen would be a route they
+            // cannot see themselves start.
+            minX = Math.min(minX, mc.player.getX());
+            maxX = Math.max(maxX, mc.player.getX());
+            minZ = Math.min(minZ, mc.player.getZ());
+            maxZ = Math.max(maxZ, mc.player.getZ());
+        }
+        // Room to read: a route drawn against the very edge of the map reads as clipped. The margin
+        // is a share of the span rather than a number of blocks, so a short trip is not given the
+        // same fix as a long one.
+        double spanX = Math.max(1.0, maxX - minX);
+        double spanZ = Math.max(1.0, maxZ - minZ);
+        // The map is wider than it is tall in the two-column layout and the opposite when stacked,
+        // so the span is measured against the shape of the frame it has to fit into. A route that
+        // runs mostly north-south needs a bigger radius than the same route running east-west,
+        // because the frame is wider than it is tall.
+        double aspect = mapH > 0 && mapW > 0 ? (double) mapH / mapW : 1.0;
+        double needed = Math.max(spanX, spanZ / Math.max(0.2, aspect)) * 0.62;
+        targetCenterX = (minX + maxX) * 0.5;
+        targetCenterZ = (minZ + maxZ) * 0.5;
+        targetViewRadius = Math.max(MIN_VIEW_RADIUS,
+                Math.min(MAX_VIEW_RADIUS, needed * 1.15 + 24.0));
+        momentumX = 0;
+        momentumZ = 0;
     }
 
     private static int clamp(int value, int min, int max) {
@@ -1523,6 +1673,10 @@ public final class DestinationScreen extends Screen {
         // else in this screen calls it -- and every pass below reads the opacity it answers with.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        // The camera first, for the same reason: every pass below -- the map, the labels, the route
+        // preview -- draws through the one set of numbers this advances, and the hit tests read the
+        // same numbers, so a frame of an animated pan cannot show one thing and offer another.
+        stepCamera();
         // The whole frame travels as one surface, before the first pixel: a sheet that fades in where
         // it already is reads as a cut, and ten pixels of rise over the two hundred of the entrance
         // is what turns that cut into a window arriving. Pressed here so the dimming, the panel, the
@@ -1571,8 +1725,17 @@ public final class DestinationScreen extends Screen {
         drawDetailsPanel(graphics, mouseX, mouseY);
         drawPreviewSummary(graphics);
         // Under the readout: the plans while the controls are folded, then the four rows while they
-        // are open, then the one bar that toggles between the two, then the footer.
+        // are open, then the one bar that toggles between the two, then the footer. The plans are
+        // clipped to the shared block too: as the fold opens they leave through its top, and without
+        // the clip they would be drawn across the readout on the way out.
+        boolean clipPlans = stackBottom > stackTop;
+        if (clipPlans) {
+            UiMotion.clip(graphics, panelX, stackTop, panelX + panelW, stackBottom);
+        }
         drawPlanList(graphics, mouseX, mouseY);
+        if (clipPlans) {
+            graphics.disableScissor();
+        }
         // Both forms of the controls are drawn off the one fold value, and that is the whole of the
         // hand-over: the rows leave upward while fading, the plans come down into the space they
         // give up while arriving, and the block they share changes height on the same value -- so
@@ -1657,10 +1820,13 @@ public final class DestinationScreen extends Screen {
         // than with the screen: a plan appears as the row holding it does, not in the frame the
         // place was clicked. Multiplied with the entrance, which has long finished by then.
         float bandArrival = 1.0F - fold;
-        // The other half of the exchange the four rows make: they leave upwards, so the band comes
-        // down into the space they give up, and rises back out of it as they are opened again. Off
-        // the same {@link #fold} as its alpha, so the band cannot finish fading before it has moved.
-        int bandShift = -Math.round(fold * SUMMARY_FOLD_TRAVEL);
+        // The other half of the exchange the four rows make: the rows rise out of the bar, so the
+        // band they replace leaves upwards, out of the top of the block. Travelling by its own height
+        // rather than a token few pixels is what keeps the two texts apart while both are
+        // half-transparent -- the band is above the rows for the whole exchange instead of sitting
+        // in the same place and being written over. Off the same {@link #fold} as its alpha, so the
+        // band cannot finish fading before it has moved.
+        int bandShift = -Math.round(fold * plansBlockHeight());
         for (int i = 0; i < rows; i++) {
             // The row is drawn shifted and hovered where the layout put it: the click that chooses a
             // plan is decided from planRowTop, so a band in mid-fold cannot move what is under the
@@ -2308,21 +2474,24 @@ public final class DestinationScreen extends Screen {
     // ------------------------------------------------------------------ footer
 
     /**
-     * Where one of the four control rows is drawn this frame: its laid-out top, raised by the fold.
+     * Where one of the four control rows is drawn this frame: its laid-out top, lowered by the fold.
      *
      * <p>The drawing half of the fold, and only the drawing half. The rows keep the top the layout
      * gave them and are moved by this every frame, so the animation never has to write a position:
      * the places a click is tested against are the ones the layout computed, and a row that is
      * halfway out of the panel is still exactly where it was when the pointer found it.
      *
-     * <p>The travel is the whole height of the block the rows occupy, not a token 22 pixels, and
-     * that is what keeps the hand-over clean: the plans arrive in the *bottom* of that block (they
-     * are bottom-aligned, directly above the bar), so the rows have to have left that space by the
-     * time the plans are half-arrived. A shorter travel leaves two half-transparent texts written
-     * over one another for the length of the fold, which is exactly what reads as a glitch.
+     * <p>They rise from behind the bar, which is the direction the drawer opens in: the bar is the
+     * bottom of the panel, so the options have to come up out of it rather than down from under the
+     * readout. While they are still low they are drawn below the block's bottom edge and are clipped
+     * away by it (see {@link #render}), so the ones that have not arrived yet are simply not on
+     * screen -- the block looks like it is growing upwards out of the bar.
+     *
+     * <p>The travel is the whole height of the block the rows occupy, so a row is fully below its
+     * place at the folded end rather than a token distance short of it.
      */
     private int foldRowY(int rowY) {
-        return rowY - Math.round((1.0F - fold) * controlsBlockHeight());
+        return rowY + Math.round((1.0F - fold) * controlsBlockHeight());
     }
 
     /**
@@ -2954,10 +3123,15 @@ public final class DestinationScreen extends Screen {
                 return true;
             }
             // Remember the press only. The pin is dropped on release, so panning the map does not
-            // leave a pin behind at the end of every drag.
+            // leave a pin behind at the end of every drag. Grabbing the map stops a coast in its
+            // tracks: the hand on the map is the authority, and a view that keeps drifting under it
+            // is the one thing that makes a drag feel out of control.
             mapPressed = true;
             mapPressX = mouseX;
             mapPressY = mouseY;
+            momentumX = 0;
+            momentumZ = 0;
+            lastDragNanos = 0;
             return true;
         }
         if (hoveredRow >= 0 && hoveredRow < shown.size()) {
@@ -3091,6 +3265,10 @@ public final class DestinationScreen extends Screen {
         previewTarget = destination;
         setDetailsPlace(Destinations.isPlace(destination) ? destination : null);
         replanAndShowPlans();
+        // After the relayout, not before: the fit reads the shape of the map frame, and folding the
+        // controls is what changed its height. Only a new choice aims the view -- a control that
+        // re-plans the same place must not yank it back from wherever the player has panned to.
+        aimAtPlans();
     }
 
     /**
@@ -3312,10 +3490,27 @@ public final class DestinationScreen extends Screen {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
     //?}
         if (button == MouseButton.LEFT && mapPressed) {
-            // Move the centre opposite to the drag, so the map follows the cursor.
+            // Move the centre opposite to the drag, so the map follows the cursor. Both the shown
+            // value and the aim move: during a drag the map is the player's hand, so there is nothing
+            // to smooth -- what the drag leaves behind is the speed, which becomes the coast.
             double scale = mapW / (viewRadius * 2.0);
-            mapCenterX -= dragX / scale;
-            mapCenterZ -= dragY / scale;
+            double blocksX = dragX / scale;
+            double blocksZ = dragY / scale;
+            mapCenterX -= blocksX;
+            mapCenterZ -= blocksZ;
+            targetCenterX = mapCenterX;
+            targetCenterZ = mapCenterZ;
+            long now = System.nanoTime();
+            if (lastDragNanos != 0) {
+                double seconds = (now - lastDragNanos) / 1.0E9;
+                // A step under a millisecond is the same frame's mouse events, not a speed: dividing
+                // by it would turn one pixel into a throw.
+                if (seconds > 0.001) {
+                    momentumX = -blocksX / seconds;
+                    momentumZ = -blocksZ / seconds;
+                }
+            }
+            lastDragNanos = now;
             return true;
         }
         //? if >=1.21.9 {
@@ -3337,6 +3532,14 @@ public final class DestinationScreen extends Screen {
     //?}
         if (button == MouseButton.LEFT && mapPressed) {
             mapPressed = false;
+            // A throw that ended with the hand still has no speed: the last drag step is only a
+            // velocity if it was the last thing that happened, so a press and release with the
+            // cursor held still must not send the map anywhere.
+            if (System.nanoTime() - lastDragNanos > 120_000_000L) {
+                momentumX = 0;
+                momentumZ = 0;
+            }
+            lastDragNanos = 0;
             double moved = Math.hypot(mouseX - mapPressX, mouseY - mapPressY);
             if (moved < 3 && insideMap(mouseX, mouseY)) {
                 double[] world = worldAt(mouseX, mouseY);
@@ -3370,10 +3573,16 @@ public final class DestinationScreen extends Screen {
     /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
     *///?}
         if (insideMap(mouseX, mouseY)) {
-            // Zoom about the centre. Anchoring on the centre rather than the cursor is simpler and
-            // predictable enough at this size.
+            // Zoom about the centre, aimed rather than applied: the radius is chased by
+            // {@link #stepCamera}, so a wheel notch is a movement instead of a cut. The centre is
+            // pinned to where it is so the travel is pure zoom.
             double factor = scrollY > 0 ? 0.85 : 1.0 / 0.85;
-            viewRadius = Math.max(MIN_VIEW_RADIUS, Math.min(MAX_VIEW_RADIUS, viewRadius * factor));
+            targetViewRadius = Math.max(MIN_VIEW_RADIUS,
+                    Math.min(MAX_VIEW_RADIUS, targetViewRadius * factor));
+            targetCenterX = mapCenterX;
+            targetCenterZ = mapCenterZ;
+            momentumX = 0;
+            momentumZ = 0;
             return true;
         }
         if (mouseX < listPaneX || mouseX > listPaneX + listPaneW

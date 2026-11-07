@@ -53,7 +53,7 @@ import java.util.Locale;
  * places are offered to every kind, because the player put them where they meant to and nothing in
  * the data says which class of road they stand on.
  */
-public final class TransitLineScreen extends Screen {
+public final class TransitLineScreen extends Screen implements ParentBackdrop {
 
     public static final String TITLE = "screen.howtogo.lines";
 

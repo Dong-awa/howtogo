@@ -185,6 +185,27 @@ public final class UiMotion {
         return current + remaining * (1.0F - (float) Math.exp(-frameDelta() / mine));
     }
 
+    /**
+     * A value chasing a target with a time constant of its own, for a unit that is not a 0..1 fade.
+     *
+     * <p>{@link #follow} is the same exponential chase sized for a scroll, with a half-pixel snap;
+     * a map camera moves in world blocks and zooms on a logarithmic scale, so it needs the same
+     * shape with its own constant and its own idea of "close enough". Kept here rather than written
+     * out in each screen so the shape -- exponential, frame-rate independent, snapping rather than
+     * creeping its last fraction of a pixel -- is the same one in both maps.
+     */
+    public static double chase(double current, double target, float seconds, double snap) {
+        if (!on()) {
+            return target;
+        }
+        double remaining = target - current;
+        if (Math.abs(remaining) <= snap) {
+            return target;
+        }
+        float mine = Math.max(0.001F, seconds);
+        return current + remaining * (1.0 - Math.exp(-frameDelta() / mine));
+    }
+
     // ----------------------------------------------------------------- curves
 
     /**
@@ -492,6 +513,17 @@ public final class UiMotion {
         private final Slide enter = new Slide(Easing.OUT_QUINT, 0.0F, ENTER);
         private final Slide exit = new Slide(Easing.IN_CUBIC, 0.0F, EXIT);
         private boolean leaving;
+        /**
+         * Whether this screen was drawn as the backdrop of another screen since it was last the one
+         * on show.
+         *
+         * <p>Set by {@link #of} when it is asked for a screen that is not the current one, which only
+         * happens when that screen is re-rendering its parent underneath itself. It is what lets
+         * {@link Screens} tell "this screen is being revealed again" apart from "this screen is being
+         * opened": the first must not replay an entrance, the second must. Cleared when the screen is
+         * on show again.
+         */
+        private boolean underneath;
 
         /** How far this screen has opened, 0 to 1, on its entrance curve. */
         public float opened() {
@@ -554,6 +586,16 @@ public final class UiMotion {
             enter.jump(1.0F);
             exit.jump(0.0F);
         }
+
+        /** Whether this screen was drawn underneath another one since it was last on show itself. */
+        boolean underneath() {
+            return underneath;
+        }
+
+        /** Records whether this screen is being drawn underneath another one this frame. */
+        void underneath(boolean value) {
+            this.underneath = value;
+        }
     }
 
     /**
@@ -579,6 +621,12 @@ public final class UiMotion {
         // it faded out.
         if (screen == Screens.current()) {
             activeOpacity = state.opacity();
+            // Whatever it was a frame ago, the screen on show is not a backdrop.
+            state.underneath(false);
+        } else {
+            // Drawn under the screen on show: this is the evidence a reveal needs later. Nothing else
+            // in the game asks for a screen's motion state without that screen being the current one.
+            state.underneath(true);
         }
         Screens.pump();
         return state;
@@ -737,10 +785,48 @@ public final class UiMotion {
         state.reopen();
     }
 
-    /** Drops a screen's state, for a screen the game has finished with. */
-    static void forget(Screen screen) {
-        if (screen != null) {
-            STATES.remove(screen);
+    /**
+     * Takes over a screen that is about to be shown, at the start of its entrance or as it stands.
+     *
+     * <p>Two cases, and the difference is the whole point of {@link #underneath}: a screen that was
+     * being drawn as the backdrop of the screen being replaced is <em>revealed</em> -- it is already
+     * on the player's screen, and replaying its entrance would make the whole big interface behind the
+     * dialog flash open again. A screen that was not drawn underneath is being opened, and gets its
+     * entrance. A screen with no state at all has never been drawn, so its first frame of {@link #of}
+     * opens it from the start anyway.
+     */
+    static void adopt(Screen screen) {
+        if (screen == null) {
+            return;
+        }
+        ScreenState state = STATES.get(screen);
+        if (state == null) {
+            return;
+        }
+        if (state.underneath()) {
+            state.settleOpen();
+            state.underneath(false);
+        } else {
+            state.reopen();
+        }
+    }
+
+    /**
+     * Settles a screen that has just been replaced.
+     *
+     * <p>Its exit may have finished, or it may be on its way to zero; either way, if it is still being
+     * drawn -- as the backdrop of the screen that replaced it -- it has to draw at full strength and
+     * without motion. This is why the replaced screen's state is settled rather than dropped: dropping
+     * it would make the backdrop's next frame build a fresh state and play an entrance over the new
+     * screen.
+     */
+    static void release(Screen screen) {
+        if (screen == null) {
+            return;
+        }
+        ScreenState state = STATES.get(screen);
+        if (state != null) {
+            state.settleOpen();
         }
     }
 
