@@ -2,9 +2,11 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.mtr.Mtr3Data;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -95,6 +97,8 @@ final class MtrWholeMap {
     private static boolean available;
     private static boolean warned;
     private static boolean reported;
+    /** Whether the model in use is MTR 3.x's, whose whole map is read from the world's data. */
+    private static boolean threeX;
 
     private static Field mainField;
     private static Field dimensionField;
@@ -153,6 +157,10 @@ final class MtrWholeMap {
         if (!resolve()) {
             return;
         }
+        if (threeX) {
+            requestThreeX();
+            return;
+        }
         Object simulator = localSimulator();
         if (simulator == null) {
             return;
@@ -181,6 +189,53 @@ final class MtrWholeMap {
             pending = false;
             warnUnavailable(e);
         }
+    }
+
+    /**
+     * Queues one read of the 3.x world's data, on the server's own thread.
+     *
+     * <p>The 3.x railway is a world's saved data rather than a simulator's, so it is reached with the
+     * server world the player is in, and the read is queued with {@code MinecraftServer.execute} --
+     * the server's own thread, which is the one that mutates those sets, in the same way
+     * {@code Simulator.run} is MTR's for the 4.x model. Only an immutable reading is handed back.
+     *
+     * <p>A player on somebody else's server gets nothing from here, exactly as before: there is no
+     * server in this process to read, and MTR's own client data is what remains.
+     */
+    private static void requestThreeX() {
+        Minecraft minecraft = Minecraft.getInstance();
+        LocalPlayer player = minecraft.player;
+        MinecraftServer server = minecraft.getSingleplayerServer();
+        if (player == null || server == null || !server.isRunning()) {
+            return;
+        }
+        ServerLevel level = server.getLevel(player.level().dimension());
+        if (level == null) {
+            return;
+        }
+        pending = true;
+        pendingSince = 0;
+        server.execute(() -> {
+            try {
+                Object data = Mtr3Data.railwayData(level);
+                if (data == null) {
+                    return;
+                }
+                MtrClientData.Snapshot reading = MtrClientData.toSnapshot(Mtr3Data.whole(data));
+                latest = reading;
+                if (!reported && !reading.isEmpty()) {
+                    reported = true;
+                    HowToGo.diagnostic("[HowToGo] MTR whole map | {} station(s), {} platform(s), "
+                                    + "{} line(s) read from the simulated network",
+                            reading.stations().size(), reading.platforms().size(),
+                            reading.lines().size());
+                }
+            } catch (RuntimeException e) {
+                warnUnavailable(e);
+            } finally {
+                pending = false;
+            }
+        });
     }
 
     // ------------------------------------------------------------------ the chain
@@ -395,7 +450,29 @@ final class MtrWholeMap {
         if (!MtrClientData.ready()) {
             return false;
         }
+        if (MtrClientData.isThreeX()) {
+            // 3.x has no simulation core: the railway is the world's saved data, reached through a
+            // static factory instead of a Main of simulators. See Mtr3Data.
+            return bindThreeX();
+        }
         return bind();
+    }
+
+    /**
+     * Binds MTR 3.x's simulated network.
+     *
+     * <p>Nothing of this class's own chain -- no entry class, no Main, no Simulator -- exists on that
+     * data model, so this reader has no handles of its own to look up: the world's data is reached
+     * through {@link Mtr3Data} on demand, and what is bound here is whether that is possible at all.
+     */
+    private static boolean bindThreeX() {
+        threeX = Mtr3Data.bindServer();
+        available = threeX;
+        if (!threeX) {
+            HowToGo.LOGGER.info("[HowToGo] MTR 3.x's simulated network is not reachable here; the "
+                    + "windowed reading is what remains");
+        }
+        return threeX;
     }
 
     /**
@@ -480,6 +557,12 @@ final class MtrWholeMap {
      * check rather than fail it.
      */
     static boolean classesPresent() {
+        if (MtrClientData.isThreeX()) {
+            // The 3.x whole map needs the world's data class and nothing of the 4.x chain. Whether the
+            // Minecraft types its shape mentions can be loaded is a question of which Minecraft version
+            // this process is running, not of whether MTR is installed.
+            return Mtr3Data.serverPresent();
+        }
         try {
             load(MAIN);
             load(SIMULATOR);

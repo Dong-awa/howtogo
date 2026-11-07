@@ -32,6 +32,9 @@ libs/*.jar
 # The routing harness's own output: compiled classes and the classpath gradle printed for it.
 tools/routing-harness/build/
 
+# The MTR 3.x probe's own output: the classpath gradle printed and the pass logs.
+tools/mtr3-probe/build/
+
 # Local reconnaissance scratch.
 #
 # This directory holds decompiled Minecraft sources, decompiled Xaero classes and copies of their

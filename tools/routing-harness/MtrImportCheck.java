@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.mtr.Mtr3Data;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -110,6 +111,8 @@ public final class MtrImportCheck {
         checkLineColours();
 
         checkHandshake();
+
+        checkMtr3Handshake();
 
         // A line is told from the player's own by its id alone, which is what lets the planner take
         // both lists and the editor take one, with no second field to keep in step.
@@ -1309,6 +1312,13 @@ public final class MtrImportCheck {
             System.out.println("  --   no MTR jar on the classpath: the handshake is not checked here");
             return;
         }
+        if (!MtrClientData.classesPresentFourX()) {
+            // MTR 3.x's model is what is on the classpath. Its own handshake is checkMtr3Handshake,
+            // and the 4.x names are not expected to be there at all.
+            System.out.println("  --   MTR's 3.x data model is what is on the classpath; the 4.x "
+                    + "handshake is not checked here");
+            return;
+        }
         expect("every class, field and method the reader looks up is the one MTR has",
                 MtrClientData.bind());
         // The whole-map reader has a handshake of its own, and names the other reader never touches:
@@ -1322,6 +1332,51 @@ public final class MtrImportCheck {
         }
         expect("every class, field and method the whole-map reader looks up is the one MTR has",
                 MtrWholeMap.bind());
+    }
+
+    /**
+     * Whether the 3.x shapes this mod reads are the ones the jar on the classpath has.
+     *
+     * <p>A handshake of its own, and deliberately so: MTR 3.x's model is a different set of classes,
+     * and an install has one model or the other. Which one is present is answered by the classes
+     * themselves, so each model is checked only when its own jar is there.
+     *
+     * <p>The client half is checkable here, because the classes it names load with no game running.
+     * The simulated half is not: {@code RailwayData} is a world's saved data and extends a Minecraft
+     * class the harness's own classpath may not spell the way the 3.x jar does, so a class that
+     * cannot load here is reported rather than failed. Both halves, Minecraft accessors included, are
+     * checked against a real 1.20.1-Fabric classpath by {@code tools/mtr3-probe}.
+     */
+    private static void checkMtr3Handshake() {
+        if (!Mtr3Data.clientPresent()) {
+            System.out.println("  --   no MTR 3.x jar on the classpath: its handshake is not checked here");
+            return;
+        }
+        if (!intermediaryMinecraft()) {
+            // A 3.x jar is remapped for a running game: its Minecraft references are the intermediary
+            // class_* names, which this harness's own classpath (remapped the other way, for its node)
+            // cannot load. The names are checked there instead, against a real 1.20.1-Fabric classpath.
+            System.out.println("  --   an MTR 3.x jar is on the classpath, but this harness's Minecraft "
+                    + "is not remapped the way a running game's is; the 3.x handshake is checked by "
+                    + "tools/mtr3-probe on a 1.20.1-Fabric classpath");
+            return;
+        }
+        expect("every MTR 3.x client shape the reader looks up is the one the jar has",
+                Mtr3Data.bindClient());
+        if (Mtr3Data.serverPresent()) {
+            expect("every MTR 3.x simulated shape the reader looks up is the one the jar has",
+                    Mtr3Data.bindServer());
+        }
+    }
+
+    /** Whether this classpath carries Minecraft under the names a running game has. */
+    private static boolean intermediaryMinecraft() {
+        try {
+            Class.forName("net.minecraft.class_2338", false, MtrImportCheck.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError absent) {
+            return false;
+        }
     }
 
     /** A reading shaped like the one MTR describes: stations, platforms, routes and rails. */

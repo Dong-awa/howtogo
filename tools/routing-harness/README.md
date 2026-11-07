@@ -365,6 +365,14 @@ found that MTR 4.1 moved its own classes from `org.mtr.mod.*` to `org.mtr.*`, an
 both spellings. Without a jar the check prints that it is skipping and nothing fails, so the harness
 still runs on a machine that has never seen MTR.
 
+MTR **3.x** has a handshake of its own here, and it is a name check only: the 3.x jar is a production
+Fabric build whose Minecraft is intermediary (`net.minecraft.class_2338`), while this harness's own
+classpath is remapped the other way (to the running node's names), so its member lookups cannot
+resolve here at all. The harness therefore reports that and leaves the 3.x verification to
+`tools/mtr3-probe`, which runs that handshake -- and the reader itself, end to end -- against a real
+1.20.1-Fabric classpath. `MtrImportCheck.checkMtr3Handshake` is the code; `docs/mtr-versions.md` is
+the short version.
+
 The same is done for **MTR Map Overlay** (`run/mods/*mtrmap*.jar`), whose client cache is the third
 reading: the whole railway, fetched from the server, for a player on somebody else's server where
 there is no local simulation to read. Its reader is checked the same way and skipped the same way.

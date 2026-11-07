@@ -2,6 +2,8 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.RoadConfig;
+import bili.dongsz.howtogo.mtr.Mtr3Data;
+import bili.dongsz.howtogo.mtr.MtrSnapshotData;
 import bili.dongsz.howtogo.road.RoadClass;
 //? if fabric {
 /*import net.fabricmc.loader.api.FabricLoader;
@@ -120,6 +122,10 @@ public final class MtrClientData {
     private static boolean resolved;
     private static boolean available;
     private static boolean warned;
+    /** Whether the model bound is MTR 3.x's, which has its own reader in {@link Mtr3Data}. */
+    private static boolean threeX;
+    /** What 4.x's binding failed with, kept so the report names it when neither model binds. */
+    private static Throwable fourXFailure;
 
     private static Method getInstanceMethod;
     private static Field stationsField;
@@ -540,6 +546,12 @@ public final class MtrClientData {
         if (!available) {
             return Snapshot.EMPTY;
         }
+        if (threeX) {
+            // The 3.x model has its own reader, and its reading is handed back in these records so
+            // that everything downstream -- the merge, the memory, the map, the planner -- reads one
+            // shape and can tell nothing about which model produced it.
+            return toSnapshot(Mtr3Data.windowDimension());
+        }
         try {
             Object data = getInstanceMethod.invoke(null);
             if (data == null) {
@@ -916,9 +928,9 @@ public final class MtrClientData {
      * and running another mod's static initialisers from here would be asking for trouble in a session
      * where the game has not finished starting.
      *
-     * @return whether MTR's shapes are the ones this class reads
+     * @return whether MTR's 4.x shapes are the ones this class reads
      */
-    static boolean bind() {
+    private static boolean bindFourX() {
         try {
             Class<?> clientData = null;
             String boundName = null;
@@ -1024,9 +1036,41 @@ public final class MtrClientData {
             return true;
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;
-            warnUnavailable(e);
+            fourXFailure = e;
             return false;
         }
+    }
+
+    /**
+     * Binds MTR's data, whichever of its two models is installed.
+     *
+     * <p>The 4.x model is tried first and left entirely alone: an install that has it is an install
+     * this mod has always read, and nothing about that path changes. Only when those names are absent
+     * is the 3.x model looked for -- MTR 3.x keeps its objects on the client and in the world's saved
+     * data instead of a simulation core, so it has a reader of its own in {@link Mtr3Data}, and what
+     * comes out of it is handed back in this class's own records.
+     *
+     * <p>A version that has moved every one of these names simply reports itself unavailable, which
+     * is the honest answer and leaves the rest of the mod untouched.
+     *
+     * @return whether one of MTR's data models is readable here
+     */
+    static boolean bind() {
+        if (bindFourX()) {
+            threeX = false;
+            return true;
+        }
+        if (Mtr3Data.bindClient()) {
+            threeX = true;
+            available = true;
+            HowToGo.LOGGER.info("[HowToGo] MTR's 3.x data model is in use; the 4.x names are not on "
+                    + "the classpath");
+            return true;
+        }
+        available = false;
+        warnUnavailable(fourXFailure == null
+                ? new IllegalStateException("no known MTR data model is present") : fourXFailure);
+        return false;
     }
 
     /** A class by name, loaded but not initialised. */
@@ -1043,6 +1087,16 @@ public final class MtrClientData {
      * and quietly reported that there was nothing to check.
      */
     static boolean classesPresent() {
+        return classesPresentFourX() || Mtr3Data.clientPresent();
+    }
+
+    /**
+     * Whether MTR 4.x's client data class is on the classpath, without the 3.x fallback.
+     *
+     * <p>Asked by the regression harness before it checks the 4.x handshake: an install has one data
+     * model or the other, and a 3.x jar on the classpath is not a reason to expect 4.x's names.
+     */
+    static boolean classesPresentFourX() {
         for (String name : CLIENT_DATA_NAMES) {
             try {
                 load(name);
@@ -1052,6 +1106,53 @@ public final class MtrClientData {
             }
         }
         return false;
+    }
+
+    /**
+     * A 3.x reading, in this mod's own client records.
+     *
+     * <p>The two readings are the same fields under different owners, so this is a copy and not a
+     * conversion: nothing here decides anything, and a field {@link MtrSnapshotData} does not carry is
+     * a field the 4.x reading would not have offered either.
+     */
+    public static Snapshot toSnapshot(MtrSnapshotData.Dimension dimension) {
+        if (dimension == null) {
+            return Snapshot.EMPTY;
+        }
+        List<Station> stations = new ArrayList<>(dimension.stations().size());
+        for (MtrSnapshotData.Station station : dimension.stations()) {
+            stations.add(new Station(station.id(), station.name(), station.mode(), station.color(),
+                    station.centerX(), station.centerY(), station.centerZ(), station.minX(),
+                    station.minY(), station.minZ(), station.maxX(), station.maxY(),
+                    station.maxZ()));
+        }
+        List<Platform> platforms = new ArrayList<>(dimension.platforms().size());
+        for (MtrSnapshotData.Platform platform : dimension.platforms()) {
+            platforms.add(new Platform(platform.id(), platform.stationId(), platform.name(),
+                    platform.mode(), platform.x(), platform.y(), platform.z()));
+        }
+        List<Line> lines = new ArrayList<>(dimension.lines().size());
+        for (MtrSnapshotData.Line line : dimension.lines()) {
+            List<Stop> stops = new ArrayList<>(line.stops().size());
+            for (MtrSnapshotData.Stop stop : line.stops()) {
+                stops.add(new Stop(stop.platformId(), stop.stationId(), stop.stationName(),
+                        stop.destination()));
+            }
+            lines.add(new Line(line.id(), line.name(), line.mode(), line.color(), List.copyOf(stops),
+                    line.rails()));
+        }
+        List<Track> tracks = new ArrayList<>(dimension.tracks().size());
+        for (MtrSnapshotData.Track track : dimension.tracks()) {
+            tracks.add(new Track(track.hexId(), track.mode(), track.y(), track.xs(), track.zs()));
+        }
+        return new Snapshot(List.copyOf(stations), List.copyOf(platforms), List.copyOf(lines),
+                List.copyOf(tracks));
+    }
+
+    /** Whether the model in use is MTR 3.x's rather than 4.x's. */
+    static boolean isThreeX() {
+        resolve();
+        return threeX;
     }
 
     /**

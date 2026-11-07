@@ -37,7 +37,7 @@ Forge 已从仓库移除，不再计划支持；原因见 `MIGRATION.md` 的 For
 | Xaero's World Map | **必需** | 所有道路与路线都画在它上面  |
 | Xaero's Minimap   | 可选     | 读取小地图路标点作为目的地；也可当作导航地图的显示位置（见下）  |
 | Create（机械动力）      | 可选     | 读取轨道，把铁路映射进路网  |
-| MTR（我的世界铁路）       | 可选     | 读取车站与线路        |
+| MTR（我的世界铁路）       | 可选     | 读取车站与线路；4.x 与 3.x（含 YMTR 分支）都支持，见 [docs/mtr-versions.md](docs/mtr-versions.md) |
 | MCPhone           | 可选     | 手机里多一个「问道导航」应用 |
 | RoadWeaver        | 可选     | 读取它的路网数据       |
 
