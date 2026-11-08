@@ -171,7 +171,7 @@
   "screen.howtogo.line_list": "线路",
   "screen.howtogo.line_new": "新建",
   "screen.howtogo.line_delete": "删除",
-  "screen.howtogo.line_stops": "站点（按序排列）",
+  "screen.howtogo.line_stops": "站点（无序排列）",
   "screen.howtogo.line_candidates": "可添加站点",
   "screen.howtogo.line_none": "还没有线路",
   "screen.howtogo.line_empty": "还没有站点",
