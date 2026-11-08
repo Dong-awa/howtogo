@@ -101,6 +101,21 @@ public final class UiMotion {
     /** Rows past this one share the last row's delay, so a long list never trickles in for a second. */
     public static final int STAGGER_LIMIT = 8;
 
+    /**
+     * How faint one page's content gets while another page takes over from it, as an opacity.
+     *
+     * <p>Three tenths, and the number is the whole transition: at zero the two pages are two
+     * separate fades with a blank surface between them (which reads as the interface blinking), and
+     * at one there is no transition at all. At three tenths the outgoing page has visibly left, the
+     * incoming one has visibly not arrived, and neither of them ever stopped being part of the same
+     * surface -- which is what "one page became the next" looks like.
+     *
+     * <p>It applies to content only. The sheet and the dimming behind it are held at full for the
+     * whole hand-off (see {@link ScreenState#surface()}), because they are the surface the two pages
+     * have in common rather than part of either one.
+     */
+    public static final float HANDOFF_FLOOR = 0.3F;
+
     /** A frame longer than this is treated as this, so a stall cannot teleport an animation. */
     private static final float MAX_STEP_SECONDS = 0.05F;
     /** Two reads closer together than this share one delta: the same frame, not two. */
@@ -514,16 +529,14 @@ public final class UiMotion {
         private final Slide exit = new Slide(Easing.IN_CUBIC, 0.0F, EXIT);
         private boolean leaving;
         /**
-         * Whether this screen was drawn as the backdrop of another screen since it was last the one
-         * on show.
+         * Whether the transition in flight is a hand-off to or from another of this mod's pages.
          *
-         * <p>Set by {@link #of} when it is asked for a screen that is not the current one, which only
-         * happens when that screen is re-rendering its parent underneath itself. It is what lets
-         * {@link Screens} tell "this screen is being revealed again" apart from "this screen is being
-         * opened": the first must not replay an entrance, the second must. Cleared when the screen is
-         * on show again.
+         * <p>Set by the two entry points below, never inferred from the slides: it is a statement
+         * about <em>what kind of swap</em> is happening, which the durations cannot express. See
+         * {@link #surface()} and {@link #opacity()} for what it changes, and {@link Screens} for when
+         * a swap is one of these.
          */
-        private boolean underneath;
+        private boolean handoff;
 
         /** How far this screen has opened, 0 to 1, on its entrance curve. */
         public float opened() {
@@ -541,8 +554,16 @@ public final class UiMotion {
          * <p>Two separate travels rather than one number: arriving rises into place from below at
          * {@code rise}, and leaving lifts away by {@code fall}. A single value would have to pick one
          * direction for both, and an exit that sank downwards reads as the panel being dropped.
+         *
+         * <p>A hand-off does not travel at all. Both pages keep their sheet where it is and only the
+         * content changes, so the sheet of the page arriving is drawn exactly over the sheet of the
+         * page leaving; moving either would put a visible step in the middle of a transition whose
+         * whole point is that nothing moves.
          */
         public float offsetY(float rise, float fall) {
+            if (handoff) {
+                return 0.0F;
+            }
             return (1.0F - enter.eased()) * rise - exit.eased() * fall;
         }
 
@@ -550,9 +571,42 @@ public final class UiMotion {
          * The opacity everything on this screen is drawn at: the entrance and the exit multiplied
          * together, so a screen that is opened and then immediately closed fades from wherever the
          * opening got to rather than flickering back to full.
+         *
+         * <p>In a hand-off the content does not go all the way to nothing: it leaves off at
+         * {@link #HANDOFF_FLOOR} and the page arriving picks the fade up from there, so the two
+         * halves read as one cross-fade rather than as one page fading out and another fading in.
          */
         public float opacity() {
-            return clamp01(enter.eased() * (1.0F - closed()));
+            float entered = enter.eased();
+            if (!handoff) {
+                return clamp01(entered * (1.0F - closed()));
+            }
+            if (leaving) {
+                return clamp01(entered * (1.0F - closed() * (1.0F - HANDOFF_FLOOR)));
+            }
+            return clamp01(HANDOFF_FLOOR + entered * (1.0F - HANDOFF_FLOOR));
+        }
+
+        /**
+         * How opaque the screen's own <em>surface</em> is: the dimming over the world and the sheet
+         * the interface is drawn on.
+         *
+         * <p>The same number as {@link #opacity()} everywhere except during a hand-off, where the
+         * surface does not fade at all. Fading it is what shows the world between two pages -- the
+         * old page going transparent, the world for a frame or two, the new page coming back -- and
+         * holding it is what makes the two pages share one surface instead of one replacing the
+         * other. The content still cross-fades on top of it, so there is still motion; what is gone
+         * is the hole in the middle of it.
+         *
+         * <p>An arriving page holds it from its first frame rather than from its own entrance: the
+         * page it is replacing left the surface standing at full, and a sheet that restarted from
+         * nothing would be the same flash one page later.
+         */
+        public float surface() {
+            if (!handoff) {
+                return opacity();
+            }
+            return leaving ? enter.eased() : 1.0F;
         }
 
         /** Whether this screen is on its way out. */
@@ -562,9 +616,44 @@ public final class UiMotion {
 
         /** Starts the exit; the screen draws at a falling opacity until the game swaps it. */
         void leave() {
+            handoff = false;
             leaving = true;
             exit.jump(0.0F);
             exit.to(1.0F);
+        }
+
+        /**
+         * Starts the exit of a page that another of this mod's pages is taking over from.
+         *
+         * <p>The same slide as {@link #leave()}, read differently: the content drops to
+         * {@link #HANDOFF_FLOOR} while the surface stays, and the frame does not travel. See
+         * {@link Screens#defer} for which swaps are these.
+         */
+        void handOffOut() {
+            handoff = true;
+            leaving = true;
+            exit.jump(0.0F);
+            exit.to(1.0F);
+        }
+
+        /**
+         * Starts the entrance of a page that is taking over from another one.
+         *
+         * <p>From the content floor rather than from nothing, with the surface already up: the page
+         * arriving finishes a fade the page leaving started. The exit slide is put back at rest so
+         * that the state left by this screen's last departure cannot bleed into this arrival.
+         */
+        void handOffIn() {
+            handoff = true;
+            leaving = false;
+            enter.jump(0.0F);
+            enter.to(1.0F);
+            exit.jump(0.0F);
+        }
+
+        /** Whether the transition in flight is a hand-off; read once by {@link Screens#pump()}. */
+        boolean handoff() {
+            return handoff;
         }
 
         /** Whether the exit has finished, which is when the deferred swap may happen. */
@@ -572,29 +661,12 @@ public final class UiMotion {
             return leaving && exit.settled() && exit.raw() > 0.99F;
         }
 
-        /** Puts the screen back at the start of its entrance, for an instance being shown again. */
-        void reopen() {
-            leaving = false;
-            enter.jump(0.0F);
-            enter.to(1.0F);
-            exit.jump(0.0F);
-        }
-
         /** No motion at all: fully open and staying. */
         void settleOpen() {
+            handoff = false;
             leaving = false;
             enter.jump(1.0F);
             exit.jump(0.0F);
-        }
-
-        /** Whether this screen was drawn underneath another one since it was last on show itself. */
-        boolean underneath() {
-            return underneath;
-        }
-
-        /** Records whether this screen is being drawn underneath another one this frame. */
-        void underneath(boolean value) {
-            this.underneath = value;
         }
     }
 
@@ -621,12 +693,6 @@ public final class UiMotion {
         // it faded out.
         if (screen == Screens.current()) {
             activeOpacity = state.opacity();
-            // Whatever it was a frame ago, the screen on show is not a backdrop.
-            state.underneath(false);
-        } else {
-            // Drawn under the screen on show: this is the evidence a reveal needs later. Nothing else
-            // in the game asks for a screen's motion state without that screen being the current one.
-            state.underneath(true);
         }
         Screens.pump();
         return state;
@@ -757,12 +823,22 @@ public final class UiMotion {
         return screen != null && STATES.containsKey(screen);
     }
 
-    /** Starts {@code screen} leaving, and answers whether it was a screen the mod could animate. */
-    static boolean beginLeave(Screen screen) {
+    /**
+     * Starts {@code screen} leaving, and answers whether it was a screen the mod could animate.
+     *
+     * @param handoff whether another of this mod's pages is taking over from it -- see
+     *                {@link ScreenState#handOffOut()} and {@link Screens#defer}
+     */
+    static boolean beginLeave(Screen screen, boolean handoff) {
         if (!tracked(screen)) {
             return false;
         }
-        STATES.get(screen).leave();
+        ScreenState state = STATES.get(screen);
+        if (handoff) {
+            state.handOffOut();
+        } else {
+            state.leave();
+        }
         return true;
     }
 
@@ -772,60 +848,55 @@ public final class UiMotion {
         return state == null || state.left();
     }
 
-    /** Puts a screen that is about to be shown at the start of its entrance. */
-    static void reopen(Screen screen) {
+    /**
+     * Whether the screen's exit in flight is a hand-off, which is what the page replacing it must be
+     * told when it is installed -- the two halves have to be the same transition or neither half
+     * looks like anything.
+     */
+    static boolean leavingAsHandoff(Screen screen) {
+        ScreenState state = screen == null ? null : STATES.get(screen);
+        return state != null && state.handoff();
+    }
+
+    /**
+     * Takes over a screen that is about to be shown: as a hand-off from the page leaving, as a reveal
+     * of a page the player is coming back to, or as a page being opened.
+     *
+     * <h2>The three cases</h2>
+     * <ul>
+     *   <li><b>A hand-off</b> ({@code handoff}) is one of this mod's pages replacing another. The
+     *       outgoing page stopped short of nothing and the incoming one starts from the same floor
+     *       with the surface already up: one cross-fade between two pages that share a surface. See
+     *       {@link ScreenState#handOffIn()}.</li>
+     *   <li><b>A reveal</b> is a screen that already has a state and is being installed at once -- a
+     *       dialog being dismissed over the page it was drawn over. That page never left, so playing
+     *       its entrance again would flash the whole interface open behind a dialog that is merely
+     *       going away. It is settled instead.</li>
+     *   <li><b>An opening</b> is a screen with no state at all: it has never been drawn, so its first
+     *       {@link #of} starts it from nothing, which is the entrance a page opened from a menu
+     *       should have. Nothing is created here, because a screen whose state is created before it
+     *       is ever drawn is a screen {@link Screens#defer} would be willing to wait for an exit from
+     *       -- and one nothing would ever draw (see the class note in {@link Screens}).</li>
+     * </ul>
+     *
+     * <p>An instance that is thrown away and built again is a new instance and gets its entrance, so
+     * every page that is opened from a menu still arrives with one.
+     */
+    static void adopt(Screen screen, boolean handoff) {
         if (screen == null) {
             return;
         }
         ScreenState state = STATES.get(screen);
+        if (state == null && !handoff) {
+            return;
+        }
         if (state == null) {
             state = new ScreenState();
             STATES.put(screen, state);
         }
-        state.reopen();
-    }
-
-    /**
-     * Takes over a screen that is about to be shown, at the start of its entrance or as it stands.
-     *
-     * <p>Two cases, and the difference is the whole point of {@link #underneath}: a screen that was
-     * being drawn as the backdrop of the screen being replaced is <em>revealed</em> -- it is already
-     * on the player's screen, and replaying its entrance would make the whole big interface behind the
-     * dialog flash open again. A screen that was not drawn underneath is being opened, and gets its
-     * entrance. A screen with no state at all has never been drawn, so its first frame of {@link #of}
-     * opens it from the start anyway.
-     */
-    static void adopt(Screen screen) {
-        if (screen == null) {
-            return;
-        }
-        ScreenState state = STATES.get(screen);
-        if (state == null) {
-            return;
-        }
-        if (state.underneath()) {
-            state.settleOpen();
-            state.underneath(false);
+        if (handoff) {
+            state.handOffIn();
         } else {
-            state.reopen();
-        }
-    }
-
-    /**
-     * Settles a screen that has just been replaced.
-     *
-     * <p>Its exit may have finished, or it may be on its way to zero; either way, if it is still being
-     * drawn -- as the backdrop of the screen that replaced it -- it has to draw at full strength and
-     * without motion. This is why the replaced screen's state is settled rather than dropped: dropping
-     * it would make the backdrop's next frame build a fresh state and play an entrance over the new
-     * screen.
-     */
-    static void release(Screen screen) {
-        if (screen == null) {
-            return;
-        }
-        ScreenState state = STATES.get(screen);
-        if (state != null) {
             state.settleOpen();
         }
     }

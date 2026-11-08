@@ -75,6 +75,12 @@ public final class XaeroMinimapRouteRenderer
     /** The route is opaque so the two halves read as one line where they meet. */
     private static final int ROUTE_ALPHA = 0xFF;
 
+    /** Half the width of a transit line stroke: thinner than the roads it runs beside. */
+    private static final double LINE_HALF_WIDTH_PX = 0.35;
+
+    /** A line is map content, not the trip, so it is drawn a little softer than the route. */
+    private static final int LINE_ALPHA = 0xC8;
+
     /** Markers are opaque: there is at most one of each on the map at a time. */
     private static final int MARKER_ALPHA = 0xFF;
 
@@ -189,6 +195,7 @@ public final class XaeroMinimapRouteRenderer
         return switch (element.kind()) {
             case ROADS, RAILS, MTR_LAYER -> drawNetwork(element.network(), graphics);
             case ROADWEAVER -> drawNetworkInBox(element, graphics);
+            case TRANSIT_LINES -> drawLineStroke(element, graphics);
             case ROUTE_DONE, ROUTE_AHEAD -> drawRoute(element, graphics);
             case DESTINATION -> drawMarker(DESTINATION_RADIUS_PX, element.argb(), graphics);
             case ORIGIN -> clamped ? false : drawMarker(ORIGIN_RADIUS_PX, element.argb(), graphics);
@@ -252,23 +259,29 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Draws one half of the route.
      *
-     * <p>One drawing block per half, with the stroke's joins handled by the same path pass the
-     * panel uses, so the two halves meet at the split point without a notch. The clip rectangle is
-     * the minimap's, which matters more for the route than for anything else: a route is usually
-     * longer than the map is wide.
+     * <p>The element carries the route's ink and the distance covered; one drawing block draws the
+     * half this element stands for, and {@code HudDraw} does the rest -- for the covered half one
+     * grey, for the ahead half each stretch in its own colour, cut where the player is. That is the
+     * same call the navigation panel's mini-map makes, so the two small maps colour a journey
+     * identically, and the frame builds no point lists for either.
+     *
+     * <p>The clip rectangle is the minimap's, which matters more for the route than for anything
+     * else: a route is usually longer than the map is wide.
      */
     private static boolean drawRoute(XaeroMinimapRouteElement element, GuiGraphics graphics) {
-        List<double[]> points = element.routePoints();
-        if (points == null || points.size() < 2) {
+        HudDraw.RouteInk ink = element.routeInk();
+        if (ink == null || !ink.isPresent()) {
             return false;
         }
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
-        HudDraw.emitPath(drawing.sink, points,
+        HudDraw.emitInkPart(drawing.sink, ink, element.travelled(),
+                element.kind() == XaeroMinimapRouteElement.Kind.ROUTE_DONE,
+                element.argb(),
                 XaeroMinimapProjection.m00(), XaeroMinimapProjection.m01(),
                 XaeroMinimapProjection.m02(), XaeroMinimapProjection.m10(),
                 XaeroMinimapProjection.m11(), XaeroMinimapProjection.m12(),
                 ROUTE_HALF_WIDTH_PX * XaeroMinimapProjection.localPerScreenPx(),
-                element.argb(), ROUTE_ALPHA,
+                ROUTE_ALPHA,
                 XaeroMinimapProjection.localClipMinX(), XaeroMinimapProjection.localClipMinY(),
                 XaeroMinimapProjection.localClipMaxX(), XaeroMinimapProjection.localClipMaxY());
         HudDraw.endBlock(graphics, drawing);
@@ -283,6 +296,24 @@ public final class XaeroMinimapRouteRenderer
      * pixels. {@code radiusPx} is the size the navigation panel uses for the same marker, so a
      * destination is the same dot on both maps.
      */
+    private static boolean drawLineStroke(XaeroMinimapRouteElement element, GuiGraphics graphics) {
+        List<double[]> points = element.routePoints();
+        if (points == null || points.size() < 2) {
+            return false;
+        }
+        HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
+        HudDraw.emitPath(drawing.sink, points,
+                XaeroMinimapProjection.m00(), XaeroMinimapProjection.m01(),
+                XaeroMinimapProjection.m02(), XaeroMinimapProjection.m10(),
+                XaeroMinimapProjection.m11(), XaeroMinimapProjection.m12(),
+                LINE_HALF_WIDTH_PX * XaeroMinimapProjection.localPerScreenPx(),
+                element.argb(), LINE_ALPHA,
+                XaeroMinimapProjection.localClipMinX(), XaeroMinimapProjection.localClipMinY(),
+                XaeroMinimapProjection.localClipMaxX(), XaeroMinimapProjection.localClipMaxY());
+        HudDraw.endBlock(graphics, drawing);
+        return true;
+    }
+
     private static boolean drawMarker(double radiusPx, int argb, GuiGraphics graphics) {
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
         HudDraw.emitDisc(drawing.sink, 0, 0,
@@ -330,7 +361,7 @@ public final class XaeroMinimapRouteRenderer
     /** Whether an element kind draws a layer anchored at the frame anchor. */
     private static boolean isLayer(XaeroMinimapRouteElement.Kind kind) {
         return switch (kind) {
-            case ROADS, RAILS, MTR_LAYER, ROADWEAVER, ROUTE_DONE, ROUTE_AHEAD -> true;
+            case ROADS, RAILS, MTR_LAYER, ROADWEAVER, TRANSIT_LINES, ROUTE_DONE, ROUTE_AHEAD -> true;
             default -> false;
         };
     }

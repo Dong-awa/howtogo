@@ -173,9 +173,15 @@ public final class UiTheme {
      * <p>No world to ask -- the config screens are not our clients and this mod's own screens only
      * exist over a world -- so the dark style is the answer that cannot surprise anybody: it is what a
      * player who has never seen the setting has.
+     *
+     * <p>The client itself may be absent, not merely its world. This method is also reached from the
+     * offline routing harness, which loads the drawing code with no game behind it, and a theme that
+     * could only be asked from inside a running client could not be checked there. A missing client
+     * is the same answer as a missing world: the dark style.
      */
     private static boolean autoLight() {
-        var level = Minecraft.getInstance().level;
+        Minecraft minecraft = Minecraft.getInstance();
+        var level = minecraft == null ? null : minecraft.level;
         if (level == null) {
             return false;
         }
@@ -629,9 +635,51 @@ public final class UiTheme {
 
     // ------------------------------------------------------------ map symbols
 
-    /** The route being followed, and the route being previewed. */
+    /**
+     * The part of a route travelled on foot: every walk, including the legs either side of a ride.
+     *
+     * <p>Blue because the one thing a route line has to say at a glance is whether the next stretch
+     * is walked or ridden, and colour says it before the width or the dashes can. A public transport
+     * journey is not one colour; its riding stretches take their line's own colour and this is what
+     * is left at the ends. See {@link #routeRide()} for the driven colour and {@link #routeDone()}
+     * for the part already covered.
+     */
     public static int route() {
         return pick(0xFF2FD0FF, 0xFF1A73E8);
+    }
+
+    /**
+     * The part of a route travelled in a vehicle that has no line to take its colour from: driven.
+     *
+     * <p>Green, kept apart from the walking blue and from the violet a ride with an unresolvable
+     * line falls back to -- see {@link #routeLineFallback()}. A public transport ride is drawn in
+     * its line's own colour rather than in this one, because the line's colour is its badge
+     * everywhere else in the mod, so the route, the map and the editor agree about which service is
+     * being ridden.
+     *
+     * <p>The green itself is dark enough to sit beside the walking blue without competing with it,
+     * and light enough to be read on the dark panel and on the light one: the light theme's green is
+     * the same family as {@link #okSoft()} but deeper, because a route is a line rather than a
+     * status, and the dark theme's is lifted so it does not disappear into a night map.
+     */
+    public static int routeRide() {
+        return pick(0xFF3FBF6A, 0xFF1B7F3B);
+    }
+
+    /**
+     * A ride whose line cannot be named: the colour the route line falls back to.
+     *
+     * <p>The journey on screen records the name of the line it rides, and the line itself can be
+     * deleted, replaced or re-imported while that journey is still being followed. The stretch is
+     * still ridden by something, so drawing it in the walking blue or the driving green would be a
+     * claim about how the player travels that the map has no basis for; drawing it grey would read
+     * as ground already covered. A violet is the one family left that means neither, and it is dark
+     * enough in the light style and bright enough in the dark one to be seen as a line rather than
+     * as a smudge -- {@link #routeRide()}'s green and {@link #route()}'s blue are the two it must
+     * not be mistaken for, and it is neither.
+     */
+    public static int routeLineFallback() {
+        return pick(0xFFB98CFF, 0xFF6A3AB8);
     }
 
     /** The part of a route already travelled. */

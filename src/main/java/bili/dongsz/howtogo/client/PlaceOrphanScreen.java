@@ -86,6 +86,15 @@ public final class PlaceOrphanScreen extends Screen {
     private float open = 1.0F;
 
     /**
+     * The opacity of the sheet and its edge this frame, as against the rows on top of them.
+     *
+     * <p>The same number as {@link #open} except during a hand-off to another page, where the sheet
+     * is held at full while the content cross-fades -- see {@link UiMotion.ScreenState#surface()}.
+     * A field because the sheet is drawn from {@link #renderBackground}, before the rest of the frame.
+     */
+    private float surface = 1.0F;
+
+    /**
      * Each visible row's delete control, keyed by the row's position on screen.
      *
      * <p>Position rather than identity, because what it animates is a highlight and a highlight
@@ -276,9 +285,9 @@ public final class PlaceOrphanScreen extends Screen {
         // lands on the panel rather than behind it, as on the map-data screen. Both are drawn at the
         // window's own opacity, so the panel arrives over the map instead of appearing on it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiMotion.fade(UiTheme.windowEdge(), open));
+                UiMotion.fade(UiTheme.windowEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
-                UiMotion.fade(UiTheme.panelSolid(), open));
+                UiMotion.fade(UiTheme.panelSolid(), surface));
     }
 
     @Override
@@ -288,6 +297,7 @@ public final class PlaceOrphanScreen extends Screen {
         // opacity. UiMotion.of is also what pumps a deferred screen swap, so it is read once here.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        surface = motion.surface();
         // The card then travels as one piece, and it is pushed before either background path is
         // entered: the sheet and its edge are the card, so they have to move with the rows rather
         // than staying put while the contents rise past them.

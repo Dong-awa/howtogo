@@ -29,6 +29,7 @@
 | `SCROLL` | **200 ms** | 列表滚到新位置 | 一次滚轮的位移，用跟随曲线而非线性。 |
 | `HUD` | **220 ms** | 导航面板出现/消失、行程条 | HUD 是常驻物，进出要软一点。 |
 | `STAGGER` | **16 ms / 行**（上限） | 列表逐行入场延迟 | 每行晚一点开始、每行固定用 120ms 到位；延迟被压缩到"入场剩余的时间"里（当前令牌下约 10ms/行 × 8 行），所以最后一行也在 `ENTER` 内到齐、不会永远偏暗。超过 `STAGGER_LIMIT`(8) 行共用最大延迟。 |
+| `HANDOFF_FLOOR` | **0.3** | 两个界面之间交接时，旧界面内容淡到的最低不透明度；新界面从这里接着淡回来 | 不是时长而是"位置"：到 0 就是两次独立淡入淡出、中间露出一块空屏（读作闪一下），到 1 就没有过渡。三成时旧内容明显走了、新内容明显还没到，但两者始终是同一块面。**只作用于内容**——遮罩和面板本身在整个交接里保持不动（见第 5 节）。 |
 
 ## 3. 曲线（`UiMotion.Easing`）
 
@@ -80,7 +81,8 @@ UiMotion.frameDelta()             // 本帧秒数，clamp 到 0.05
 @Override
 public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     UiMotion.ScreenState motion = UiMotion.of(this);   // 每帧一次：推进入场/退场，并驱动延迟换屏
-    open = motion.opacity();                           // 0..1，入场与退场相乘
+    open = motion.opacity();                           // 0..1，内容（地图、文字、按钮、路线）
+    surface = motion.surface();                        // 0..1，遮罩与面板；只有交接那一下与 open 不同
     UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));  // 整帧位移
     //? if <1.20.2 { renderBackground(graphics); //?}  （若有）
     super.render(graphics, mouseX, mouseY, partialTick);
@@ -97,6 +99,32 @@ public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTi
 - **命中测试不动**：位移期间最坏 10px 偏差、最长 200ms，且位移只影响绘制坐标；可点区域始终按逻辑坐标。
 - **版本围栏只在一处**：1.21.6 起 `PoseStack` 换成 `Matrix3x2fStack`（`pushMatrix/popMatrix`），
   `UiMotion.pushFrame/popFrame` 是唯一处理这件事的地方。**界面文件里不许自己写 pose 围栏。**
+- **两个不透明度，不是一个**：`opacity()` 是内容，`surface()` 是它下面那层（遮罩、面板底、
+  面板边缘）。平时两者相等；只有页面交接时不同（见下）。界面文件里画**遮罩/面板底/边缘**的
+  地方读 `surface`，其余（文字、地图、控件、路线）读 `open`。
+
+### 换屏的三种情况（`Screens.defer`）
+
+只有本模组自己的界面会被延迟换屏（`UiMotion.tracked`），原版/别的模组的界面当帧换掉。剩下三种：
+
+| 情况 | 做法 | 为什么 |
+|---|---|---|
+| 本模组页面 → 本模组页面 | **接力淡化**（下面详述） | 换页不是消失：真播完整退场就会把世界露出来 |
+| 关到世界（`Screens.set(null)`） | 完整退场，140ms 淡到 0 | 这里界面是真的走了，淡出是唯一说这件事的方式 |
+| 关到/打开小面板（`ParentBackdrop`） | 当帧换屏，两边都不播 | 小面板画在父界面**上面**（它自己重画父界面），父界面从头到尾没动过 |
+
+### 接力淡化（交接）
+
+旧页面的内容淡到 `HANDOFF_FLOOR`(0.3)，同一帧新页面从 0.3 接着淡回 1。
+
+- **遮罩和面板不动**：交接期间 `surface()` 恒为 1、`offsetY` 恒为 0。让面板跟着内容淡，中间那两帧
+  世界就露出来了——这正是要消掉的那次闪；让面板跟着位移走，两块面板交接的那一帧会差十来个像素，
+  读作一次跳变。所以交接里只有**内容**在动，看起来是一次交叉淡化。
+- **新旧两半必须同一条时间轴**：`Screens.pump` 在换屏前读一次 `UiMotion.leavingAsHandoff(旧)`，
+  把同一个答案交给 `UiMotion.adopt(新, handoff)`；两半各自决定，就是两次淡化。
+- **内容从三成接、不从零接**：从零接等于"旧界面没了、新界面再从没有淡回来"，中间仍有一下"空"。
+- **交接结束后标记要清**：普通 `leave()` 和 `settleOpen()` 都会清掉交接标记，否则这个界面之后
+  关到世界时会停在 0.3 透明度——界面看起来卡住不动。
 
 ### 退场为什么需要延迟换屏
 
@@ -108,25 +136,30 @@ public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTi
 
 **只有本模组自己的界面会被"收养"进动画状态。** 延迟换屏的前提是"当前界面会画自己的退场"，
 而会画退场的唯一证据就是它每帧调用 `UiMotion.of`——那也正是推动换屏的泵。所以 `Screens.install`
-只在目标界面**已经**有动画状态时才重置它，绝不因为换屏而给任何界面新建状态：否则原版/其他模组的
+只在目标界面**已经**有动画状态时才接管它，绝不因为换屏而给任何界面新建状态：否则原版/其他模组的
 界面（典型是 Xaero 的世界地图）在第一次从本模组面板返回时被登记成"可等退场"，下一次要离开它时
 换屏就被记成待换、等一个永远不会到来的泵——表现是**世界地图里所有界面打开过一次之后，第二次就
-再也打不开**，必须退出全屏地图再进来（新实例没被登记）才恢复。界面的第一次入场丢失不了：没有状态
-的界面在第一帧 `UiMotion.of` 里从 0 开始，和 `install` 里重置是一样的动画。
+再也打不开**，必须退出全屏地图再进来（新实例没被登记）才恢复。没有状态的界面丢不了入场：
+它的第一帧 `UiMotion.of` 会从 0 开始，和 `install` 里重置是同一种动画。
 
-**叠加的小面板不播父界面的退场（`ParentBackdrop`）。** 有一类界面是"盖在另一个界面上的对话框"：
-它们自己调用 `parent.render(...)` 把父界面重画在下面（命名面板、线路编辑、地点详情都这样，父界面
-往往是世界地图）。这类界面的目标是 `ParentBackdrop`，`Screens.set` 直接安装、**不**启动父界面的退场：
-父界面根本没离开，它还要被画在下面当背景，播退场只会让它淡出、然后被对话框重画回全亮——看起来
-就是"大界面重新弹了一遍"。反过来，关闭对话框时父界面是**被重新露出**而不是被重新打开：`UiMotion.of`
-发现它在被当作背景绘制时记下 `underneath`，`UiMotion.adopt` 据此让它直接落到全开状态，不再播一次
-入场。两件事合起来才是"小面板进出、大界面不动"。新增对话框时声明这个标记即可，不要另写一套判断。
+**换屏那一刻不要再"扶正"旧界面。** 曾经在安装新界面前把旧界面的状态 `settleOpen()`，理由是
+"给下个界面当底图的界面得是静止的"；但现在没有任何界面会去画那个被换掉的旧界面（唯一会画别的
+界面的小面板根本不会走延迟换屏这条路），于是这一步唯一的效果就是：一个刚淡到 0 的界面被拉回
+100% 画了最后一帧，紧接着被换掉——按「完成」时那一下多余的闪烁就是这个。
+
+**叠加的小面板任何时候都不播父界面的动画（`ParentBackdrop`）。** 这类界面是"盖在另一个界面上的
+对话框"：它们自己调用 `parent.render(...)` 把父界面重画在下面（命名面板、线路编辑、地点详情都
+这样，父界面往往是世界地图）。两个方向都不该有动画：打开时父界面根本没离开，播退场只会让它淡出、
+然后被对话框重画回全亮（看起来就是"大界面重新弹了一遍"）；关闭时父界面是被**重新露出**而不是被
+**重新打开**，它一直在屏幕上，播入场是同样的闪。所以 `Screens.defer` 对这类界面直接当帧换屏，
+`UiMotion.adopt` 只在它本来就有状态时把它落到全开。新增对话框时声明这个标记即可，不要另写一套判断。
 
 ## 6. 各类控件的规定动作
 
 | 对象 | 动作 | 做法 |
 |---|---|---|
 | 界面（Screen） | 整帧位移 + 淡入淡出 | `pushFrame` + `offsetY(RISE, FALL)` + `popFrame`，遮罩外扩 `SCRIM_MARGIN` |
+| 两界面之间换页 | **接力淡化**：内容到 `HANDOFF_FLOOR` 交接，遮罩与面板不动 | `Screens.defer` 给旧界面 `handOffOut()`、给新界面 `handOffIn()`；`surface()` 读进 `surface` 字段，`opacity()` 读进 `open`；交接期间 `offsetY` 为 0 |
 | `PanelButton` | 光标进出缓动 + 按下缩进 | `hover`/`press` 两个 Slide；面色 `UiMotion.mix(base, hover, h)`；按下时 face 缩 1px |
 | 列表行 | 光标底色缓动 + 逐行入场 | `Row` 自带 `hover` Slide；底色 `fade(rowHoverTint, h * stagger)` |
 | 勾选框 / chip | 光标：外描边 alpha 缓动 | 描边 `fade(overlayHoverEdge, h)` |
@@ -158,3 +191,7 @@ public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTi
 - 默认：`true`
 - 设置界面：`设置 → 外观 → 界面动效`（`screen.howtogo.settings.group.appearance`）
 - 关闭后：本文件第 6 节全部动作变为瞬时，界面功能不变。
+- 回归检查：`tools/routing-harness` 里的 `ScreenMotionCheck`（`run-fast.ps1` 会跑）把换页的
+  两个不变量钉死——交接期间 `surface()` 不掉到 1 以下、内容不低于 `HANDOFF_FLOOR`、`offsetY`
+  为 0；关到世界时 `surface()` 必须真的到 0；交接过一次的界面之后关到世界也必须能淡到 0。
+  这两条就是玩家报的「闪两下」「没有动画」在数值上的样子。

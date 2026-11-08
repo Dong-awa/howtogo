@@ -5,7 +5,6 @@ import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
-import bili.dongsz.howtogo.route.Route;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -397,59 +396,16 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY,
                 playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
-        Route route = Navigation.route();
-        if (route.isPresent()) {
-            List<double[]> points = route.points();
-            double travelled = Navigation.travelled();
-            double cumulative = 0;
-            int splitAt = -1;
-            double splitX = 0;
-            double splitY = 0;
-            for (int i = 1; i < points.size(); i++) {
-                double[] a = points.get(i - 1);
-                double[] b = points.get(i);
-                double segmentLength = Math.hypot(b[0] - a[0], b[1] - a[1]);
-                if (segmentLength < 1.0E-9) {
-                    continue;
-                }
-                if (cumulative + segmentLength >= travelled) {
-                    splitAt = i;
-                    double t = (travelled - cumulative) / segmentLength;
-                    splitX = a[0] + (b[0] - a[0]) * t;
-                    splitY = a[1] + (b[1] - a[1]) * t;
-                    break;
-                }
-                cumulative += segmentLength;
-            }
-            List<double[]> done = new ArrayList<>();
-            List<double[]> ahead = new ArrayList<>();
-            if (splitAt < 0) {
-                // Past the end of the route (or a route whose segments are all zero length): what is
-                // left to draw is whatever has not been walked, which is nothing once the player has
-                // travelled. Drawing everything in the "ahead" colour was the one place the done
-                // colour and the ahead colour could disagree with where the player actually was.
-                if (travelled > 0) {
-                    done.addAll(points);
-                } else {
-                    ahead.addAll(points);
-                }
-            } else if (splitAt <= 0) {
-                ahead.addAll(points);
-            } else {
-                done.addAll(points.subList(0, splitAt));
-                done.add(new double[]{splitX, splitY});
-                ahead.add(new double[]{splitX, splitY});
-                ahead.addAll(points.subList(splitAt, points.size()));
-            }
-            double half = ROUTE_THICKNESS * 0.5;
-            if (done.size() >= 2) {
-                emitPath(last, done, m00, m01, m02, m10, m11, m12, half, UiTheme.routeDone(),
-                        solid, minX, minY, maxX, maxY);
-            }
-            if (ahead.size() >= 2) {
-                emitPath(last, ahead, m00, m01, m02, m10, m11, m12, half, UiTheme.route(),
-                        solid, minX, minY, maxX, maxY);
-            }
+        // The live route, in the ink each of its stretches calls for: the part behind the player
+        // grey, and what is left ahead blue where it is walked, the line's own colour where it is
+        // ridden. The split is made per stretch inside the drawing, so a journey is coloured the
+        // whole way along instead of one mode's colour hiding the others; a walk or a drive is one
+        // stretch and comes out exactly as it always did.
+        HudDraw.RouteInk ink = Navigation.routeInk();
+        if (ink.isPresent()) {
+            HudDraw.emitRouteInk(last, ink, Navigation.travelled(), UiTheme.routeDone(),
+                    m00, m01, m02, m10, m11, m12, ROUTE_THICKNESS * 0.5, solid,
+                    minX, minY, maxX, maxY);
         }
 
         double originX = Navigation.tripOriginX();

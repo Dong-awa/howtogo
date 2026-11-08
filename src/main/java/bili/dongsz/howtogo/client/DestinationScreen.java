@@ -9,9 +9,11 @@ import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
+import bili.dongsz.howtogo.route.LinePlanner;
 import bili.dongsz.howtogo.route.Route;
 import bili.dongsz.howtogo.route.RouteOption;
 import bili.dongsz.howtogo.route.RoutePreferences;
+import bili.dongsz.howtogo.route.RouteStrategy;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -26,6 +28,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.player.LocalPlayer;
 // 1.21.9 bundled mouse coordinates and the button into a record.
 //? if >=1.21.9 {
 /*import net.minecraft.client.input.MouseButtonEvent;
@@ -298,6 +301,16 @@ public final class DestinationScreen extends Screen {
      * that the exit, which is the same value falling again, needs no second code path.
      */
     private float open = 1.0F;
+
+    /**
+     * The opacity of the window's own surface this frame: the dimming, the sheet and the empty map.
+     *
+     * <p>The same number as {@link #open} everywhere except during a hand-off to another page, where
+     * the surface is held at full while the content cross-fades -- see
+     * {@link UiMotion.ScreenState#surface()}. The empty map counts as surface rather than as content:
+     * a map that faded would be a hole in the sheet with the world showing through it.
+     */
+    private float surface = 1.0F;
 
     /**
      * How far the four control rows are open this frame, from 0 folded to 1 open.
@@ -1710,12 +1723,12 @@ public final class DestinationScreen extends Screen {
         // would leave an undimmed strip along the edge the entrance uncovered.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 width + UiMotion.SCRIM_MARGIN, height + UiMotion.SCRIM_MARGIN,
-                UiMotion.fade(UiTheme.dim(), open));
+                UiMotion.fade(UiTheme.dim(), surface));
 
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), open));
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), surface));
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelHeight,
-                CORNER_RADIUS, UiMotion.fade(UiTheme.panelEdge(), open));
+                CORNER_RADIUS, UiMotion.fade(UiTheme.panelEdge(), surface));
 
         graphics.drawString(font, title, panelX + PADDING, panelY + PADDING,
                 UiMotion.fade(UiTheme.header(), open), false);
@@ -1820,19 +1833,16 @@ public final class DestinationScreen extends Screen {
         // than with the screen: a plan appears as the row holding it does, not in the frame the
         // place was clicked. Multiplied with the entrance, which has long finished by then.
         float bandArrival = 1.0F - fold;
-        // The other half of the exchange the four rows make: the rows rise out of the bar, so the
-        // band they replace leaves upwards, out of the top of the block. Travelling by its own height
-        // rather than a token few pixels is what keeps the two texts apart while both are
-        // half-transparent -- the band is above the rows for the whole exchange instead of sitting
-        // in the same place and being written over. Off the same {@link #fold} as its alpha, so the
-        // band cannot finish fading before it has moved.
-        int bandShift = -Math.round(fold * plansBlockHeight());
+        // The band does not travel. It used to slide out of the way, and a sliding row being cut by
+        // the block's own edge -- which is what clips it -- flicked its own text as the edge crossed
+        // it. A plain fade has nothing to cut: the block's edge only ever passes over rows that are
+        // rising into the space, and they are drawn over the band, not the other way round.
         for (int i = 0; i < rows; i++) {
-            // The row is drawn shifted and hovered where the layout put it: the click that chooses a
-            // plan is decided from planRowTop, so a band in mid-fold cannot move what is under the
-            // pointer (rule 1 of docs/UI_MOTION.md).
+            // The row is hovered where the layout put it: the click that chooses a plan is decided
+            // from planRowTop, so a band in mid-fold cannot move what is under the pointer (rule 1
+            // of docs/UI_MOTION.md).
             int laidOut = planRowTop(i);
-            int top = laidOut + bandShift;
+            int top = laidOut;
             int bottom = top + planRowSize;
             boolean hovered = mouseX >= rowX && mouseX <= rowX + rowW
                     && mouseY >= laidOut && mouseY < laidOut + planRowSize;
@@ -1928,10 +1938,15 @@ public final class DestinationScreen extends Screen {
      * turns are not what is compared -- the journey's own facts are the changes and the walking, and
      * those are what the numbers say. Asking the plan rather than the route for them is what keeps
      * the shown figure and the followed figure the same calculation; see {@link RouteOption}.
+     *
+     * <p>Keyed on the journey rather than on the mode: the walk offered in public transport's place
+     * is handed over under the transit mode but is not a journey -- it has no changes and no
+     * boarding, and asking it for its walking would print "0 blocks on foot" about a plan that is
+     * nothing else.
      */
     private static String planFacts(RouteOption plan) {
         String distance = Route.formatDistance(plan.length());
-        if (plan.mode() == TravelMode.TRANSIT) {
+        if (plan.trip() != null) {
             return Component.translatable("screen.howtogo.plan.transit_facts", distance,
                     plan.transfers(), Route.formatDistance(plan.walked())).getString();
         }
@@ -2071,9 +2086,9 @@ public final class DestinationScreen extends Screen {
 
     private void drawPickerMap(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.fill(mapX - 1, mapY - 1, mapX + mapW + 1, mapY + mapH + 1,
-                UiMotion.fade(UiTheme.panelEdge(), open));
+                UiMotion.fade(UiTheme.panelEdge(), surface));
         graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH,
-                UiMotion.fade(UiTheme.mapBackdrop(), open));
+                UiMotion.fade(UiTheme.mapBackdrop(), surface));
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
@@ -2137,10 +2152,20 @@ public final class DestinationScreen extends Screen {
                 0.7, roadAlpha, minX, minY, maxX, maxY,
                 mapCenterX - reach, mapCenterZ - reach, mapCenterX + reach, mapCenterZ + reach);
 
-        Route route = Navigation.route();
-        if (route.isPresent()) {
-            HudDraw.emitPath(last, route.points(), m00, 0, m02, 0, m11, m12,
-                    1.1, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
+        // Public transport lines, above the ground they run on and below the route: this map has no
+        // track to follow a line along, so it is drawn through the stops it calls at. Half a footpath's
+        // width -- a line marks a service, not a road -- with a floor because this map draws every
+        // road at one thin weight and half of that rounds away to nothing.
+        HudDraw.emitTransitLines(last, Navigation.linesInPlay(), m00, 0, m02, 0, m11, m12,
+                Math.max(0.5, 0.7 * 0.5), (int) (0xE0 * open), minX, minY, maxX, maxY);
+
+        // The live route, in the ink each of its stretches calls for: the map is a plan, and a
+        // journey's walking and riding have to be told apart on it or the plan is the one thing the
+        // picker shows that the map would not.
+        HudDraw.RouteInk liveInk = Navigation.routeInk();
+        if (liveInk.isPresent()) {
+            HudDraw.emitInk(last, liveInk, m00, 0, m02, 0, m11, m12,
+                    1.1, routeAlpha, minX, minY, maxX, maxY);
         }
 
         // The preview goes down in the same ink as the live route, so a route looked at before
@@ -2169,8 +2194,15 @@ public final class DestinationScreen extends Screen {
         } else {
             Navigation.RoutePreview planned = preview;
             if (planned != null && planned.isPresent()) {
-                HudDraw.emitPath(last, planned.route().points(), m00, 0, m02, 0, m11, m12,
-                        1.1, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
+                // No plans to compare, so this is the one line the panel has: the walker's fallback,
+                // a walk or a drive. Its own route says which, including the public transport
+                // fallback that is a walk and therefore blue -- the UI mode is not the answer here,
+                // the line that was actually planned is.
+                HudDraw.RouteInk previewInk = Navigation.inkFor(planned.route(), null);
+                if (previewInk.isPresent()) {
+                    HudDraw.emitInk(last, previewInk, m00, 0, m02, 0, m11, m12,
+                            1.1, routeAlpha, minX, minY, maxX, maxY);
+                }
             }
         }
 
@@ -2301,11 +2333,17 @@ public final class DestinationScreen extends Screen {
     /**
      * One plan's line on the picker map.
      *
-     * <p>The chosen plan is drawn in the accent colour at the width the live route uses, and the
-     * others thinner and faded: three lines of equal strength would leave the player unable to tell
-     * which one the readout and the footer are about. Both are still drawn in the route family's
-     * ink rather than in a palette of their own, because they are routes and not a different kind of
-     * object -- what separates them is emphasis, not identity.
+     * <p>The chosen plan is drawn in the accent colour at the width the live route uses, so it is
+     * clearly the one the readout and the footer are about. The others are thinner and faded, but
+     * in <em>their own</em> ink: a plan that rides a line shows that line's colour on the ridden
+     * stretch and the walking blue on the walk to it, exactly as it will once committed. An
+     * unchosen plan used to be one grey-blue line, which is fine for telling three plans apart and
+     * useless for reading what any of them does -- the comparison is the point of the results band,
+     * and "this one is mostly walking and that one is mostly the tram" is what is being compared.
+     *
+     * <p>The fading is per stretch and by alpha, not by replacing the colour with a paler one: the
+     * hue is what carries the meaning, and mixing each stretch toward the panel would make two
+     * different lines' colours converge at exactly the alpha this band uses to recede.
      *
      * <p>Emitted through the shared block's sink like every other line on this map, so it must be
      * called before the name pass: a string written by {@code GuiGraphics} flushes the batch these
@@ -2317,9 +2355,16 @@ public final class DestinationScreen extends Screen {
         if (plan == null || !plan.isPresent()) {
             return;
         }
-        HudDraw.emitPath(out, plan.route().points(), m00, 0, m02, 0, m11, m12,
-                selected ? 1.1 : 0.7, selected ? UiTheme.accent() : UiTheme.route(),
-                selected ? 0xE0 : 0x70, minX, minY, maxX, maxY);
+        if (selected) {
+            HudDraw.emitPath(out, plan.route().points(), m00, 0, m02, 0, m11, m12,
+                    1.1, UiTheme.accent(), 0xE0, minX, minY, maxX, maxY);
+            return;
+        }
+        HudDraw.RouteInk ink = Navigation.inkFor(plan.route(), plan.trip());
+        if (ink.isPresent()) {
+            HudDraw.emitInk(out, ink, m00, 0, m02, 0, m11, m12,
+                    0.7, 0x70, minX, minY, maxX, maxY);
+        }
     }
 
     /**
@@ -2540,6 +2585,10 @@ public final class DestinationScreen extends Screen {
      * the state line says which mode the answer is for, and the second line is the trip or the
      * router's sentence explaining why there is none.
      *
+     * <p>The second line gives the plan's cost except for the walk offered because no line is worth
+     * riding: there it gives the reason instead, since "how far and how long" is already on the row
+     * and the question left is why there is no ride at all. See {@link #walkInsteadOfRiding}.
+     *
      * <p>A failed combination is a sentence from the router, which is the only thing that turns
      * "there is no route" into something the player can act on, so it gets a line of its own to be
      * read in rather than being clipped to make room for a distance and a time that do not exist.
@@ -2560,11 +2609,19 @@ public final class DestinationScreen extends Screen {
             // the readout and the list are read as one statement rather than two.
             graphics.drawString(font, planTitle(planIndex, selected), rowX, previewY,
                     UiMotion.fade(UiTheme.textMuted(), open), false);
-            String text = Component.translatable("screen.howtogo.preview_route",
-                    Route.formatDistance(selected.length()),
-                    Route.formatDuration(selected.seconds())).getString();
+            // A walk offered in public transport's place is not a plan with a cost to compare: its
+            // distance and time are on the row's own facts line, and the question this line answers
+            // is why there is no ride. It reads as an explanation rather than as a warning -- a
+            // destination being near is not a fault -- so it takes the state line's muted ink.
+            boolean walkingInstead = walkInsteadOfRiding(selected);
+            String text = walkingInstead
+                    ? Component.translatable("hud.howtogo.close_enough_to_walk").getString()
+                    : Component.translatable("screen.howtogo.preview_route",
+                            Route.formatDistance(selected.length()),
+                            Route.formatDuration(selected.seconds())).getString();
             graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
-                    rowX, previewY + PREVIEW_STATE_HEIGHT, UiMotion.fade(UiTheme.accent(), open),
+                    rowX, previewY + PREVIEW_STATE_HEIGHT,
+                    UiMotion.fade(walkingInstead ? UiTheme.textMuted() : UiTheme.accent(), open),
                     false);
             return;
         }
@@ -2591,6 +2648,29 @@ public final class DestinationScreen extends Screen {
         graphics.drawString(font, font.plainSubstrByWidth(text, rowW),
                 rowX, previewY + PREVIEW_STATE_HEIGHT,
                 UiMotion.fade(present ? UiTheme.accent() : UiTheme.warn(), open), false);
+    }
+
+    /**
+     * Whether the selected plan is the walk offered in public transport's place because the
+     * destination is near enough to walk to.
+     *
+     * <p>The row's own title already says what the plan is -- a walk; this answers the different
+     * question the readout's second line exists for: why there is no ride at all. It is true only
+     * when that is the reason, because a destination further off keeps the plan's own cost there and
+     * "there is no line here" is not what explains that row. It is asked of the same distance the
+     * planner refuses a ride for -- see {@link LinePlanner#closeEnoughToWalk} -- so the sentence and
+     * the list cannot disagree about what "near" means. The origin is the player, which is where the
+     * list was planned from; a player who has wandered while the panel was open changes nothing that
+     * matters here, since the HUD says the same sentence after the trip starts.
+     */
+    private boolean walkInsteadOfRiding(RouteOption plan) {
+        if (plan == null || plan.strategy() != RouteStrategy.WALK || previewTarget == null) {
+            return false;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        double x = player != null ? player.getX() : previewTarget.x();
+        double z = player != null ? player.getZ() : previewTarget.z();
+        return LinePlanner.closeEnoughToWalk(x, z, previewTarget.x(), previewTarget.z());
     }
 
     /**

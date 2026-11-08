@@ -78,6 +78,15 @@ public final class MapImportScreen extends Screen {
      */
     private float open = 1.0F;
 
+    /**
+     * This frame's opacity for the warning sheet and its edge, as against the lines on top of them.
+     *
+     * <p>The same number as {@link #open} except during a hand-off to another page, where the sheet
+     * is held at full while the content cross-fades -- see {@link UiMotion.ScreenState#surface()}.
+     * A field for the same reason as {@code open}: the sheet is drawn before the rest of the frame.
+     */
+    private float surface = 1.0F;
+
     /** @param nextParent the screen the transfer screen should return to once the import is done */
     public MapImportScreen(Screen cancelTo, Screen nextParent, Path archive,
                            WorldArchive.Contents contents) {
@@ -184,9 +193,9 @@ public final class MapImportScreen extends Screen {
         // Both at the frame's opacity: the warning sheet is the first thing to arrive and the last
         // thing to leave, so every line drawn over it goes with it rather than outliving it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiMotion.fade(UiTheme.windowEdge(), open));
+                UiMotion.fade(UiTheme.windowEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
-                UiMotion.fade(UiTheme.panelSolid(), open));
+                UiMotion.fade(UiTheme.panelSolid(), surface));
     }
 
     @Override
@@ -196,6 +205,7 @@ public final class MapImportScreen extends Screen {
         // it answers with, so the warning arrives as one sheet.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        surface = motion.surface();
         // The whole frame is displaced, not only faded: a warning sheet that appears where it stays
         // reads as a cut. Pushed before any pixel -- the sheet 1.20.1 asks for by hand below included --
         // so the panel, the warning and the buttons travel together as one surface. The pose is rebuilt

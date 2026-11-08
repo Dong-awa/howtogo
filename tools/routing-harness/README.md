@@ -107,6 +107,19 @@ semicircle at every stroke end; and a bend whose mitre was only clamped read as 
 the world map's stroke reached its full width. Both checks rasterise through `StrokeCoverage`, so they cannot
 disagree with each other -- or with the game -- about what a `QUADS` buffer draws.
 
+`RouteInkCheck.java` covers what colour each stretch of a route line is drawn in: walking blue, the
+driving green, and a public transport ride in the colour of the line it is on. `HudDraw.routeInk` turns a
+route and the journey behind it into one point list and a range per colour, keyed by the two objects and
+cached by the navigation, so the five surfaces that draw a route share one table and a frame only walks
+it. That is pure arithmetic over a route, a journey and a list of lines, so the check builds the tables
+with no game and pins the rules: a walk is one blue stretch, a drive one green one, a journey is blue,
+the line's own colour, blue again with the boundaries on the legs' accumulated drawn lengths; a ride
+whose line cannot be found is drawn in a fallback that is none of the driving green, the walking blue or
+the travelled grey. The other half is that the new model did not repaint the routes that were already
+right: a single-stretch route, whole and cut at thirty percent and at both ends, must emit the same
+vertices as the code it replaced, and neighbouring stretches must meet at the station vertex without a
+cap of one painting its half width over the next colour.
+
 `RouteDirectionCheck.java` covers the reading the wrong-way call is built on: that a planned route never
 reads as running **backwards** where it is drawn forwards. `Route.bearingAt` answers with the nearest
 segment of the drawn line, and a line that passes over the same ground twice -- a road that loops back,
@@ -181,6 +194,19 @@ connector-only "route". What can happen with two ends off the network whose near
 same node is that out-to-the-road-and-back line; when no road is used at all and the straight line is
 shorter, `RoadRouter.preferDirectWalk` answers with the walk between the two places instead, which is
 also what the harness pins.
+
+`RouteDetourCheck.java` covers the way round on a driving trip's plan list, which the picker offered to
+walkers and not to drivers. Both are planned by the same four questions, so the difference was in the
+numbers: the way round was admitted by the bound the other metric and the other taste are held to, and
+a driver's other road trails the main one further than a walker's other street does; it was also only
+asked for while a row was free, and the fastest and the shortest can be the same street with a
+different corner. The check is that shape in the driving case -- a recommendation and a shortest way out
+of town twenty-five blocks apart, and a real way round the outside at twice the recommendation's time --
+and requires the way round to appear while the near-duplicate does not take a row. Two fixtures hold the
+other end: a loop round the road four times as long must not be offered at all, and a "shortest
+distance" trip whose only other way is a road loop is the case where the detour search's own arithmetic
+(in blocks) would let a plan through that the admission's bound (in the seconds the panel shows)
+refuses.
 
 `PoiCheck.java` covers the place merge: a second press on one block selects the place already there,
 the id, name and kind survive it, a merged press is not an extra undo step, and a place put down on a

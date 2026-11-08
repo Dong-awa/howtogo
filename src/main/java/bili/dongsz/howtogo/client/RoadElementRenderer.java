@@ -1573,6 +1573,34 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** The path each line actually runs along, one shape per line, and the lines it was built for. */
     private static String lineShapeSignature = "";
     private static List<LineShape> lineShapes = List.of();
+    /**
+     * The same track, flattened into the strokes the mod's own small maps draw.
+     *
+     * <p>One entry per stretch of one line, with the colour of the line it belongs to: the main
+     * screen's viewer and the picker's map project these themselves and have no vertex buffer of
+     * Xaero's to write into, so what they need is the geometry and the colour, not the map's own
+     * drawing. Rebuilt with the shapes -- on a change of the lines, not per frame, because the two
+     * small maps ask for it every frame.
+     */
+    private static List<TransitStroke> transitStrokes = List.of();
+
+    /** One line's track in world blocks, and the colour that line is known by. */
+    public record TransitStroke(List<double[]> points, int colour) {
+    }
+
+    /**
+     * The track each line runs along, in world blocks, one stroke per stretch.
+     *
+     * <p>For the maps this mod draws itself. The world map draws the same shapes from inside its own
+     * element pass; these two project them with their own camera, so they ask for the geometry instead
+     * of for a drawing. The shapes are the planner's -- each pair of neighbouring stops is routed the
+     * way the router will route it -- so a line on a small map bends where the line bends, rather
+     * than cutting the corner between two stations.
+     */
+    public static List<TransitStroke> transitStrokesFor(List<TransitLine> lines) {
+        shapeLines(lines);
+        return transitStrokes;
+    }
     /** The line count the diagnostic last reported, so it speaks when that changes and not per frame. */
     private static int reportedLineCount = -1;
     /**
@@ -1708,6 +1736,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         lineShapeCache.clear();
         lineShapeCache.putAll(rebuilt);
         lineShapes = shapes;
+        // The same shapes, flattened for the small maps: one stroke per stretch, carrying the colour
+        // the line is known by everywhere else. The points are the runs' own lists -- nothing is
+        // copied, so this is a walk over the shapes rather than a second set of geometry.
+        List<TransitStroke> strokes = new java.util.ArrayList<>();
+        for (int index = 0; index < lines.size() && index < shapes.size(); index++) {
+            TransitLine line = lines.get(index);
+            int colour = line.colorOr(RoadConfig.transitLineColor(line.kind()));
+            for (PathRuns.Run run : shapes.get(index).runs()) {
+                strokes.add(new TransitStroke(run.points(), colour));
+            }
+        }
+        transitStrokes = strokes;
         reportLongSteps(lines, shapes);
     }
 
@@ -2367,18 +2407,32 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * The active navigation route, drawn over the roads.
      *
-     * <p>Coloured by progress the way a navigation app does: the part already walked is grey, the
-     * part still ahead is cyan. A segment straddling the player's position is split at the exact
-     * point rather than being coloured whole, so the boundary does not lurch a segment at a time.
+     * <h2>The ink</h2>
+     * Each stretch of the route is drawn in its own colour -- blue where it is walked, green where
+     * it is driven, the line's own colour where it is ridden -- and everything behind the player is
+     * grey, the way a navigation app colours progress. The stretches come from {@code
+     * Navigation.routeInk}, which is the same table the panel, the minimap and the two viewers draw,
+     * so no surface can disagree about what a ride looks like.
+     *
+     * <h2>Why this is not a polyline stroke</h2>
+     * This map draws the route as one quad per edge with a dot at every joint, unlike the
+     * self-drawn maps, which stroke the whole line as one shape. The two look deliberately
+     * different at this scale, and the split of an edge at the player's exact position is what keeps
+     * the grey boundary from lurching a segment at a time -- so the edges and the dots are still
+     * emitted one at a time, with the stretch's colour replacing the old single "ahead" colour.
+     *
+     * <p>The dots are a second pass, after every edge: a dot drawn inside the edge loop would be
+     * painted over by the next stretch's edges where two stretches meet, and the joint at a station
+     * would show a notch in the colour that is leaving rather than the one that is arriving.
      */
     private void renderRoute(RoadElement element, PoseStack.Pose pose, VertexConsumer vc,
                              double fracX, double fracY, double p10, double posePerPixel) {
-        Route route = Navigation.route();
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
         double marker = ROUTE_MARKER_PX * posePerPixel;
+        HudDraw.RouteInk ink = Navigation.routeInk();
 
-        if (!route.isPresent()) {
+        if (!ink.isPresent()) {
             // Still show where the trip started and where it is trying to get to, so a failed
             // route does not look like the destination was never set.
             drawMarker(pose, vc, anchorX, anchorZ, fracX, fracY, p10,
@@ -2391,56 +2445,66 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return;
         }
 
-        List<double[]> points = route.points();
+        List<double[]> points = ink.points();
         double halfWidth = ROUTE_STROKE_PX * 0.5 * posePerPixel;
         double travelled = Navigation.travelled();
-
-        int aheadR = (COLOR_ROUTE >> 16) & 0xFF;
-        int aheadG = (COLOR_ROUTE >> 8) & 0xFF;
-        int aheadB = COLOR_ROUTE & 0xFF;
         int doneR = (COLOR_ROUTE_DONE >> 16) & 0xFF;
         int doneG = (COLOR_ROUTE_DONE >> 8) & 0xFF;
         int doneB = COLOR_ROUTE_DONE & 0xFF;
 
-        double cumulative = 0;
-        double[] pointDistance = new double[points.size()];
-        for (int i = 1; i < points.size(); i++) {
-            double[] a = points.get(i - 1);
-            double[] b = points.get(i);
-            double segmentLength = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        for (HudDraw.InkSpan span : ink.spans()) {
+            int aheadR = (span.colour() >> 16) & 0xFF;
+            int aheadG = (span.colour() >> 8) & 0xFF;
+            int aheadB = span.colour() & 0xFF;
+            double cumulative = span.fromDistance();
+            for (int i = span.fromPoint() + 1; i <= span.toPoint(); i++) {
+                double[] a = points.get(i - 1);
+                double[] b = points.get(i);
+                double segmentLength = Math.hypot(b[0] - a[0], b[1] - a[1]);
 
-            double ax = localX(a[0], anchorX, fracX, p10);
-            double ay = localY(a[1], anchorZ, fracY, p10);
-            double bx = localX(b[0], anchorX, fracX, p10);
-            double by = localY(b[1], anchorZ, fracY, p10);
+                double ax = localX(a[0], anchorX, fracX, p10);
+                double ay = localY(a[1], anchorZ, fracY, p10);
+                double bx = localX(b[0], anchorX, fracX, p10);
+                double by = localY(b[1], anchorZ, fracY, p10);
 
-            if (segmentLength < 1.0E-9) {
-                pointDistance[i] = cumulative;
-                continue;
+                if (segmentLength < 1.0E-9) {
+                    continue;
+                }
+
+                if (cumulative + segmentLength <= travelled) {
+                    emitStroke(pose, vc, ax, ay, bx, by, halfWidth, doneR, doneG, doneB, 0xFF);
+                } else if (cumulative >= travelled) {
+                    emitStroke(pose, vc, ax, ay, bx, by, halfWidth, aheadR, aheadG, aheadB, 0xFF);
+                } else {
+                    double t = (travelled - cumulative) / segmentLength;
+                    double mx = ax + (bx - ax) * t;
+                    double my = ay + (by - ay) * t;
+                    emitStroke(pose, vc, ax, ay, mx, my, halfWidth, doneR, doneG, doneB, 0xFF);
+                    emitStroke(pose, vc, mx, my, bx, by, halfWidth, aheadR, aheadG, aheadB, 0xFF);
+                }
+
+                cumulative += segmentLength;
             }
-
-            if (cumulative + segmentLength <= travelled) {
-                emitStroke(pose, vc, ax, ay, bx, by, halfWidth, doneR, doneG, doneB, 0xFF);
-            } else if (cumulative >= travelled) {
-                emitStroke(pose, vc, ax, ay, bx, by, halfWidth, aheadR, aheadG, aheadB, 0xFF);
-            } else {
-                double t = (travelled - cumulative) / segmentLength;
-                double mx = ax + (bx - ax) * t;
-                double my = ay + (by - ay) * t;
-                emitStroke(pose, vc, ax, ay, mx, my, halfWidth, doneR, doneG, doneB, 0xFF);
-                emitStroke(pose, vc, mx, my, bx, by, halfWidth, aheadR, aheadG, aheadB, 0xFF);
-            }
-
-            cumulative += segmentLength;
-            pointDistance[i] = cumulative;
         }
 
-        for (int i = 0; i < points.size(); i++) {
-            double[] p = points.get(i);
-            boolean behind = pointDistance[i] < travelled;
-            emitDisc(pose, vc,
-                    localX(p[0], anchorX, fracX, p10), localY(p[1], anchorZ, fracY, p10), halfWidth,
-                    behind ? doneR : aheadR, behind ? doneG : aheadG, behind ? doneB : aheadB, 0xFF);
+        for (HudDraw.InkSpan span : ink.spans()) {
+            int aheadR = (span.colour() >> 16) & 0xFF;
+            int aheadG = (span.colour() >> 8) & 0xFF;
+            int aheadB = span.colour() & 0xFF;
+            double cumulative = span.fromDistance();
+            for (int i = span.fromPoint(); i <= span.toPoint(); i++) {
+                double[] p = points.get(i);
+                boolean behind = cumulative < travelled;
+                emitDisc(pose, vc,
+                        localX(p[0], anchorX, fracX, p10), localY(p[1], anchorZ, fracY, p10),
+                        halfWidth,
+                        behind ? doneR : aheadR, behind ? doneG : aheadG, behind ? doneB : aheadB,
+                        0xFF);
+                if (i < span.toPoint()) {
+                    double[] next = points.get(i + 1);
+                    cumulative += Math.hypot(next[0] - p[0], next[1] - p[1]);
+                }
+            }
         }
 
         double[] end = points.get(points.size() - 1);

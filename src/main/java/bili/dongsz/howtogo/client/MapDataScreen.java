@@ -116,6 +116,16 @@ public final class MapDataScreen extends Screen {
     private float open = 1.0F;
 
     /**
+     * This frame's opacity for the sheet and its edge, as against the content on top of them.
+     *
+     * <p>The same number as {@link #open} except during a hand-off to another page, where the sheet
+     * is held at full while the content cross-fades -- see {@link UiMotion.ScreenState#surface()},
+     * which is where the reason lives. Kept as a field for the same reason as {@code open}: the sheet
+     * is drawn from {@link #renderBackground}, which runs before the rest of the frame.
+     */
+    private float surface = 1.0F;
+
+    /**
      * How far the cursor's arrival has got on each row of the list, one slide per row position.
      *
      * <p>Indexed by where the row sits on screen rather than by which archive it holds: the cursor is
@@ -399,9 +409,9 @@ public final class MapDataScreen extends Screen {
         // are drawn at the frame's opacity: the sheet is the first thing to arrive and the last thing
         // to leave, so everything drawn over it goes with it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiMotion.fade(UiTheme.windowEdge(), open));
+                UiMotion.fade(UiTheme.windowEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
-                UiMotion.fade(UiTheme.panelSolid(), open));
+                UiMotion.fade(UiTheme.panelSolid(), surface));
     }
 
     @Override
@@ -411,6 +421,7 @@ public final class MapDataScreen extends Screen {
         // it answers with, which is what makes the whole sheet arrive as one surface.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        surface = motion.surface();
         // The frame is displaced, not only faded: a sheet that appears where it stays reads as a cut.
         // Pushed before any pixel -- the background 1.20.1 asks for by hand below included -- so the
         // panel, the context lines and the footer buttons travel together as the one surface they are.

@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client.xaero.minimap;
 
+import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.RailTrackStore;
@@ -8,7 +9,6 @@ import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.route.Destination;
-import bili.dongsz.howtogo.route.Route;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import xaero.hud.minimap.element.render.MinimapElementRenderLocation;
@@ -76,6 +76,7 @@ public final class XaeroMinimapRouteProvider
 
         appendProbes(anchorX, anchorZ);
         appendLayers(anchorX, anchorZ);
+        appendTransitLines(anchorX, anchorZ);
         appendRoute(anchorX, anchorZ);
         appendMarkers();
     }
@@ -158,71 +159,55 @@ public final class XaeroMinimapRouteProvider
     /**
      * The route, split where the player is into the travelled and still-ahead halves.
      *
-     * <p>The same split as the navigation panel makes, over the same numbers: walk the polyline and
-     * accumulate drawn length until it passes {@link Navigation#travelled()}, then put the whole
-     * route in the "ahead" colour if nothing has been walked, everything in the "done" colour if
-     * the player is past the end, and otherwise two lists sharing an interpolated split point. The
-     * two maps then colour the route identically, which is the point of computing it here instead
-     * of once per map.
+     * <p>The split is no longer worked out here. It used to be: this provider walked the polyline,
+     * built two lists and handed them over, which made the minimap the third place in the mod that
+     * knew how a route is cut in two -- and, once a route could be several colours, the wrong shape
+     * of thing entirely: the ahead half could no longer be one list in one colour. The two elements
+     * now carry the route's ink and the distance covered, and the renderer asks {@code HudDraw} for
+     * the half it is drawing, which is the same table the navigation panel and the two viewers use.
+     * The frame therefore builds no lists for the route at all.
      *
-     * <p>The lists are carried by the element and are not read by anything else, so they are
-     * ordinary mutable ArrayLists built for this frame.
+     * <p>The conditions for adding each element are the same as the old lists' sizes were: there is
+     * a covered half once anything has been travelled, and an ahead half while there is line left.
+     * An element that would draw nothing is not added, because a drawing block that emits no
+     * vertices still costs the frame a block.
      */
     private void appendRoute(double anchorX, double anchorZ) {
-        Route route = Navigation.route();
-        if (!route.isPresent()) {
+        HudDraw.RouteInk ink = Navigation.routeInk();
+        if (!ink.isPresent()) {
             return;
         }
-        List<double[]> points = route.points();
         double travelled = Navigation.travelled();
-        double cumulative = 0;
-        int splitAt = -1;
-        double splitX = 0;
-        double splitZ = 0;
-        for (int i = 1; i < points.size(); i++) {
-            double[] a = points.get(i - 1);
-            double[] b = points.get(i);
-            double segmentLength = Math.hypot(b[0] - a[0], b[1] - a[1]);
-            if (segmentLength < 1.0E-9) {
-                continue;
-            }
-            if (cumulative + segmentLength >= travelled) {
-                splitAt = i;
-                double t = (travelled - cumulative) / segmentLength;
-                splitX = a[0] + (b[0] - a[0]) * t;
-                splitZ = a[1] + (b[1] - a[1]) * t;
-                break;
-            }
-            cumulative += segmentLength;
-        }
-        List<double[]> done = new ArrayList<>();
-        List<double[]> ahead = new ArrayList<>();
-        if (splitAt < 0) {
-            if (travelled > 0) {
-                done.addAll(points);
-            } else {
-                ahead.addAll(points);
-            }
-        } else if (splitAt <= 0) {
-            ahead.addAll(points);
-        } else {
-            done.addAll(points.subList(0, splitAt));
-            done.add(new double[] {splitX, splitZ});
-            ahead.add(new double[] {splitX, splitZ});
-            ahead.addAll(points.subList(splitAt, points.size()));
-        }
-        if (done.size() >= 2) {
-            buffer.add(XaeroMinimapRouteElement.routeLayer(
+        if (travelled > 0) {
+            buffer.add(XaeroMinimapRouteElement.routeInkLayer(
                     XaeroMinimapRouteElement.Kind.ROUTE_DONE, anchorX, anchorZ,
-                    UiTheme.routeDone(), done));
+                    UiTheme.routeDone(), ink, travelled));
         }
-        if (ahead.size() >= 2) {
-            buffer.add(XaeroMinimapRouteElement.routeLayer(
+        if (travelled < ink.length()) {
+            buffer.add(XaeroMinimapRouteElement.routeInkLayer(
                     XaeroMinimapRouteElement.Kind.ROUTE_AHEAD, anchorX, anchorZ,
-                    UiTheme.route(), ahead));
+                    0, ink, travelled));
         }
     }
 
+
+    /**
+     * The public transport lines, one element per stretch, in each line's own colour.
+     *
+     * <p>Between the road layers and the route, because a line is part of the map rather than part of
+     * the trip: the route the player is following has to stay readable over it. The shapes are the
+     * same ones the two larger self-drawn maps use -- see RoadElementRenderer.transitStrokesFor --
+     * so a line bends where the line bends, even on a map this small.
+     */
+    private void appendTransitLines(double anchorX, double anchorZ) {
+        for (bili.dongsz.howtogo.client.RoadElementRenderer.TransitStroke stroke :
+                bili.dongsz.howtogo.client.RoadElementRenderer.transitStrokesFor(
+                        Navigation.linesInPlay())) {
+            buffer.add(XaeroMinimapRouteElement.routeLayer(
+                    XaeroMinimapRouteElement.Kind.TRANSIT_LINES, anchorX, anchorZ,
+                    stroke.colour(), stroke.points()));
+        }
+    }
     /**
      * The destination and the trip origin.
      *

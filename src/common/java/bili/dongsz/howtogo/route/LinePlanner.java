@@ -91,6 +91,21 @@ public final class LinePlanner {
     }
 
     /**
+     * Whether a destination is near enough that the walk to it is the whole answer, in blocks.
+     *
+     * <p>Asked by the client when public transport comes back with nothing: a destination inside this
+     * distance is one a player would be told to walk to reach a stop anyway, so the panel says "close
+     * enough to walk" rather than reporting that the lines failed. It is a straight-line question on
+     * purpose -- it is about how near the place is, not about how the streets happen to run -- and it
+     * says nothing about whether a journey exists: the search's own reason for refusing one is the
+     * walk it compared against, in {@link #worthRiding}.
+     */
+    public static boolean closeEnoughToWalk(double startX, double startZ, double goalX,
+                                            double goalZ) {
+        return Math.hypot(goalX - startX, goalZ - startZ) <= CLOSE_ENOUGH_TO_WALK;
+    }
+
+    /**
      * The cell the transfer pass files a stop under, which is the radius itself.
      *
      * <p>Not a constant of its own: nine cells of this size around a stop is exactly the neighbourhood a
@@ -137,6 +152,17 @@ public final class LinePlanner {
     private static final double MAX_WALK_TO_STOP = 256.0;
 
     /**
+     * How near a destination has to be for walking to be the whole answer to it, in blocks.
+     *
+     * <p>The same distance the planner will ask a player to walk to reach a stop: a destination a
+     * player could be sent that far to board a line is one they can be sent that far on foot instead.
+     * This is a question about a sentence rather than about a plan -- it decides which reason the
+     * client shows when the public transport mode comes back with the walk -- so it is answered by
+     * {@link #closeEnoughToWalk} and never by the search.
+     */
+    private static final double CLOSE_ENOUGH_TO_WALK = MAX_WALK_TO_STOP;
+
+    /**
      * How close two positions have to be before the walk between them is no walk at all.
      *
      * <p>A route is a polyline and needs two points, and the builder drops a second point that lands
@@ -162,6 +188,27 @@ public final class LinePlanner {
      * between two platforms, not a ride, and it is refused rather than added to the journey.
      */
     private static final double MIN_RIDE_TRACK = 1.0;
+
+    /**
+     * How much closer to the destination a ride has to carry the rider before it is worth taking, in
+     * blocks.
+     *
+     * <p>Measured as the net ground the riding won: the straight-line distance from the first stop
+     * boarded at to the destination, less the same distance from the last stop got off at. It is the
+     * only figure that tells "the line carried me towards where I am going" from "the line moved me
+     * around and put me back", and the second shape is the one a search will hand back with a straight
+     * face when the destination stands near the boarding stop: ride out to the next station, ride the
+     * same line back, and the journey has ridden a line and arrived where it started.
+     *
+     * <p>The bound is the walk between two platforms of one interchange, because that is an amount of
+     * walking this planner already asks a rider to do for nothing: a ride that gains less ground than
+     * that has done the journey no more good than stepping off one platform and onto the next. It is
+     * deliberately small. A ride that gained thirty blocks is not the same thing as no ride at all --
+     * it can be the whole answer where a river or a wall stands between the player and the door -- so
+     * a ride that clears this figure is never second-guessed, and one that does not is only dropped if
+     * the plan is no quicker than the walk that replaces it. See {@link #worthRiding}.
+     */
+    private static final double MIN_RIDE_GAIN = 24.0;
 
     /**
      * Ceiling on the walking routes planned for interchanges in one plan, for the same reason as
@@ -390,7 +437,9 @@ public final class LinePlanner {
         if (context == null) {
             return Trip.empty();
         }
-        return searchOnce(context, startX, startZ, goalX, goalZ, Weights.NONE).trip();
+        Journey best = searchOnce(context, startX, startZ, goalX, goalZ, Weights.NONE);
+        return worthRiding(context, best, startX, startZ, goalX, goalZ) ? best.trip()
+                : Trip.empty();
     }
 
     /**
@@ -403,7 +452,15 @@ public final class LinePlanner {
      * by what the journey actually does -- which line is boarded where and left where -- and later
      * questions are only asked while there is still room for the answer.
      *
-     * @return the journeys, best first; empty when no line can carry the trip at all
+     * <p>A journey that would be beaten by simply walking there is not a plan at all -- see
+     * {@link #worthRiding} -- and the recommendation is asked first so that the other questions are
+     * not paid for when the whole list is going to be empty. Every candidate is put through the same
+     * test, because an alternative strategy can find a shape the recommendation did not, and a list
+     * that offered one of the very journeys the recommendation was refused for would be inconsistent
+     * with itself.
+     *
+     * @return the journeys, best first; empty when no line can carry the trip at all, or when the
+     *         ride found is not worth taking and the walk is the honest answer
      */
     public static List<Trip> alternatives(RideRoads roads, List<TransitLine> lines, double startX,
                                           double startZ, double goalX, double goalZ,
@@ -414,26 +471,28 @@ public final class LinePlanner {
         }
         List<Trip> journeys = new ArrayList<>(MAX_PLANS);
         Journey best = searchOnce(context, startX, startZ, goalX, goalZ, Weights.NONE);
-        if (!best.isPresent()) {
+        if (!worthRiding(context, best, startX, startZ, goalX, goalZ)) {
             return journeys;
         }
         journeys.add(best.trip());
-        addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
-                Weights.fewerTransfers()));
+        addIfNew(context, journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                Weights.fewerTransfers()), startX, startZ, goalX, goalZ);
         if (journeys.size() < MAX_PLANS) {
-            addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
-                    Weights.lessWalking()));
+            addIfNew(context, journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                    Weights.lessWalking()), startX, startZ, goalX, goalZ);
         }
         if (journeys.size() < MAX_PLANS) {
-            addIfNew(journeys, searchOnce(context, startX, startZ, goalX, goalZ,
-                    Weights.otherLines(best.lines())));
+            addIfNew(context, journeys, searchOnce(context, startX, startZ, goalX, goalZ,
+                    Weights.otherLines(best.lines())), startX, startZ, goalX, goalZ);
         }
         return journeys;
     }
 
-    /** Adds a journey unless the same one is already offered: same lines boarded and left the same. */
-    private static void addIfNew(List<Trip> journeys, Journey candidate) {
-        if (!candidate.isPresent() || journeys.size() >= MAX_PLANS) {
+    /** Adds a journey unless it is not worth taking, or the same one is already offered. */
+    private static void addIfNew(Context context, List<Trip> journeys, Journey candidate,
+                                 double startX, double startZ, double goalX, double goalZ) {
+        if (journeys.size() >= MAX_PLANS
+                || !worthRiding(context, candidate, startX, startZ, goalX, goalZ)) {
             return;
         }
         String signature = signatureOf(candidate.trip());
@@ -453,6 +512,137 @@ public final class LinePlanner {
                     .append('>').append(ride.leftAt());
         }
         return signature.toString();
+    }
+
+    /**
+     * Whether the journey the search found is worth taking rather than walking the whole way.
+     *
+     * <h2>The shape this refuses</h2>
+     * The search runs over two states per stop -- before the first ride and after it -- and only the
+     * second may finish, so that a walk that happens to be cheaper than any line is not handed back as
+     * the answer to a public transport request. The price of that rule is this: when the destination
+     * stands near the stop the player is already beside, the cheapest way to satisfy "must ride
+     * something" is to ride out to the next station and ride the same line back. The journey has
+     * ridden a line, arrived where it started, and the search reports it as the best journey it knows
+     * because it is the cheapest one that rides anything -- which used to reach the player as "the
+     * destination is over there, so take the line out and take it back".
+     *
+     * <h2>Why the ride is judged by the ground it wins, not by the line it is on</h2>
+     * "Riding the same line back is silly" is not a rule this planner can state: a line is a service
+     * rather than a direction, the order of a line's stops means nothing about which way a rider may
+     * go, and a player crossing a river on a ferry legitimately rides a line whose two stops stand
+     * close together. What is a rule is what the ride did for the journey. {@link #rideGain} measures
+     * exactly that -- how much closer to the destination the last stop got off at stands than the
+     * first one boarded at -- and {@link #MIN_RIDE_GAIN} is the amount below which the line has not
+     * moved the rider any closer in any way that matters. A ride that clears it is kept without a
+     * second look, whatever shape it has.
+     *
+     * <h2>And why a small gain is not refused on its own</h2>
+     * Because the walk has to be a real answer before the ride is taken away. The destination may be
+     * on the other side of a wall the ride is the only way through, in which case the gain is small
+     * and the journey is still the only plan that arrives. So the walk from the player to the
+     * destination is planned -- the walking navigation's own walk, not the straight hop
+     * {@link #walk} falls back to where no road route exists -- and the journey is refused only when
+     * that walk exists and is at least as quick. A ride that gains nothing but still beats a long way
+     * round on foot is still the answer; a ride that gains nothing and is slower than walking the
+     * short way is exactly the circle this exists to stop.
+     *
+     * <p>The walk is planned only for the suspicious shape, and through the plan's own cache: a
+     * journey whose ride cleared {@link #MIN_RIDE_GAIN} -- which is nearly every journey over a real
+     * network -- returns before any route is asked for, so the common plan pays nothing for this
+     * check.
+     */
+    private static boolean worthRiding(Context context, Journey journey, double startX,
+                                       double startZ, double goalX, double goalZ) {
+        if (!journey.isPresent()) {
+            return false;
+        }
+        Trip trip = journey.trip();
+        double gain = rideGain(trip, goalX, goalZ);
+        if (gain > MIN_RIDE_GAIN) {
+            return true;
+        }
+        Route onFoot = pureWalk(context, startX, startZ, goalX, goalZ);
+        if (!onFoot.isPresent()) {
+            // Nothing to walk: the ride, however odd the shape, is the only way to the destination.
+            return true;
+        }
+        boolean worth = trip.estimatedSeconds() < onFoot.estimatedSeconds();
+        if (!worth) {
+            // Said when it happens, because "public transport reports no journey" is otherwise a
+            // statement about the network rather than about the plan that was refused, and this is
+            // the only line that knows which of the two it was.
+            HowToGo.diagnostic("[HowToGo] public transport: the ride gains {} blocks towards the "
+                            + "destination, the journey is {} s and walking is {} s -- the walk is "
+                            + "the answer", Math.round(gain), Math.round(trip.estimatedSeconds()),
+                    Math.round(onFoot.estimatedSeconds()));
+        }
+        return worth;
+    }
+
+    /**
+     * How much closer to the destination the riding carried the rider, in blocks.
+     *
+     * <p>From the first stop a ride is boarded at to the last stop one is got off at, along the
+     * straight line to the destination -- the net ground, not the distance ridden. Riding a line out
+     * and back nets nothing however much track it covered, and that is the point: the question is
+     * what the riding did for the journey, and a ride that returns the rider to where it found them
+     * did nothing.
+     *
+     * <p>Positive infinity for a journey that rides nothing or whose rides name no stops: neither
+     * shape is one this filter has an opinion about, and answering "worth taking" leaves such a
+     * journey untouched rather than silently removing it.
+     */
+    private static double rideGain(Trip trip, double goalX, double goalZ) {
+        List<Trip.Ride> rides = trip.rides();
+        if (rides.isEmpty()) {
+            return Double.POSITIVE_INFINITY;
+        }
+        Trip.Ride first = rides.get(0);
+        Trip.Ride last = rides.get(rides.size() - 1);
+        if (first.stops().isEmpty() || last.stops().isEmpty()) {
+            return Double.POSITIVE_INFINITY;
+        }
+        Trip.RideStop board = first.stops().get(0);
+        Trip.RideStop alight = last.stops().get(last.stops().size() - 1);
+        return Math.hypot(board.x() - goalX, board.z() - goalZ)
+                - Math.hypot(alight.x() - goalX, alight.z() - goalZ);
+    }
+
+    /**
+     * The walk from the player to the destination, planned by the walking router and cached for the
+     * plan.
+     *
+     * <p>Deliberately not {@link #walk}: that helper falls back to a straight hop where no road route
+     * exists, and a straight hop is not a walk the navigation can be asked to give. The comparison
+     * here decides whether a public transport request is answered with the walk instead, so it has to
+     * be made against a walk that exists -- a destination the walker cannot reach leaves the ride
+     * alone, which is the one case where refusing it would leave the player with nothing at all.
+     *
+     * <p>Cached under its own key in the plan's route cache, so the several journeys of one plan's
+     * alternatives share one walking route rather than planning the same walk for each of them.
+     */
+    private static Route pureWalk(Context context, double startX, double startZ, double goalX,
+                                  double goalZ) {
+        String key = "W|" + startX + "," + startZ + "|" + goalX + "," + goalZ;
+        Route known = context.cache().get(key);
+        if (known != null) {
+            return known;
+        }
+        Route planned;
+        if (Math.hypot(goalX - startX, goalZ - startZ) <= STATIONARY_DISTANCE) {
+            // Already there: the walk that says so is a route with nothing to walk, the same shape
+            // the search uses for a stop the player is standing on.
+            planned = stationary(startX, startZ, context.destinationName());
+        } else {
+            planned = RoadRouter.findRoute(context.workspace(), startX, startZ, goalX, goalZ,
+                    context.destinationName(), TravelMode.WALK, context.preferences());
+            if (!planned.isPresent()) {
+                planned = Route.empty();
+            }
+        }
+        context.cache().put(key, planned);
+        return planned;
     }
 
     /**

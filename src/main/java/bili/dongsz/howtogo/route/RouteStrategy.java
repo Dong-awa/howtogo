@@ -37,7 +37,18 @@ public enum RouteStrategy {
     LESS_WALKING("less_walking"),
 
     /** A journey over other lines, planned by tolling the lines the recommended journey rides. */
-    OTHER_LINES("other_lines");
+    OTHER_LINES("other_lines"),
+
+    /**
+     * A walk offered where the mode chosen cannot do better.
+     *
+     * <p>Not a strategy of public transport but a row the picker may show in its place: when no line
+     * can carry the trip, or when the only journey the lines could offer is one walking would beat,
+     * the honest plan on offer is the walk itself -- and a plan with no label would read as a plan the
+     * picker could not name. The row is a walk in every respect the picker shows: its distance is
+     * walked, it has no changes and no waiting.
+     */
+    WALK("walk");
 
     private final String id;
 

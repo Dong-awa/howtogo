@@ -1,9 +1,17 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
+import bili.dongsz.howtogo.route.Route;
+import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.route.Trip;
+import bili.dongsz.howtogo.transit.TransitLine;
+
+import java.util.ArrayList;
+import java.util.List;
 //? if <1.21.6 {
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -732,7 +740,7 @@ public final class HudDraw {
     }
 
     /** The same for a plain list of world points, which is what a planned route is. */
-    public static void emitPath(VertexSink out, java.util.List<double[]> points,
+    public static void emitPath(VertexSink out, List<double[]> points,
                                 double m00, double m01, double m02,
                                 double m10, double m11, double m12,
                                 double halfWidth, int argb, int alpha,
@@ -740,14 +748,333 @@ public final class HudDraw {
         if (points == null || points.size() < 2) {
             return;
         }
-        int count = points.size();
-        ensurePathCapacity(count);
-        for (int i = 0; i < count; i++) {
-            double[] point = points.get(i);
-            PATH_X[i] = m00 * point[0] + m01 * point[1] + m02;
-            PATH_Y[i] = m10 * point[0] + m11 * point[1] + m12;
+        emitPathRange(out, points, 0, points.size() - 1, m00, m01, m02, m10, m11, m12,
+                halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    /**
+     * Draws every stretch of a route in the ink that stretch calls for.
+     *
+     * <p>The drawing counterpart of {@link RouteInk}: for a walk or a drive the table has one
+     * stretch and this is exactly {@link #emitPath} over the route's points, while a journey is
+     * drawn stretch by stretch, a walked leg in the walking blue and a ridden one in its line's
+     * colour. Nothing is copied to do it -- each stretch is a range of the one point list -- so the
+     * whole route is one walk of the table rather than a list built per stretch per frame.
+     *
+     * <p>Used by the surfaces that draw a route as a whole with no progress colouring: the main
+     * screen's viewer, the picker's map and the picker's plan lines. The surfaces that grey out what
+     * the player has already covered use {@link #emitRouteInk} or {@link #emitInkPart}.
+     */
+    public static void emitInk(VertexSink out, RouteInk ink,
+                               double m00, double m01, double m02,
+                               double m10, double m11, double m12,
+                               double halfWidth, int alpha,
+                               double minX, double minY, double maxX, double maxY) {
+        if (ink == null || !ink.isPresent()) {
+            return;
+        }
+        List<double[]> points = ink.points();
+        for (InkSpan span : ink.spans()) {
+            emitSpanSlice(out, points, span, span.fromDistance(), span.toDistance(), span.colour(),
+                    m00, m01, m02, m10, m11, m12, halfWidth, alpha, minX, minY, maxX, maxY);
+        }
+    }
+
+    /**
+     * Draws a whole route with everything behind the player greyed out.
+     *
+     * <p>The same split the maps have always made, moved from the polyline to the stretches: the part
+     * of each stretch before {@code travelled} is the done grey and the part after it keeps the
+     * stretch's own ink, so a journey shows how far along the walk, the ride and the next walk the
+     * player is instead of pretending the whole line is one colour. A single-stretch route comes out
+     * vertex for vertex as it did when the split was made on the whole polyline -- the check for
+     * this feature asserts that.
+     *
+     * <p>One difference is deliberate rather than a regression: when the cut lands exactly on a
+     * vertex, the old two-list code wrote that vertex twice and the duplicate silently took one end
+     * cap away at the cut. This drawing cuts the line by its geometry and never repeats a vertex, so
+     * both caps are painted there -- a half width of ink at a point the old drawing left butt-ended.
+     * That only happens when the player stands exactly on a vertex, and the cap is the one the line
+     * should have; the interior cuts, which are the ones that do happen, are vertex for vertex the
+     * old ones.
+     *
+     * <p>The two halves are two passes, all of the grey first: that is the order the two separate
+     * drawing blocks used to go in, and a cap from the coloured half landing on the grey one would
+     * otherwise paint a bead of colour where the player already is.
+     *
+     * @param travelled drawn distance already covered, as {@code Navigation.travelled()} reports it
+     * @param doneArgb  the ARGB of the covered part
+     */
+    public static void emitRouteInk(VertexSink out, RouteInk ink, double travelled, int doneArgb,
+                                    double m00, double m01, double m02,
+                                    double m10, double m11, double m12,
+                                    double halfWidth, int alpha,
+                                    double minX, double minY, double maxX, double maxY) {
+        emitInkPart(out, ink, travelled, true, doneArgb, m00, m01, m02, m10, m11, m12,
+                halfWidth, alpha, minX, minY, maxX, maxY);
+        emitInkPart(out, ink, travelled, false, doneArgb, m00, m01, m02, m10, m11, m12,
+                halfWidth, alpha, minX, minY, maxX, maxY);
+    }
+
+    /**
+     * One half of {@link #emitRouteInk}: the covered part in one colour, or the part ahead in each
+     * stretch's own.
+     *
+     * <p>A method of its own because one of the five surfaces draws the two halves as two separate
+     * pipeline elements -- Xaero's minimap gives each element its own depth slot -- and each element
+     * has to be able to draw its half from the same table without the other half's lists being built
+     * for it.
+     *
+     * @param done     true for the covered part in {@code doneArgb}, false for the part ahead in each
+     *                 stretch's own colour; {@code doneArgb} is ignored in the second case
+     * @param travelled drawn distance already covered
+     */
+    public static void emitInkPart(VertexSink out, RouteInk ink, double travelled, boolean done,
+                                   int doneArgb,
+                                   double m00, double m01, double m02,
+                                   double m10, double m11, double m12,
+                                   double halfWidth, int alpha,
+                                   double minX, double minY, double maxX, double maxY) {
+        if (ink == null || !ink.isPresent()) {
+            return;
+        }
+        List<double[]> points = ink.points();
+        for (InkSpan span : ink.spans()) {
+            if (done) {
+                emitSpanSlice(out, points, span, span.fromDistance(),
+                        Math.min(travelled, span.toDistance()), doneArgb,
+                        m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                        minX, minY, maxX, maxY);
+            } else {
+                emitSpanSlice(out, points, span, Math.max(travelled, span.fromDistance()),
+                        span.toDistance(), span.colour(),
+                        m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                        minX, minY, maxX, maxY);
+            }
+        }
+    }
+
+    /**
+     * The same for a run of a point list, both end points included.
+     *
+     * <p>The primitives behind the ink methods: one stretch of a {@link RouteInk} is a run of the
+     * route's own list, so drawing a stretch is this with the stretch's range and colour. The range
+     * is projected into the shared scratch arrays, so a frame that draws five stretches allocates
+     * nothing for them.
+     */
+    private static void emitPathRange(VertexSink out, List<double[]> points, int fromPoint,
+                                      int toPoint,
+                                      double m00, double m01, double m02,
+                                      double m10, double m11, double m12,
+                                      double halfWidth, int argb, int alpha,
+                                      double minX, double minY, double maxX, double maxY) {
+        int count = project(points, fromPoint, toPoint, m00, m01, m02, m10, m11, m12);
+        if (count < 2) {
+            return;
         }
         emitProjectedPath(out, count, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+    }
+
+    /**
+     * Projects a run of world points into the shared scratch arrays.
+     *
+     * @return how many vertices were written, zero when the range is not a line
+     */
+    private static int project(List<double[]> points, int fromPoint, int toPoint,
+                               double m00, double m01, double m02,
+                               double m10, double m11, double m12) {
+        int count = copyWorld(points, fromPoint, toPoint);
+        if (count < 2) {
+            return 0;
+        }
+        for (int i = 0; i < count; i++) {
+            double worldX = PATH_X[i];
+            double worldZ = PATH_Y[i];
+            PATH_X[i] = m00 * worldX + m01 * worldZ + m02;
+            PATH_Y[i] = m10 * worldX + m11 * worldZ + m12;
+        }
+        return count;
+    }
+
+    /**
+     * Copies a run of world points into the shared scratch arrays, without projecting them.
+     *
+     * <p>Split out of {@link #project} because a slice is cut in world blocks before it is
+     * projected, and the two steps share the same range check and the same capacity growth.
+     *
+     * @return how many vertices were written, zero when the range is not a line
+     */
+    private static int copyWorld(List<double[]> points, int fromPoint, int toPoint) {
+        if (points == null) {
+            return 0;
+        }
+        int from = Math.max(0, fromPoint);
+        int to = Math.min(points.size() - 1, toPoint);
+        int count = to - from + 1;
+        if (count < 2) {
+            return 0;
+        }
+        ensurePathCapacity(count);
+        for (int i = 0; i < count; i++) {
+            double[] point = points.get(from + i);
+            PATH_X[i] = point[0];
+            PATH_Y[i] = point[1];
+        }
+        return count;
+    }
+
+    /**
+     * Draws the part of one stretch between two distances along the route.
+     *
+     * <h2>Why the slice is cut before it is projected</h2>
+     * A half-covered stretch has to stop exactly where the player is, not at the nearest vertex, so
+     * the ends of the slice are interpolated: the requested distances are walked along the world
+     * polyline and a point is inserted where one falls inside an edge. The cut is made in world
+     * blocks because that is the space the distances are measured in, and only then is the assembled
+     * line projected: the split point is the same arithmetic the whole-polyline call would have
+     * applied to the same world point, so a route in a single mode is drawn with exactly the
+     * vertices it always was. The vertices that are wholly inside are moved down the scratch array
+     * and the two ends are appended, and the result is run through the ordinary path pass -- so the
+     * slice keeps the same mitred bends and round joins as the whole line would, and its ends get
+     * the same caps.
+     *
+     * <p>This allocates nothing: the movement is {@code System.arraycopy} of the shared scratch
+     * arrays, and everything is done for one slice at a time.
+     *
+     * <p>Used with the whole stretch and the whole line's distances, it is exactly
+     * {@link #emitPath}: no end is interpolated, the copy moves every vertex onto itself, and the
+     * path pass sees the same array it would have seen. That is the property the regression check
+     * holds this feature to, because a route in a single mode must still draw as it always did.
+     */
+    private static void emitSpanSlice(VertexSink out, List<double[]> points, InkSpan span,
+                                      double sliceFrom, double sliceTo, int argb,
+                                      double m00, double m01, double m02,
+                                      double m10, double m11, double m12,
+                                      double halfWidth, int alpha,
+                                      double minX, double minY, double maxX, double maxY) {
+        double from = Math.max(sliceFrom, span.fromDistance());
+        double to = Math.min(sliceTo, span.toDistance());
+        if (!(to - from >= 1.0E-6)) {
+            return;
+        }
+        int count = copyWorld(points, span.fromPoint(), span.toPoint());
+        if (count < 2) {
+            return;
+        }
+        // The length the line really has, so a slice asked for in the route's own distances is cut
+        // by the same measurement it was described in.
+        double total = 0;
+        for (int i = 1; i < count; i++) {
+            total += Math.hypot(PATH_X[i] - PATH_X[i - 1], PATH_Y[i] - PATH_Y[i - 1]);
+        }
+        if (total < 1.0E-9) {
+            return;
+        }
+        double localFrom = Math.min(total, Math.max(0, from - span.fromDistance()));
+        double localTo = Math.min(total, Math.max(0, to - span.fromDistance()));
+        if (!(localTo - localFrom >= 1.0E-6)) {
+            return;
+        }
+
+        // Where the slice begins: a vertex, or a point interpolated on the edge it falls in.
+        int first = 0;
+        boolean headSplit = false;
+        double headX = 0;
+        double headY = 0;
+        boolean found = localFrom <= 1.0E-9;
+        double walked = 0;
+        for (int i = 1; i < count && !found; i++) {
+            double dx = PATH_X[i] - PATH_X[i - 1];
+            double dy = PATH_Y[i] - PATH_Y[i - 1];
+            double length = Math.hypot(dx, dy);
+            if (walked + length < localFrom - 1.0E-9) {
+                walked += length;
+                continue;
+            }
+            double t = length <= 1.0E-9 ? 0 : (localFrom - walked) / length;
+            if (t <= 1.0E-6) {
+                first = i - 1;
+            } else if (t >= 1.0 - 1.0E-6) {
+                first = i;
+            } else {
+                first = i;
+                headSplit = true;
+                headX = PATH_X[i - 1] + dx * t;
+                headY = PATH_Y[i - 1] + dy * t;
+            }
+            found = true;
+        }
+        if (!found) {
+            return;
+        }
+
+        // Where it ends, by the same rule from the other side.
+        int last = count - 1;
+        boolean tailSplit = false;
+        double tailX = 0;
+        double tailY = 0;
+        found = localTo >= total - 1.0E-9;
+        walked = 0;
+        for (int i = 1; i < count && !found; i++) {
+            double dx = PATH_X[i] - PATH_X[i - 1];
+            double dy = PATH_Y[i] - PATH_Y[i - 1];
+            double length = Math.hypot(dx, dy);
+            if (walked + length < localTo - 1.0E-9) {
+                walked += length;
+                continue;
+            }
+            double t = length <= 1.0E-9 ? 0 : (localTo - walked) / length;
+            if (t <= 1.0E-6) {
+                last = i - 1;
+            } else if (t >= 1.0 - 1.0E-6) {
+                last = i;
+            } else {
+                last = i - 1;
+                tailSplit = true;
+                tailX = PATH_X[i - 1] + dx * t;
+                tailY = PATH_Y[i - 1] + dy * t;
+            }
+            found = true;
+        }
+        if (!found) {
+            return;
+        }
+
+        int offset = headSplit ? 1 : 0;
+        int kept = Math.max(0, last - first + 1);
+        if (kept > 0) {
+            System.arraycopy(PATH_X, first, PATH_X, offset, kept);
+            System.arraycopy(PATH_Y, first, PATH_Y, offset, kept);
+        }
+        if (headSplit) {
+            PATH_X[0] = headX;
+            PATH_Y[0] = headY;
+        }
+        int assembled = offset + kept;
+        if (tailSplit) {
+            PATH_X[assembled] = tailX;
+            PATH_Y[assembled] = tailY;
+            assembled++;
+        }
+        if (assembled < 2) {
+            return;
+        }
+        for (int i = 0; i < assembled; i++) {
+            double worldX = PATH_X[i];
+            double worldZ = PATH_Y[i];
+            PATH_X[i] = m00 * worldX + m01 * worldZ + m02;
+            PATH_Y[i] = m10 * worldX + m11 * worldZ + m12;
+        }
+        // A cap belongs only where the stroke genuinely ends. Two neighbouring stretches of one
+        // route share the vertex at a station, and two stretches of one colour would otherwise each
+        // cap there; two of different colours would cap into each other's first half width. So a
+        // slice that runs to a shared end of its stretch stops butt-joined there, and the ends of
+        // the whole line keep their caps as they always did.
+        boolean capStart = headSplit || localFrom > 1.0E-9 || span.fromPoint() == 0;
+        boolean capEnd = tailSplit || localTo < total - 1.0E-9
+                || span.toPoint() == points.size() - 1;
+        emitProjectedPath(out, assembled, halfWidth, argb, alpha, minX, minY, maxX, maxY,
+                capStart, capEnd);
     }
 
     /**
@@ -853,8 +1180,307 @@ public final class HudDraw {
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
-                    bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
+                    RoadConfig.roadColor(segment.roadClass()), alpha,
                     minX, minY, maxX, maxY);
+        }
+    }
+
+    /**
+     * The colour of a route that is one whole stretch, in the given mode.
+     *
+     * <p>Blue on foot, green when driven. The case that is easy to get wrong is public transport:
+     * a route drawn for that mode with no journey behind it is not a ride, it is the walker's
+     * fallback -- the planners answer a journey no line can carry with the walk -- so it takes the
+     * walking blue rather than the driving green. A route that really does ride is not one colour
+     * at all; see {@link RouteInk}, which has a colour per stretch.
+     *
+     * <p>Every surface that draws a route with one colour asks this one method, so the world map,
+     * the HUD's small map and the two viewers cannot disagree about what a walk or a drive looks
+     * like. It is also what {@link #routeInk} gives the routes that have no journey to split, which
+     * is every walk, every drive, and the walk a public transport plan falls back to.
+     */
+    public static int routeColour(TravelMode mode) {
+        return mode == TravelMode.DRIVE ? UiTheme.routeRide() : UiTheme.route();
+    }
+
+    // ------------------------------------------------------------- route ink
+
+    /**
+     * One stretch of a drawn route that is drawn in one colour.
+     *
+     * <p>A stretch is a run of the route's own vertices plus the colour they are drawn in, and the
+     * two distances along the route where it begins and ends. The vertices are named as an index
+     * range into the route's single point list rather than copied into a list of their own: the
+     * route is drawn every frame on up to five surfaces, and a second list of the same points per
+     * stretch, rebuilt per frame, is garbage made in the frame loop -- which is why the whole table
+     * {@link RouteInk} is cached by the route it describes.
+     *
+     * <p>Consecutive stretches share the vertex where one ends and the next begins, so a change of
+     * colour happens at a vertex both stretches draw. That is deliberate: it keeps the drawn line
+     * continuous instead of leaving the two strokes to meet across a gap of rounding.
+     *
+     * <p>The distances are <em>drawn</em> distances, measured along the polyline the maps stroke, and
+     * they are the measure {@code Navigation.travelled()} has always been compared against on these
+     * lines. They deliberately do not include the connectors at the two ends of a route: those are
+     * not on the drawn line at all.
+     *
+     * @param fromPoint    index of the first vertex, in the route's point list
+     * @param toPoint      index of the last vertex, inclusive
+     * @param colour       the ARGB this stretch is drawn in
+     * @param fromDistance drawn distance from the start of the route to {@code fromPoint}
+     * @param toDistance   drawn distance from the start of the route to {@code toPoint}
+     */
+    public record InkSpan(int fromPoint, int toPoint, int colour,
+                          double fromDistance, double toDistance) {
+
+        /** How much of the drawn line this stretch accounts for, in blocks. */
+        public double length() {
+            return toDistance - fromDistance;
+        }
+    }
+
+    /**
+     * A route as the maps should draw it: one polyline, and the coloured stretches of it.
+     *
+     * <h2>Why a table rather than a colour</h2>
+     * A public transport journey is walked, ridden and walked again, and each of those is drawn in a
+     * different ink: on foot it is the walking blue, on a vehicle it is the colour of the line being
+     * ridden, and only a journey that is one mode throughout is one colour. Asking the drawing
+     * surface for "the route colour" cannot say that, which is the whole of the reported bug -- a
+     * transit journey came out green from end to end, and a ride's colour was not the line's.
+     *
+     * <h2>Why the points are shared</h2>
+     * The polyline is the route's own point list, not a copy, and a stretch names a range of it.
+     * Every surface already draws that list; splitting it into one list per stretch would copy every
+     * point on every frame. The table itself is built once per route and journey and cached beside
+     * the navigation -- see {@code Navigation.inkFor} -- so a frame only walks it.
+     *
+     * <h2>One mode, one stretch</h2>
+     * A walk or a drive, and a public transport route whose journey could not be found, have one
+     * stretch covering the whole line, in that route's own mode colour. So the simple case produces
+     * exactly the drawing it always did, and the checks assert that vertex for vertex.
+     */
+    public record RouteInk(List<double[]> points, List<InkSpan> spans, double length) {
+
+        /** Nothing to draw: an empty route, or a route that is already past its end. */
+        public static final RouteInk EMPTY = new RouteInk(List.of(), List.of(), 0);
+
+        /** Whether there is a line here to draw at all. */
+        public boolean isPresent() {
+            return points.size() >= 2 && !spans.isEmpty();
+        }
+    }
+
+    /**
+     * The ink a route is drawn in, stretch by stretch.
+     *
+     * <h2>Where the stretches come from</h2>
+     * When there is a journey, from its legs: a leg on foot is walking blue, a leg on a vehicle is
+     * the colour of the line it rides, and two neighbouring legs in the same ink are one stretch so
+     * the line is not chopped at every station it passes through. Without a journey the route is one
+     * stretch in its own mode's colour -- see {@link #routeColour}.
+     *
+     * <h2>Where a line's colour comes from</h2>
+     * The journey names the line it rides, and the lines in play are searched for that name. The
+     * colour is the line's own when it has one and the default for its kind otherwise, through
+     * {@link TransitLine#colorOr}, so the route is drawn in the same colour as the line's badge on
+     * the map and in the editor. A name that resolves to no line -- the line was deleted or replaced
+     * while the journey was still being followed -- is drawn in {@link UiTheme#routeLineFallback()},
+     * which is deliberately neither the walking blue, the driving green nor the travelled grey: the
+     * one thing the map must not do is silently claim the stretch is one of the modes it is not.
+     *
+     * <h2>When this refuses</h2>
+     * A journey describes a route only if the two are the same line: the legs' drawn lengths, added
+     * up in order, have to land exactly on the vertices of this polyline. They do for every journey
+     * the planner flattens, because that flattening is the same concatenation; a mismatch means the
+     * caller handed over a route and a journey that do not belong together, and colouring that would
+     * put a station boundary at an arbitrary place. The answer then is one stretch, which is what
+     * the line would have been drawn as before there were journeys at all.
+     *
+     * <p>Builds, so it allocates: it is called once per route and journey and cached by them, never
+     * from a frame loop -- see {@code Navigation.inkFor}.
+     *
+     * @param route the route to draw; {@link Route#empty()} yields {@link RouteInk#EMPTY}
+     * @param trip  the journey the route was flattened from, or null for a one-mode plan
+     * @param lines the public transport lines in play, for resolving a ride's colour
+     */
+    public static RouteInk routeInk(Route route, Trip trip, List<TransitLine> lines) {
+        if (route == null || !route.isPresent()) {
+            return RouteInk.EMPTY;
+        }
+        List<double[]> points = route.points();
+        double length = polylineLength(points);
+        if (trip != null && trip.isPresent() && trip.ridesAnything()) {
+            RouteInk journey = inkOfJourney(points, length, trip, lines);
+            if (journey != null) {
+                return journey;
+            }
+        }
+        return new RouteInk(points, List.of(new InkSpan(0, points.size() - 1,
+                routeColour(route.travelMode()), 0, length)), length);
+    }
+
+    /**
+     * The stretches of a journey, or null when the journey is not this polyline.
+     *
+     * <p>The legs are walked in order and each one's drawn length is added up; that running total is
+     * the distance at which the leg ends in the flattened line, because the flattening wrote the
+     * legs' points one after the other and dropped only the duplicated point at each join. The
+     * running total is matched against the cumulative lengths of the vertices to find the vertex the
+     * boundary falls on. The lengths are the same numbers added in the same order, so the match is
+     * exact rather than approximate; the tolerance is there to survive a route built by anything
+     * other than {@code TransitPlanner.asRoute}, not to paper over a different line.
+     */
+    private static RouteInk inkOfJourney(List<double[]> points, double length, Trip trip,
+                                         List<TransitLine> lines) {
+        double[] cumulative = new double[points.size()];
+        for (int i = 1; i < points.size(); i++) {
+            cumulative[i] = cumulative[i - 1] + distance(points.get(i - 1), points.get(i));
+        }
+        List<InkSpan> spans = new ArrayList<>(trip.legs().size());
+        int vertex = 0;
+        int spanStart = 0;
+        double spanFrom = 0;
+        int spanColour = 0;
+        double reached = 0;
+        boolean open = false;
+        for (Trip.Leg leg : trip.legs()) {
+            reached += polylineLength(leg.route().points());
+            int end = vertexAt(cumulative, reached);
+            if (end < 0) {
+                return null;
+            }
+            int colour = legColour(leg, lines);
+            if (!open) {
+                spanColour = colour;
+                open = true;
+            } else if (colour != spanColour) {
+                if (vertex > spanStart) {
+                    spans.add(new InkSpan(spanStart, vertex, spanColour, spanFrom,
+                            cumulative[vertex]));
+                }
+                spanStart = vertex;
+                spanFrom = cumulative[vertex];
+                spanColour = colour;
+            }
+            vertex = end;
+        }
+        if (!open || vertex != points.size() - 1) {
+            return null;
+        }
+        if (vertex > spanStart) {
+            spans.add(new InkSpan(spanStart, vertex, spanColour, spanFrom, cumulative[vertex]));
+        }
+        if (spans.isEmpty()) {
+            return null;
+        }
+        return new RouteInk(points, spans, length);
+    }
+
+    /**
+     * The distance along the polyline at which the given cumulative distance sits on a vertex.
+     *
+     * @return the vertex's index, or -1 when the distance falls between two vertices
+     */
+    private static int vertexAt(double[] cumulative, double distance) {
+        for (int i = 0; i < cumulative.length; i++) {
+            double gap = cumulative[i] - distance;
+            if (Math.abs(gap) <= VERTEX_SLACK) {
+                return i;
+            }
+            if (gap > VERTEX_SLACK) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * How far a boundary may be from the vertex it is supposed to land on, in blocks.
+     *
+     * <p>A millionth of a block is nothing a map can draw and far more than the difference between
+     * two sums of the same double values. It is not a tolerance for a different route shape; it is
+     * there so that a join written by a future flattening, which might add the same lengths in a
+     * different order, is still recognised as the vertex it lands on. A real mismatch is hundreds of
+     * blocks, and that is refused rather than smeared over.
+     */
+    private static final double VERTEX_SLACK = 1.0E-6;
+
+    /** The ink of one leg: walked stretches are blue, everything else is its line's colour. */
+    private static int legColour(Trip.Leg leg, List<TransitLine> lines) {
+        if (leg.mode() == TravelMode.WALK) {
+            return UiTheme.route();
+        }
+        Trip.Ride ride = leg.ride();
+        if (ride == null) {
+            // A vehicle leg with no line: only a drive is shaped like that, and the drive's own
+            // colour is the truthful one. A transit journey always names its line.
+            return UiTheme.routeRide();
+        }
+        return lineInk(ride.line(), lines);
+    }
+
+    /**
+     * The colour of one line by name, or the fallback when no line in play carries that name.
+     *
+     * <p>Matched against {@link TransitLine#label()}, which is what the journey recorded when it
+     * built the ride. Two lines may share a label -- nothing stops a player naming two services the
+     * same -- and the first in play wins; there is no better answer, because the journey carries the
+     * name it was planned with and not the identity of the line object.
+     */
+    private static int lineInk(String lineName, List<TransitLine> lines) {
+        if (lineName != null && lines != null) {
+            for (TransitLine line : lines) {
+                if (line != null && lineName.equals(line.label())) {
+                    return line.colorOr(RoadConfig.transitLineColor(line.kind()));
+                }
+            }
+        }
+        return UiTheme.routeLineFallback();
+    }
+
+    /** The drawn length of a polyline, in blocks. */
+    private static double polylineLength(List<double[]> points) {
+        double length = 0;
+        for (int i = 1; i < points.size(); i++) {
+            length += distance(points.get(i - 1), points.get(i));
+        }
+        return length;
+    }
+
+    /** Distance between two world points of a drawn line. */
+    private static double distance(double[] a, double[] b) {
+        return Math.hypot(b[0] - a[0], b[1] - a[1]);
+    }
+
+    /**
+     * The public transport lines, along the track each one actually runs on.
+     *
+     * <p>For the maps this mod draws itself -- the viewer on the main screen and the picker's small
+     * map. A line is not the chord between two of its stops: a railway between two stations can run a
+     * long way round, and the chord hides the one thing the map is for. The shapes come from
+     * {@link RoadElementRenderer#transitStrokesFor}, which plans each pair of neighbouring stops the
+     * same way the router will and caches the result, so these two maps draw the same track the world
+     * map does without planning anything of their own.
+     *
+     * <p>Each line is drawn in its own colour -- the one the player gave it, or the default for its
+     * kind -- because that colour is the line's badge everywhere else in the mod. Drawn after the
+     * roads and before the route, so a line is under the route the player is following and over the
+     * ground it runs on. Never thinned by zoom: there are a handful of lines, and seeing them is the
+     * point of having them on the small map at all.
+     */
+    public static void emitTransitLines(VertexSink out, List<TransitLine> lines,
+                                        double m00, double m01, double m02,
+                                        double m10, double m11, double m12,
+                                        double halfWidth, int alpha,
+                                        double minX, double minY, double maxX, double maxY) {
+        if (lines == null || lines.isEmpty()) {
+            return;
+        }
+        for (RoadElementRenderer.TransitStroke stroke :
+                RoadElementRenderer.transitStrokesFor(lines)) {
+            emitPath(out, stroke.points(), m00, m01, m02, m10, m11, m12, halfWidth,
+                    stroke.colour(), alpha, minX, minY, maxX, maxY);
         }
     }
 
@@ -907,7 +1533,7 @@ public final class HudDraw {
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
-                    bili.dongsz.howtogo.RoadConfig.roadColor(segment.roadClass()), alpha,
+                    RoadConfig.roadColor(segment.roadClass()), alpha,
                     minX, minY, maxX, maxY);
         }
     }
@@ -952,6 +1578,29 @@ public final class HudDraw {
     private static void emitProjectedPath(VertexSink out, int count,
                                           double halfWidth, int argb, int alpha,
                                           double minX, double minY, double maxX, double maxY) {
+        emitProjectedPath(out, count, halfWidth, argb, alpha, minX, minY, maxX, maxY, true, true);
+    }
+
+    /**
+     * The same, with the two caps optional.
+     *
+     * <p>Both are on for every drawing that has always drawn a line of its own, which is every
+     * caller but the route ink. The ink draws each stretch as its own stroke, and two neighbouring
+     * stretches share a vertex at a station: each stretch's cap belongs at the end of the line, not
+     * at that shared vertex, where the two caps would otherwise paint a semicircle of one stretch's
+     * colour over the first half width of the next one -- a small swap of colours at every station a
+     * journey passes through, and, on the faded plan lines, a darker bead wherever two translucent
+     * caps overlapped. Suppressing the cap at a shared vertex leaves the two strokes butt-joined
+     * there, which is exactly the line they are.
+     *
+     * <p>Neither flag changes anything for a route drawn as one stretch: its two ends are the ends
+     * of the line, so both caps are emitted, and the regression check holds that drawing to the
+     * vertices the old one emitted.
+     */
+    private static void emitProjectedPath(VertexSink out, int count,
+                                          double halfWidth, int argb, int alpha,
+                                          double minX, double minY, double maxX, double maxY,
+                                          boolean capStart, boolean capEnd) {
         if (count < 2 || !(halfWidth > 0)) {
             return;
         }
@@ -1000,12 +1649,16 @@ public final class HudDraw {
         // the road around it -- a line of beads whenever the geometry was stroked piece by piece. A
         // cap that only adds the part beyond the end owns every pixel it paints exactly once, and the
         // two of them at a joint still cover the wedge because each fills its own side of it.
-        capOutward(out, PATH_X[0], PATH_Y[0],
-                PATH_X[0] - PATH_X[1], PATH_Y[0] - PATH_Y[1], halfWidth, argb, alpha,
-                minX, minY, maxX, maxY);
-        capOutward(out, PATH_X[count - 1], PATH_Y[count - 1],
-                PATH_X[count - 1] - PATH_X[count - 2], PATH_Y[count - 1] - PATH_Y[count - 2],
-                halfWidth, argb, alpha, minX, minY, maxX, maxY);
+        if (capStart) {
+            capOutward(out, PATH_X[0], PATH_Y[0],
+                    PATH_X[0] - PATH_X[1], PATH_Y[0] - PATH_Y[1], halfWidth, argb, alpha,
+                    minX, minY, maxX, maxY);
+        }
+        if (capEnd) {
+            capOutward(out, PATH_X[count - 1], PATH_Y[count - 1],
+                    PATH_X[count - 1] - PATH_X[count - 2], PATH_Y[count - 1] - PATH_Y[count - 2],
+                    halfWidth, argb, alpha, minX, minY, maxX, maxY);
+        }
     }
 
     /**

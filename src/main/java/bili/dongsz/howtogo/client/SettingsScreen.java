@@ -129,6 +129,16 @@ final class SettingsScreen extends Screen {
     /** The opacity the whole window is drawn at this frame; see {@link #render}. */
     private float open = 1.0F;
 
+    /**
+     * The opacity of the dimming and the sheet under the window's content this frame.
+     *
+     * <p>The same number as {@link #open} except during a hand-off to another page, where the
+     * surface is held at full while the content cross-fades -- see
+     * {@link UiMotion.ScreenState#surface()}. A field because the sheet is drawn from
+     * {@link #renderBackground}, which runs before the rest of the frame.
+     */
+    private float surface = 1.0F;
+
     /** The reset button's first press arms it; the second one restores the defaults. */
     private boolean resetArmed;
     private Component status;
@@ -510,13 +520,13 @@ final class SettingsScreen extends Screen {
         // with the frame it is part of.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
-                UiMotion.fade(UiTheme.dim(), open));
+                UiMotion.fade(UiTheme.dim(), surface));
         // The sheet is rounded like the destination picker's, rather than the square frame the
         // world map uses: this is a window over the game, not a full-screen workspace.
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
-                UiMotion.fade(UiTheme.panel(), open));
+                UiMotion.fade(UiTheme.panel(), surface));
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
-                UiMotion.fade(UiTheme.panelEdge(), open));
+                UiMotion.fade(UiTheme.panelEdge(), surface));
     }
 
     @Override
@@ -527,6 +537,7 @@ final class SettingsScreen extends Screen {
         // swap, so it is read exactly once per frame.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        surface = motion.surface();
         // The whole frame is displaced, not only faded: a window that appears in place reads as a cut.
         // Pushed before any pixel -- the background 1.20.1 asks for by hand below included -- so the
         // dimming, the sheet, the rows and the footer buttons travel together as one surface. The pose

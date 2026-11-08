@@ -8,6 +8,7 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
+import bili.dongsz.howtogo.route.LinePlanner;
 import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.Route;
@@ -15,6 +16,7 @@ import bili.dongsz.howtogo.route.RouteAlternatives;
 import bili.dongsz.howtogo.route.RouteFailure;
 import bili.dongsz.howtogo.route.RouteOption;
 import bili.dongsz.howtogo.route.RoutePreferences;
+import bili.dongsz.howtogo.route.RouteStrategy;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.route.Trip;
@@ -152,6 +154,16 @@ public final class Navigation {
     private static double walkingSeconds;
 
     /**
+     * Whether the mode given up on was public transport and the destination is near enough to walk to.
+     *
+     * <p>The one fallback whose reason is not a failure: there was no line worth riding, and the walk
+     * is the answer rather than a substitute for one. Kept beside the other two so the readout
+     * resolves it in one place, and cleared with them; see {@link #fallbackHint} and
+     * {@link LinePlanner#closeEnoughToWalk}.
+     */
+    private static boolean walkInsteadOfRiding;
+
+    /**
      * How much the player may move and still be served the plan list worked out from where they
      * were, in blocks.
      *
@@ -189,6 +201,37 @@ public final class Navigation {
      */
     private static final Map<PlansKey, List<RouteOption>> plansCache = new LinkedHashMap<>();
 
+    /**
+     * How many route inks the maps may keep at once.
+     *
+     * <p>An ink is the coloured stretches of one route -- see {@link HudDraw.RouteInk} -- and
+     * building one walks the route and resolves a line colour per leg, which is not something five
+     * drawing surfaces may do in five frame loops. The picker draws up to three plan lines and the
+     * live route at the same time, and the world map, the panel, the picker's map and Xaero's
+     * minimap all ask for the live route again on every frame; six entries cover those and the
+     * single-preview fallback with room for the list to be rebuilt under a drawn frame.
+     */
+    private static final int INK_CACHE_CAPACITY = 6;
+
+    /**
+     * The cache: the route instance and the journey instance an ink was built from, and the ink.
+     *
+     * <p>Identity, not equality, and no key record: a route is a handful of parallel arrays and
+     * equals is not defined for it, while the objects the navigation itself holds are exactly the
+     * ones the drawing surfaces are handed. That makes a hit three reference comparisons, which is
+     * what a per-frame question has to cost.
+     *
+     * <p>The parallel arrays are hand-rolled rather than a map for the same reason the plans cache is
+     * evicted by hand: six entries and one linear scan allocate nothing on the frame path, whereas a
+     * {@code LinkedHashMap} lookup boxes nothing but still builds no key only because there is none
+     * to build -- the point is that a miss is the rare case and a hit is three reads.
+     */
+    private static final Route[] inkRoutes = new Route[INK_CACHE_CAPACITY];
+    private static final Trip[] inkTrips = new Trip[INK_CACHE_CAPACITY];
+    private static final HudDraw.RouteInk[] inkValues = new HudDraw.RouteInk[INK_CACHE_CAPACITY];
+    /** The slot a miss replaces. The oldest entry is not tracked: six is enough that any rotation is fine. */
+    private static int inkCacheNext;
+
     private Navigation() {
     }
 
@@ -202,6 +245,85 @@ public final class Navigation {
 
     public static Route route() {
         return route;
+    }
+
+    /**
+     * The live route as the maps draw it: its stretches, each in the ink its own way of travelling
+     * calls for.
+     *
+     * <p>The one thing every surface that draws a navigation route asks for. It used to ask for a
+     * colour -- blue or green -- which cannot describe a public transport journey, where walking,
+     * riding one line and walking again are three different inks on one line. The table is built
+     * once per route and journey and cached; see {@link #inkFor} for what a frame costs and what the
+     * cache deliberately does not notice.
+     */
+    public static HudDraw.RouteInk routeInk() {
+        return inkFor(route, transitTrip);
+    }
+
+    /**
+     * The ink for one route and the journey it was flattened from, cached by the pair.
+     *
+     * <h2>Why the pair, and why identity</h2>
+     * A route cannot say where the riding begins -- that is what {@link Trip} is for -- and a journey
+     * without its route is not something to draw. The navigation holds both, and the picker holds
+     * both in each {@link RouteOption}, so the two references are the whole question. They are
+     * compared by identity because routes have no value equality and because the caller is always
+     * holding an object the navigation itself produced or was handed; a plan handed over whole at
+     * commit time is the very route the picker drew, so the ink is reused rather than rebuilt at the
+     * moment the trip starts.
+     *
+     * <h2>What a hit costs</h2>
+     * A miss builds a table, which allocates; a hit is a scan of six slots and returns the same
+     * object. The world map, the panel, the picker's map and Xaero's minimap all ask for the live
+     * route on every frame they draw, so the miss happens once per route and the frames after it
+     * are pure reads.
+     *
+     * <h2>What the cache deliberately does not notice</h2>
+     * A line's colour being edited while its route is being followed is not an invalidation. The
+     * colour belongs to the line, not to the route, and folding every line's colour into the guard
+     * would walk the line list on every frame to catch an edit made in a screen the player opened
+     * deliberately. The map keeps the old colour until the route is planned again -- a mode change,
+     * an off-route re-plan, or a plan handed over from the picker -- and the line's chips and the
+     * guidance, which read the line live, are correct in the meantime. The same applies to a line
+     * being deleted: the ride keeps the colour it resolved last, and a re-plan replaces it.
+     *
+     * @param route the route to draw, or null for nothing
+     * @param trip  the journey the route was flattened from, or null for a one-mode route
+     * @return the ink, or {@link HudDraw.RouteInk#EMPTY} when there is no route
+     */
+    public static HudDraw.RouteInk inkFor(Route route, Trip trip) {
+        if (route == null || !route.isPresent()) {
+            return HudDraw.RouteInk.EMPTY;
+        }
+        for (int i = 0; i < inkRoutes.length; i++) {
+            if (inkRoutes[i] == route && inkTrips[i] == trip) {
+                return inkValues[i];
+            }
+        }
+        HudDraw.RouteInk ink = HudDraw.routeInk(route, trip, linesInPlay());
+        inkRoutes[inkCacheNext] = route;
+        inkTrips[inkCacheNext] = trip;
+        inkValues[inkCacheNext] = ink;
+        inkCacheNext = (inkCacheNext + 1) % inkRoutes.length;
+        return ink;
+    }
+
+    /**
+     * Forgets every cached ink.
+     *
+     * <p>Called when the session is cleared: the routes of the world just left can never be drawn
+     * again, and a table holding a whole region's route points is not something to keep through the
+     * world change. A stale entry would be harmless -- it can only be hit by an identity that is
+     * gone -- but harmless is not the same as free.
+     */
+    private static void clearInkCache() {
+        for (int i = 0; i < inkRoutes.length; i++) {
+            inkRoutes[i] = null;
+            inkTrips[i] = null;
+            inkValues[i] = null;
+        }
+        inkCacheNext = 0;
     }
 
     /** The active travel mode. */
@@ -228,6 +350,11 @@ public final class Navigation {
     public static String fallbackHint() {
         if (abandonedMode == null) {
             return null;
+        }
+        if (walkInsteadOfRiding) {
+            // The one fallback whose reason is not a failure: the lines had nothing worth riding.
+            return net.minecraft.network.chat.Component
+                    .translatable("hud.howtogo.close_enough_to_walk").getString();
         }
         if (Double.isNaN(abandonedSeconds)) {
             return net.minecraft.network.chat.Component
@@ -385,8 +512,10 @@ public final class Navigation {
         arrived = false;
         offRouteSince = 0L;
         // A commit is a fresh plan, not a fallback: there is nothing to explain and nothing a new
-        // turn reading may suppress.
+        // turn reading may suppress -- except the walk row, which exists only because no line could
+        // carry the trip and travels with its own explanation. See noteWalkInsteadOfRiding.
         clearFallback();
+        noteWalkInsteadOfRiding(plan, x, z, destination);
         clearWrongWay();
         turns.reset();
         // Logged with the strategy's own name, which is the one fact the picker showed that a
@@ -396,6 +525,28 @@ public final class Navigation {
                 destination.name(), mode.id(), plan.label(), route.points().size(),
                 Math.round(route.totalLength()), plan.turns(),
                 Route.formatDuration(route.estimatedSeconds()));
+    }
+
+    /**
+     * Records the reason behind a walk handed over as the plan for public transport.
+     *
+     * <p>A plan committed from the picker is a fresh plan with nothing to explain: the player saw the
+     * row and pressed start. The walk row is the exception -- it is on the list only because no line
+     * was worth riding, and it is handed over under the mode the player chose, so the panel would
+     * otherwise guide a walk under "public transport" with no sentence saying why. It goes through the
+     * same state the fallback uses, so the HUD line and the picker's readout say the same thing; a
+     * destination further off keeps the ordinary "no route here" sentence, which is the true one
+     * there.
+     */
+    private static void noteWalkInsteadOfRiding(RouteOption plan, double x, double z,
+                                               Destination destination) {
+        if (plan.strategy() != RouteStrategy.WALK) {
+            return;
+        }
+        abandonedMode = TravelMode.TRANSIT;
+        abandonedSeconds = Double.NaN;
+        walkingSeconds = route.estimatedSeconds();
+        walkInsteadOfRiding = LinePlanner.closeEnoughToWalk(x, z, destination.x(), destination.z());
     }
 
     public static void clear() {
@@ -412,6 +563,7 @@ public final class Navigation {
         clearFallback();
         clearWrongWay();
         turns.reset();
+        clearInkCache();
     }
 
     /** The dimension the player is in, or null when no world is loaded. */
@@ -2208,8 +2360,29 @@ public final class Navigation {
                     lines, x, z, destination.x(), destination.z(), destination.name(), policy);
         }
         RoadNetwork network = RailTrackStore.forRouting(active, policy, true);
-        return RouteAlternatives.roads(network, x, z, destination.x(), destination.z(),
-                destination.name(), active, policy);
+        List<RouteOption> plans = RouteAlternatives.roads(network, x, z, destination.x(),
+                destination.z(), destination.name(), active, policy);
+        if (plans.isEmpty() && active != TravelMode.WALK
+                && RoadConfig.fallBackToWalkingWhenSlower()) {
+            // The same fallback the single-route preview makes, for the same reason: a car cannot
+            // leave the road far enough to reach a destination a little off it, so the honest answer
+            // is to plan on foot and time that line as the chosen mode -- the stretches a car can
+            // drive at driving pace, the last step at walking pace. Without it the picker offered no
+            // plans at all for a destination its own preview line still described, which is the
+            // "driving has no plans" case; the line is the walker's, because the walker is the only
+            // mode that can reach past the end of the road.
+            Route walked = RoadRouter.findRoute(RoadRouter.workspaceFor(network), x, z,
+                    destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
+            Route timed = timedForRequested(walked, active);
+            if (timed.isPresent()) {
+                boolean shortestFirst = policy.metric()
+                        == bili.dongsz.howtogo.route.RoutePreference.SHORTEST_DISTANCE;
+                plans = List.of(new RouteOption(timed, null, active, shortestFirst
+                        ? bili.dongsz.howtogo.route.RouteStrategy.SHORTEST
+                        : bili.dongsz.howtogo.route.RouteStrategy.FASTEST));
+            }
+        }
+        return plans;
     }
 
     /**
@@ -2506,6 +2679,7 @@ public final class Navigation {
         abandonedMode = null;
         abandonedSeconds = Double.NaN;
         walkingSeconds = 0;
+        walkInsteadOfRiding = false;
     }
 
     /**
@@ -2518,6 +2692,14 @@ public final class Navigation {
                                      RoutePreferences preferences) {
         abandonedMode = abandoned;
         walkingSeconds = onFoot.estimatedSeconds();
+        // A public transport plan with no journey and a destination a walk away is the one case where
+        // walking is not the mode failing: there is no line worth taking, and the readout says that
+        // in its own words rather than reporting that public transport found nothing. A destination
+        // further off keeps the old sentence, which is the true one there. Asked of the same distance
+        // the planner refuses a ride for, so the plan and its explanation cannot disagree about what
+        // "near" means -- see LinePlanner.closeEnoughToWalk.
+        walkInsteadOfRiding = abandoned == TravelMode.TRANSIT && !planned.isPresent()
+                && LinePlanner.closeEnoughToWalk(routeOriginX, routeOriginZ, target.x(), target.z());
         if (planned.isPresent()) {
             abandonedSeconds = planned.estimatedSeconds();
             HowToGo.diagnostic(

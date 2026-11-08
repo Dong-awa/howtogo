@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client.xaero.minimap;
 
+import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.road.RoadNetwork;
 
 import java.util.List;
@@ -88,6 +89,14 @@ public final class XaeroMinimapRouteElement {
          */
         ROADWEAVER,
 
+        /**
+         * The public transport lines, one element per stretch, each in its line's own colour.
+         *
+         * <p>Between the road layers and the route on purpose: a line is part of the map, not part of
+         * the trip, so the route the player is following must stay on top of it.
+         */
+        TRANSIT_LINES,
+
         /** The travelled part of the route. */
         ROUTE_DONE,
 
@@ -108,9 +117,13 @@ public final class XaeroMinimapRouteElement {
     private final double probe;
     private final RoadNetwork network;
     private final List<double[]> points;
+    private final HudDraw.RouteInk ink;
+    private final double travelled;
 
     private XaeroMinimapRouteElement(Kind kind, double x, double z, int argb, double probe,
-                                     RoadNetwork network, List<double[]> points) {
+                                     RoadNetwork network, List<double[]> points,
+                                     HudDraw.RouteInk ink,
+                                     double travelled) {
         this.kind = kind;
         this.x = x;
         this.z = z;
@@ -118,6 +131,8 @@ public final class XaeroMinimapRouteElement {
         this.probe = probe;
         this.network = network;
         this.points = points;
+        this.ink = ink;
+        this.travelled = travelled;
     }
 
     /**
@@ -129,7 +144,7 @@ public final class XaeroMinimapRouteElement {
      * @param probe the calibration distance in blocks, or 0 for the centre and edge probes
      */
     static XaeroMinimapRouteElement probe(Kind kind, double x, double z, double probe) {
-        return new XaeroMinimapRouteElement(kind, x, z, 0, probe, null, null);
+        return new XaeroMinimapRouteElement(kind, x, z, 0, probe, null, null, null, 0);
     }
 
     /**
@@ -142,7 +157,7 @@ public final class XaeroMinimapRouteElement {
      */
     static XaeroMinimapRouteElement networkLayer(Kind kind, double anchorX, double anchorZ,
                                                  RoadNetwork network) {
-        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, 0, 0, network, null);
+        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, 0, 0, network, null, null, 0);
     }
 
     /**
@@ -151,12 +166,36 @@ public final class XaeroMinimapRouteElement {
      * @param kind which half of the route this is
      * @param anchorX the frame anchor's world X
      * @param anchorZ the frame anchor's world Z
-     * @param argb the colour the half is drawn in
+     * @param argb the colour the half is drawn in, which for the ahead half is only the colour the
+     *             element used to carry; the stretches bring their own now
      * @param points the polyline's world points
      */
     static XaeroMinimapRouteElement routeLayer(Kind kind, double anchorX, double anchorZ, int argb,
                                                List<double[]> points) {
-        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, points);
+        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, points, null, 0);
+    }
+
+    /**
+     * One half of the live route, carried as the route's ink and the distance already covered.
+     *
+     * <p>Rather than the two point lists the provider used to build, one per half and per frame.
+     * The ink is the table every other surface draws from -- see {@code Navigation.routeInk} -- and
+     * the renderer walks it and draws only the half this element stands for, so the two halves come
+     * from one calculation and the frame allocates no lists of its own.
+     *
+     * @param kind {@link Kind#ROUTE_DONE} for the covered half, {@link Kind#ROUTE_AHEAD} for the rest
+     * @param anchorX the frame anchor's world X
+     * @param anchorZ the frame anchor's world Z
+     * @param argb the colour the covered half is drawn in; the ahead half uses each stretch's own
+     * @param ink the route's ink, shared with the other surfaces and not owned by this element
+     * @param travelled drawn distance already covered
+     */
+    static XaeroMinimapRouteElement routeInkLayer(Kind kind, double anchorX, double anchorZ,
+                                                  int argb,
+                                                  HudDraw.RouteInk ink,
+                                                  double travelled) {
+        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, null, ink,
+                travelled);
     }
 
     /**
@@ -168,7 +207,7 @@ public final class XaeroMinimapRouteElement {
      * @param argb the marker's colour
      */
     static XaeroMinimapRouteElement marker(Kind kind, double x, double z, int argb) {
-        return new XaeroMinimapRouteElement(kind, x, z, argb, 0, null, null);
+        return new XaeroMinimapRouteElement(kind, x, z, argb, 0, null, null, null, 0);
     }
 
     /** What this element means. */
@@ -210,5 +249,15 @@ public final class XaeroMinimapRouteElement {
     /** The polyline a route layer draws, or null for anything that is not a route layer. */
     public List<double[]> routePoints() {
         return points;
+    }
+
+    /** The live route's ink, or null for anything that is not one of the two route halves. */
+    public HudDraw.RouteInk routeInk() {
+        return ink;
+    }
+
+    /** The drawn distance already covered, for the two route halves; meaningless for anything else. */
+    public double travelled() {
+        return travelled;
     }
 }

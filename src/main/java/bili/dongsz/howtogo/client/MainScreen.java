@@ -118,6 +118,18 @@ public final class MainScreen extends Screen {
      */
     private float open = 1.0F;
 
+    /**
+     * How far the screen's own surface has arrived this frame: the dimming, the sheet, and the empty
+     * map the roads are drawn on.
+     *
+     * <p>The same number as {@link #open} everywhere except during a hand-off to another page, where
+     * the surface is held at full while the content on it cross-fades: see
+     * {@link UiMotion.ScreenState#surface()}, which is where the reason lives. The map's own backdrop
+     * counts as surface rather than as content -- a map that faded would be a hole in the sheet with
+     * the world showing through it.
+     */
+    private float surface = 1.0F;
+
     /** View centre in world blocks, and the zoom. Kept across a resize, not across screens. */
     private double centerX;
     private double centerZ;
@@ -889,11 +901,11 @@ public final class MainScreen extends Screen {
         // with the frame it is part of.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
-                UiMotion.fade(UiTheme.dim(), open));
+                UiMotion.fade(UiTheme.dim(), surface));
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
-                UiMotion.fade(UiTheme.panelEdge(), open));
+                UiMotion.fade(UiTheme.panelEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
-                UiMotion.fade(UiTheme.panel(), open));
+                UiMotion.fade(UiTheme.panel(), surface));
     }
 
     /**
@@ -915,6 +927,7 @@ public final class MainScreen extends Screen {
         // game may skip would leave a screen that never finishes leaving.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
+        surface = motion.surface();
         // The camera first: the map, the route, the markers, the labels and every hit test below
         // read the same three numbers this advances, so a frame of an animated pan cannot show one
         // thing and offer another.
@@ -957,11 +970,11 @@ public final class MainScreen extends Screen {
         // entrance's opacity: the backdrop, the strokes' own alphas and the marker colours. Only the
         // alpha moves -- not one coordinate here is touched, so the map the player clicks is the map
         // that was drawn, at every point of the entrance.
-        int edge = UiMotion.fade(UiTheme.mapEdge(), open);
+        int edge = UiMotion.fade(UiTheme.mapEdge(), surface);
         int stroke = (int) (0xD0 * open);
         int routeAlpha = (int) (0xFF * open);
         graphics.fill(mapX, mapY, mapX + mapW, mapY + mapH,
-                UiMotion.fade(UiTheme.mapBackdrop(), open));
+                UiMotion.fade(UiTheme.mapBackdrop(), surface));
         graphics.fill(mapX, mapY, mapX + mapW, mapY + 1, edge);
         graphics.fill(mapX, mapY + mapH - 1, mapX + mapW, mapY + mapH, edge);
         graphics.fill(mapX, mapY, mapX + 1, mapY + mapH, edge);
@@ -1002,11 +1015,23 @@ public final class MainScreen extends Screen {
             drawRoad(sink, segment, minX, minY, maxX, maxY);
         }
 
-        // The current route over everything, so it reads as the one thing to follow.
-        Route route = Navigation.route();
-        if (route.isPresent()) {
-            HudDraw.emitPath(sink, route.points(), pathM00(), 0, pathM02(), 0, pathM11(),
-                    pathM12(), 1.6, UiTheme.route(), routeAlpha, minX, minY, maxX, maxY);
+        // Public transport lines, over the ground they run on and under the route: the world map
+        // draws a line along the track it runs on, but this map has no track to follow, so the line is
+        // the chain of the stops it calls at -- which is the fact a passenger reads it for. Half a
+        // footpath's width, because a line marks a service rather than a road.
+        HudDraw.emitTransitLines(sink, Navigation.linesInPlay(), pathM00(), 0, pathM02(), 0,
+                pathM11(), pathM12(), roadHalfWidth(RoadClass.PATH) * 0.5, (int) (0xE0 * open),
+                minX, minY, maxX, maxY);
+
+        // The current route over everything, so it reads as the one thing to follow. Drawn in the
+        // ink of each stretch: blue where the player walks, green where a car drives, and a line's
+        // own colour on the stretch that rides it. This map draws the whole trip rather than the
+        // part ahead, so there is no travelled grey here -- the progress colouring belongs to the
+        // maps the player is actually being guided on.
+        HudDraw.RouteInk ink = Navigation.routeInk();
+        if (ink.isPresent()) {
+            HudDraw.emitInk(sink, ink, pathM00(), 0, pathM02(), 0, pathM11(), pathM12(),
+                    1.6, routeAlpha, minX, minY, maxX, maxY);
         }
 
         // Places, and the labels to draw after the shapes. The names are thinned by the same rule

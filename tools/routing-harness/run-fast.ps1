@@ -9,6 +9,10 @@
 #         .\tools\routing-harness\run-fast.ps1 -Refresh      # re-read the classpath from Gradle first
 #         .\tools\routing-harness\run-fast.ps1 -MtrJar <path>  # check another MTR build's handshake
 #         .\tools\routing-harness\run-fast.ps1 -RoadWeaverJar <path>  # the same for RoadWeaver
+#         .\tools\routing-harness\run-fast.ps1 -WorkDir build-verify-a
+#             A directory of its own for the class files, so two people (or two agents) type-checking
+#             the same working copy do not delete each other's output halfway through. The classpath
+#             is copied from build/classpath.txt when the directory is new, so this costs nothing.
 # Exit:   the harness's own status, so a failing check fails the script.
 
 param(
@@ -24,15 +28,30 @@ param(
     # Writes the browser map's fixture payload to this path. The page's own tests are then run against
     # a payload this server really produced -- node tools\webmap-test\run.js <path> -- rather than
     # against one written to match it, which is what catches the two sides drifting apart.
-    [string]$WriteWebMapFixture
+    [string]$WriteWebMapFixture,
+    # Where the class files and the harness's own logs go, relative to this directory. The default is
+    # the one every run used to write, so an existing workflow is unchanged; anything else is a
+    # private workspace, and a new one takes its classpath from the default rather than asking Gradle.
+    [string]$WorkDir = 'build'
 )
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = (Resolve-Path (Join-Path $here '..\..')).Path
-$work = Join-Path $here 'build'
+$work = if ([System.IO.Path]::IsPathRooted($WorkDir)) { $WorkDir } else { Join-Path $here $WorkDir }
+if (-not (Test-Path $work)) {
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+}
+$sharedClasspath = Join-Path $here 'build\classpath.txt'
 $modClasses = Join-Path $work 'mod-classes'
 $harnessClasses = Join-Path $work 'harness-classes'
 $classpathFile = Join-Path $work 'classpath.txt'
+
+# A private workspace borrows the classpath the default one already has: it is a property of
+# build.gradle, not of this run, and asking Gradle for it is a minute of configuration for a file
+# that cannot have changed.
+if (-not $Refresh -and -not (Test-Path $classpathFile) -and (Test-Path $sharedClasspath)) {
+    Copy-Item $sharedClasspath $classpathFile
+}
 
 if ($Refresh -or -not (Test-Path $classpathFile)) {
     Write-Host 'reading the runtime classpath from gradle (needed once per build.gradle change)...'

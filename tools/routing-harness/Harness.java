@@ -78,6 +78,9 @@ public final class Harness {
         int[] preference = RoutePreferenceCheck.run();
         checks += preference[0];
         failures += preference[1];
+        int[] detour = RouteDetourCheck.run();
+        checks += detour[0];
+        failures += detour[1];
         int[] imported = bili.dongsz.howtogo.client.MtrImportCheck.run();
         checks += imported[0];
         failures += imported[1];
@@ -93,6 +96,9 @@ public final class Harness {
         int[] guidance = bili.dongsz.howtogo.route.TransitGuidanceCheck.run();
         checks += guidance[0];
         failures += guidance[1];
+        int[] nearDestination = NearDestinationCheck.run();
+        checks += nearDestination[0];
+        failures += nearDestination[1];
         int[] oneWay = bili.dongsz.howtogo.road.OneWayCheck.run();
         checks += oneWay[0];
         failures += oneWay[1];
@@ -162,9 +168,15 @@ public final class Harness {
         int[] lineColour = bili.dongsz.howtogo.transit.TransitLineColourCheck.run();
         checks += lineColour[0];
         failures += lineColour[1];
+        int[] routeInk = RouteInkCheck.run();
+        checks += routeInk[0];
+        failures += routeInk[1];
         int[] selection = bili.dongsz.howtogo.road.SelectionCheck.run();
         checks += selection[0];
         failures += selection[1];
+        int[] transitions = bili.dongsz.howtogo.client.ScreenMotionCheck.run();
+        checks += transitions[0];
+        failures += transitions[1];
         System.out.println();
         if (failures > 0) {
             System.out.println("FAILED: " + failures + " of " + checks + " checks");

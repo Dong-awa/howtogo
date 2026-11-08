@@ -111,7 +111,7 @@ public final class Screens {
         if (defer(current(), screen)) {
             return;
         }
-        install(screen);
+        install(screen, false);
     }
 
     /**
@@ -146,11 +146,11 @@ public final class Screens {
         }
         Screen target = pendingTarget;
         Screen gone = leaving;
+        // Read before the record is cleared: the page being installed has to continue the transition
+        // the page leaving started. A hand-off whose two halves were decided separately is two fades.
+        boolean handoff = UiMotion.leavingAsHandoff(gone);
         clear();
-        // Settle rather than drop: a screen the new one draws as its backdrop has to be static behind
-        // it, and a dropped state would make that backdrop play an entrance of its own.
-        UiMotion.release(gone);
-        install(target);
+        install(target, handoff);
     }
 
     /** Forgets the swap in flight, whichever end it reached. */
@@ -158,6 +158,19 @@ public final class Screens {
         swapping = false;
         pendingTarget = null;
         leaving = null;
+    }
+
+    /**
+     * Whether the screen is one of this mod's own.
+     *
+     * <p>Asked by package name rather than through a marker on every screen class: the question is
+     * only ever "is this one of ours", and every screen of the mod lives under the mod's package, so
+     * a screen added later is answered by the same test with no list to keep in step. The cost is
+     * that a screen of ours placed in another package would be missed -- which is the same cost a
+     * marker has when someone forgets to declare it, and one less line to forget.
+     */
+    private static boolean isModScreen(Screen screen) {
+        return screen != null && screen.getClass().getName().startsWith("bili.dongsz.howtogo.");
     }
 
     /**
@@ -183,15 +196,26 @@ public final class Screens {
         if (!UiMotion.on() || current == null || current == target) {
             return false;
         }
-        // A screen that re-renders its parent underneath itself is a dialog over it, not a
-        // replacement for it: the parent is still on screen, at full strength. There is nothing to
-        // fade out, and fading it would be undone one frame later when the dialog redrew it -- which
-        // reads as the whole big interface flashing on its way to the dialog. So the dialog is
-        // installed at once and the parent never leaves. See {@link ParentBackdrop}.
-        if (target instanceof ParentBackdrop) {
+        // A dialog is not a page. It is drawn <em>over</em> the screen it belongs to -- it re-renders
+        // its parent underneath itself, see {@link ParentBackdrop} -- so in both directions the page
+        // underneath stays exactly where it is: opening the dialog must not fade the parent out (the
+        // dialog would redraw it a frame later, which reads as the whole big interface flashing), and
+        // closing it must not fade the parent in (it was never gone). The dialog itself simply appears
+        // and disappears over a surface that never moved.
+        if (current instanceof ParentBackdrop || target instanceof ParentBackdrop) {
             return false;
         }
-        if (!UiMotion.beginLeave(current)) {
+        // Two of the mod's own pages, one after the other. This is a hand-off rather than a
+        // disappearance: the outgoing page's content fades to {@link UiMotion#HANDOFF_FLOOR} while its
+        // sheet stays up, and the incoming page's content picks the fade up from the same floor on the
+        // same sheet. Playing the old page's full exit first would take the surface down with it, and
+        // for a frame or two the player would be looking at the world between two pages -- which is
+        // exactly the flash that a page change should never have.
+        //
+        // Closing to the world (a null target) keeps the full exit: there the surface really is going
+        // away, and the fade is the only thing that says so.
+        boolean handoff = isModScreen(target);
+        if (!UiMotion.beginLeave(current, handoff)) {
             return false;
         }
         swapping = true;
@@ -202,34 +226,38 @@ public final class Screens {
     }
 
     /**
-     * Installs a screen, at the start of its entrance.
+     * Installs a screen, at whatever point of its transition it belongs at.
      *
      * <p>The state of every other screen is deliberately left alone. Screen instances are reused as
      * parents -- a picker holds the main screen and returns to that same object -- and two of the
      * mod's screens draw their parent underneath themselves, so a parent whose state was dropped
-     * here would fade in again behind its own child. Reopening is enough: an instance that is shown
-     * a second time gets its entrance, and one that was merely drawn underneath keeps the state it
-     * already had. States of screens that are genuinely gone are collected with the screens.
+     * here would fade in again behind its own child; see {@link UiMotion#adopt}, which is what
+     * decides between continuing a hand-off, revealing a page that never left, and opening a page
+     * that has never been drawn.
+     *
+     * <h2>Why the outgoing screen is not settled here</h2>
+     * It used to be: the screen being replaced was put back at full opacity as it was installed over,
+     * on the grounds that a screen drawn as a backdrop has to be static. But nothing draws the
+     * replaced screen any more -- the only screens that draw another screen under themselves are the
+     * dialogs, and a dialog swap is never deferred in the first place (see {@link #defer}) -- so the
+     * only thing that settle achieved was one frame of a fully opaque screen that had just faded to
+     * nothing, immediately before the game took it away. That is the second of the two blinks a player
+     * saw when pressing the last button of a panel.
      *
      * <h2>Only a screen the mod animates is adopted</h2>
-     * Reopening <em>creates</em> a screen's animation state, and a screen's animation state is what
-     * makes {@link #defer} willing to wait for its exit -- an exit that only a screen calling
-     * {@link UiMotion#of} can ever finish, because that is the pump. So a screen that is merely
-     * handed back to the game without the mod ever drawing it must not be adopted here: it would be
-     * recorded as something whose exit can be waited for, and every later request to leave it would
-     * be deferred to a frame that never comes. That is exactly what returning from one of the mod's
-     * panels to Xaero's world map looked like -- the map was reopened, adopted, and from then on
+     * A screen's animation state is what makes {@link #defer} willing to wait for its exit -- an exit
+     * that only a screen calling {@link UiMotion#of} can ever finish, because that is the pump. So a
+     * screen that is merely handed back to the game without the mod ever drawing it must not be
+     * adopted: it would be recorded as something whose exit can be waited for, and every later request
+     * to leave it would be deferred to a frame that never comes. That is exactly what returning from
+     * one of the mod's panels to Xaero's world map looked like -- the map was adopted, and from then on
      * pressing N or L anywhere in it did nothing at all until the map was closed and a fresh map
-     * screen (a different instance, so not adopted) was opened.
-     *
-     * <p>A screen that is not animated yet loses nothing by this test: its first frame of
-     * {@link UiMotion#of} is what opens it, and a screen arriving for the first time is opened from
-     * the start, which is the same entrance it would have been given here. A screen that was drawn as
-     * the backdrop of the one it replaces is revealed as it stands rather than played in again; see
-     * {@link UiMotion#adopt}.
+     * screen (a different instance, so not adopted) was opened. A screen with no state loses nothing by
+     * this: its first frame of {@link UiMotion#of} is what opens it, and that is the same entrance it
+     * would have been given here.
      */
-    private static void install(Screen screen) {
-        UiMotion.adopt(screen);
+    private static void install(Screen screen, boolean handoff) {
+        UiMotion.adopt(screen, handoff);
         //? if >=26.2 {
         /*Minecraft.getInstance().gui.setScreen(screen);
         *///?} else {
