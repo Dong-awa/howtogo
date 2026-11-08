@@ -2173,10 +2173,10 @@ public final class DestinationScreen extends Screen {
         // a preview is only ever the newer of the two, and would otherwise hide under the line it
         // is being compared with.
         if (!plans.isEmpty()) {
-            // Every plan at once, so the comparison is made on the map as well as in the list: the
-            // chosen one in the accent colour and at the live route's width, the others thin and
-            // faded so they recede without disappearing. The unchosen lines are emitted first, so
-            // the chosen one is never hidden under a line it is being compared with.
+            // Every plan at once, so the comparison is made on the map as well as in the list: each in
+            // its own ink, the chosen one at the live route's width and strength, the others thin and
+            // faded so they recede without disappearing. The unchosen lines are emitted first, so the
+            // chosen one is never hidden under a line it is being compared with.
             //
             // These keep their own fixed alphas rather than the screen's: a plan can only exist
             // once a destination has been chosen, which is long after the entrance has finished, so
@@ -2195,10 +2195,10 @@ public final class DestinationScreen extends Screen {
             Navigation.RoutePreview planned = preview;
             if (planned != null && planned.isPresent()) {
                 // No plans to compare, so this is the one line the panel has: the walker's fallback,
-                // a walk or a drive. Its own route says which, including the public transport
-                // fallback that is a walk and therefore blue -- the UI mode is not the answer here,
-                // the line that was actually planned is.
-                HudDraw.RouteInk previewInk = Navigation.inkFor(planned.route(), null);
+                // a walk or a drive. Its own journey decides the colours when there is one -- a
+                // public transport journey has to be drawn in its stretches rather than as one line,
+                // and a mode is not the answer here, the plan that was actually made is.
+                HudDraw.RouteInk previewInk = Navigation.inkFor(planned.route(), planned.trip());
                 if (previewInk.isPresent()) {
                     HudDraw.emitInk(last, previewInk, m00, 0, m02, 0, m11, m12,
                             1.1, routeAlpha, minX, minY, maxX, maxY);
@@ -2333,17 +2333,20 @@ public final class DestinationScreen extends Screen {
     /**
      * One plan's line on the picker map.
      *
-     * <p>The chosen plan is drawn in the accent colour at the width the live route uses, so it is
-     * clearly the one the readout and the footer are about. The others are thinner and faded, but
-     * in <em>their own</em> ink: a plan that rides a line shows that line's colour on the ridden
-     * stretch and the walking blue on the walk to it, exactly as it will once committed. An
-     * unchosen plan used to be one grey-blue line, which is fine for telling three plans apart and
-     * useless for reading what any of them does -- the comparison is the point of the results band,
-     * and "this one is mostly walking and that one is mostly the tram" is what is being compared.
+     * <p>Every plan is drawn in <em>its own</em> ink -- the walking blue on the stretches walked, the
+     * line's own colour on the stretch ridden, the driving green on a drive -- and not in a colour of
+     * this screen's choosing. The accent is what the rows and the readout use to say which plan is
+     * being compared; the map has to say what the plan <em>is</em>, and a public transport plan drawn
+     * in one colour looks like a walk with a line's length, which is worse than saying nothing.
      *
-     * <p>The fading is per stretch and by alpha, not by replacing the colour with a paler one: the
-     * hue is what carries the meaning, and mixing each stretch toward the panel would make two
-     * different lines' colours converge at exactly the alpha this band uses to recede.
+     * <p>The chosen plan is told apart by weight rather than by hue: it is drawn at the width the live
+     * route uses and at full strength, the others thinner and faded. That was the other way round in
+     * the first version -- accent for the chosen line -- and it made the one plan the player was
+     * looking at the only line on the map that could not say whether it rode anything.
+     *
+     * <p>The fading of an unchosen plan is per stretch and by alpha, not by replacing the colour with
+     * a paler one: the hue is what carries the meaning, and mixing each stretch toward the panel would
+     * make two different lines' colours converge at exactly the alpha this band uses to recede.
      *
      * <p>Emitted through the shared block's sink like every other line on this map, so it must be
      * called before the name pass: a string written by {@code GuiGraphics} flushes the batch these
@@ -2355,16 +2358,12 @@ public final class DestinationScreen extends Screen {
         if (plan == null || !plan.isPresent()) {
             return;
         }
-        if (selected) {
-            HudDraw.emitPath(out, plan.route().points(), m00, 0, m02, 0, m11, m12,
-                    1.1, UiTheme.accent(), 0xE0, minX, minY, maxX, maxY);
+        HudDraw.RouteInk ink = Navigation.inkFor(plan.route(), plan.trip());
+        if (!ink.isPresent()) {
             return;
         }
-        HudDraw.RouteInk ink = Navigation.inkFor(plan.route(), plan.trip());
-        if (ink.isPresent()) {
-            HudDraw.emitInk(out, ink, m00, 0, m02, 0, m11, m12,
-                    0.7, 0x70, minX, minY, maxX, maxY);
-        }
+        HudDraw.emitInk(out, ink, m00, 0, m02, 0, m11, m12,
+                selected ? 1.1 : 0.7, selected ? 0xE0 : 0x70, minX, minY, maxX, maxY);
     }
 
     /**

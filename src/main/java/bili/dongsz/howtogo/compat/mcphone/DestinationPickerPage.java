@@ -569,13 +569,18 @@ public final class DestinationPickerPage implements IPhonePage {
 
             // The previewed route, in the same ink the desktop picker and the HUD use for a route, so
             // the line looked at before committing and the line drawn afterwards read as one thing.
+            // The journey travels with the preview for exactly this: a public transport plan is a
+            // walk to a stop, a line ridden, and a walk at the far end, and drawn from the route alone
+            // it would be one blue line whatever it rode.
             Navigation.RoutePreview planned = preview;
             if (planned != null && planned.isPresent()) {
-                HudDraw.emitPath(out, planned.route().points(),
-                        pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
-                        0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
-                        1.1, UiMotion.fade(UiTheme.route(), open), routeAlpha,
-                        minX, minY, maxX, maxY);
+                HudDraw.RouteInk ink = Navigation.inkFor(planned.route(), planned.trip());
+                if (ink.isPresent()) {
+                    HudDraw.emitInk(out, ink,
+                            pixelsPerBlock, 0, mapCentreScreenX() - mapCenterX * pixelsPerBlock,
+                            0, pixelsPerBlock, mapCentreScreenZ() - mapCenterZ * pixelsPerBlock,
+                            1.1, routeAlpha, minX, minY, maxX, maxY);
+                }
             }
             // Closed while the scissor is still on: the pre-1.21.6 path flushes here, and flushing
             // after the clip came off would paint the roads and markers over the sheet.

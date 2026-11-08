@@ -2187,14 +2187,21 @@ public final class Navigation {
     /**
      * A route planned for the picker, with nothing of the live trip in it.
      *
+     * <p>The journey travels with the route for the same reason the live session keeps both: a route
+     * cannot say where the riding begins, and the maps colour a public transport trip stretch by
+     * stretch -- the walk to the stop, the line ridden, the walk at the far end. A preview that
+     * carried only the flattened route could not draw that, and a public transport preview would be
+     * one blue line whatever lines it rode -- which is exactly what was reported.
+     *
      * @param route         the plan, or {@link Route#empty()} when there is none
+     * @param trip          the journey the route was flattened from, or null when it rides nothing
      * @param originX       where it starts, which is the player rather than the trip origin
      * @param originZ       where it starts, which is the player rather than the trip origin
      * @param destination   what it leads to
      * @param note          why there is no plan, or null when there is one
      */
-    public record RoutePreview(Route route, double originX, double originZ, Destination destination,
-                               String note) {
+    public record RoutePreview(Route route, Trip trip, double originX, double originZ,
+                               Destination destination, String note) {
 
         /** Whether this preview has a plan to draw. */
         public boolean isPresent() {
@@ -2245,7 +2252,13 @@ public final class Navigation {
                 || !MtrTransit.everyLineRidesItsOwnTrack(linesInPlay());
         RoadNetwork network = RailTrackStore.forRouting(active, policy, wantsMarks);
 
-        Route planned = planRoute(network, active, policy, x, z, destination).route();
+        Planned plan = planRoute(network, active, policy, x, z, destination);
+        Route planned = plan.route();
+        // The journey behind the route, kept for the map rather than for guidance: a preview of a
+        // public transport trip has to be drawn in its stretches, and only the journey knows which
+        // stretch rides which line. Null for every mode but public transport, and null again below
+        // when the fallback replaces a missing journey with a walk.
+        Trip journey = plan.trip();
         if (!planned.isPresent() && active != TravelMode.WALK
                 && RoadConfig.fallBackToWalkingWhenSlower()) {
             // The same comparison the live route makes, so that the line the picker draws is the line
@@ -2260,6 +2273,9 @@ public final class Navigation {
             planned = RoadRouter.findRoute(RailTrackStore.forRouting(TravelMode.WALK, policy), x, z,
                     destination.x(), destination.z(), destination.name(), TravelMode.WALK, policy);
             planned = timedForRequested(planned, active);
+            // The line is the walker's now, whatever mode was asked for: there is no journey to
+            // colour a stretch of it by, and the drawn route really is one mode end to end.
+            journey = null;
         }
         if (!planned.isPresent()) {
             // Said out loud, and this is the only place it can be: a preview that finds nothing shows
@@ -2274,9 +2290,9 @@ public final class Navigation {
                     destination.z(), active, policy);
             HowToGo.LOGGER.info("[HowToGo] no route to {} for {} from ({}, {}): {}",
                     destination.name(), active.id(), Math.round(x), Math.round(z), why);
-            return new RoutePreview(planned, x, z, destination, failureText(why));
+            return new RoutePreview(planned, journey, x, z, destination, failureText(why));
         }
-        return new RoutePreview(planned, x, z, destination, null);
+        return new RoutePreview(planned, journey, x, z, destination, null);
     }
 
     /**
