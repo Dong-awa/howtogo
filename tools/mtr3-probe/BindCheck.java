@@ -60,6 +60,7 @@ public final class BindCheck {
             checkReading();
             checkGeometricStations();
             checkRailDedupe();
+            checkWholeMapRails();
         } catch (Throwable thrown) {
             failures++;
             System.out.println("  FAIL the check itself threw: " + thrown);
@@ -186,6 +187,92 @@ public final class BindCheck {
         MtrSnapshotData.Dimension reading = Mtr3Data.build("", List.of(), List.of(), List.of(),
                 null, false, rails, 64);
         check("a rail held in both directions is read once", reading.tracks().size() == 1);
+    }
+
+    /**
+     * The whole map's rail conversion: several rails, a connection MTR keeps in both directions, the
+     * height and endpoints of each, and the cache that keeps a poll over an unchanged network from
+     * sampling every rail again.
+     *
+     * <p>This drives {@link Mtr3Data#wholeTracks}, which is what {@code whole()} converts a
+     * dimension's rail map with; {@code whole()} itself needs a live {@code RailwayData}, which needs a
+     * running world, so this is the closest the check can get to the real path.
+     */
+    private static void checkWholeMapRails() throws Exception {
+        Object train = transportMode("TRAIN");
+        Object boat = transportMode("BOAT");
+
+        Object first = rail(block(0, 64, 0), block(10, 64, 0), train);
+        Object second = rail(block(10, 64, 0), block(20, 64, 0), boat);
+        Object high = rail(block(0, 70, 5), block(10, 70, 5), train);
+
+        // MTR keeps a connection in both directions, as the same Rail object on both sides.
+        Map<Object, Map<Object, Object>> rails = new LinkedHashMap<>();
+        Map<Object, Object> firstEnds = new LinkedHashMap<>();
+        firstEnds.put(block(10, 64, 0), first);
+        rails.put(block(0, 64, 0), firstEnds);
+        Map<Object, Object> secondForward = new LinkedHashMap<>();
+        secondForward.put(block(20, 64, 0), second);
+        rails.put(block(10, 64, 0), secondForward);
+        Map<Object, Object> secondBackward = new LinkedHashMap<>();
+        secondBackward.put(block(10, 64, 0), second);
+        rails.put(block(20, 64, 0), secondBackward);
+        Map<Object, Object> highEnds = new LinkedHashMap<>();
+        highEnds.put(block(10, 70, 5), high);
+        rails.put(block(0, 70, 5), highEnds);
+
+        List<MtrSnapshotData.Track> tracks = Mtr3Data.wholeTracks(rails);
+        check("a whole-dimension map yields every rail once, reverse storage included",
+                tracks.size() == 3, "actual=" + tracks.size());
+        MtrSnapshotData.Track firstTrack = trackById(tracks, "m3:0,64,0|10,64,0:TRAIN");
+        MtrSnapshotData.Track secondTrack = trackById(tracks, "m3:10,64,0|20,64,0:BOAT");
+        MtrSnapshotData.Track highTrack = trackById(tracks, "m3:0,70,5|10,70,5:TRAIN");
+        check("a whole-map track keeps both endpoints' id and mode",
+                firstTrack != null && secondTrack != null && highTrack != null);
+        check("a whole-map track carries the height it starts at",
+                highTrack != null && highTrack.y() == 70);
+        check("a whole-map track is sampled from its start block's centre",
+                firstTrack != null && Math.abs(firstTrack.xs()[0] - 0.5) < 0.001
+                        && Math.abs(firstTrack.zs()[0] - 0.5) < 0.001);
+        check("a whole-map track is sampled to its end block's centre",
+                firstTrack != null
+                        && Math.abs(firstTrack.xs()[firstTrack.xs().length - 1] - 10.5) < 0.001
+                        && Math.abs(firstTrack.zs()[firstTrack.zs().length - 1] - 0.5) < 0.001);
+        check("a reverse-stored connection is sampled along its own geometry",
+                secondTrack != null
+                        && Math.abs(secondTrack.xs()[secondTrack.xs().length - 1] - 20.5) < 0.001,
+                "last x=" + (secondTrack == null ? "missing"
+                        : String.valueOf(secondTrack.xs()[secondTrack.xs().length - 1])));
+
+        List<MtrSnapshotData.Track> unchanged = Mtr3Data.wholeTracks(rails);
+        check("an unchanged network reuses the converted rails", unchanged == tracks,
+                "the conversion ran again on a poll that should have been free");
+
+        Map<Object, Object> thirdEnds = new LinkedHashMap<>();
+        thirdEnds.put(block(30, 64, 0), rail(block(20, 64, 0), block(30, 64, 0), train));
+        rails.put(block(20, 64, 0), thirdEnds);
+        List<MtrSnapshotData.Track> extended = Mtr3Data.wholeTracks(rails);
+        check("a network with a rail added is converted again", extended != unchanged
+                && extended.size() == 4, "actual=" + extended.size());
+        check("the conversion after a change keeps the rails it already had",
+                trackById(extended, "m3:0,64,0|10,64,0:TRAIN") != null
+                        && trackById(extended, "m3:20,64,0|30,64,0:TRAIN") != null);
+
+        rails.remove(block(0, 64, 0));
+        List<MtrSnapshotData.Track> pruned = Mtr3Data.wholeTracks(rails);
+        check("a removed rail leaves the cached conversion too", pruned.size() == 3
+                        && trackById(pruned, "m3:0,64,0|10,64,0:TRAIN") == null,
+                "actual=" + pruned.size());
+    }
+
+    /** The track with one made-up id, or null when the reading does not hold it. */
+    private static MtrSnapshotData.Track trackById(List<MtrSnapshotData.Track> tracks, String id) {
+        for (MtrSnapshotData.Track track : tracks) {
+            if (id.equals(track.hexId())) {
+                return track;
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ the objects

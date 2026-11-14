@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -48,6 +49,11 @@ import java.util.function.IntSupplier;
  * already persisted it. The one line that matters is {@link #commit()}, which every control that
  * holds a value runs -- the row that opens the category editor changes nothing here and so has
  * nothing to save.
+ *
+ * <p>The one row that does not go through the config is the straight-through junction switch, which
+ * the guidance reads from the preference store rather than from the config; see
+ * {@link #buildRows}. Its own setter persists it there, so the row behaves like every other one from
+ * the player's side -- and a reset restores the same default the config declares.
  *
  * <h2>Theme</h2>
  * No colour is written down here. Every surface, edge, text rank, control face and state comes from
@@ -288,7 +294,18 @@ final class SettingsScreen extends Screen {
                         "screen.howtogo.settings.station_snap_blocks.desc",
                         RoadConfig::stationSnapBlocks,
                         RoadConfig::setStationSnapBlocks,
-                        1, 256, 4, 32, true));
+                        1, 256, 4, 32, true),
+                // The one guidance switch on this screen, and the only row here that does not write
+                // the config: the manoeuvre list itself reads the preference store, because that is
+                // where the readouts' other switches live and where this one is persisted, so
+                // writing the config value would be a visible no-op on any install that has a saved
+                // preference file. The row is still here rather than in the picker because what it
+                // changes is what the road ahead is called, which is a navigation setting a player
+                // looks for in this list.
+                Row.toggle("howtogo.configuration.straight_announcements",
+                        "screen.howtogo.settings.straight_announcements.desc",
+                        RoutePreferenceStore::straightAnnouncements,
+                        RoutePreferenceStore::setStraightAnnouncements, true));
 
         // MTR's whole-map reader is only consulted while MTR data is read at all; the row stays
         // visible and greyed, because the switch above it is the explanation.

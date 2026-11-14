@@ -93,9 +93,13 @@ $bindSource = Join-Path $here 'BindCheck.java'
 Remove-Item $classes -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $classes | Out-Null
 Write-Host 'compiling the reader and the check (nothing of MTR or Minecraft is linked: every lookup is reflective)...'
+$javacErr = Join-Path $work 'javac-bind-stderr.log'
 & $javac '-encoding' 'UTF-8' '-proc:none' '-nowarn' '-cp' $runtime '-d' $classes `
-    (Join-Path $stubPackage 'HowToGo.java') $mtrSource $snapshotSource $bindSource
-if ($LASTEXITCODE -ne 0) { throw "javac failed on the check with $LASTEXITCODE" }
+    (Join-Path $stubPackage 'HowToGo.java') $mtrSource $snapshotSource $bindSource 2> $javacErr
+if ($LASTEXITCODE -ne 0) {
+    Get-Content $javacErr -ErrorAction SilentlyContinue | Write-Host
+    throw "javac failed on the check with $LASTEXITCODE"
+}
 
 $log = Join-Path $work 'bind-check.log'
 $stderrLog = Join-Path $work 'bind-check.err.log'

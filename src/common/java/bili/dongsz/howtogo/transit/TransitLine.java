@@ -63,6 +63,17 @@ public final class TransitLine {
      */
     private Integer color;
 
+    /**
+     * Which way along {@link #stops} this line may be ridden, and two-way until told otherwise.
+     *
+     * <h2>Why the line carries it rather than the planner</h2>
+     * It is a fact about the service, not about one journey: a one-way loop is one-way for every rider
+     * and for every journey ever planned over it, and it has to survive a save, an import from MTR and
+     * a copy of the line. Everything that says what a line <em>is</em> lives here -- the name, the
+     * kind, the colour, the stops -- and this belongs with them for the same reason.
+     */
+    private LineDirection direction = LineDirection.TWO_WAY;
+
     public TransitLine(String id, String name, RoadClass kind) {
         this.id = id == null || id.isBlank() ? java.util.UUID.randomUUID().toString() : id;
         this.name = name == null ? "" : name;
@@ -157,6 +168,32 @@ public final class TransitLine {
         return Collections.unmodifiableList(stops);
     }
 
+    /**
+     * Which way along {@link #stops()} this line may be ridden.
+     *
+     * <p>What the planner asks before it adds a ride: see {@link LineDirection} for why the line's
+     * order is the direction of a one-way line rather than something stored beside it.
+     */
+    public LineDirection direction() {
+        return direction;
+    }
+
+    /** Whether this line may only be ridden from its first stop towards its last. */
+    public boolean oneWay() {
+        return direction.isOneWay();
+    }
+
+    /**
+     * Sets which ways along the stops this line may be ridden, or clears it to two-way when given null.
+     *
+     * <p>Null is two-way rather than a refusal for the same reason {@link #setKind} ignores a null
+     * kind: a caller with no opinion -- a file written before lines had directions, an imported line
+     * whose reading does not say -- leaves the line answering the way every line used to.
+     */
+    public void setDirection(LineDirection direction) {
+        this.direction = direction == null ? LineDirection.TWO_WAY : direction;
+    }
+
     public int stopCount() {
         return stops.size();
     }
@@ -205,6 +242,32 @@ public final class TransitLine {
     }
 
     /**
+     * Moves a stop to a new block, keeping everything else about it.
+     *
+     * <p>The position of a stop has two owners. It stands on a road node -- a place the player marked
+     * -- and the line calls there; while the line is being built those are the same block, but
+     * afterwards the place is the one that may move, because dragging a station on the map is an edit
+     * to the place and not to the line. A line that kept the block it was handed on the day it was
+     * built would then be a line drawn through where its stops used to be, so the caller that moves a
+     * place has to tell the lines about it. The name and the node id are kept for that reason: they
+     * are what makes the stop still the same stop, and a drag that cost the line its stop names would
+     * make every move a rename.
+     *
+     * @return whether the stop moved, so a caller can leave the store clean when nothing changed
+     */
+    public boolean repositionStop(int index, int x, int z) {
+        if (index < 0 || index >= stops.size()) {
+            return false;
+        }
+        LineStop stop = stops.get(index);
+        if (stop.x() == x && stop.z() == z) {
+            return false;
+        }
+        stops.set(index, new LineStop(stop.nodeId(), stop.name(), x, z));
+        return true;
+    }
+
+    /**
      * Moves a stop one place earlier or later in the calling order.
      *
      * <p>Clamped rather than refused: dragging the first stop up is the same gesture as asking for it
@@ -241,6 +304,9 @@ public final class TransitLine {
         TransitLine copy = new TransitLine(id, name, kind);
         copy.stops.addAll(stops);
         copy.setColor(color);
+        // The direction is part of what the line is, like the colour: a copy of a one-way loop is a
+        // second one-way loop, and a copy that quietly became two-way would be a different service.
+        copy.setDirection(direction);
         return copy;
     }
 }

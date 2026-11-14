@@ -1,9 +1,11 @@
 package bili.dongsz.howtogo.client.xaero.minimap;
 
 import bili.dongsz.howtogo.client.HudDraw;
+import bili.dongsz.howtogo.client.MapFilter;
 import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.RailTrackStore;
+import bili.dongsz.howtogo.client.RoadElementRenderer;
 import bili.dongsz.howtogo.client.RoadRenderContext;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
@@ -77,6 +79,7 @@ public final class XaeroMinimapRouteProvider
         appendProbes(anchorX, anchorZ);
         appendLayers(anchorX, anchorZ);
         appendTransitLines(anchorX, anchorZ);
+        appendTransitLineNames(anchorX, anchorZ);
         appendRoute(anchorX, anchorZ);
         appendMarkers();
     }
@@ -208,6 +211,31 @@ public final class XaeroMinimapRouteProvider
                     stroke.colour(), stroke.points()));
         }
     }
+
+    /**
+     * One name plate per stretch of one named line, in the line's own colour.
+     *
+     * <p>After the line strokes and before the route, so the plate sits over the track it names and
+     * under the trip. The renderer places it with {@code LineNameLabels}, the same helper the world
+     * map, the K screen, the picker, the HUD's mini-map and the phone page use, so a line's badge is
+     * in the same kind of place on every map and at the same size.
+     *
+     * <p>Gated on the player's lines switch, the same condition the world map draws the strokes and
+     * their names under: a plate names a line, and a line that is switched off has nothing for the
+     * plate to name. The elements carry the geometry rather than the renderer reaching into the
+     * stores again, for the reason {@link #begin} gives for the layers.
+     */
+    private void appendTransitLineNames(double anchorX, double anchorZ) {
+        if (!MapFilter.showsLines()) {
+            return;
+        }
+        for (RoadElementRenderer.NamedTransitStroke stroke :
+                RoadElementRenderer.transitLineStrokesFor(Navigation.linesInPlay())) {
+            buffer.add(XaeroMinimapRouteElement.lineNameLayer(anchorX, anchorZ,
+                    stroke.colour(), stroke.points(), stroke.name()));
+        }
+    }
+
     /**
      * The destination and the trip origin.
      *

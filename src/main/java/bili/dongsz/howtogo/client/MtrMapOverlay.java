@@ -38,7 +38,7 @@ import java.util.Map;
  *     .routes                            // List&lt;MapRoute&gt;  -- every line
  *     .tracks                            // List&lt;MapTrack&gt;  -- every rail
  *     .landmarks                         // List&lt;MapLandmark&gt; -- every station, platform, depot
- * MapRoute    .id .name .color .stops    ; MapRoute.Stop  .x .z .stationName .destination
+ * MapRoute    .id .name .color .circular .stops    ; MapRoute.Stop  .x .z .stationName .destination
  * MapTrack    .id .points (List&lt;double[]{x, z}&gt;)
  * MapLandmark .id() .type() .x() .y() .z() .name() .symbol()      // a record
  * </pre>
@@ -140,6 +140,8 @@ final class MtrMapOverlay {
     private static Field routeIdField;
     private static Field routeNameField;
     private static Field routeColorField;
+    /** Whether the route is a loop, as the overlay's own boolean; optional like every addition. */
+    private static Field routeCircularField;
     private static Field routeStopsField;
     private static Field routeTrackIdsField;
     private static Field stopXField;
@@ -407,10 +409,29 @@ final class MtrMapOverlay {
             }
             return new MtrClientData.Line(id, string(routeNameField.get(route)), TRAIN,
                     (int) number(routeColorField.get(route)) & 0xFFFFFF, List.copyOf(stops),
-                    railsOf(route));
+                    railsOf(route), circular(route));
         } catch (ReflectiveOperationException | RuntimeException e) {
             noteUnreadable("line", e);
             return null;
+        }
+    }
+
+    /**
+     * Whether the snapshot says this route is a loop ridden one way round.
+     *
+     * <p>A public field rather than an accessor, because that is the shape the overlay gives it --
+     * {@code MapRoute.circular}. Optional for the same reason every other addition to this reading is:
+     * a version without it loses the direction, never the line, and reads two-way, which is what every
+     * line was before directions existed.
+     */
+    private static boolean circular(Object route) {
+        if (routeCircularField == null) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(routeCircularField.get(route));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
         }
     }
 
@@ -722,6 +743,9 @@ final class MtrMapOverlay {
             routeIdField = route.getField("id");
             routeNameField = route.getField("name");
             routeColorField = route.getField("color");
+            // The route's loop state, as the overlay's own public boolean. Not required: a version
+            // without it reads every line two-way, and the lines themselves are unaffected.
+            routeCircularField = optionalField(route, "circular");
             routeStopsField = route.getField("stops");
             // The rails the route runs along, in the order it runs along them. The one thing MTR's
             // own data never says about a line, and the reason a line read out of the overlay is drawn

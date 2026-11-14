@@ -114,17 +114,18 @@ public final class MainScreen extends Screen {
 
     /**
      * How much of the font a road's sign card is drawn at on this map: the plate and its text alike,
-     * 0.72 of the font.
+     * {@link RoadSigns#FIXED_CARD_SCALE} of the font.
      *
-     * <p>The same fraction, and the same reason, as the destination picker's card. A card at the
-     * font's own size is an opaque coloured plate among ink names, and on a map a couple of hundred
-     * pixels across it is one of the loudest things on it. This map has no label zoom of its own
-     * either -- the map zooms and the text does not -- so the decision is again a constant; 0.72 is
-     * the top of the range the world map's card moves through, because a panel this small cannot
-     * afford the bottom of it. The border stays one screen pixel: at this size it is a rim, not a
-     * share of the plate.
+     * <p>The same fraction, and the same reason, as the destination picker's and the phone page's
+     * cards, and now the same number: the three maps that draw every label at one size share the
+     * constant, because the same road's shield must be the same object on all of them. It used to be
+     * 0.72 of the font, which made the plate bigger than the streets it stood on once its border and
+     * padding were counted; 0.58 keeps the number legible while leaving the card a detail of the road
+     * rather than an object the map is about. This map has no label zoom of its own either -- the map
+     * zooms and the text does not -- so the decision is a constant here as well. The border stays one
+     * screen pixel: at this size it is a rim, not a share of the plate.
      */
-    private static final float SIGN_CARD_SCALE = 0.72F;
+    private static final float SIGN_CARD_SCALE = RoadSigns.FIXED_CARD_SCALE;
 
     /**
      * The least share of the card's scale the mixed card's name line may shrink to.
@@ -193,6 +194,41 @@ public final class MainScreen extends Screen {
      * not walk the road network and measure labels to prove it.
      */
     private static final int MIN_LABEL_MAP_PX = 48;
+
+    /**
+     * The least zoom, in screen pixels per block, at which this map names a public transport line.
+     *
+     * <p>One and a half pixels a block -- the figure the player asked for, in the terms the map
+     * zooms in: the panel then shows a couple of hundred blocks across. A line's name plate is an
+     * opaque capsule the height of a word whatever the zoom does, so a zoomed-out map would be a
+     * band of plates along every line; from here the line is long enough on screen for a plate to be
+     * a name on a stretch of track rather than a band across the city. The world map's own gate is
+     * stated in its pixels per block and this map is a fraction of its size, which is why the two
+     * numbers are not the same one.
+     */
+    private static final double LINE_NAME_MIN_SCALE = 1.5;
+
+    /**
+     * How far above the line a name plate floats, in screen pixels.
+     *
+     * <p>The same figure the world map uses, and for the same reason: a capsule lying on the stroke
+     * would be a second, opaque stroke, while one lifted clear of it leaves the line reading as one
+     * line with a name beside it. In screen pixels rather than blocks because the plate does not grow
+     * with the zoom the way the line's stroke does -- a block offset would be a gap when zoomed out
+     * and a plate sitting on the stroke when zoomed in.
+     */
+    private static final double LINE_NAME_RISE_PX = 7.0;
+
+    /**
+     * The most line name plates this map draws at once.
+     *
+     * <p>A cap rather than a rule about where: the candidate distances and the reservation list
+     * already space the plates out, but a network of half a dozen lines crossing in one view would
+     * still fill the panel with capsules when every one of them found room. Six is a panel's worth of
+     * labels -- the same ceiling the road names' own thinning has by eye -- and past it the plate
+     * that would have been drawn is simply not offered.
+     */
+    private static final int MAX_LINE_NAMES = 6;
 
     private final List<String> notices = new ArrayList<>();
 
@@ -1160,10 +1196,14 @@ public final class MainScreen extends Screen {
         // Public transport lines, over the ground they run on and under the route: the world map
         // draws a line along the track it runs on, but this map has no track to follow, so the line is
         // the chain of the stops it calls at -- which is the fact a passenger reads it for. Half a
-        // footpath's width, because a line marks a service rather than a road.
-        HudDraw.emitTransitLines(sink, Navigation.linesInPlay(), pathM00(), 0, pathM02(), 0,
-                pathM11(), pathM12(), roadHalfWidth(RoadClass.PATH) * 0.5, (int) (0xE0 * open),
-                minX, minY, maxX, maxY);
+        // footpath's width, because a line marks a service rather than a road. The player's own
+        // switch hides them here exactly as it does on the world map: this map used to draw them
+        // whatever the switch said, so a line the player had switched off came back on the K screen.
+        if (MapFilter.showsLines()) {
+            HudDraw.emitTransitLines(sink, Navigation.linesInPlay(), pathM00(), 0, pathM02(), 0,
+                    pathM11(), pathM12(), roadHalfWidth(RoadClass.PATH) * 0.5, (int) (0xE0 * open),
+                    minX, minY, maxX, maxY);
+        }
 
         // The current route over everything, so it reads as the one thing to follow. Drawn in the
         // ink of each stretch: blue where the player walks, green where a car drives, and a line's
@@ -1551,6 +1591,11 @@ public final class MainScreen extends Screen {
      * next one's. Past {@link #LABEL_MIN_SCALE} the card is therefore not drawn and the road
      * shows its name instead: the same fallback a road with no number already gets, so no road loses
      * its label to the zoom.
+     *
+     * <h2>And the lines' names, after both</h2>
+     * The public transport lines' plates are offered what the place names and the road labels left --
+     * see {@link #drawLineNames}. They come last because they are the newest and largest object on
+     * the map and the one that can do without a spot; a road's own label was there first.
      */
     private void drawRoadLabels(GuiGraphics graphics, List<LabelBox> reserved) {
         if (mapW < MIN_LABEL_MAP_PX || mapH < MIN_LABEL_MAP_PX) {
@@ -1708,12 +1753,148 @@ public final class MainScreen extends Screen {
             pose.popPose();
             //?}
         }
+        // The public transport lines' names, last: they are plates in the lines' own colours and they
+        // compete for the room the place names and the road labels have already claimed, so they are
+        // offered what is left rather than being allowed to displace a road's label. Still inside the
+        // map's clip, because a plate is cut at the frame like every other label here.
+        drawLineNames(graphics, reserved, minX, minY, maxX, maxY);
         graphics.disableScissor();
     }
 
     /**
+     * A public transport line's name, as a capsule in the line's own colour above the line.
+     *
+     * <h2>Why a capsule rather than ink along the line</h2>
+     * A road's name belongs to the ground -- it is written along the stroke, at the stroke's angle,
+     * because the road is what it names. A line's name names a service, not the track under it, and
+     * the mod already draws a line's identity as a coloured object with its name in it (in the list,
+     * on a platform sign, on the place card). The capsule is that same object on a map, which is why
+     * it is horizontal whatever the line does and why its rounding is half its height: it must not be
+     * mistaken for a road's sign card, which is a rectangle with small rounded corners.
+     *
+     * <h2>Where the names are offered, and why they are allowed to be missing</h2>
+     * The positions come from {@link LineNameLabels}, the same helper the world map uses: every 160
+     * blocks of the line's drawn track, plus one just outside each end, so the count follows the
+     * length of the line rather than the size of the map. A plate is a fixed size on a map that
+     * zooms, so the whole pass is gated by {@link #LINE_NAME_MIN_SCALE}; and each candidate is
+     * offered to the map's one reservation list, the same one the place names and the road labels
+     * claim from, so a plate can only stand where nothing else already stands. When every candidate
+     * of a line is taken the line goes unnamed -- a plate moved somewhere unrelated to its line
+     * would be worse than no plate. See {@link LineNameLabels} for that argument in full.
+     *
+     * <p>This pass runs after the road labels rather than before them, the order the world map uses:
+     * a line's plate is the newer, larger object and it is the one that can do without a spot, so it
+     * takes what the established labels left rather than pushing them aside.
+     */
+    private void drawLineNames(GuiGraphics graphics, List<LabelBox> reserved,
+                               int minX, int minY, int maxX, int maxY) {
+        if (scale < LINE_NAME_MIN_SCALE || !MapFilter.showsLines()) {
+            // Two answers in one guard because they are the same answer: a plate names a line the map
+            // is not drawing, or is offered at a zoom where there is no room for one.
+            return;
+        }
+        List<RoadElementRenderer.NamedTransitStroke> strokes =
+                RoadElementRenderer.transitLineStrokesFor(Navigation.linesInPlay());
+        double height = LineNameLabels.height(font.lineHeight);
+        if (strokes.isEmpty() || !(height > 0.0)) {
+            return;
+        }
+        // One projection and one fit test for the whole pass: the map does not move between two
+        // candidates, and the reservation list is the same object throughout. The box the fit test
+        // approved is handed back through this array rather than measured again by the caller: a
+        // second measurement could round a corner differently and reserve a box that was not tested.
+        LabelBox[] claimed = new LabelBox[1];
+        LineNameLabels.Screen screen = new LineNameLabels.Screen() {
+            @Override
+            public double screenX(double worldX, double worldZ) {
+                return MainScreen.this.screenX(worldX);
+            }
+
+            @Override
+            public double screenY(double worldX, double worldZ) {
+                return MainScreen.this.screenY(worldZ);
+            }
+
+            @Override
+            public boolean fits(double left, double top, double right, double bottom) {
+                // A plate that reaches past the frame is not offered: unlike a name, half a capsule is
+                // not a plate, and the clip would cut it rather than move it.
+                if (left < minX + 1 || right > maxX - 1 || top < minY + 1 || bottom > maxY - 1) {
+                    return false;
+                }
+                LabelBox box = new LabelBox(left, top, right - left, bottom - top)
+                        .inflated(LABEL_CLEARANCE_PX);
+                for (LabelBox other : reserved) {
+                    if (box.overlaps(other)) {
+                        return false;
+                    }
+                }
+                claimed[0] = box;
+                return true;
+            }
+        };
+        int drawn = 0;
+        for (RoadElementRenderer.NamedTransitStroke stroke : strokes) {
+            double width = LineNameLabels.width(font.width(stroke.name()));
+            if (!(width > 0.0)) {
+                continue;
+            }
+            // The candidate points are worked out in one walk of the line, and each is then placed in
+            // constant time -- see LineNameLabels, which states why the distance form is the wrong
+            // shape for a line read out of MTR.
+            for (LineNameLabels.Candidate candidate : LineNameLabels.candidatePoints(stroke.points())) {
+                claimed[0] = null;
+                double[] spot = LineNameLabels.find(candidate, width, height, LINE_NAME_RISE_PX,
+                        screen);
+                if (spot == null) {
+                    continue;
+                }
+                reserved.add(claimed[0]);
+                drawLineNamePlate(graphics, stroke.name(), spot[0], spot[1], width, height,
+                        stroke.colour());
+                if (++drawn >= MAX_LINE_NAMES) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * One line's name plate: a capsule in the line's colour with the name printed in it.
+     *
+     * <p>The rounding is half the plate's height, so the two ends are semicircles -- deliberately not
+     * the shape a road's sign card is, which is a rectangle with {@link RoadSigns#CARD_CORNER_PX} of
+     * rounding. Both shapes are fills made through the GUI's own batches before their text, which is
+     * what keeps the plate's name the last thing written at that spot. The ink comes from the sign
+     * cards' own contrast rule, so a pale line is lettered dark and a dark line pale without a second
+     * table of colours being kept anywhere.
+     *
+     * <p>The capsule is faded with the screen like the cards: a map arriving would otherwise arrive
+     * with its line names already at full strength.
+     */
+    private void drawLineNamePlate(GuiGraphics graphics, String name, double centreX,
+                                   double centreY, double width, double height, int colour) {
+        int x1 = (int) Math.round(centreX - width / 2.0);
+        int y1 = (int) Math.round(centreY - height / 2.0);
+        int x2 = (int) Math.round(centreX + width / 2.0);
+        int y2 = (int) Math.round(centreY + height / 2.0);
+        if (x2 <= x1 || y2 <= y1) {
+            return;
+        }
+        int background = UiMotion.fade(colour, open);
+        int ink = UiMotion.fade(RoadSigns.ink(colour), open);
+        int radius = Math.max(1, (y2 - y1) / 2);
+        HudDraw.fillRounded(graphics, x1, y1, x2, y2, radius, background);
+        HudDraw.outlineRounded(graphics, x1, y1, x2, y2, radius, ink);
+        drawScaledCardText(graphics, name, centreX,
+                centreY - font.lineHeight * (double) LineNameLabels.NAME_FACTOR / 2.0, ink,
+                LineNameLabels.NAME_FACTOR);
+    }
+
+    /**
      * One road's sign card on this screen's map: the category's colour, a one-pixel contrasting
-     * border, the number centred inside, and in mixed mode the road's name shrunk beneath it.
+     * border on rounded corners, the number centred inside, and in mixed mode the road's name shrunk
+     * beneath it.
      *
      * <p>The same object the destination picker draws, at the same scale and by the same rules: the
      * plate is upright because a sign stands beside the road rather than lying along it, it is
@@ -1793,14 +1974,23 @@ public final class MainScreen extends Screen {
         // arriving card could be lettered in the ink of a different colour.
         int ink = UiMotion.fade(RoadSigns.ink(colour), open);
         int background = UiMotion.fade(colour, open);
-        graphics.fill(left, top, left + cardWidth, bottom, background);
-        // Four one-pixel bars for the border, in the same ink as the text: the rim is a fixed weight
-        // rather than a share of the plate, and one contrast decision made from the background keeps
-        // the card reading as one object.
-        graphics.fill(left, top, left + cardWidth, top + 1, ink);
-        graphics.fill(left, bottom - 1, left + cardWidth, bottom, ink);
-        graphics.fill(left, top + 1, left + 1, bottom - 1, ink);
-        graphics.fill(left + cardWidth - 1, top + 1, left + cardWidth, bottom - 1, ink);
+        // Rounded rather than square: a sign is a printed plate, and a plate's corners are rounded --
+        // on a card this small the four square ones are the sharpest thing on the map. The radius is
+        // the shared {@link RoadSigns#CARD_CORNER_PX}, clamped inside the fill to half the card's own
+        // height, so a card a few pixels tall rounds by less than that instead of becoming a pill.
+        // The line badges draw their capsule with the same corner arithmetic at their own height, so
+        // a plate and a capsule read as two shapes rather than as two roundings.
+        //
+        // Both calls are fills through the GUI's own batches, made before the two strings below for
+        // the reason the whole pass is ordered: a string flushes the buffer it writes to, so a quad
+        // emitted after one would go through a stale consumer.
+        HudDraw.fillRounded(graphics, left, top, left + cardWidth, bottom,
+                RoadSigns.CARD_CORNER_PX, background);
+        // One-pixel rim in the same ink as the text, drawn on the fill's own outline: the two share
+        // the corner arithmetic, so the border follows the rounded corners without a gap at them, and
+        // one contrast decision made from the background keeps the card reading as one object.
+        HudDraw.outlineRounded(graphics, left, top, left + cardWidth, bottom,
+                RoadSigns.CARD_CORNER_PX, ink);
 
         // Both lines are drawn at the card's own scale through the pose, centred on the plate's
         // middle: a scaled font written at an absolute position would be a small word floating in a

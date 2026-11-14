@@ -31,11 +31,13 @@ import java.util.Map;
  *       {@code ROUTES} and {@code RAILS}: what MTR has sent this client, which is the part of the
  *       railway around the player, exactly as 4.x's client reading is;</li>
  *   <li><b>a whole dimension</b> -- {@code mtr.data.RailwayData.getInstance(world)} and its
- *       {@code stations}, {@code platforms} and {@code routes}: the same reading 4.x's
- *       {@code MtrWholeMap} takes from a {@code Simulator}. Its rails are deliberately not read, for
- *       the reason 4.x's whole-map read gives -- the window already has them -- which is also what
- *       keeps this of use on 1.20.1, where the server-to-client sync has no transport yet (see
- *       {@code docs/mtr-versions.md}).</li>
+ *       {@code stations}, {@code platforms}, {@code routes} and {@code rails}: the same reading 4.x's
+ *       {@code MtrWholeMap} takes from a {@code Simulator}. Unlike 4.x's whole-map read, which
+ *       leaves rails out because the window already carries the rails around the player, this one
+ *       reads them too: on 1.20.1 the server-to-client sync has no transport yet (see
+ *       {@code docs/mtr-versions.md}), so the window is the only other reading and it only holds the
+ *       rails near where the player has been. Without the whole dimension's rails, a network the
+ *       player has not walked end to end draws as disconnected pieces.</li>
  * </ul>
  *
  * <h2>Names: two families, one shape</h2>
@@ -57,6 +59,18 @@ import java.util.Map;
  * readings matches rails by id, so one is made up out of the endpoints
  * ({@code "m3:x,y,z|x,y,z:MODE"}), which is stable across readings -- and would be the same id a
  * server-side reading of the same rail produced -- and cannot collide with an id MTR itself hands out.
+ *
+ * <h2>Why the whole map's rails are cached</h2>
+ * Sampling a rail's curve is the one expensive part of a whole-map read: one reflective call per
+ * vertex, up to {@link #WINDOW_MAX_VERTICES} of them per rail, for every rail in the dimension -- and
+ * {@code MtrWholeMap} asks for a whole read every few seconds. So the converted rail list is kept,
+ * together with a cheap content signature of the rail map: a walk over the endpoints and the rail
+ * objects' identities, with no geometry sampled at all. A poll that finds the signature unchanged
+ * reuses the list; one that finds it changed converts the map again. The signature is internal to the
+ * cache -- it is not an id, it never reaches a track, and matching across readings still happens on
+ * {@link #railId}, so caching cannot make two readings disagree about which rail is which. Keeping
+ * the list and the signature rather than MTR's own rail objects means a read still holds nothing of
+ * MTR's after it returns, so nothing of a world outlives the world through this cache.
  */
 public final class Mtr3Data {
 
@@ -114,6 +128,15 @@ public final class Mtr3Data {
     private static Getter stopDestinationGetter;
     private static Method routeDestinationByIndexMethod;
     private static Getter routeHiddenGetter;
+    /**
+     * The circular state of a route, as MTR 3.x might name it.
+     *
+     * <p>Unverified: there is no 3.x jar on this machine, and this member has never been checked
+     * against one -- see the class comment on the two name families. It is therefore optional and
+     * outside {@link #shapesAvailable}: a family without it is still a family this reads, whose lines
+     * simply stay two-way, which is the answer that cannot invent a restriction.
+     */
+    private static Getter routeCircularGetter;
 
     private static Getter railLengthGetter;
     private static Method railPositionMethod;
@@ -156,6 +179,24 @@ public final class Mtr3Data {
     private static Field railwayRoutesField;
     private static Field railwayCacheField;
     private static Method railwayGetInstanceMethod;
+    /** The whole dimension's rails: the public getter when there is one, the private field otherwise. */
+    private static Method railwayRailsMethod;
+    private static Field railwayRailsField;
+
+    // ------------------------------------------------------------------ the rail cache
+
+    /**
+     * The rail list last converted for a whole-map read, and the signature of the map it came from.
+     *
+     * <p>Guarded by the class lock. The owner is held weakly and compared by identity, so this cache
+     * cannot keep a rail map -- and with it a world -- alive after the world is gone; the list itself
+     * holds nothing of MTR's. A stale entry is simply never matched again, and the next whole-map read
+     * replaces it.
+     */
+    private static java.lang.ref.WeakReference<Object> railsCacheOwner;
+    private static long railsCacheSignature;
+    private static boolean railsCached;
+    private static List<MtrSnapshotData.Track> railsCache = List.of();
 
     private static int unreadable;
 
@@ -193,11 +234,18 @@ public final class Mtr3Data {
     }
 
     /**
-     * Every station, platform and line of one simulated dimension, without rails.
+     * Every station, platform, line and rail of one simulated dimension.
      *
-     * <p>This is the whole-map read: rails are deliberately left out for the same reason 4.x's
-     * {@code MtrWholeMap} leaves them out -- the windowed reading already has them, and a whole
-     * railway's geometry is the one part of this that is genuinely large.
+     * <p>This is the whole-map read, and the rails in it are the point: MTR 3.x sends a client only
+     * the rails around the player, so the windowed reading alone leaves the rest of the network
+     * undrawn -- which is the "tracks are broken, some are missing" a player sees. A single-player or
+     * LAN host has the whole network in this process, so this reader takes it from there. The
+     * conversion is cached -- see the class comment -- so only a changed network costs a sampling
+     * pass, and the returned reading still holds nothing of MTR's.
+     *
+     * <p>When this version's rail map cannot be read at all, the reading is the stations, platforms
+     * and lines exactly as before and no track is offered: rails are an addition to this reading, not
+     * a requirement of it.
      */
     public static MtrSnapshotData.Dimension whole(Object railwayData) {
         if (railwayData == null || !bindServer()) {
@@ -209,12 +257,60 @@ public final class Mtr3Data {
             Object routes = fieldValue(railwayRoutesField, railwayData);
             Object cache = fieldValue(railwayCacheField, railwayData);
             Map<?, ?> platformStations = platformStationsOf(cache);
-            return build("", stations, platforms, routes, platformStations,
-                    platformStations != null, null, WINDOW_MAX_VERTICES);
+            // The cheap reading first: if any part of the conversion is unavailable, the rails are
+            // the one part worth not paying for.
+            MtrSnapshotData.Dimension reading = build("", stations, platforms, routes,
+                    platformStations, platformStations != null, null, WINDOW_MAX_VERTICES);
+            List<MtrSnapshotData.Track> tracks;
+            try {
+                tracks = wholeTracks(railsOf(railwayData));
+            } catch (RuntimeException railsUnreadable) {
+                // Rails are an addition to this reading: a rail map that cannot be walked costs the
+                // tracks and nothing else. The reading this reader gave before the rails were read is
+                // still a good reading, and it must not become no reading at all.
+                noteUnreadable("rail map", railsUnreadable);
+                tracks = List.of();
+            }
+            if (tracks.isEmpty()) {
+                return reading;
+            }
+            return new MtrSnapshotData.Dimension(reading.id(), reading.stations(),
+                    reading.platforms(), reading.lines(), tracks);
         } catch (ReflectiveOperationException | RuntimeException e) {
             warnServer(e);
             return null;
         }
+    }
+
+    /**
+     * The rail map a whole dimension's data holds, or null when this version keeps none where a
+     * reader can reach it.
+     *
+     * <p>{@code getRailsMap()} is preferred because asking a public accessor for the map needs no
+     * privileged access at all; the {@code rails} field is the fallback for the builds that have no
+     * getter -- YMTR 3.6.4.2's map is a private final field, and a reader that only knew the getter
+     * would read no rail on the build this is checked against. The field is made accessible once, at
+     * bind time, and a JVM that refuses that is a version this reports unavailable rather than a
+     * failure: the whole-map read then keeps its stations, platforms and lines.
+     */
+    static Object railsOf(Object railwayData) {
+        if (railwayData == null || !bindServer()) {
+            return null;
+        }
+        try {
+            if (railwayRailsMethod != null) {
+                Object rails = railwayRailsMethod.invoke(railwayData);
+                if (rails != null) {
+                    return rails;
+                }
+            }
+            if (railwayRailsField != null) {
+                return railwayRailsField.get(railwayData);
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            noteUnreadable("rail map", e);
+        }
+        return null;
     }
 
     /**
@@ -385,7 +481,7 @@ public final class Mtr3Data {
                 index++;
             }
             return new MtrSnapshotData.Line(number(raw, idGetter), text(raw, nameGetter), mode,
-                    (int) number(raw, colourGetter) & 0xFFFFFF, stops, List.of());
+                    (int) number(raw, colourGetter) & 0xFFFFFF, stops, List.of(), circular(raw));
         } catch (ReflectiveOperationException | RuntimeException e) {
             noteUnreadable("line", e);
             return null;
@@ -407,6 +503,104 @@ public final class Mtr3Data {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether a 3.x route says it is circular, or false when the answer cannot be read.
+     *
+     * <p>MTR 3.x has no simulation core and no {@code CircularState} of the 4.x kind, so what its route
+     * calls a loop is a guess: a boolean field or accessor, or a state enum whose {@code NONE} is a
+     * normal route. Nothing here has been checked against a 3.x jar, which is why every other answer --
+     * including the name not existing at all -- is two-way: that is what every 3.x line was before
+     * directions existed, and the answer that cannot invent a restriction. When a 3.x jar is available,
+     * {@code tools/mtr3-probe} is where these names get confirmed.
+     */
+    private static boolean circular(Object route) {
+        Object value = value(route, routeCircularGetter);
+        if (value instanceof Boolean loop) {
+            return loop;
+        }
+        if (value instanceof Enum<?> constant) {
+            return !"NONE".equals(constant.name());
+        }
+        return false;
+    }
+
+    /**
+     * A whole dimension's rails as tracks, sampling only when the network has changed since the last
+     * whole-map read.
+     *
+     * <p>Package-visible rather than private so that the conversion can be driven from the probe with
+     * real MTR rail objects but no game running, the same as {@link #build}: {@code whole} itself
+     * needs a live {@code RailwayData}.
+     *
+     * <p>The cached list is returned as it is rather than copied. Tracks are immutable records over
+     * arrays nothing in this mod writes to -- see {@code MtrClientData}, which reads them into its own
+     * records without touching the arrays -- so a second reader of an unchanged network is handed the
+     * same value the last one got, which is also what makes it cheap.
+     */
+    static List<MtrSnapshotData.Track> wholeTracks(Object railsRaw) {
+        if (!(railsRaw instanceof Map<?, ?> outer) || !ensureVectorAccessors()) {
+            return List.of();
+        }
+        long signature = railsSignature(outer);
+        synchronized (Mtr3Data.class) {
+            // A weak owner compared by identity: the cache is only ever consulted for the very map it
+            // was built from, so a rail map that a world let go of is not kept alive by this field --
+            // and a signature is never trusted for a different map, whose identity is part of it.
+            if (railsCached && railsCacheOwner != null && railsCacheOwner.get() == railsRaw
+                    && railsCacheSignature == signature) {
+                return railsCache;
+            }
+            List<MtrSnapshotData.Track> tracks = List.copyOf(tracks(railsRaw, WINDOW_MAX_VERTICES));
+            railsCacheOwner = new java.lang.ref.WeakReference<>(railsRaw);
+            railsCacheSignature = signature;
+            railsCache = tracks;
+            railsCached = true;
+            return tracks;
+        }
+    }
+
+    /**
+     * A cheap content signature of a rail map, for deciding whether a cached conversion is current.
+     *
+     * <p>It walks the map's keys and the rail objects' identities, and asks each rail only for its
+     * length -- one cheap call, against the four per sampled vertex that converting the geometry
+     * costs. Replacing a rail, adding one and removing one all change it, and the length is what
+     * catches a rail whose curve was edited in place, which identity alone would miss. A dimension's
+     * map is identified by the map object itself, so two dimensions read one after the other do not
+     * reuse each other's list.
+     *
+     * <p>This is not an id and never becomes one: matching across readings is still {@link #railId}'s
+     * job, which is built from endpoints and mode only. The signature only ever decides whether the
+     * previous conversion can be reused.
+     */
+    private static long railsSignature(Map<?, ?> outer) {
+        long signature = System.identityHashCode(outer);
+        for (Map.Entry<?, ?> byStart : outer.entrySet()) {
+            if (!(byStart.getValue() instanceof Map<?, ?> byEnd)) {
+                continue;
+            }
+            signature = signature * 31 + System.identityHashCode(byStart.getKey());
+            for (Map.Entry<?, ?> one : byEnd.entrySet()) {
+                signature = signature * 31 + System.identityHashCode(one.getValue())
+                        + System.identityHashCode(one.getKey())
+                        + Double.doubleToLongBits(railLengthOf(one.getValue()));
+            }
+        }
+        return signature;
+    }
+
+    /** One rail's length, or 0 when it cannot be read -- a failure worth no cache invalidation. */
+    private static double railLengthOf(Object rail) {
+        if (rail == null || railLengthGetter == null) {
+            return 0.0;
+        }
+        try {
+            return decimal(rail, railLengthGetter);
+        } catch (ReflectiveOperationException | RuntimeException unreadable) {
+            return 0.0;
+        }
     }
 
     private static List<MtrSnapshotData.Track> tracks(Object railsRaw, int maxVertices) {
@@ -614,6 +808,15 @@ public final class Mtr3Data {
                 if (railwayGetInstanceMethod == null) {
                     throw new NoSuchMethodException(type.getName() + ".getInstance");
                 }
+                // Rails are optional: a whole-map reading without them is the reading this reader
+                // used to give, which is still useful. The getter is preferred and the field is the
+                // fallback, so this works both before and after the accessor was added.
+                railwayRailsMethod = methodObject(type, "getRailsMap");
+                railwayRailsField = accessibleField(type, "rails");
+                if (railwayRailsMethod == null && railwayRailsField == null) {
+                    HowToGo.LOGGER.info("[HowToGo] MTR 3.x at {} keeps its rails where this cannot reach "
+                            + "them; the whole-map reading will have no track", type.getName());
+                }
                 serverAvailable = true;
                 HowToGo.LOGGER.info("[HowToGo] MTR 3.x simulated data reachable through {}",
                         type.getName());
@@ -712,6 +915,11 @@ public final class Mtr3Data {
             routeDestinationByIndexMethod = methodObject(routeClass, "getDestination", int.class);
             routeHiddenGetter = fieldOrMethod(routeClass, new String[]{"isHidden", "hidden"},
                     "getHidden", "isHidden");
+            // The loop state of the route: optional, unverified and outside shapesAvailable, so a
+            // family that does not have any of these names still reads -- its lines just stay two-way.
+            routeCircularGetter = fieldOrMethod(routeClass,
+                    new String[]{"circular", "isCircular", "circularState"},
+                    "isCircular", "getCircularState", "getCircular");
 
             railLengthGetter = noArgMethod(railClass, "getLength");
             railPositionMethod = methodObject(railClass, "getPosition", double.class);
@@ -758,6 +966,7 @@ public final class Mtr3Data {
         stopDestinationGetter = null;
         routeDestinationByIndexMethod = null;
         routeHiddenGetter = null;
+        routeCircularGetter = null;
         railLengthGetter = null;
         railPositionMethod = null;
         railModeGetter = null;
@@ -992,6 +1201,36 @@ public final class Mtr3Data {
                 return owner.getField(name);
             } catch (NoSuchFieldException | RuntimeException absent) {
                 // Not this name; the next one is another spelling of the same field.
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A field anywhere up a class chain, made accessible, or null when there is none to read.
+     *
+     * <p>For the members MTR keeps private -- the rails map is one -- {@code getField} cannot find
+     * them, and a reader that gave up at that would read a whole dimension with no track at all. A
+     * JVM or a named module that refuses {@code setAccessible} is answered by null: the caller treats
+     * that field as absent rather than as an error.
+     */
+    private static Field accessibleField(Class<?> owner, String... names) {
+        for (String name : names) {
+            for (Class<?> type = owner; type != null && type != Object.class;
+                 type = type.getSuperclass()) {
+                Field field;
+                try {
+                    field = type.getDeclaredField(name);
+                } catch (NoSuchFieldException | SecurityException | LinkageError absent) {
+                    // Not declared here; an inherited one may be declared further up the chain.
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                } catch (RuntimeException refused) {
+                    return null;
+                }
+                return field;
             }
         }
         return null;

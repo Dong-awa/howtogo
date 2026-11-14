@@ -248,7 +248,7 @@ public final class MtrClientSync {
                         stop.stationName(), stop.destination()));
             }
             lines.add(new MtrClientData.Line(line.id(), line.name(), line.mode(), line.color(),
-                    stops, line.rails()));
+                    stops, line.rails(), line.circular()));
         }
         List<MtrClientData.Track> tracks = new ArrayList<>(dimension.tracks().size());
         for (MtrSnapshotData.Track track : dimension.tracks()) {

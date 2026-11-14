@@ -650,21 +650,27 @@ public final class RoadEditor {
     }
 
     /**
-     * Everything one visit to the road panel edits: name, storey, category and number.
+     * Everything one visit to the road panel edits: name, storey, category, number and direction.
      *
-     * <p>One undo step rather than four, for the same reason {@link #setRoadNameAndLayer} is one:
+     * <p>One undo step rather than five, for the same reason {@link #setRoadNameAndLayer} is one:
      * the player answered one panel, and taking it back should be one press. Every selected road
-     * gets the same four values -- what one field each says -- because a selection is the gesture
+     * gets the same values -- what one field each says -- because a selection is the gesture
      * "do this to all of these".
      *
      * <p>The category is clamped by the segment itself, so a passed category from another class
      * lands on that class's "none" rather than mislabelling the road. Everything is written even
-     * when only one of the four changed: the panel is the source of truth for what the road should
+     * when only one of the five changed: the panel is the source of truth for what the road should
      * be, not a set of independent patches, and a segment that somehow differs from the panel would
      * otherwise keep a value nobody can see.
+     *
+     * <p>The direction is chain-relative and written through {@link #applyChainDirection}, for the
+     * same reason the one-way key is: a road drawn in pieces can have its pieces stored in opposite
+     * directions, and writing {@code FORWARD} onto each piece would make half a bent street one-way
+     * against the other half. {@code null} leaves the direction alone, which is what the older
+     * four-value callers meant.
      */
     public boolean setRoadDetails(int segmentId, String name, int layer, RoadCategory category,
-                                  String number) {
+                                  String number, RoadDirection direction) {
         java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
         if (chains.isEmpty()) {
             return false;
@@ -679,6 +685,9 @@ public final class RoadEditor {
                     segment.setCategory(category);
                     segment.setNumber(number);
                 }
+            }
+            if (direction != null) {
+                applyChainDirection(chain, direction);
             }
         }
         setActiveLayer(layer);

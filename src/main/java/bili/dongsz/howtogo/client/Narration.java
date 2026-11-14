@@ -129,6 +129,14 @@ public final class Narration {
     private static boolean aheadAnnounced;
     /** Whether the "now" line has been spoken for the manoeuvre being announced. */
     private static boolean nowAnnounced;
+    /**
+     * Whether the manoeuvre being announced was already inside the lead distance the first time it
+     * was seen.
+     *
+     * <p>Decides which number the approach line says: the distance the call was detected at, or the
+     * measurement it happened to trip on. See {@link #approachDistance}.
+     */
+    private static boolean aheadInsideLead;
     /** Where the junction the wrong-way call points at is, or NaN when none has been announced. */
     private static double lastUturnX = Double.NaN;
     private static double lastUturnZ = Double.NaN;
@@ -138,6 +146,8 @@ public final class Narration {
     private static boolean uturnAheadAnnounced;
     /** Whether the wrong-way "now" line has been spoken for it. */
     private static boolean uturnNowAnnounced;
+    /** The same first-seen test as {@link #aheadInsideLead}, for the wrong-way junction. */
+    private static boolean uturnAheadInsideLead;
     /** Whether the distance-free U-turn has been spoken for a reading that named no junction. */
     private static boolean uturnPlainAnnounced;
     /**
@@ -461,6 +471,16 @@ public final class Narration {
      * is armed when it becomes the next one, fires the approach line once, fires the "now" line once,
      * and is then quiet until the next manoeuvre takes its place.
      *
+     * <p>The number the approach line says is the detection distance -- the lead distance for the
+     * pace being made -- and not the measurement that happened to trip it. The call fires on the
+     * first tick the junction is inside the lead, which is a different number every time depending
+     * on where the player was standing a tick earlier: "in 97 metres" for a caller whose thresholds
+     * are round hundreds is a measurement read out as guidance, and it is the countdown in the
+     * readout, not the phrase, that has to stay exact. The exception is a manoeuvre first seen
+     * already inside the lead -- the route has just turned into it, or a re-plan has put it
+     * there -- where there is no threshold crossing to report and the distance actually left is the
+     * honest number. See {@link #approachDistance}.
+     *
      * <p>Manoeuvre identity is its position along the route -- {@code distanceAhead} added back to
      * what has been travelled, which is the same number however far along the approach the player
      * has got -- compared with a block of slack for the rounding in that rebasing. The step count is
@@ -471,7 +491,9 @@ public final class Narration {
         if (maneuver == null) {
             return;
         }
-        double alongRoute = maneuver.distanceAhead() + Navigation.travelled();
+        double distance = maneuver.distanceAhead();
+        double lead = Navigation.turnLeadDistance();
+        double alongRoute = distance + Navigation.travelled();
         if (!(Math.abs(alongRoute - lastManeuverAt) <= MANEUVER_ID_SLACK)) {
             // A different junction, so both announcements are news again. The comparison is written
             // as a negation so the first manoeuvre of a trip -- where there is nothing to compare
@@ -479,9 +501,9 @@ public final class Narration {
             lastManeuverAt = alongRoute;
             aheadAnnounced = false;
             nowAnnounced = false;
+            aheadInsideLead = distance <= lead;
         }
 
-        double distance = maneuver.distanceAhead();
         boolean now = distance <= Navigation.turnNowDistance();
         // Wording comes from Navigation, so the voice and the map readout cannot describe the same
         // turn differently -- including when it is a U-turn, which is worded differently again on a
@@ -496,11 +518,39 @@ public final class Narration {
             }
             return;
         }
-        if (aheadAnnounced || distance > Navigation.turnLeadDistance()) {
+        if (aheadAnnounced || distance > lead) {
             return;
         }
         aheadAnnounced = true;
-        announce(Navigation.maneuverSentence(maneuver, false));
+        announce(Navigation.maneuverSentence(
+                atDetectionDistance(maneuver, approachDistance(distance, aheadInsideLead)), false));
+    }
+
+    /**
+     * The distance an approach line says, given the measurement it fired on.
+     *
+     * <p>See {@link #announceTurn}: the detection distance normally, and the measurement itself when
+     * the manoeuvre was already inside the lead when it was first seen.
+     *
+     * @param measured       blocks to the junction at this instant
+     * @param seenInsideLead whether that junction was already inside the lead when it was first seen
+     */
+    private static double approachDistance(double measured, boolean seenInsideLead) {
+        return seenInsideLead ? measured : Navigation.turnLeadDistance();
+    }
+
+    /**
+     * The same manoeuvre, with the distance the spoken line is to report.
+     *
+     * <p>Only the number is replaced: the angle, the road and both name flags are what decide the
+     * sentence, and they must be the ones the readout is looking at. The readout keeps the measured
+     * distance -- it is a countdown, not a phrase -- which is why this is a copy made for the voice
+     * rather than a change to what {@link Navigation#nextManeuver()} answers.
+     */
+    private static Navigation.Instruction atDetectionDistance(Navigation.Instruction maneuver,
+                                                              double distance) {
+        return new Navigation.Instruction(distance, maneuver.turnDegrees(), maneuver.roadName(),
+                maneuver.namesTheRoad(), maneuver.continuesNamedRoad(), maneuver.straight());
     }
 
     /**
@@ -515,23 +565,28 @@ public final class Narration {
     private static void announceUturn(Navigation.Uturn uturn) {
         double junctionX = uturn.junctionX();
         double junctionZ = uturn.junctionZ();
-        if (Math.hypot(junctionX - lastUturnX, junctionZ - lastUturnZ) > MANEUVER_ID_SLACK
+        double distance = uturn.distanceAhead();
+        double lead = Navigation.turnLeadDistance();
+        if (Double.isNaN(lastUturnX)
+                || Math.hypot(junctionX - lastUturnX, junctionZ - lastUturnZ) > MANEUVER_ID_SLACK
                 || uturn.highway() != lastUturnHighway) {
             // A different junction, or the same one under a different rule, so both lines are news
             // again. Written as a comparison against the remembered junction rather than against the
-            // distance, which changes every step and would re-arm on every one of them.
+            // distance, which changes every step and would re-arm on every one of them. The NaN test
+            // is the first call of an episode: the latch is cleared by {@link #resetUturn} on every
+            // tick the call is down, so nothing there is left to compare against.
             lastUturnX = junctionX;
             lastUturnZ = junctionZ;
             lastUturnHighway = uturn.highway();
             uturnAheadAnnounced = false;
             uturnNowAnnounced = false;
+            uturnAheadInsideLead = distance <= lead;
             // The same-text guard is re-armed with the latch. The "now" line carries no distance, so
             // it is the same sentence every time: without this, going the wrong way a second time
             // would be swallowed for being the same words in a row, when the first was minutes ago.
             lastSpoken = null;
         }
 
-        double distance = uturn.distanceAhead();
         boolean now = distance <= Navigation.turnNowDistance();
         if (now) {
             if (!uturnNowAnnounced) {
@@ -543,11 +598,14 @@ public final class Narration {
             }
             return;
         }
-        if (uturnAheadAnnounced || distance > Navigation.turnLeadDistance()) {
+        if (uturnAheadAnnounced || distance > lead) {
             return;
         }
         uturnAheadAnnounced = true;
-        announce(Navigation.uturnSentence(distance, false, uturn.highway()));
+        // The same detection-distance rule as the ordinary turn line, and for the same reason: the
+        // distance the call fired on is a measurement, and the line is guidance.
+        announce(Navigation.uturnSentence(approachDistance(distance, uturnAheadInsideLead), false,
+                uturn.highway()));
     }
 
     /**
@@ -561,6 +619,7 @@ public final class Narration {
         lastUturnZ = Double.NaN;
         uturnAheadAnnounced = false;
         uturnNowAnnounced = false;
+        uturnAheadInsideLead = false;
         uturnPlainAnnounced = false;
     }
 
@@ -635,6 +694,12 @@ public final class Narration {
         }
         if (step.cue() == Navigation.TransitCue.ALIGHT) {
             // Said on the approach, once, and never made truer by saying it again closer in.
+            //
+            // The detection-distance rule the turn and wrong-way lines follow has nothing to change
+            // here: the transit lines carry no distance at all. The readout has a slot of its own for
+            // the number beside them, and a phrase about a stop is about the stop -- "arriving at X"
+            // is just as true at the lead distance as it is a tick later. What the rule exists for
+            // is a measurement read out as guidance, and there is no measurement in these words.
             if (transitAheadAnnounced || step.distanceAhead() > Navigation.turnLeadDistance()) {
                 return;
             }
@@ -822,6 +887,7 @@ public final class Narration {
         lastManeuverAt = Double.NaN;
         aheadAnnounced = false;
         nowAnnounced = false;
+        aheadInsideLead = false;
     }
 
     /** Forgets everything that was said: the state belongs to a trip that is over or switched off. */

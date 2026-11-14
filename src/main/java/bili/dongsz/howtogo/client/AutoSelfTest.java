@@ -1,6 +1,8 @@
 package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.road.RoadEditor;
+import bili.dongsz.howtogo.road.RoadSegment;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 
@@ -81,7 +83,11 @@ public final class AutoSelfTest {
             // report line followed by a quit would close the window before the picture is taken.
             HowToGo.LOGGER.info("[HowToGo] rig | opening {} for a screenshot",
                     System.getProperty(SCREEN_PROPERTY, "").trim());
+            //? if >=26.2 {
+            /*Minecraft.getInstance().gui.setScreen(screen);
+            *///?} else {
             minecraft.setScreen(screen);
+            //?}
             return;
         }
         report();
@@ -103,12 +109,45 @@ public final class AutoSelfTest {
             case "destination" -> new DestinationScreen(null);
             case "settings" -> new SettingsScreen(null);
             case "categories" -> new RoadCategoryScreen(null);
+            // The road editor over a real road of the loaded world: the row a screenshot cannot
+            // otherwise reach, because opening it needs an editor selection and a key press.
+            case "roadpanel" -> roadPanel();
             default -> {
                 HowToGo.LOGGER.warn("[HowToGo] rig | no screen called '{}'; the picture will be of"
                         + " the world", raw);
                 yield null;
             }
         };
+    }
+
+    /**
+     * The road panel on the first road of the loaded world, or the main screen when there is none.
+     *
+     * <p>The panel is opened exactly as the map opens it -- current name, storey, category, number and
+     * the chain's direction -- so a picture of it is a picture of the real thing rather than of a
+     * panel built with placeholder values. The apply callback writes nothing: this is a screenshot,
+     * not an edit, and a click on Done must not change the world under the player.
+     */
+    private static Screen roadPanel() {
+        // A one-way road when the world has one: the direction row is the reason this screen exists in
+        // the rig, and a picture of it saying "双向" would not show what the row can say.
+        RoadSegment segment = null;
+        for (RoadSegment candidate : RoadStore.get().segmentsSnapshot()) {
+            if (segment == null || candidate.oneWay()) {
+                segment = candidate;
+            }
+            if (candidate.oneWay()) {
+                break;
+            }
+        }
+        if (segment == null) {
+            HowToGo.LOGGER.warn("[HowToGo] rig | the world has no road to open the panel on");
+            return new MainScreen();
+        }
+        RoadEditor editor = RoadEditSession.editor();
+        return new RoadNameScreen(null, RoadNameScreen.TITLE_ROAD, segment.name(), segment.layer(),
+                segment.category(), segment.number(), editor.chainDirection(segment.id()),
+                40.0, 40.0, (name, layer, category, number, direction) -> { });
     }
 
     /**

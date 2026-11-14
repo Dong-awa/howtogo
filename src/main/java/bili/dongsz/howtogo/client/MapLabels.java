@@ -62,11 +62,53 @@ final class MapLabels {
                           int argb) {
         graphics.fill(x1, y1, x2, y2, argb);
     }
+
+    static void fillRoundedOnMap(xaero.map.element.MapElementGraphics graphics, int x1, int y1, int x2,
+                                 int y2, int radius, int argb) {
+        for (int y = y1; y < y2; y++) {
+            int inset = RoadSigns.roundedInset(y, y1, y2, radius);
+            graphics.fill(x1 + inset, y, x2 - inset, y + 1, argb);
+        }
+    }
+
+    static void outlineRoundedOnMap(xaero.map.element.MapElementGraphics graphics, int x1, int y1,
+                                    int x2, int y2, int radius, int argb) {
+        for (int y = y1; y < y2; y++) {
+            int inset = RoadSigns.roundedInset(y, y1, y2, radius);
+            if (y == y1 || y == y2 - 1) {
+                graphics.fill(x1 + inset, y, x2 - inset, y + 1, argb);
+            } else {
+                graphics.fill(x1 + inset, y, x1 + inset + 1, y + 1, argb);
+                graphics.fill(x2 - inset - 1, y, x2 - inset, y + 1, argb);
+            }
+        }
+    }
     *///?}
     //? if <1.21.6 {
     static void fillOnMap(net.minecraft.client.gui.GuiGraphics graphics, int x1, int y1, int x2, int y2,
                           int argb) {
         graphics.fill(x1, y1, x2, y2, argb);
+    }
+
+    static void fillRoundedOnMap(net.minecraft.client.gui.GuiGraphics graphics, int x1, int y1, int x2,
+                                 int y2, int radius, int argb) {
+        for (int y = y1; y < y2; y++) {
+            int inset = RoadSigns.roundedInset(y, y1, y2, radius);
+            graphics.fill(x1 + inset, y, x2 - inset, y + 1, argb);
+        }
+    }
+
+    static void outlineRoundedOnMap(net.minecraft.client.gui.GuiGraphics graphics, int x1, int y1,
+                                    int x2, int y2, int radius, int argb) {
+        for (int y = y1; y < y2; y++) {
+            int inset = RoadSigns.roundedInset(y, y1, y2, radius);
+            if (y == y1 || y == y2 - 1) {
+                graphics.fill(x1 + inset, y, x2 - inset, y + 1, argb);
+            } else {
+                graphics.fill(x1 + inset, y, x1 + inset + 1, y + 1, argb);
+                graphics.fill(x2 - inset - 1, y, x2 - inset, y + 1, argb);
+            }
+        }
     }
     //?}
 }

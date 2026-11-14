@@ -4,6 +4,7 @@ import bili.dongsz.howtogo.place.PlaceDetails;
 import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadCategory;
+import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import net.minecraft.client.Minecraft;
@@ -50,17 +51,19 @@ import java.util.function.Predicate;
  * in a field (rather than in the widget alone) is what makes the round trip through the dialog lossless
  * -- the dialog replaces this screen, and {@code init} runs again on the way back.
  *
- * <h2>Why a road's four values are one panel</h2>
- * A road is named, put on a storey, classified and given a number in one visit, because they are one
- * answer to "what is this road": the storey says which level of the world it runs on, the category says
- * which kind of highway or street it is, and the number is the plate the map prints inside the
- * category's sign. Splitting the classification into a second screen would mean a player could name a
- * road and never find the other half of it, which is the same reason the storey lives here rather than
- * on a key of its own.
+ * <h2>Why a road's five values are one panel</h2>
+ * A road is named, put on a storey, classified, given a number and told which way it runs in one visit,
+ * because they are one answer to "what is this road": the storey says which level of the world it runs
+ * on, the category says which kind of highway or street it is, the number is the plate the map prints
+ * inside the category's sign, and the direction says whether it is a street or a one-way lane. Splitting
+ * the classification into a second screen would mean a player could name a road and never find the other
+ * half of it, which is the same reason the storey lives here rather than on a key of its own -- and it is
+ * why the one-way state is here too: it used to be reachable only by the {@code O} key on the map, which
+ * is a control a player has to be told about, while this panel is where a road is described.
  *
- * <p>The category is a stepper rather than an open list: one class has only a handful of categories,
- * the panel has no room for a list dropped over the map, and stepping is one click either way. Its two
- * halves, the up and down keys and the mouse wheel all step it, so a player who has found one of those
+ * <p>The category and the direction are steppers rather than open lists: one class has only a handful of
+ * categories, the panel has no room for a list dropped over the map, and stepping is one click either
+ * way. Their two halves and the mouse wheel both step them, so a player who has found one of those
  * routes finds the others work too. The number is free text because real roads are not numbered with an
  * integer alone -- see {@link RoadSegment#number()}.
  *
@@ -101,17 +104,20 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * What a committed road edit hands back: the name, the storey, the category and the number.
+     * What a committed road edit hands back: the name, the storey, the category, the number and the
+     * direction.
      *
      * <p>One callback for the whole panel rather than a consumer per row, for the same reason
-     * {@link PlaceApply} is one: the four values are a single answer to a single visit, and a caller
+     * {@link PlaceApply} is one: the five values are a single answer to a single visit, and a caller
      * that had to patch them in separately could save half an edit. The number is null when the
      * chosen category is its class's built-in one -- an unclassified road wears no sign
      * ({@link RoadSegment#hasSign()}), so the panel drops what was typed in the disabled field rather
-     * than storing a plate nothing will ever draw.
+     * than storing a plate nothing will ever draw. The direction is chain-relative, exactly as
+     * {@link bili.dongsz.howtogo.road.RoadEditor#setChainDirection} takes it.
      */
     public interface RoadApply {
-        void accept(String name, int layer, RoadCategory category, String number);
+        void accept(String name, int layer, RoadCategory category, String number,
+                    RoadDirection direction);
     }
 
     private static final int FIELD_WIDTH = 190;
@@ -220,6 +226,24 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
      */
     private RoadCategory selectedCategory;
 
+    /**
+     * The direction the edited road runs, which is the chain's own direction rather than the piece's.
+     *
+     * <p>Asked of the chain when the panel opens ({@link RoadEditSession#promptRoadName} passes it in),
+     * because a bent street is several segments and the piece under the cursor says nothing about the
+     * street: a player looking at one bend of a one-way road has to see the road's answer. A field
+     * rather than only a widget, because this row is drawn and hit-tested by hand and the choice has to
+     * survive {@code init} running again on a window resize.
+     */
+    private RoadDirection selectedDirection;
+
+    /**
+     * One hover slide per half of the direction row's box, for the same reason the category row keeps
+     * one per half: the two halves step opposite ways, and a single face lighting up would say "this is
+     * clickable" without saying which way it goes.
+     */
+    private final UiMotion.Slides directionHovers = new UiMotion.Slides();
+
     private PlaceKind selectedKind;
     /**
      * The details as edited so far, which is not the store's yet.
@@ -297,7 +321,7 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * A road: its name, storey, category and number, edited as one thing.
+     * A road: its name, storey, category, number and direction, edited as one thing.
      *
      * <p>Together because they are one gesture -- point at a road, say what it is -- and because the
      * storey and the category are invisible on a map that cannot show height or a classification on
@@ -313,13 +337,16 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
      * such a road looks like is the class's built-in category -- which is also where the panel has to
      * open, or the first step would compare itself against a value the picker does not hold.
      *
-     * @param initialLayer    the storey the road is on now, which the field starts at
-     * @param initialCategory the category the road carries now; null and a category the store no
-     *                        longer defines both open the panel on the class's built-in category
-     * @param initialNumber   the number the road carries now, or null when it has none
+     * @param initialLayer     the storey the road is on now, which the field starts at
+     * @param initialCategory  the category the road carries now; null and a category the store no
+     *                         longer defines both open the panel on the class's built-in category
+     * @param initialNumber    the number the road carries now, or null when it has none
+     * @param initialDirection the way the whole road runs now, as the chain's own direction -- see
+     *                         {@link bili.dongsz.howtogo.road.RoadEditor#chainDirection}
      */
     public RoadNameScreen(Screen parent, String titleKey, String initialValue, int initialLayer,
                           RoadCategory initialCategory, String initialNumber,
+                          RoadDirection initialDirection,
                           double anchorX, double anchorY, RoadApply onAcceptRoad) {
         super(Component.translatable(titleKey));
         this.parent = parent;
@@ -338,6 +365,8 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
         RoadCategory category = RoadCategoryStore.normalise(initialCategory);
         this.initialNumber = initialNumber;
         this.initialLayer = initialLayer;
+        this.selectedDirection = initialDirection == null
+                ? RoadDirection.TWO_WAY : initialDirection;
         // The store's own order, the built-in category first: copied so that a category added while
         // the panel is open cannot appear under a step the player is in the middle of.
         this.categories = List.copyOf(RoadCategoryStore.ofClass(category.roadClass()));
@@ -423,10 +452,10 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
         }
         if (isRoadEditor()) {
             // Measured from the real heights rather than from the nominal row height: the storey box
-            // and the number box are FIELD_HEIGHT tall, and the category box between them is
-            // CATEGORY_HEIGHT, so the panel's height is the sum of what is actually drawn.
+            // and the number box are FIELD_HEIGHT tall, and the category and direction boxes between
+            // them are CATEGORY_HEIGHT, so the panel's height is the sum of what is actually drawn.
             return FIELD_HEIGHT + ROW_GAP + CATEGORY_HEIGHT + ROW_GAP + FIELD_HEIGHT
-                    + PANEL_PAD + ERROR_HEIGHT;
+                    + ROW_GAP + CATEGORY_HEIGHT + PANEL_PAD + ERROR_HEIGHT;
         }
         return 0;
     }
@@ -566,7 +595,7 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
                         RoadSegment.MIN_LAYER, RoadSegment.MAX_LAYER);
                 return;
             }
-            // All four values go back in one call: they were asked for in one panel, and the caller
+            // All five values go back in one call: they were asked for in one panel, and the caller
             // writes them as one undo step. The number is the typed text under a real category and
             // null under the built-in one: an unclassified road has no plate to print a number on
             // ({@link RoadSegment#hasSign()}), so keeping the text would store a value the map never
@@ -574,7 +603,8 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             // player had already been told the road has no number.
             String plate = selectedCategory.isNone() || numberField == null
                     ? null : numberField.getValue();
-            onAcceptRoad.accept(field.getValue(), layer, selectedCategory, plate);
+            onAcceptRoad.accept(field.getValue(), layer, selectedCategory, plate,
+                    selectedDirection);
             committed = true;
             onClose();
             return;
@@ -631,9 +661,21 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
         return extraRowY() + FIELD_HEIGHT + ROW_GAP;
     }
 
-    /** Where the number box sits: under the category row, the last row above the error line. */
+    /** Where the number box sits: under the category row, above the one-way row. */
     private int numberRowY() {
         return categoryRowY() + CATEGORY_HEIGHT + ROW_GAP;
+    }
+
+    /**
+     * Where the one-way row sits: the last row above the error line.
+     *
+     * <p>After the number rather than before the category: the four values above it are what a road is
+     * called and where it runs, and the direction is a rule about travel along it -- the last question
+     * of the visit, and the one whose two chevrons are the only control here that is not a text field,
+     * so it reads best at the foot of the fields.
+     */
+    private int directionRowY() {
+        return numberRowY() + FIELD_HEIGHT + ROW_GAP;
     }
 
     /** Where the detail rows' labels end and their controls begin. */
@@ -658,7 +700,7 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             return moreY() + MORE_HEIGHT + 1;
         }
         if (isRoadEditor()) {
-            return numberRowY() + FIELD_HEIGHT + 1;
+            return directionRowY() + CATEGORY_HEIGHT + 1;
         }
         return extraRowY() + TYPE_HEIGHT + 1;
     }
@@ -749,6 +791,75 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             return;
         }
         numberField.setEditable(!selectedCategory.isNone());
+    }
+
+    // ---------------------------------------------------------- one-way row
+
+    /** Whether the point is on the one-way row's box, which is the whole of that row's control. */
+    private boolean overDirection(double mouseX, double mouseY) {
+        int x = detailX();
+        int y = directionRowY();
+        return mouseX >= x && mouseX < x + detailWidth()
+                && mouseY >= y && mouseY < y + CATEGORY_HEIGHT;
+    }
+
+    /**
+     * Steps the one-way state by one: two-way, along the road, against it, two-way.
+     *
+     * <p>The same three-state cycle the {@code O} key walks, deliberately: the two controls act on the
+     * same value, so a player who learned the order from one of them reads the other without a second
+     * table of what comes next. The state is chain-relative ({@link RoadDirection#FORWARD} is along the
+     * road as the editor walked it), which is what {@link bili.dongsz.howtogo.road.RoadEditor} writes
+     * onto every piece, so a bent street stays one street.
+     */
+    private void stepDirection(int delta) {
+        selectedDirection = delta > 0 ? selectedDirection.next()
+                : selectedDirection.next().next();
+        error = null;
+    }
+
+    /**
+     * The one-way row: the label, and a box whose two halves step the state.
+     *
+     * <p>Its own row rather than a third route to the {@code O} key: the key is a map shortcut a player
+     * has to be told about, while the panel is where a road is described, and a player who opened this
+     * panel to classify a road should not have to close it and learn a key to make the road one-way.
+     * The box is the same control the category row uses, so the two rows read as the same kind of thing
+     * rather than as a button and a value.
+     */
+    private void drawDirectionRow(GuiGraphics graphics, int mouseX, int mouseY) {
+        int y = directionRowY();
+        drawDetailLabel(graphics, "screen.howtogo.road_direction", y, CATEGORY_HEIGHT);
+
+        int x = detailX();
+        int width = detailWidth();
+        boolean over = overDirection(mouseX, mouseY);
+        boolean overLeft = over && mouseX < x + width / 2;
+        boolean overRight = over && mouseX >= x + width / 2;
+        float litLeft = directionHovers.get(0).to(overLeft ? 1.0F : 0.0F).eased();
+        float litRight = directionHovers.get(1).to(overRight ? 1.0F : 0.0F).eased();
+        int face = UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(),
+                Math.max(litLeft, litRight));
+        HudDraw.fillRounded(graphics, x, y, x + width, y + CATEGORY_HEIGHT, 3,
+                UiMotion.fade(face, open));
+
+        int textY = y + (CATEGORY_HEIGHT - 8) / 2;
+        graphics.drawString(this.font, "<", x + 3, textY,
+                UiMotion.fade(UiMotion.mix(UiTheme.textFaint(), UiTheme.textSecondary(), litLeft),
+                        open), false);
+        graphics.drawString(this.font, ">", x + width - 3 - this.font.width(">"), textY,
+                UiMotion.fade(UiMotion.mix(UiTheme.textFaint(), UiTheme.textSecondary(), litRight),
+                        open), false);
+
+        // The direction's own colour rather than a category swatch: there is no marker to print here,
+        // and a road that is one-way is drawn with arrows in the map's own ink, so the word is the
+        // whole readout. It is centred in the room the two chevrons leave.
+        String label = Component.translatable("hud.howtogo.direction." + selectedDirection.id())
+                .getString();
+        String shown = PlaceText.ellipsis(this.font, label, width - 24 - 11);
+        graphics.drawString(this.font, shown,
+                x + (width - this.font.width(shown)) / 2, textY,
+                UiMotion.fade(UiTheme.text(), open), false);
     }
 
     /**
@@ -910,6 +1021,12 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             stepCategory(mouseX < detailX() + detailWidth() / 2 ? -1 : 1);
             return true;
         }
+        if (isRoadEditor() && button == MouseButton.LEFT && overDirection(mouseX, mouseY)) {
+            // The same two halves, stepping the three one-way states: a press on this row is consumed
+            // before the widgets are offered it, for the same reason as the category row.
+            stepDirection(mouseX < detailX() + detailWidth() / 2 ? -1 : 1);
+            return true;
+        }
         if (isPlaceEditor() && button == MouseButton.LEFT) {
             PlaceKind[] kinds = PlaceKind.values();
             for (int i = 0; i < kinds.length; i++) {
@@ -1003,6 +1120,11 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             stepCategory(scrollY > 0 ? -1 : 1);
             return true;
         }
+        if (isRoadEditor() && scrollY != 0 && overDirection(mouseX, mouseY)) {
+            // The same reading as the category: up goes back through the three states, down goes on.
+            stepDirection(scrollY > 0 ? -1 : 1);
+            return true;
+        }
         //? if >=1.20.2 {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         //?} else {
@@ -1078,6 +1200,7 @@ public final class RoadNameScreen extends Screen implements ParentBackdrop {
             drawLayerRow(graphics);
             drawCategoryRow(graphics, mouseX, mouseY);
             drawNumberRow(graphics);
+            drawDirectionRow(graphics, mouseX, mouseY);
         }
         if (error != null) {
             graphics.drawString(this.font, error.getString(), fieldX, errorY(),

@@ -559,10 +559,14 @@ public final class RoadEditSession {
         if (segment == null) {
             return;
         }
+        // The direction asked of the chain, not of the piece under the cursor: a bent street is several
+        // segments whose stored directions may differ, and the panel has to open on the answer the map
+        // and the one-way key would give for the street.
+        RoadDirection direction = editor().chainDirection(segmentId);
         promptName(RoadNameScreen.TITLE_ROAD, segment.name(), segment.layer(), segment.category(),
-                segment.number(), mouseScreenX(), mouseScreenZ(),
-                (name, layer, category, number) ->
-                        editor().setRoadDetails(segmentId, name, layer, category, number));
+                segment.number(), direction, mouseScreenX(), mouseScreenZ(),
+                (name, layer, category, number, oneWay) ->
+                        editor().setRoadDetails(segmentId, name, layer, category, number, oneWay));
     }
 
     /**
@@ -919,7 +923,7 @@ public final class RoadEditSession {
     }
 
     /**
-     * The same, for a road: its name, storey, category and number handed back together.
+     * The same, for a road: its name, storey, category, number and direction handed back together.
      *
      * <p>Deliberately deferred for the same reason as the name prompt: opening a screen from the input
      * handler is what makes a key look dead, and the tick of delay is the difference between a field
@@ -927,17 +931,17 @@ public final class RoadEditSession {
      *
      * <p>The mark is dirtied here rather than by the caller's own write, so the one place that opens
      * this panel is also the one place that says the store needs saving -- a road edit is one write,
-     * whichever of the four values changed.
+     * whichever of the five values changed.
      */
     private static void promptName(String titleKey, String initial, int layer, RoadCategory category,
-                                   String number, double anchorX, double anchorY,
-                                   RoadNameScreen.RoadApply apply) {
+                                   String number, RoadDirection direction, double anchorX,
+                                   double anchorY, RoadNameScreen.RoadApply apply) {
         pendingAction = () -> {
             Screen parent = Screens.current();
             Screens.set(
-                    new RoadNameScreen(parent, titleKey, initial, layer, category, number, anchorX,
-                            anchorY, (name, storey, chosen, plate) -> {
-                                apply.accept(name, storey, chosen, plate);
+                    new RoadNameScreen(parent, titleKey, initial, layer, category, number, direction,
+                            anchorX, anchorY, (name, storey, chosen, plate, oneWay) -> {
+                                apply.accept(name, storey, chosen, plate, oneWay);
                                 RoadStore.markDirty();
                             }));
         };
@@ -1596,12 +1600,32 @@ public final class RoadEditSession {
             // The autosave is debounced, so flagging every frame only delays the write until the
             // drag actually stops.
             RoadStore.markDirty();
+            // The line data travels with the place it stands on: a stop stores the block it was
+            // built at, and a drag is the one edit in which that block stops being true a block at a
+            // time. Read back from the node rather than from the snap, because the node's block is
+            // the truth a stop has to match -- the round of a cursor position and the block the
+            // editor actually moved to can differ, and a stop a block off its own place is a stop the
+            // planner boards at nowhere. The store compares before it flags anything, so a frame that
+            // moves the node less than a block changes no stop and marks nothing.
+            RoadNode moved = RoadStore.get().node(draggingNodeId);
+            if (moved != null) {
+                TransitLineStore.updateStopsForNode(moved.id(), moved.x(), moved.z());
+            }
         }
     }
 
     public static void endDrag() {
-        if (draggingNodeId != RoadSegment.NO_NODE) {
+        int nodeId = draggingNodeId;
+        if (nodeId != RoadSegment.NO_NODE) {
             RoadStore.markDirty();
+            // The release is the gesture's last word, and covers the frames in which no sync ran: a
+            // drag whose node was replaced while it was held, or one that ended before updateDrag
+            // drew another frame. The stop is put on the node's actual block rather than on the
+            // cursor, for the reason updateDrag gives.
+            RoadNode node = RoadStore.get().node(nodeId);
+            if (node != null) {
+                TransitLineStore.updateStopsForNode(node.id(), node.x(), node.z());
+            }
         }
         draggingNodeId = RoadSegment.NO_NODE;
     }
@@ -1639,12 +1663,21 @@ public final class RoadEditSession {
         forgetToggleUndo();
         editor().undo();
         RoadStore.markDirty();
+        // Undo swapped in a snapshot of the whole network, so every place in it is at the block it
+        // was at when the snapshot was taken -- a station that was dragged and then taken back
+        // springs back with no move of its own to carry the news to the line that calls there. No
+        // per-frame path runs after a key press, so every stop is re-read from its place here; redo
+        // does the same because it springs the place forward again. See
+        // TransitLineStore#syncStationStops.
+        TransitLineStore.syncStationStops();
     }
 
     public static void redo() {
         forgetToggleUndo();
         editor().redo();
         RoadStore.markDirty();
+        // The other direction of the same reconciliation -- see undo().
+        TransitLineStore.syncStationStops();
     }
 
     /** Best available ground height: the player's Y, or sea level. */

@@ -29,6 +29,7 @@ reading the config file's comments". That leaves five groups:
 | Routing and travel | Transit wait per boarding | `transit_wait_seconds` | `60` | average wait used in estimates |
 | Routing and travel | Walk off-road distance | `walk_offroad_blocks` | `32` | how far a walk may cross between two different roads' ends |
 | Routing and travel | Station snap distance | `station_snap_blocks` | `32` | how close counts as at the stop |
+| Routing and travel | Straight-through junction calls | `straight_announcements` | `true` | call a real junction the route carries straight through: distance on the approach, "go straight" as you reach it |
 | Map data sources | Read Create train tracks | `create_train_tracks` | `true` | Create's tracks/stations layer |
 | Map data sources | Read MTR stations and lines | `mtr_transit` | `true` | MTR as transit data |
 | Map data sources | Read MTR's whole railway | `mtr_full_map` | `true` | while hosting, instead of the sent window |
@@ -43,10 +44,14 @@ Everything else stays in the file. In particular:
   the player defines them (add, delete, rename, recolour), so they get a page of their own behind the
   appearance group (`RoadCategoryScreen`, with the colour picker in `RoadCategoryColorScreen`) rather
   than rows on this screen.
-- **Route preference, avoided classes, prefer-major-roads, voice and transit-board-only** are
-  shadowed by `config/howtogo/route_preferences.json`, which the destination picker writes: editing
-  the config value would be a visible no-op on any install where the picker has been used. The
-  picker is the right place for them.
+- **Route preference, avoided classes, prefer-major-roads, voice, transit-board-only and
+  straight-through calls** are shadowed by `config/howtogo/route_preferences.json`, which the
+  destination picker writes: editing the config value would be a visible no-op on any install where
+  the picker has been used. The picker is the right place for the first five. Straight-through calls
+  are the exception that proves the rule: the switch **is** on this screen (Routing and travel), and
+  its row writes the preference store directly rather than the config, which is why it is the one row
+  here whose save does not go through `RoadConfig`'s setters. The config value is the declared
+  default it falls back to when the store has no saved answer.
 - **Create track ids, scan radius and chunk budget**, **MTR Map Overlay / server sync / station merge
   / auto route marks**, **RoadWeaver road class / full map / structures / routing** and
   **on-road tolerance** are tuning values for a world's data and its cost, not daily switches.
@@ -89,6 +94,7 @@ screen or the game after an edit loses nothing. There is no Apply button.
 | road category names/colours (the other page; its own store) | next frame, and every map redrawn after it |
 | Create / MTR / RoadWeaver read switches | next client tick (the layers are read per tick) |
 | fallback, transit mixed, walk off-road, station snap, transit wait | next route plan or guidance decision |
+| straight-through junction calls | next frame: the manoeuvre list is rebuilt when the switch differs from the one it was built for, with no re-plan (the road under the player has not changed) |
 | default travel mode | immediately if the player has not switched mode this session; otherwise it is the default next session (the session's choice is not taken away) |
 | browser map auto-start | next world load; turning it off does not stop a server that is already running |
 

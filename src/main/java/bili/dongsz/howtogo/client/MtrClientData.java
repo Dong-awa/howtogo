@@ -55,6 +55,7 @@ import java.util.Map;
  * NameColorDataBase.getId() / getName() / getColor() / getTransportMode()
  * AreaBase.getCenter() / getMinX() .. getMaxZ()          // a station's area
  * SimplifiedRoute.getPlatforms()                          // the stops, in order
+ * SimplifiedRoute.getCircularState()                      // NONE / CLOCKWISE / ANTICLOCKWISE
  * SimplifiedRoutePlatform.getPlatformId() / getStationId() / getStationName()
  * RailWrapper.getRail() / .hexId ; Rail.railMath ; RailMath.getLength() / getPosition(double, boolean)
  * </pre>
@@ -143,6 +144,8 @@ public final class MtrClientData {
     private static Method routeGetIdMethod;
     private static Method routeGetNameMethod;
     private static Method routeGetColorMethod;
+    /** The route's circular state, optional: a version without it reads every line two-way. */
+    private static Method routeGetCircularStateMethod;
     private static Method railGetTransportModeMethod;
     private static Method getCenterMethod;
     private static Method getMinXMethod;
@@ -201,9 +204,14 @@ public final class MtrClientData {
      *
      * @param rails MTR's own ids for the rails this line runs along, in the order it runs along them,
      *              or an empty list when the reading does not say. See {@link #rails()}.
+     * @param circular MTR's own fact about the route -- it is a loop, which is ridden one way round.
+     *                 This is not this mod's direction: the translation happens once, in
+     *                 {@code MtrTransit.buildLines}, so the readers do not each decide what a loop
+     *                 means. False when the reading cannot say, which is the answer that cannot
+     *                 invent a restriction.
      */
     public record Line(long id, String name, String mode, int color, List<Stop> stops,
-                       List<String> rails) {
+                       List<String> rails, boolean circular) {
 
         /** The rails are absent more often than not, and an absent list is not a null one. */
         public Line {
@@ -218,7 +226,18 @@ public final class MtrClientData {
          * out here. See {@link MtrLineTracks}.
          */
         public Line(long id, String name, String mode, int color, List<Stop> stops) {
-            this(id, name, mode, color, stops, List.of());
+            this(id, name, mode, color, stops, List.of(), false);
+        }
+
+        /**
+         * A line from a reading that states its rails but says nothing about a circular state.
+         *
+         * <p>Kept because "no rails stated" and "no circular state" are separate absences: the 3.x
+         * and overlay readings name rails, and both can be silent about the loop state.
+         */
+        public Line(long id, String name, String mode, int color, List<Stop> stops,
+                    List<String> rails) {
+            this(id, name, mode, color, stops, rails, false);
         }
 
         /** The kind of this mod's line this one becomes, or null when it becomes no line. */
@@ -521,18 +540,26 @@ public final class MtrClientData {
      * has one, so a reading that happens to arrive without it must not turn a coloured line into a
      * kind-coloured one. Zero means "this reading has no colour for the line" rather than black,
      * which is the convention the three readers already use.
+     *
+     * <p>The circular state follows the same rule for the same reason: a reading that knows the route
+     * is a loop must not be overruled by one that says nothing about it, or the line would become
+     * rideable in both directions the moment a silent reading arrived. "Not circular" is not
+     * knowledge here -- false is also what an unreadable field reports -- so the two are ORed, and
+     * only a route no reading calls circular stays two-way.
      */
     private static Line better(Line kept, Line offered) {
         Line winner = offered.stops().size() >= kept.stops().size() ? offered : kept;
         Line other = winner == offered ? kept : offered;
         boolean needsRails = winner.rails().isEmpty() && !other.rails().isEmpty();
         boolean needsColour = (winner.color() & 0xFFFFFF) == 0 && (other.color() & 0xFFFFFF) != 0;
-        if (!needsRails && !needsColour) {
+        boolean needsCircular = !winner.circular() && other.circular();
+        if (!needsRails && !needsColour && !needsCircular) {
             return winner;
         }
         return new Line(winner.id(), winner.name(), winner.mode(),
                 needsColour ? other.color() : winner.color(), winner.stops(),
-                needsRails ? other.rails() : winner.rails());
+                needsRails ? other.rails() : winner.rails(),
+                winner.circular() || other.circular());
     }
 
     /**
@@ -675,7 +702,8 @@ public final class MtrClientData {
                 }
             }
             return new Line(number(raw, routeGetIdMethod), text(raw, routeGetNameMethod), mode,
-                    (int) number(raw, routeGetColorMethod), List.copyOf(stops));
+                    (int) number(raw, routeGetColorMethod), List.copyOf(stops), List.of(),
+                    circular(raw));
         } catch (ReflectiveOperationException | RuntimeException e) {
             noteUnreadable("line", e);
             return null;
@@ -741,6 +769,35 @@ public final class MtrClientData {
     /** The name of an enum constant, or null when the value is not one. */
     static String modeName(Object value) {
         return value instanceof Enum<?> constant ? constant.name() : null;
+    }
+
+    /**
+     * Whether MTR calls this route circular, read through an accessor a reader has bound, or false
+     * when there is none or it does not answer.
+     *
+     * <p>A circular route is a loop ridden one way round. MTR states it as a {@code CircularState} of
+     * {@code NONE}, {@code CLOCKWISE} or {@code ANTICLOCKWISE}, so the question is only whether it is
+     * the none of them -- and anything a later MTR adds to that enum reads as circular rather than as
+     * a route the mod has never seen the state of.
+     *
+     * <p>Takes the accessor as an argument because the client's field is a {@code SimplifiedRoute}'s
+     * and the whole-map and server readers reach a {@code Route}'s: one rule, three bound methods.
+     */
+    static boolean circular(Object route, Method accessor) {
+        if (accessor == null) {
+            return false;
+        }
+        try {
+            String state = modeName(accessor.invoke(route));
+            return state != null && !"NONE".equals(state);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** The same, for the route of MTR's own client data. */
+    private static boolean circular(Object route) {
+        return circular(route, routeGetCircularStateMethod);
     }
 
     // -------------------------------------------------- what the whole-map read shares
@@ -843,7 +900,8 @@ public final class MtrClientData {
         hash = hash * 31 + reading.platforms().size();
         hash = hash * 31 + reading.lines().size();
         hash = hash * 31 + reading.tracks().size();
-        // The records hash every component; Line includes stops and rails, Stop includes both names.
+        // The records hash every component; Line includes stops, rails and the circular state,
+        // Stop includes both names.
         for (Station station : reading.stations()) {
             hash = hash * 31 + station.hashCode();
         }
@@ -1011,6 +1069,12 @@ public final class MtrClientData {
             routeGetIdMethod = simplified.getMethod("getId");
             routeGetNameMethod = simplified.getMethod("getName");
             routeGetColorMethod = simplified.getMethod("getColor");
+            // Optional, like the fields this reader already treats as additions rather than
+            // requirements: a version that has moved this name loses the line's direction, not the
+            // line. It then reads two-way, which is what every line was before directions existed
+            // and the answer that cannot invent a restriction -- and the handshake against a real jar
+            // is what notices the name having moved, rather than a silent two-way railway.
+            routeGetCircularStateMethod = optionalMethod(simplified, "getCircularState");
             routeGetPlatformsMethod = simplified.getMethod("getPlatforms");
             stopGetPlatformIdMethod = simplifiedPlatform.getMethod("getPlatformId");
             stopGetStationIdMethod = simplifiedPlatform.getMethod("getStationId");
@@ -1078,6 +1142,15 @@ public final class MtrClientData {
         return Class.forName(name, false, MtrClientData.class.getClassLoader());
     }
 
+    /** A no-argument accessor, or null when the version in use does not have it. */
+    private static Method optionalMethod(Class<?> owner, String name) {
+        try {
+            return owner.getMethod(name);
+        } catch (NoSuchMethodException | RuntimeException absent) {
+            return null;
+        }
+    }
+
     /**
      * Whether MTR's client data class is on the classpath at all, under any of its names.
      *
@@ -1139,7 +1212,7 @@ public final class MtrClientData {
                         stop.destination()));
             }
             lines.add(new Line(line.id(), line.name(), line.mode(), line.color(), List.copyOf(stops),
-                    line.rails()));
+                    line.rails(), line.circular()));
         }
         List<Track> tracks = new ArrayList<>(dimension.tracks().size());
         for (MtrSnapshotData.Track track : dimension.tracks()) {

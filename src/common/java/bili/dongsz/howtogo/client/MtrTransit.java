@@ -8,6 +8,7 @@ import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.RoadRouter;
+import bili.dongsz.howtogo.transit.LineDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
@@ -1125,6 +1126,16 @@ public final class MtrTransit {
      * asked to be black, which zero is not. The RGB part is what is tested, because the readings
      * disagree about whether they carry MTR's alpha -- the window keeps whatever MTR handed over and
      * the whole-map and overlay readers drop it -- and a value whose RGB is zero is MTR's unset.
+     *
+     * <h2>Why the direction is taken here too</h2>
+     * A route's circular state is MTR's own fact, and the line it imports is this mod's: the two are
+     * not the same thing, and this is the one place a reading becomes lines, so it is the one place to
+     * translate one into the other -- the same argument as the colour above, and the same three
+     * readers. A circular route is a loop ridden one way round, which is exactly the case a
+     * {@link LineDirection#ONE_WAY} line describes: the stop order is the travel order. Every other
+     * route is travelled both ways, which is what a line is until something says otherwise -- and what
+     * a reading that cannot say leaves it as, so a version whose circular state this mod cannot read
+     * never invents a restriction the line does not have.
      */
     private static List<TransitLine> buildLines(MtrClientData.Snapshot reading, Places places,
                                                 Counts counts) {
@@ -1139,6 +1150,9 @@ public final class MtrTransit {
             }
             TransitLine made = new TransitLine(LINE_ID_PREFIX + Long.toHexString(line.id()),
                     line.name() == null ? Long.toHexString(line.id()) : line.name(), kind);
+            // MTR's circular state is the one-way case: a loop is ridden from the first stop to the
+            // last and nowhere else. Every route that is not a loop runs both ways.
+            made.setDirection(line.circular() ? LineDirection.ONE_WAY : LineDirection.TWO_WAY);
             // Zero is MTR's "this route has no colour", not black: see the method comment. The value
             // keeps its own RGB and the line makes it opaque, so what is drawn is the colour MTR's
             // map draws rather than one of this mod's kind colours.

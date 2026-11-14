@@ -134,6 +134,13 @@ final class MtrKnown {
             // session, so a winner without one inherits the colour already learned for the same MTR
             // line. A winner that does carry one keeps its own: MTR is the authority on it, and the
             // memory is only the fallback for a reading that was silent.
+            //
+            // The direction is deliberately not inherited here, which is the difference worth stating:
+            // a route's circular state is MTR's answer rather than a reading's, so a newer reading that
+            // says "no longer a loop" is MTR changing the service, and keeping the remembered one-way
+            // would leave a line the railway no longer runs that way. The colour has to be inherited
+            // because "no colour" is how a thin reader says "I could not ask"; two-way is a real
+            // answer, so there is nothing to fall back over.
             if (!line.hasColor() && kept.hasColor()) {
                 line.setColor(kept.color());
             }

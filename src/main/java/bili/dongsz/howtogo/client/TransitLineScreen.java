@@ -13,6 +13,7 @@ import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.RoutePreferences;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.store.RoutePreferenceStore;
+import bili.dongsz.howtogo.transit.LineDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 import bili.dongsz.howtogo.transit.TransitLineColours;
@@ -85,11 +86,29 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
     private static final int PRESET_MIN_SIZE = 4;
     /** The label of the colour row; the field's hint says the format on its own. */
     private static final String COLOUR_LABEL = "screen.howtogo.line_color";
+    /** The label of the direction row; the chips say the two answers. */
+    private static final String DIRECTION_LABEL = "screen.howtogo.line_direction";
+    /**
+     * The two directions, in the order the chips offer them.
+     *
+     * <p>Held as a constant because {@link LineDirection#values()} copies its array on every call and
+     * this row is drawn once per frame; the kinds are held the same way by {@link TransitLine#kinds()}.
+     */
+    private static final List<LineDirection> DIRECTIONS = List.of(LineDirection.values());
     /** Width of one of the per-row controls on a stop: rename, up, down, remove. */
     private static final int CONTROL_WIDTH = 11;
 
     private static final int PANEL_MAX_WIDTH = 460;
-    private static final int PANEL_MAX_HEIGHT = 200;
+    /**
+     * The panel's cap on its own height.
+     *
+     * <p>217 rather than 200 because of the direction row: its three-pixel gap and fourteen-pixel
+     * chips take seventeen pixels from the three columns, and the lists are what this screen is for.
+     * Growing the panel by exactly that much keeps the nine rows the columns showed before the row
+     * existed, rather than paying for a new control with a row of the line list. A window too short
+     * for even that is still served: {@link #init} takes the smaller of this and the window.
+     */
+    private static final int PANEL_MAX_HEIGHT = 217;
     /** Rename, earlier, later, remove: the controls each stop row carries. */
     private static final int CONTROLS = 4;
     /** The marks switch at the right end of an imported line's row. */
@@ -135,6 +154,23 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
     private int colourPresetY;
     private int colourPresetStep;
     private int colourPresetSize;
+
+    /**
+     * The direction row: the label, and the two chips that say whether the line may be ridden only
+     * from its first stop towards its last.
+     *
+     * <p>Its own fields rather than numbers derived from the colour row's, for the same reason the
+     * colour row has its own: each row is placed once in {@link #init} from the row above it, and a
+     * geometry worked out again per frame or derived from a neighbour could disagree with the hit
+     * testing. The chips are a fixed height and a width taken from what is left of the row, so a
+     * narrow window shows two narrower chips rather than chips drawn past the panel.
+     */
+    private Component directionLabel;
+    private int directionLabelX;
+    private int directionLabelY;
+    private int directionChipX;
+    private int directionChipY;
+    private int directionChipW;
 
     /**
      * How far each column is scrolled, in rows.
@@ -205,6 +241,9 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
 
     /** The colour presets beside the colour field, keyed by their position in the row. */
     private final UiMotion.Slides presetHovers = new UiMotion.Slides();
+
+    /** The direction chips beside their label, keyed by their position in the row. */
+    private final UiMotion.Slides directionHovers = new UiMotion.Slides();
 
     public TransitLineScreen(Screen parent) {
         super(Component.translatable(TITLE));
@@ -281,6 +320,10 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         // second line that looks like the first until they change it. Not copying it was a copy that
         // silently changed kind colour, which is exactly the difference the colour exists to state.
         copy.setColor(line.color());
+        // The direction is part of what the line is, like the colour: a copy of a one-way loop is a
+        // second one-way loop, and a copy that quietly became two-way would be a different service
+        // from the one the player was looking at when they asked for it.
+        copy.setDirection(line.direction());
         TransitLineStore.get().add(copy);
         TransitLineStore.markDirty();
         selectedId = copy.id();
@@ -412,11 +455,28 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         addRenderableWidget(colourField);
         refreshColour();
 
+        // The direction row, between the colour row and the column headers: a line's direction is read
+        // next to its colour because both are answers about the line rather than about its stops. It
+        // is laid out from the colour row's lower edge, like the colour row is laid out from the field,
+        // so the three rows read as one stack of controls above the lists.
+        int directionY = colourY + FIELD_HEIGHT + 3;
+        directionLabel = Component.translatable(DIRECTION_LABEL);
+        directionLabelX = panelX + PAD;
+        directionLabelY = directionY + 3;
+        directionChipX = directionLabelX + this.font.width(directionLabel) + 4;
+        directionChipY = directionY;
+        // Two chips share what is left of the row after the label, capped so a wide window does not
+        // stretch them into looking like the name field. A narrow window gets two narrower chips, not
+        // chips drawn past the panel's edge: the label is the part that decides how much is left.
+        int directionRoom = panelX + panelW - PAD - directionChipX;
+        directionChipW = Math.max(1, Math.min((directionRoom - 3) / 2, 110));
+
         // The lists start below the column headers, not below the controls: the headers are drawn at
         // listY - HEADER_HEIGHT, so leaving only PAD between them and the controls row drew the three of
-        // them through the kind buttons above. The colour row pushes both down by its own height, which
-        // is why listY is recomputed from the row rather than from the controls it was computed from.
-        listY = colourY + FIELD_HEIGHT + HEADER_HEIGHT + 2;
+        // them through the kind buttons above. The colour row and then the direction row push both down
+        // by their own heights, which is why listY is recomputed from the last of those rows rather than
+        // from the controls it was first computed from.
+        listY = directionY + KIND_HEIGHT + HEADER_HEIGHT + 2;
         listH = panelY + panelH - PAD - BUTTON_HEIGHT - 4 - listY;
 
         // The row depends on the panel's geometry and on which line is selected, so it is built last
@@ -669,6 +729,51 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         }
     }
 
+    /**
+     * The direction row: the label, then the two chips that say whether the line may be ridden only
+     * from its first stop in the list towards its last.
+     *
+     * <p>Drawn exactly like the kind chips, because it is the same kind of control -- an answer among
+     * a fixed set, not a button that commits. The chosen one keeps its own face whatever the cursor
+     * does, so only the answer not chosen is mixed towards the hover face, by its own slide; the
+     * chips also arrive a stagger step apart so the pair is read left to right. The faces are the
+     * button roles rather than the row roles for the same reason the kind row's are: on the white
+     * sheet a row colour would leave an unchosen chip as a label with no chip around it.
+     *
+     * <p>An imported line shows the direction it was read with -- which is the whole point of showing
+     * it here -- but its chips never light for the cursor and never take a click, because a reading
+     * from MTR is not this screen's to change: see {@link #readOnly}. A readout that also refuses the
+     * edit is what the read-only rows do everywhere else on this screen.
+     */
+    private void drawDirection(GuiGraphics graphics, int mouseX, int mouseY, TransitLine line) {
+        graphics.drawString(this.font, directionLabel.getString(), directionLabelX, directionLabelY,
+                UiMotion.fade(UiTheme.textSecondary(), open), false);
+        for (int i = 0; i < DIRECTIONS.size(); i++) {
+            LineDirection direction = DIRECTIONS.get(i);
+            int x = directionChipX + i * (directionChipW + 3);
+            boolean selected = line != null && line.direction() == direction;
+            boolean hovered = !readOnly(line) && mouseX >= x && mouseX < x + directionChipW
+                    && mouseY >= directionChipY && mouseY < directionChipY + KIND_HEIGHT;
+            float lit = directionHovers.get(i).to(hovered && !selected ? 1.0F : 0.0F).eased();
+            float arrived = UiMotion.stagger(i, open);
+            int background = selected ? UiTheme.selectionSoft()
+                    : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit);
+            graphics.fill(x, directionChipY, x + directionChipW, directionChipY + KIND_HEIGHT,
+                    UiMotion.fade(background, arrived));
+
+            // The direction's own id, so the label says what the data file says and a translation can
+            // be added without touching either the enum or this drawing code.
+            String label = Component.translatable(
+                    "screen.howtogo.line_direction." + direction.id()).getString();
+            String shown = this.font.plainSubstrByWidth(label, directionChipW - 2);
+            graphics.drawString(this.font, shown,
+                    x + Math.max(0, (directionChipW - this.font.width(shown)) / 2),
+                    directionChipY + 3,
+                    UiMotion.fade(selected ? UiTheme.onSelectionSoft() : UiTheme.textSecondary(),
+                            arrived), false);
+        }
+    }
+
     // --------------------------------------------------------------- columns
 
     /**
@@ -811,6 +916,9 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         // Before the columns, because the colour row is part of the controls above them: a preset
         // drawn over a list row would be a swatch on a line it does not belong to.
         drawColourRow(graphics, mouseX, mouseY, line);
+        // And the same for the direction row under it, which is the other control that belongs to the
+        // line as a whole rather than to one of its stops.
+        drawDirection(graphics, mouseX, mouseY, line);
         drawLines(graphics, mouseX, mouseY);
         drawStops(graphics, mouseX, mouseY, line);
         drawCandidates(graphics, mouseX, mouseY, line);
@@ -951,8 +1059,14 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
             // leave it: a control drawn over the text it belongs to is worse than a shorter name.
             boolean marked = readOnly(candidate);
             int room = columnW - 4 - (marked ? TOGGLE_WIDTH + 2 : 0) - ROW_MARKER_STEP;
+            // A one-way line says so on its row, after its kind: the list is where a player sees which
+            // lines are restricted, and a restriction visible only in the editor of that one line would
+            // be hidden from every player reading the list. It is short on purpose and cut with the
+            // rest of the row, so it costs the row no room of its own.
+            String direction = candidate.oneWay()
+                    ? " " + Component.translatable("screen.howtogo.line_one_way").getString() : "";
             String shown = this.font.plainSubstrByWidth(
-                    source + candidate.label() + "  (" + kind + ")", Math.max(8, room));
+                    source + candidate.label() + "  (" + kind + ")" + direction, Math.max(8, room));
             // Hovering paints the chosen fill, so both ranks of text follow the chosen row's pair: a
             // body-text grey on the selection blue is the one row on the screen that stops being read.
             graphics.drawString(this.font, shown, linesX + 3 + ROW_MARKER_STEP, rowY + 2,
@@ -1505,6 +1619,17 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
                 return true;
             }
 
+            // The direction chips are pressed the same way the kind chips are, and are unreachable
+            // for an imported line for the same reason: this block is only entered for a line this
+            // screen owns, and the drawing refuses the hover as well, so the chips never advertise a
+            // press they would not honour.
+            int directionRow = directionAt(mouseX, mouseY);
+            if (directionRow >= 0) {
+                line.setDirection(DIRECTIONS.get(directionRow));
+                TransitLineStore.markDirty();
+                return true;
+            }
+
             int stopRow = rowAt(mouseX, mouseY, stopsX, line.stopCount(), stopsScroll);
             if (stopRow >= 0) {
                 int controlsX = stopsX + columnW - CONTROL_WIDTH * CONTROLS - 2;
@@ -1546,6 +1671,22 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         for (int i = 0; i < TransitLine.kinds().size(); i++) {
             int x = kindX + i * (kindW + 3);
             if (mouseX >= x && mouseX < x + kindW) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** The direction chip under the pointer, or -1 when there is none. Read-only lines are refused by
+     * the caller, exactly as they are for the kind chips: showing a direction is not permission to
+     * change it. */
+    private int directionAt(double mouseX, double mouseY) {
+        if (mouseY < directionChipY || mouseY >= directionChipY + KIND_HEIGHT) {
+            return -1;
+        }
+        for (int i = 0; i < DIRECTIONS.size(); i++) {
+            int x = directionChipX + i * (directionChipW + 3);
+            if (mouseX >= x && mouseX < x + directionChipW) {
                 return i;
             }
         }

@@ -22,10 +22,10 @@ import java.util.List;
  *       hundred thousand blocks away, Xaero clamps them to the minimap's edge, and their clamped
  *       position is where the minimap's rectangle comes from.</li>
  *   <li><b>Layers</b> ({@link Kind#ROADS}, {@link Kind#RAILS}, {@link Kind#MTR_LAYER},
- *       {@link Kind#ROADWEAVER}, {@link Kind#ROUTE_DONE}, {@link Kind#ROUTE_AHEAD}) carry the
- *       network or the route they draw. One element per layer, each anchored at the frame anchor,
- *       so everything a layer draws is in one local coordinate space and the whole layer is one
- *       drawing block.</li>
+ *       {@link Kind#ROADWEAVER}, {@link Kind#TRANSIT_LINES}, {@link Kind#TRANSIT_LINE_NAME},
+ *       {@link Kind#ROUTE_DONE}, {@link Kind#ROUTE_AHEAD}) carry the network or the route they
+ *       draw. One element per layer, each anchored at the frame anchor, so everything a layer draws
+ *       is in one local coordinate space and the whole layer is one drawing block.</li>
  *   <li><b>Markers</b> ({@link Kind#DESTINATION}, {@link Kind#ORIGIN}) are the
  *       only elements anchored at their own world position, because a marker is a dot at exactly
  *       the place it marks and needs no transform beyond the one Xaero already applied.</li>
@@ -97,6 +97,19 @@ public final class XaeroMinimapRouteElement {
          */
         TRANSIT_LINES,
 
+        /**
+         * A public transport line's name plate.
+         *
+         * <p>An element of its own rather than a field on {@link #TRANSIT_LINES}: a line is drawn as
+         * one element per stretch, while a plate belongs to the line and is placed by walking the
+         * line's whole drawn track. Tying it to the strokes would offer the same plate once per
+         * stretch, each time from a different piece of the line.
+         *
+         * <p>Anchored at the frame anchor like the other layers: the plate is projected with the same
+         * measured matrix, so it lands on the track it names.
+         */
+        TRANSIT_LINE_NAME,
+
         /** The travelled part of the route. */
         ROUTE_DONE,
 
@@ -119,11 +132,13 @@ public final class XaeroMinimapRouteElement {
     private final List<double[]> points;
     private final HudDraw.RouteInk ink;
     private final double travelled;
+    /** The line's name, for a name plate; null for every other kind. */
+    private final String lineName;
 
     private XaeroMinimapRouteElement(Kind kind, double x, double z, int argb, double probe,
                                      RoadNetwork network, List<double[]> points,
                                      HudDraw.RouteInk ink,
-                                     double travelled) {
+                                     double travelled, String lineName) {
         this.kind = kind;
         this.x = x;
         this.z = z;
@@ -133,6 +148,7 @@ public final class XaeroMinimapRouteElement {
         this.points = points;
         this.ink = ink;
         this.travelled = travelled;
+        this.lineName = lineName;
     }
 
     /**
@@ -144,7 +160,7 @@ public final class XaeroMinimapRouteElement {
      * @param probe the calibration distance in blocks, or 0 for the centre and edge probes
      */
     static XaeroMinimapRouteElement probe(Kind kind, double x, double z, double probe) {
-        return new XaeroMinimapRouteElement(kind, x, z, 0, probe, null, null, null, 0);
+        return new XaeroMinimapRouteElement(kind, x, z, 0, probe, null, null, null, 0, null);
     }
 
     /**
@@ -157,7 +173,7 @@ public final class XaeroMinimapRouteElement {
      */
     static XaeroMinimapRouteElement networkLayer(Kind kind, double anchorX, double anchorZ,
                                                  RoadNetwork network) {
-        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, 0, 0, network, null, null, 0);
+        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, 0, 0, network, null, null, 0, null);
     }
 
     /**
@@ -172,7 +188,7 @@ public final class XaeroMinimapRouteElement {
      */
     static XaeroMinimapRouteElement routeLayer(Kind kind, double anchorX, double anchorZ, int argb,
                                                List<double[]> points) {
-        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, points, null, 0);
+        return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, points, null, 0, null);
     }
 
     /**
@@ -195,7 +211,28 @@ public final class XaeroMinimapRouteElement {
                                                   HudDraw.RouteInk ink,
                                                   double travelled) {
         return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, null, ink,
-                travelled);
+                travelled, null);
+    }
+
+    /**
+     * A line name plate, anchored at the frame anchor like the other layers.
+     *
+     * <p>Carries the line's drawn track, the name to print and the colour to print it on: the placer
+     * walks the track to offer positions, and the renderer needs nothing else. One element per
+     * stretch of a line, which is the geometry the shapes cache keeps -- so a line whose track is
+     * several disjoint stretches offers a plate on each, rather than a plate on the straight line
+     * between them.
+     *
+     * @param anchorX the frame anchor's world X
+     * @param anchorZ the frame anchor's world Z
+     * @param argb the line's own colour, the capsule's background
+     * @param points the stretch's world points
+     * @param name the line's name, printed in the capsule
+     */
+    static XaeroMinimapRouteElement lineNameLayer(double anchorX, double anchorZ, int argb,
+                                                  List<double[]> points, String name) {
+        return new XaeroMinimapRouteElement(Kind.TRANSIT_LINE_NAME, anchorX, anchorZ, argb, 0,
+                null, points, null, 0, name);
     }
 
     /**
@@ -207,7 +244,7 @@ public final class XaeroMinimapRouteElement {
      * @param argb the marker's colour
      */
     static XaeroMinimapRouteElement marker(Kind kind, double x, double z, int argb) {
-        return new XaeroMinimapRouteElement(kind, x, z, argb, 0, null, null, null, 0);
+        return new XaeroMinimapRouteElement(kind, x, z, argb, 0, null, null, null, 0, null);
     }
 
     /** What this element means. */
@@ -259,5 +296,10 @@ public final class XaeroMinimapRouteElement {
     /** The drawn distance already covered, for the two route halves; meaningless for anything else. */
     public double travelled() {
         return travelled;
+    }
+
+    /** The line's name, for a name plate element; null for every other kind. */
+    public String lineName() {
+        return lineName;
     }
 }

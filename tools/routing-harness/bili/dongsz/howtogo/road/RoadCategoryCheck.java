@@ -228,7 +228,7 @@ public final class RoadCategoryCheck {
         editor.selectSegment(middle);
         RoadCategory category = RoadCategory.of(RoadClass.ROAD, "c5");
         expect("the panel's edit is accepted",
-                editor.setRoadDetails(middle, "Main Street", 2, category, "S12"));
+                editor.setRoadDetails(middle, "Main Street", 2, category, "S12", null));
         boolean whole = true;
         for (int id : editor.selectedChain()) {
             RoadSegment segment = net.segment(id);
@@ -258,8 +258,8 @@ public final class RoadCategoryCheck {
         // The panel passes a blank number when the chosen category is the built-in one; the segment
         // turns that into "no number", so the unclassified road has nothing a sign could print.
         editor.selectSegment(middle);
-        editor.setRoadDetails(middle, "Main Street", 0, category, "S12");
-        editor.setRoadDetails(middle, "Main Street", 0, RoadCategory.none(RoadClass.ROAD), null);
+        editor.setRoadDetails(middle, "Main Street", 0, category, "S12", null);
+        editor.setRoadDetails(middle, "Main Street", 0, RoadCategory.none(RoadClass.ROAD), null, null);
         boolean cleared = true;
         for (int id : editor.selectedChain()) {
             RoadSegment segment = net.segment(id);
@@ -284,7 +284,7 @@ public final class RoadCategoryCheck {
         // A category from another class is clamped by every segment it is written to.
         editor.selectSegment(middle);
         editor.setRoadDetails(middle, "Main Street", 0,
-                RoadCategory.of(RoadClass.HIGHWAY, "c5"), "G1");
+                RoadCategory.of(RoadClass.HIGHWAY, "c5"), "G1", null);
         boolean clamped = true;
         for (RoadSegment segment : net.segments()) {
             clamped &= segment.category().isNone() && segment.roadClass() == RoadClass.ROAD;

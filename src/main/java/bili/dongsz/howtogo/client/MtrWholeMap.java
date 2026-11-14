@@ -108,6 +108,8 @@ final class MtrWholeMap {
     private static Method routeIdMethod;
     private static Method routeNameMethod;
     private static Method routeColorMethod;
+    /** The route's circular state, optional: a version without it reads every line two-way. */
+    private static Method routeCircularMethod;
     private static Method routeModeMethod;
     private static Method routeDestinationMethod;
     private static Method routeDestinationByIndexMethod;
@@ -225,10 +227,13 @@ final class MtrWholeMap {
                 latest = reading;
                 if (!reported && !reading.isEmpty()) {
                     reported = true;
+                    // The rail count is here because it is the one number a player reporting "tracks are
+                    // missing" can be asked for: a whole-map reading with tracks means the network was
+                    // read, and no tracks means this MTR build keeps them somewhere this cannot reach.
                     HowToGo.diagnostic("[HowToGo] MTR whole map | {} station(s), {} platform(s), "
-                                    + "{} line(s) read from the simulated network",
+                                    + "{} line(s), {} rail(s) read from the simulated network",
                             reading.stations().size(), reading.platforms().size(),
-                            reading.lines().size());
+                            reading.lines().size(), reading.tracks().size());
                 }
             } catch (RuntimeException e) {
                 warnUnavailable(e);
@@ -413,7 +418,8 @@ final class MtrWholeMap {
             return new MtrClientData.Line(MtrClientData.number(route, routeIdMethod),
                     MtrClientData.text(route, routeNameMethod), mode,
                     (int) MtrClientData.number(route, routeColorMethod) & 0xFFFFFF,
-                    List.copyOf(stops));
+                    List.copyOf(stops), List.of(),
+                    MtrClientData.circular(route, routeCircularMethod));
         } catch (ReflectiveOperationException | RuntimeException e) {
             // One unreadable route must not cost the reading every other one.
             return null;
@@ -532,6 +538,10 @@ final class MtrWholeMap {
             routeIdMethod = route.getMethod("getId");
             routeNameMethod = route.getMethod("getName");
             routeColorMethod = route.getMethod("getColor");
+            // Optional, like the mode and the hidden flag above: a version that moved this name loses
+            // the direction and keeps the line, which reads two-way -- what every line was before
+            // directions existed. The handshake against a real jar is what notices the name moving.
+            routeCircularMethod = optionalMethod(route, "getCircularState");
             routeModeMethod = optionalMethod(route, "getTransportMode");
             routeHiddenMethod = optionalMethod(route, "getHidden");
             routeDestinationMethod = optionalMethod(routePlatform, "getDestination");

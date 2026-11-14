@@ -109,6 +109,8 @@ public final class MtrServerData {
     private static Method routeIdMethod;
     private static Method routeNameMethod;
     private static Method routeColorMethod;
+    /** The route's circular state, optional: a version without it reads every line two-way. */
+    private static Method routeCircularMethod;
     private static Method routeModeMethod;
     private static Method routeHiddenMethod;
     private static Method routePlatformsMethod;
@@ -413,7 +415,8 @@ public final class MtrServerData {
             }
             return new MtrSnapshotData.Line(number(raw, routeIdMethod),
                     text(raw, routeNameMethod), mode,
-                    (int) number(raw, routeColorMethod) & 0xFFFFFF, stops, List.of());
+                    (int) number(raw, routeColorMethod) & 0xFFFFFF, stops, List.of(),
+                    circular(raw));
         } catch (ReflectiveOperationException | RuntimeException e) {
             // One unreadable route must not cost the reading every other one.
             return null;
@@ -435,6 +438,25 @@ public final class MtrServerData {
             return value instanceof String text ? text : null;
         }
         return null;
+    }
+
+    /**
+     * Whether MTR calls this route circular, or false when the name is missing or does not answer.
+     *
+     * <p>A circular route is a loop ridden one way round; MTR states it as a {@code CircularState} of
+     * {@code NONE}, {@code CLOCKWISE} or {@code ANTICLOCKWISE}. A missing accessor is a version whose
+     * lines are read two-way, which is the answer that cannot invent a restriction.
+     */
+    private static boolean circular(Object route) {
+        if (routeCircularMethod == null) {
+            return false;
+        }
+        try {
+            String state = modeName(routeCircularMethod.invoke(route));
+            return state != null && !"NONE".equals(state);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
     }
 
     private static List<MtrSnapshotData.Track> tracks(Object simulator) {
@@ -620,6 +642,10 @@ public final class MtrServerData {
             routeIdMethod = route.getMethod("getId");
             routeNameMethod = route.getMethod("getName");
             routeColorMethod = route.getMethod("getColor");
+            // Optional, like the mode and the hidden flag below: a version that moved this name loses
+            // the direction and keeps the line, which reads two-way -- what every line was before
+            // directions existed. The handshake against a real jar is what notices the name moving.
+            routeCircularMethod = optionalMethod(route, "getCircularState");
             routeModeMethod = optionalMethod(route, "getTransportMode");
             routeHiddenMethod = optionalMethod(route, "getHidden");
             routePlatformsMethod = route.getMethod("getRoutePlatforms");

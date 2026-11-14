@@ -36,6 +36,7 @@ public final class OneWayCheck {
         states();
         segmentRules();
         markingAStreet();
+        panelEdit();
         savingAndLoading();
         return new int[]{checks, failures};
     }
@@ -143,6 +144,62 @@ public final class OneWayCheck {
         editor.setChainDirection(first.id(), RoadDirection.TWO_WAY);
         expect("and two-way clears it on every piece",
                 !first.oneWay() && !second.oneWay());
+    }
+
+    /**
+     * The road panel's one visit: name, storey, category, number and direction as one write and one undo.
+     *
+     * <p>The panel used to be able to say everything about a road except which way it runs, so the only
+     * way to make a street one-way was the map's {@code O} key -- a control a player had to be told
+     * about. The row that closed that gap writes the same value {@code setChainDirection} does, and this
+     * check is the two things that could go wrong with it: the direction has to be chain-relative like
+     * the key's (a bent street whose pieces are stored in opposite directions must still end up running
+     * one way), and the whole visit has to be a single undo step, because the player answered a single
+     * panel.
+     */
+    private static void panelEdit() {
+        RoadNetwork net = new RoadNetwork();
+        RoadSegment first = road(net, 0, 0, 200, 0);
+        RoadSegment second = road(net, 200, 200, 200, 0);
+        RoadEditor editor = new RoadEditor(net);
+        RoadCategory category = RoadCategory.none(RoadClass.ROAD);
+
+        expect("the panel's five-value edit is accepted", editor.setRoadDetails(first.id(),
+                "人民路", 1, category, "G318", RoadDirection.FORWARD));
+        expect("the name reaches both pieces of the street",
+                "人民路".equals(first.name()) && "人民路".equals(second.name()));
+        expect("as does the storey", first.layer() == 1 && second.layer() == 1);
+        expect("and the number", "G318".equals(first.number()) && "G318".equals(second.number()));
+        expect("the direction is the street's, not the piece's",
+                editor.chainDirection(first.id()) == RoadDirection.FORWARD
+                        && first.oneWay() && second.oneWay());
+
+        // The same walk the street itself has to satisfy: every piece lets travel in at the node the
+        // previous one let it out at, although the two pieces are stored pointing opposite ways.
+        int node = first.fromNode();
+        boolean walked = true;
+        for (int id : RoadChains.chainContaining(net, first.id())) {
+            RoadSegment piece = net.segment(id);
+            walked = walked && piece.allowsTravelFrom(node);
+            node = piece.fromNode() == node ? piece.toNode() : piece.fromNode();
+        }
+        expect("and the pieces agree about which way along the street is allowed", walked);
+
+        editor.undo();
+        RoadSegment firstAgain = net.segment(first.id());
+        RoadSegment secondAgain = net.segment(second.id());
+        expect("one undo takes the whole visit back, direction included",
+                firstAgain != null && secondAgain != null
+                        && !firstAgain.oneWay() && !secondAgain.oneWay()
+                        && firstAgain.layer() == 0 && !"人民路".equals(firstAgain.name()));
+
+        // A caller that has no opinion about the direction (the older four-value form) must not clear
+        // one that is already there.
+        editor.setChainDirection(first.id(), RoadDirection.BACKWARD);
+        editor.setRoadDetails(first.id(), null, 0, category, null, null);
+        expect("a null direction leaves the street's direction alone",
+                editor.chainDirection(first.id()) == RoadDirection.BACKWARD
+                        && net.segment(first.id()).oneWay());
     }
 
     /** A file keeps what it was given, including the boolean written before directions existed. */

@@ -52,6 +52,13 @@ final class TurnCursor {
      * out. The two do overlap on the shallowest manoeuvres -- a turn of twenty-five degrees, the
      * threshold for one existing at all, is barely different from not turning -- but there the two
      * directions mean nearly the same thing, so getting it wrong costs nothing.
+     *
+     * <p>A straight-through junction needs no case of its own, which is why there is none: its
+     * {@code bearingAfter} is the direction the route runs, and a player carrying straight on is
+     * already facing that direction, so this arc is satisfied as soon as they come level with it.
+     * A player who does not carry straight on is a player who has left the route, and that junction
+     * is then held open exactly as a missed turn is -- which is the answer the other half of this
+     * class is built for.
      */
     static final double TURN_TAKEN_ARC_DEGREES = 45.0;
 

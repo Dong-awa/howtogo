@@ -15,6 +15,7 @@ import bili.dongsz.howtogo.route.RideRoads;
 import bili.dongsz.howtogo.route.TransitPlanner;
 import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.route.Trip;
+import bili.dongsz.howtogo.transit.LineDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
@@ -62,6 +63,7 @@ public final class Harness {
         scenarioConcatKeepsConnectors();
         scenarioTurnIsCountedFromThePlayer();
         scenarioOneWayRoad();
+        scenarioOneWayLineIsRiddenOneWay();
         scenarioDeleteRemovesTheWholeRoad();
         scenarioChainLengthIsTheWholeRoad();
         scenarioDriveTimingWalksOnlyTheWalkedPart();
@@ -168,6 +170,9 @@ public final class Harness {
         int[] lineColour = bili.dongsz.howtogo.transit.TransitLineColourCheck.run();
         checks += lineColour[0];
         failures += lineColour[1];
+        int[] lineDirection = bili.dongsz.howtogo.transit.LineDirectionCheck.run();
+        checks += lineDirection[0];
+        failures += lineDirection[1];
         int[] routeInk = RouteInkCheck.run();
         checks += routeInk[0];
         failures += routeInk[1];
@@ -1262,6 +1267,91 @@ public final class Harness {
         Route against = RoadRouter.findRoute(net, 590, 0, 10, 0, "west", TravelMode.DRIVE,
                 RoutePreferences.DEFAULTS);
         expect("but not against it, when the one-way is the only way through", !against.isPresent());
+    }
+
+    /**
+     * A one-way line is ridden in its own order, and the order is the direction.
+     *
+     * <h2>What this pins</h2>
+     * A two-way line is a service read in either direction -- ride out along it and back, both are
+     * journeys -- while a one-way line only carries a rider from a stop towards the later ones. The
+     * search is what makes that true rather than a check applied to the answer afterwards: the edge
+     * back towards the previous stop is simply not in the graph, so no journey can use it however much
+     * the rest of the graph would like to.
+     *
+     * <p>The middle of the line is checked as well as its ends, because the rule is about the stretch
+     * between two stops rather than about the line as a whole: boarding part way along and riding
+     * onwards is a journey a one-way service does carry, and the same boarding ridden the other way is
+     * one it does not. And the reversed line is the same shape ridden the other way round, which is the
+     * point of storing a direction as the order of the stops: a player who meant the other direction
+     * moves the stops rather than flipping a flag that would then disagree with the map.
+     */
+    private static void scenarioOneWayLineIsRiddenOneWay() {
+        System.out.println("== a one-way line is ridden one way ==");
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.RAIL, 0, 0, 600, 0);
+        // A patch of road at each stop, so boarding and alighting are walks along a road rather than
+        // the straight hop a walk falls back to where there is no road at all.
+        addRoad(net, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(net, RoadClass.ROAD, 280, 0, 320, 0);
+        addRoad(net, RoadClass.ROAD, 580, 0, 620, 0);
+
+        List<TransitLine> bothWays = new ArrayList<>();
+        bothWays.add(line("TW", RoadClass.RAIL, stop("A", 0, 0), stop("B", 300, 0),
+                stop("C", 600, 0)));
+
+        Trip out = TransitPlanner.plan(net, bothWays, 5, 0, 595, 0, "C", RoutePreferences.DEFAULTS);
+        Trip back = TransitPlanner.plan(net, bothWays, 595, 0, 5, 0, "A", RoutePreferences.DEFAULTS);
+        expect("a two-way line carries the journey in its own order", out.isPresent());
+        expect("and the journey back along it", back.isPresent());
+        if (back.isPresent()) {
+            Trip.Ride ride = back.rides().get(0);
+            expect("which is one ride boarded at the far stop and left at the near one",
+                    back.rides().size() == 1 && "C".equals(ride.boardedAt())
+                            && "A".equals(ride.leftAt()));
+        }
+
+        TransitLine loop = line("OW", RoadClass.RAIL, stop("A", 0, 0), stop("B", 300, 0),
+                stop("C", 600, 0));
+        loop.setDirection(LineDirection.ONE_WAY);
+        List<TransitLine> oneWay = new ArrayList<>();
+        oneWay.add(loop);
+
+        Trip along = TransitPlanner.plan(net, oneWay, 5, 0, 595, 0, "C", RoutePreferences.DEFAULTS);
+        expect("a one-way line carries the journey in its own order", along.isPresent());
+        if (along.isPresent()) {
+            // One ride rather than three: sitting through the middle stop is still one boarding, and
+            // "towards C" is the terminus the guidance must name.
+            Trip.Ride ride = along.rides().get(0);
+            expect("as one ride from the first stop to the last",
+                    along.rides().size() == 1 && "A".equals(ride.boardedAt())
+                            && "C".equals(ride.leftAt()));
+            expect("bound for the end of the line", "C".equals(ride.terminus()));
+        }
+
+        Trip against = TransitPlanner.plan(net, oneWay, 595, 0, 5, 0, "A", RoutePreferences.DEFAULTS);
+        expect("but not the journey back along it", !against.isPresent());
+
+        Trip middle = TransitPlanner.plan(net, oneWay, 305, 0, 595, 0, "C", RoutePreferences.DEFAULTS);
+        expect("boarding part way along and riding onwards is a journey it carries",
+                middle.isPresent());
+        Trip middleAgainst = TransitPlanner.plan(net, oneWay, 595, 0, 305, 0, "B",
+                RoutePreferences.DEFAULTS);
+        expect("while the same stretch ridden the other way is not", !middleAgainst.isPresent());
+
+        // The same three blocks, listed the other way round, are a line that runs the other way.
+        TransitLine otherWay = line("OW2", RoadClass.RAIL, stop("C", 600, 0), stop("B", 300, 0),
+                stop("A", 0, 0));
+        otherWay.setDirection(LineDirection.ONE_WAY);
+        List<TransitLine> reversed = new ArrayList<>();
+        reversed.add(otherWay);
+        Trip reversedJourney = TransitPlanner.plan(net, reversed, 595, 0, 5, 0, "A",
+                RoutePreferences.DEFAULTS);
+        expect("and a line listed the other way round is a line that runs the other way",
+                reversedJourney.isPresent());
+        expect("while the direction it no longer runs in is refused",
+                !TransitPlanner.plan(net, reversed, 5, 0, 595, 0, "C",
+                        RoutePreferences.DEFAULTS).isPresent());
     }
 
     /**

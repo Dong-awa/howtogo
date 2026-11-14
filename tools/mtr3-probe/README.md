@@ -8,10 +8,11 @@ Two tools live here and they answer two different halves:
 - `run.ps1` — the **names**. Every class/field/method the reader plans to look up, resolved against a
   real 1.20.1-Fabric runtime classpath.
 - `bind.ps1` — the **reader itself**. Compiles the real `Mtr3Data` (from `src/`) together with a stub
-  `HowToGo`, binds it against the jar, builds a two-station/one-line/one-rail railway out of MTR's own
-  classes (`Station`, `Platform`, `Route`, `Rail`, all real objects) and runs the full conversion,
-  reading the result back. 31 checks. This is the one that catches a reader that binds but converts
-  wrongly.
+  `HowToGo`, binds it against the jar, builds a two-station/one-line railway out of MTR's own classes
+  (`Station`, `Platform`, `Route`, `Rail`, all real objects), runs the full conversion, and separately
+  runs the whole-map rail conversion over a multi-rail map (a connection stored in both directions,
+  distinct heights, a rail added and another removed) including its cache. 41 checks. This is the one
+  that catches a reader that binds but converts wrongly.
 
 The jar under test (YMTR `MTR-fabric-1.20.1-3.6.4.2.jar`) is a **production** Fabric build: it names
 Minecraft with intermediary names (`net.minecraft.class_2338`). A Loom node's runtime classpath is
@@ -63,7 +64,7 @@ All MTR classes load with `Class.forName(name, false, loader)`; all planned memb
 | `Route$RoutePlatform.customDestination` | `public String` |
 | `RailwayData.getInstance` | `public static (Lnet/minecraft/class_1937;)Lmtr/data/RailwayData;` |
 | `RailwayData` fields | `public final Set<Station> stations`, `Set<Platform> platforms`, `Set<Route> routes`, `mtr.data.DataCache dataCache` |
-| `RailwayData.rails` | `private final Map<class_2338, Map<class_2338, Rail>>`; `setAccessible(true)` allowed. A **public `getRailsMap()`** exists and asks for no privileged access |
+| `RailwayData.rails` | `private final Map<class_2338, Map<class_2338, Rail>>`; `setAccessible(true)` allowed. A **public `getRailsMap()`** exists and asks for no privileged access — the reader uses the getter and falls back to the field |
 | `class_2338` (BlockPos) | `method_10263`/`method_10264`/`method_10260` = x/y/z (11/22/33 on a constructed pos), declared on `class_2382`; official spelling `getX/getY/getZ` |
 | `class_243` (Vec3d) | `field_1352` = x, `field_1351` = y, `field_1350` = z (`public final double`), proven by constructing `(1.5, 2.5, 3.5)` |
 
@@ -93,7 +94,7 @@ Namespace map (from the node's layered Tiny mappings, confirmed at runtime):
 - `run.ps1` — obtains the node classpath via Gradle (`--offline`, init script, `--configure-on-demand`),
   compiles, runs both passes, writes the logs.
 - `BindCheck.java` — the reader-under-test check: same package as `Mtr3Data`, so it can drive the
-  package-private `build(...)` conversion directly.
+  package-private `build(...)` and `wholeTracks(...)` conversions directly.
 - `bind.ps1` — compiles `Mtr3Data.java` + `MtrSnapshotData.java` + a stub `HowToGo` + `BindCheck.java`
   against the JDK only, then runs it on the production classpath. Reuses `run.ps1`'s cached classpath;
   run that once first (or pass `-Refresh`).

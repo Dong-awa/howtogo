@@ -27,9 +27,10 @@ import java.util.Set;
  * <ul>
  *   <li><b>ride</b> -- between stops that are neighbours <em>on a line</em>. This is what makes the
  *       order in a line mean something: a ride follows the line, so the journey can only get off
- *       where that line actually calls. Both directions are allowed, because a line is a service
- *       rather than a one-way street -- a player travelling back along it is riding it, not breaking
- *       it;</li>
+ *       where that line actually calls. A line that is being ridden both ways gets both edges, because
+ *       a line is a service and a player travelling back along it is riding it rather than breaking
+ *       it; a line the player has marked one-way gets only the edge in its own order, because a
+ *       journey the line cannot carry is not a journey -- see {@code LineDirection};</li>
  *   <li><b>transfer</b> -- between stops of <em>different</em> lines that stand within
  *       {@link #TRANSFER_RADIUS} blocks of each other. This is the leg the player asked to see: a
  *       change of lines is a short walk between where one line puts you down and where the next one
@@ -528,14 +529,16 @@ public final class LinePlanner {
      * destination is over there, so take the line out and take it back".
      *
      * <h2>Why the ride is judged by the ground it wins, not by the line it is on</h2>
-     * "Riding the same line back is silly" is not a rule this planner can state: a line is a service
-     * rather than a direction, the order of a line's stops means nothing about which way a rider may
-     * go, and a player crossing a river on a ferry legitimately rides a line whose two stops stand
-     * close together. What is a rule is what the ride did for the journey. {@link #rideGain} measures
-     * exactly that -- how much closer to the destination the last stop got off at stands than the
-     * first one boarded at -- and {@link #MIN_RIDE_GAIN} is the amount below which the line has not
-     * moved the rider any closer in any way that matters. A ride that clears it is kept without a
-     * second look, whatever shape it has.
+     * "Riding the same line back is silly" is not a rule this planner can state: a two-way line is a
+     * service rather than a direction, the order of its stops alone says nothing about which way a
+     * rider may go, and a player crossing a river on a ferry legitimately rides a line whose two stops
+     * stand close together. (A one-way line has already been kept out of the shape this paragraph is
+     * about: there is no ride back along it to be silly about, because the search never offered one --
+     * see {@code LineDirection}.) What is a rule is what the ride did for the journey.
+     * {@link #rideGain} measures exactly that -- how much closer to the destination the last stop got
+     * off at stands than the first one boarded at -- and {@link #MIN_RIDE_GAIN} is the amount below
+     * which the line has not moved the rider any closer in any way that matters. A ride that clears it
+     * is kept without a second look, whatever shape it has.
      *
      * <h2>And why a small gain is not refused on its own</h2>
      * Because the walk has to be a real answer before the ride is taken away. The destination may be
@@ -965,7 +968,12 @@ public final class LinePlanner {
                 // And the network the line asked for: this is where a line with its marks switched off
                 // is kept off them, rather than merely not adding a layer another line has added.
                 RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
+                // The same rule as Links.ridesFrom, in the eager form of it that this method was:
+                // a one-way line has no edge back towards the stop before this one.
                 for (int step = -1; step <= 1; step += 2) {
+                    if (step < 0 && line.oneWay()) {
+                        continue;
+                    }
                     int next = at + step;
                     if (next < 0 || next >= line.stopCount()) {
                         continue;
@@ -1240,7 +1248,7 @@ public final class LinePlanner {
             return links;
         }
 
-        /** The rides: one per direction, per line calling at this stop. */
+        /** The rides: one per direction the line allows, per line calling at this stop. */
         private void ridesFrom(int index, List<Link> links) {
             for (int[] call : nodes.get(index).calls()) {
                 TransitLine line = lines.get(call[0]);
@@ -1253,7 +1261,15 @@ public final class LinePlanner {
                 // And the network the line asked for: this is where a line with its marks switched off
                 // is kept off them, rather than merely not adding a layer another line has added.
                 RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
+                // A two-way line is ridden either way round -- it is a service, and a player travelling
+                // back along it is riding it rather than breaking it. A one-way line is ridden in its
+                // own order and nowhere else, so the edge back towards the previous stop is not in the
+                // graph at all: this is what makes "a one-way loop cannot be ridden the wrong way"
+                // true of the journey the search returns rather than a rule applied to it afterwards.
                 for (int step = -1; step <= 1; step += 2) {
+                    if (step < 0 && line.oneWay()) {
+                        continue;
+                    }
                     int next = at + step;
                     if (next < 0 || next >= line.stopCount()) {
                         continue;

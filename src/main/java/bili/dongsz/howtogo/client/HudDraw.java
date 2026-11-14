@@ -3,6 +3,7 @@ package bili.dongsz.howtogo.client;
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadCurve;
+import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Route;
@@ -1097,7 +1098,8 @@ public final class HudDraw {
                                  double m00, double m01, double m02,
                                  double m10, double m11, double m12,
                                  double halfWidth, int argb, int alpha,
-                                 double minX, double minY, double maxX, double maxY) {
+                                 double minX, double minY, double maxX, double maxY,
+                                 double screenPxPerUnit) {
         if (network == null || stroke == null || stroke.pieces().isEmpty()) {
             return;
         }
@@ -1105,8 +1107,32 @@ public final class HudDraw {
         double previousWorldX = 0;
         double previousWorldZ = 0;
         boolean havePrevious = false;
-        for (DisplayStrokes.Piece piece : stroke.pieces()) {
+        // One record per piece, so the one-way marks below know which stretch of the projected
+        // polyline belongs to which segment and which way round that stretch runs. Keeping them
+        // here rather than re-deriving them is what stops an arrow from pointing down a road the
+        // player cannot travel that way. Most chains are two-way, so the arrays are only made when
+        // one of the pieces actually needs a mark -- this runs once per chain per frame, and four
+        // small allocations apiece is the kind of garbage a map pass must not make.
+        int pieceCount = stroke.pieces().size();
+        boolean marks = false;
+        for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
+            RoadSegment segment = network.segment(stroke.pieces().get(pieceIndex).segmentId());
+            if (segment != null && segment.direction() != null && segment.direction().isOneWay()) {
+                marks = true;
+                break;
+            }
+        }
+        RoadSegment[] segments = marks ? new RoadSegment[pieceCount] : null;
+        boolean[] reversed = marks ? new boolean[pieceCount] : null;
+        int[] starts = marks ? new int[pieceCount] : null;
+        int[] ends = marks ? new int[pieceCount] : null;
+        for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
+            DisplayStrokes.Piece piece = stroke.pieces().get(pieceIndex);
             RoadSegment segment = network.segment(piece.segmentId());
+            if (marks) {
+                starts[pieceIndex] = written;
+                ends[pieceIndex] = written;
+            }
             if (segment == null) {
                 continue;
             }
@@ -1131,8 +1157,173 @@ public final class HudDraw {
                 havePrevious = true;
                 written++;
             }
+            if (marks) {
+                segments[pieceIndex] = segment;
+                reversed[pieceIndex] = piece.reversed();
+                ends[pieceIndex] = written;
+            }
         }
         emitProjectedPath(out, written, halfWidth, argb, alpha, minX, minY, maxX, maxY);
+        if (marks) {
+            // The marks come after the stroke so they sit on top of it, and before whatever the
+            // caller draws next -- a route, a marker -- so those still read as being above the road.
+            emitOneWayMarks(out, segments, reversed, starts, ends, halfWidth, alpha,
+                    screenPxPerUnit, minX, minY, maxX, maxY);
+        }
+    }
+
+    // ------------------------------------------------------------ one-way marks
+
+    /**
+     * The narrowest road, in screen half-width pixels, that carries one-way arrows on a map this mod
+     * draws.
+     *
+     * <p>These maps draw every road at a fixed weight rather than at the zoom's, so the arrows have
+     * to decide for themselves when a road is wide enough to carry one. Half a pixel is the width
+     * the HUD's small map and the phone page draw a road at: an arrowhead there is a mark on a line
+     * a pixel wide, which is still the only thing on that map that says which way the road runs.
+     */
+    private static final double ONEWAY_ARROW_MIN_HALF_PX = 0.45;
+
+    /** The smallest and largest arrowhead, in screen pixels, for the maps' road widths. */
+    private static final double ONEWAY_ARROW_MIN_PX = 2.0;
+    private static final double ONEWAY_ARROW_MAX_PX = 7.0;
+
+    /** Arrowhead size as a multiple of the road's screen half-width: about two road widths long. */
+    private static final double ONEWAY_ARROW_SIZE_PER_HALF_PX = 2.6;
+
+    /** Screen distance between two arrowheads on one stretch, as a multiple of the arrow's size. */
+    private static final double ONEWAY_ARROW_SPACING_PER_SIZE = 4.0;
+
+    /**
+     * The closest two arrowheads may be on screen, in pixels.
+     *
+     * <p>The size rule is proportional to the road, and the thinnest maps draw roads at one pixel:
+     * a fixed multiple of a two-pixel arrow would be a dotted line rather than a direction. This
+     * floor is what makes a small map's arrows read as a few marks along the road instead.
+     */
+    private static final double ONEWAY_ARROW_MIN_SPACING_PX = 12.0;
+
+    /** The most arrowheads one piece of one chain draws, so a long road cannot fill the map. */
+    private static final int ONEWAY_ARROW_LIMIT_PER_PIECE = 8;
+
+    /** The arrowhead itself, white, and the rim under it that keeps it visible on the ice road. */
+    private static final int ONEWAY_ARROW_INK = 0xFFF4F8FF;
+    private static final int ONEWAY_ARROW_RIM = 0xB0101418;
+
+    /**
+     * Draws the direction arrows along the one-way pieces of one chain.
+     *
+     * <p>The maps that draw their own roads have no place of their own for a direction mark: they
+     * draw a road as a continuous chain and the segments' directions are a property of the data, so
+     * the marks are emitted here, from the same pieces and the same projected polyline, and every
+     * map that calls {@link #emitNetwork} gets them without a second implementation. The arrowheads
+     * are sized from the stroke's own width so the small maps get small marks and the viewer's wide
+     * ones get marks that proportionally belong to the road.
+     *
+     * <p>Which way a piece runs in the projected polyline is not the segment's own direction: a
+     * stroke may be walked backwards or forwards by {@link DisplayStrokes}, so the piece's
+     * {@code reversed} flag is what turns "the segment allows FORWARD" into "the path goes this
+     * way". Getting that wrong is an arrow pointing against the only direction the road can be
+     * travelled, which is worse than no arrow at all.
+     */
+    private static void emitOneWayMarks(VertexSink out, RoadSegment[] segments, boolean[] reversed,
+                                        int[] starts, int[] ends,
+                                        double halfWidth, int alpha, double screenPxPerUnit,
+                                        double minX, double minY, double maxX, double maxY) {
+        // The marks are laid out in the emitter's own units, which are screen pixels for the maps
+        // this mod draws itself but the pose's units (a fraction of a pixel) for Xaero's minimap.
+        // The caller states the conversion, so the size and the spacing of an arrowhead are the
+        // same handful of pixels on every map instead of a fraction of one on the minimap.
+        double perUnit = screenPxPerUnit > 0 ? screenPxPerUnit : 1.0;
+        double screenHalf = halfWidth * perUnit;
+        if (segments.length == 0 || screenHalf < ONEWAY_ARROW_MIN_HALF_PX) {
+            return;
+        }
+        double screenSize = Math.max(ONEWAY_ARROW_MIN_PX,
+                Math.min(ONEWAY_ARROW_MAX_PX, screenHalf * ONEWAY_ARROW_SIZE_PER_HALF_PX));
+        double screenSpacing = Math.max(screenSize * ONEWAY_ARROW_SPACING_PER_SIZE,
+                ONEWAY_ARROW_MIN_SPACING_PX);
+        double size = screenSize / perUnit;
+        double spacing = screenSpacing / perUnit;
+        int bodyAlpha = Math.min(alpha, 0xFF);
+        int rimAlpha = Math.min(alpha * 3 / 5, 0xFF);
+        int ink = (bodyAlpha << 24) | (ONEWAY_ARROW_INK & 0xFFFFFF);
+        int rim = (rimAlpha << 24) | (ONEWAY_ARROW_RIM & 0xFFFFFF);
+        for (int piece = 0; piece < segments.length; piece++) {
+            RoadSegment segment = segments[piece];
+            if (segment == null || segment.direction() == null || !segment.direction().isOneWay()) {
+                continue;
+            }
+            // Increasing polyline index is the allowed direction when the piece was appended in
+            // vertex order and the segment runs forwards, or when it was reversed and the segment
+            // runs backwards; the two flags together decide it, which is why it is an xor.
+            boolean increasing = (segment.direction() == RoadDirection.FORWARD) != reversed[piece];
+            int start = starts[piece];
+            int end = ends[piece];
+            if (end - start < 2) {
+                continue;
+            }
+            double travelled = 0;
+            double nextAt = spacing * 0.75;
+            int drawn = 0;
+            for (int i = start + 1; i < end && drawn < ONEWAY_ARROW_LIMIT_PER_PIECE; i++) {
+                double ax = PATH_X[i - 1];
+                double ay = PATH_Y[i - 1];
+                double bx = PATH_X[i];
+                double by = PATH_Y[i];
+                double edge = Math.hypot(bx - ax, by - ay);
+                if (edge < 1.0E-9) {
+                    continue;
+                }
+                while (nextAt <= travelled + edge && drawn < ONEWAY_ARROW_LIMIT_PER_PIECE) {
+                    double along = (nextAt - travelled) / edge;
+                    double x = ax + (bx - ax) * along;
+                    double y = ay + (by - ay) * along;
+                    double dirX = (bx - ax) / edge;
+                    double dirY = (by - ay) / edge;
+                    if (!increasing) {
+                        dirX = -dirX;
+                        dirY = -dirY;
+                    }
+                    // Whole arrows only: a mark painted across the edge of the box is clipped by
+                    // the stroke pass, and a clipped arrowhead is not a direction.
+                    double reach = size * 1.3;
+                    if (x - reach >= minX && x + reach <= maxX
+                            && y - reach >= minY && y + reach <= maxY) {
+                        emitArrow(out, x, y, dirX, dirY, size, rim, ink);
+                        drawn++;
+                    }
+                    nextAt += spacing;
+                }
+                travelled += edge;
+            }
+        }
+    }
+
+    /** One direction arrowhead: the rim triangle first, the light head over it. */
+    private static void emitArrow(VertexSink out, double x, double y, double dirX, double dirY,
+                                  double size, int rim, int ink) {
+        double px = -dirY;
+        double py = dirX;
+        // The rim is the same arrow a little larger, which is what makes the head stand out from
+        // every road colour including the pale ice road.
+        double rimTipX = x + dirX * size * 1.15;
+        double rimTipY = y + dirY * size * 1.15;
+        double rimBackX = x - dirX * size * 0.72;
+        double rimBackY = y - dirY * size * 0.72;
+        double rimWing = size * 0.84;
+        emitTriangle(out, rimTipX, rimTipY,
+                rimBackX + px * rimWing, rimBackY + py * rimWing,
+                rimBackX - px * rimWing, rimBackY - py * rimWing, rim);
+        double tipX = x + dirX * size * 0.86;
+        double tipY = y + dirY * size * 0.86;
+        double backX = x - dirX * size * 0.5;
+        double backY = y - dirY * size * 0.5;
+        double wing = size * 0.6;
+        emitTriangle(out, tipX, tipY,
+                backX + px * wing, backY + py * wing,
+                backX - px * wing, backY - py * wing, ink);
     }
 
     /**
@@ -1153,7 +1344,26 @@ public final class HudDraw {
                                    double halfWidth, int alpha,
                                    double minX, double minY, double maxX, double maxY) {
         emitNetwork(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
-                minX, minY, maxX, maxY, null);
+                minX, minY, maxX, maxY, null, 1.0);
+    }
+
+    /**
+     * The same, for a surface whose emitter units are not screen pixels.
+     *
+     * <p>Xaero's minimap hands its renderers a pose in its own local units, which are a fraction of
+     * a pixel and change with the minimap's zoom; the navigation panel, the viewers and the phone
+     * page work in pixels. The one-way marks are sized and spaced in pixels -- a mark is a reading
+     * of the map, not of the pose -- so the caller states how many screen pixels one emitter unit
+     * is worth, and the same road carries the same mark on every surface.
+     */
+    public static void emitNetwork(VertexSink out, RoadNetwork network,
+                                   double m00, double m01, double m02,
+                                   double m10, double m11, double m12,
+                                   double halfWidth, int alpha,
+                                   double minX, double minY, double maxX, double maxY,
+                                   double screenPxPerUnit) {
+        emitNetwork(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, null, screenPxPerUnit);
     }
 
     /**
@@ -1170,6 +1380,19 @@ public final class HudDraw {
                                    double minX, double minY, double maxX, double maxY,
                                    java.util.function.ToDoubleFunction<
                                            bili.dongsz.howtogo.road.RoadClass> widthOf) {
+        emitNetwork(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, widthOf, 1.0);
+    }
+
+    /** The same, for a surface whose emitter units are not screen pixels; see above. */
+    public static void emitNetwork(VertexSink out, RoadNetwork network,
+                                   double m00, double m01, double m02,
+                                   double m10, double m11, double m12,
+                                   double halfWidth, int alpha,
+                                   double minX, double minY, double maxX, double maxY,
+                                   java.util.function.ToDoubleFunction<
+                                           bili.dongsz.howtogo.road.RoadClass> widthOf,
+                                   double screenPxPerUnit) {
         if (network == null || network.segmentCount() == 0) {
             return;
         }
@@ -1181,7 +1404,7 @@ public final class HudDraw {
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
                     RoadConfig.roadColor(segment.roadClass()), alpha,
-                    minX, minY, maxX, maxY);
+                    minX, minY, maxX, maxY, screenPxPerUnit);
         }
     }
 
@@ -1507,7 +1730,21 @@ public final class HudDraw {
                                         double worldMinX, double worldMinZ,
                                         double worldMaxX, double worldMaxZ) {
         emitNetworkInBox(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
-                minX, minY, maxX, maxY, worldMinX, worldMinZ, worldMaxX, worldMaxZ, null);
+                minX, minY, maxX, maxY, worldMinX, worldMinZ, worldMaxX, worldMaxZ, null, 1.0);
+    }
+
+    /** The boxed version for a surface whose emitter units are not screen pixels; see emitNetwork. */
+    public static void emitNetworkInBox(VertexSink out, RoadNetwork network,
+                                        double m00, double m01, double m02,
+                                        double m10, double m11, double m12,
+                                        double halfWidth, int alpha,
+                                        double minX, double minY, double maxX, double maxY,
+                                        double worldMinX, double worldMinZ,
+                                        double worldMaxX, double worldMaxZ,
+                                        double screenPxPerUnit) {
+        emitNetworkInBox(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, worldMinX, worldMinZ, worldMaxX, worldMaxZ, null,
+                screenPxPerUnit);
     }
 
     /** The boxed version with each road's half-width taken from its class. */
@@ -1520,6 +1757,21 @@ public final class HudDraw {
                                         double worldMaxX, double worldMaxZ,
                                         java.util.function.ToDoubleFunction<
                                                 bili.dongsz.howtogo.road.RoadClass> widthOf) {
+        emitNetworkInBox(out, network, m00, m01, m02, m10, m11, m12, halfWidth, alpha,
+                minX, minY, maxX, maxY, worldMinX, worldMinZ, worldMaxX, worldMaxZ, widthOf, 1.0);
+    }
+
+    /** The width-per-class version for a surface whose emitter units are not screen pixels. */
+    public static void emitNetworkInBox(VertexSink out, RoadNetwork network,
+                                        double m00, double m01, double m02,
+                                        double m10, double m11, double m12,
+                                        double halfWidth, int alpha,
+                                        double minX, double minY, double maxX, double maxY,
+                                        double worldMinX, double worldMinZ,
+                                        double worldMaxX, double worldMaxZ,
+                                        java.util.function.ToDoubleFunction<
+                                                bili.dongsz.howtogo.road.RoadClass> widthOf,
+                                        double screenPxPerUnit) {
         if (network == null || network.segmentCount() == 0) {
             return;
         }
@@ -1534,7 +1786,7 @@ public final class HudDraw {
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
                     RoadConfig.roadColor(segment.roadClass()), alpha,
-                    minX, minY, maxX, maxY);
+                    minX, minY, maxX, maxY, screenPxPerUnit);
         }
     }
 

@@ -355,6 +355,18 @@ loom {
             programArgs("--quickPlaySingleplayer", rootProject.property("htgQuickPlay").toString())
         }
     }
+    // The rest of the rig, wired exactly as on the NeoForge nodes: the mod reads these to run its
+    // in-game self-test by itself, and to open one of its own screens for the picture mode. Without
+    // them the rig's -Auto and -Screen modes do nothing on a Fabric node -- which is where the 1.20.1
+    // build is tested, so the mode that exists to check a node in a real client was missing on the one
+    // node the player actually plays.
+    runs.named("client") {
+        property("howtogo.selftest", rootProject.findProperty("htgSelftest")?.toString() ?: "")
+        property("howtogo.selftest.quit",
+            rootProject.findProperty("htgSelftestQuit")?.toString() ?: "")
+        property("howtogo.selftest.screen",
+            rootProject.findProperty("htgScreen")?.toString() ?: "")
+    }
 }
 
 // The shared tree, exactly as the NeoForge nodes take it: src/common is loader-free and

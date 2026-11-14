@@ -40,8 +40,14 @@ import java.util.zip.InflaterInputStream;
  */
 public final class MtrSnapshotData {
 
-    /** Bumped when the shape below changes; a reader refuses a version it does not know. */
-    public static final int VERSION = 1;
+    /**
+     * Bumped when the shape below changes; a reader refuses a version it does not know.
+     *
+     * <p>2 added a route's circular state to every line. Both sides ship in the same jar, so a bump is
+     * the honest way to say it: an older peer's body is refused rather than misread as a reading whose
+     * lines happen to be missing a field.
+     */
+    public static final int VERSION = 2;
 
     private static final int MAX_DIMENSIONS = 64;
     private static final int MAX_ELEMENTS = 1 << 20;
@@ -66,13 +72,27 @@ public final class MtrSnapshotData {
     public record Stop(long platformId, long stationId, String stationName, String destination) {
     }
 
-    /** A line, with MTR's own ids for the rails it runs along when the reading states them. */
+    /**
+     * A line, with MTR's own ids for the rails it runs along when the reading states them.
+     *
+     * @param circular whether MTR calls the route circular -- a loop, ridden one way round. This is
+     *                 MTR's raw fact and not this mod's direction: {@code MtrTransit} is the one place
+     *                 it becomes a {@code LineDirection}, exactly as the colour becomes the line's
+     *                 colour. False when the reading cannot say, which is the answer that cannot
+     *                 invent a restriction.
+     */
     public record Line(long id, String name, String mode, int color, List<Stop> stops,
-                       List<String> rails) {
+                       List<String> rails, boolean circular) {
 
         public Line {
             stops = stops == null ? List.of() : List.copyOf(stops);
             rails = rails == null ? List.of() : List.copyOf(rails);
+        }
+
+        /** The shape before a reading carried a route's circular state: a line that is not a loop. */
+        public Line(long id, String name, String mode, int color, List<Stop> stops,
+                    List<String> rails) {
+            this(id, name, mode, color, stops, rails, false);
         }
     }
 
@@ -165,6 +185,9 @@ public final class MtrSnapshotData {
                     writeNullable(out, line.name());
                     writeNullable(out, line.mode());
                     out.writeInt(line.color());
+                    // MTR's own fact, not the direction it becomes: the wire carries what the reading
+                    // knew and the client decides once, in MtrTransit, what a circular route means.
+                    out.writeBoolean(line.circular());
                     out.writeInt(line.stops().size());
                     for (Stop stop : line.stops()) {
                         out.writeLong(stop.platformId());
@@ -254,6 +277,7 @@ public final class MtrSnapshotData {
                     String name = readNullable(in);
                     String mode = readNullable(in);
                     int color = in.readInt();
+                    boolean circular = in.readBoolean();
                     int stopCount = count(in, MAX_ELEMENTS);
                     List<Stop> stops = new ArrayList<>(stopCount);
                     for (int s = 0; s < stopCount; s++) {
@@ -265,7 +289,7 @@ public final class MtrSnapshotData {
                     for (int r = 0; r < railCount; r++) {
                         rails.add(readText(in));
                     }
-                    lines.add(new Line(lineId, name, mode, color, stops, rails));
+                    lines.add(new Line(lineId, name, mode, color, stops, rails, circular));
                 }
                 List<Track> tracks = new ArrayList<>();
                 int trackCount = count(in, MAX_ELEMENTS);

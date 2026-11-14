@@ -194,6 +194,11 @@ record NavHudReadout(State state, String destinationName, String headerLabel, St
         // one, and on a highway neither can be called as one: there is nowhere to turn, so the same
         // junction is called as carrying on to it, and the arrow has to agree with the words rather
         // than with the angle the route came in at.
+        //
+        // A straight-through call arrives here as exactly zero degrees and is drawn from that number
+        // without a branch: the arrow's own direction function already answers "straight up" for an
+        // angle inside the slight-turn band, so what needed its own case was the wording, not the
+        // shape. See the instruction below.
         boolean uturnCall = uturn != null || Navigation.isUturn(maneuverDegrees);
         boolean plainUturn = wrongWay && uturn == null;
         boolean highway = uturn != null ? uturn.highway()
@@ -219,6 +224,18 @@ record NavHudReadout(State state, String destinationName, String headerLabel, St
             instruction = Navigation.uturnAction(highway);
         } else if (maneuver == null) {
             instruction = Component.translatable("hud.howtogo.hud_straight").getString();
+        } else if (maneuver.straight()) {
+            // A junction the route carries straight through. It has its own word because the angle
+            // bands below would file a zero angle under "keep left", which is the one thing this is
+            // not; the distance slot still counts down to it, because that number is a measurement.
+            instruction = Component.translatable("hud.howtogo.turn.straight").getString();
+        } else if (maneuver.continuesNamedRoad()) {
+            // The road goes on under the same name across the corner: "continue on X" rather than
+            // "onto X", which would name a road the player is already on.
+            String road = maneuver.roadName() != null && !maneuver.roadName().isBlank()
+                    ? maneuver.roadName()
+                    : Navigation.unnamedRoad();
+            instruction = Navigation.continuesAction(Navigation.turnPhrase(maneuverDegrees), road);
         } else if (!maneuver.namesTheRoad()) {
             // The turn is real, the name is not worth saying: it is the road they are already on.
             instruction = Navigation.turnPhrase(maneuverDegrees);

@@ -76,6 +76,11 @@ public final class TransitLineStorage {
                 // An absent or unreadable colour is a line without one of its own, which is what a
                 // file written before lines had colours means: it keeps following its kind's colour.
                 line.setColor(ColorHex.parseOrNull(l.color));
+                // The same rule for the direction: a file written before lines had one is a file of
+                // lines that were ridden both ways, so an absent field is two-way rather than an error
+                // -- see LineDirection.byId, which is also what a value this build does not know reads
+                // as, for the same reason.
+                line.setDirection(LineDirection.byId(l.direction));
                 if (l.stops != null) {
                     for (StopDto s : l.stops) {
                         if (s == null) {
@@ -143,6 +148,10 @@ public final class TransitLineStorage {
                 if (line.hasColor()) {
                     l.color = line.colorHex();
                 }
+                // Always written, including for a two-way line: the file says what the line is rather
+                // than leaving the reader to infer it from an absence, and an older build ignores the
+                // field it does not know exactly as this one ignores a field a later build adds.
+                l.direction = line.direction().id();
                 l.stops = new ArrayList<>(line.stopCount());
                 for (LineStop stop : line.stops()) {
                     StopDto s = new StopDto();
@@ -218,6 +227,14 @@ public final class TransitLineStorage {
          * value that is not a colour is treated the same way.
          */
         String color;
+        /**
+         * Which way along its stops the line may be ridden: {@link LineDirection}'s id, or absent.
+         *
+         * <p>Optional like every field of this file: a line file written before lines had directions
+         * reads back as two-way, which is the truth about those lines rather than an error, and a value
+         * that is not a direction is treated the same way.
+         */
+        String direction;
         List<StopDto> stops;
     }
 

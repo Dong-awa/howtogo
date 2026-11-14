@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.mtr.Mtr3Data;
+import bili.dongsz.howtogo.mtr.MtrSnapshotData;
 import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
@@ -9,9 +10,11 @@ import bili.dongsz.howtogo.road.RoadNode;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.RoadRouter;
 import bili.dongsz.howtogo.route.TravelMode;
+import bili.dongsz.howtogo.transit.LineDirection;
 import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -109,6 +112,8 @@ public final class MtrImportCheck {
                 build(MtrClientData.Snapshot.EMPTY).lines().isEmpty());
 
         checkLineColours();
+
+        checkDirections();
 
         checkHandshake();
 
@@ -1057,6 +1062,85 @@ public final class MtrImportCheck {
         expect("a later reading that does not carry the colour keeps the one already known",
                 known.lines().size() == 1 && known.lines().get(0).hasColor()
                         && known.lines().get(0).color() == 0xFF1A73E8);
+    }
+
+    /**
+     * Which way a line may be ridden, which MTR states as a route's circular state.
+     *
+     * <p>Every reader fills MTR's own fact onto one reading record -- the client window from
+     * {@code SimplifiedRoute.getCircularState()}, the whole map and the server from its
+     * {@code Route.getCircularState()}, the overlay from {@code MapRoute.circular}, and 3.x from
+     * whatever its route calls a loop -- and {@link MtrTransit#buildLines} is the one place it becomes
+     * a direction. A circular route is a loop ridden one way round, so it is the only route that may
+     * be travelled in list order alone; every other route runs both ways, which is what a line was
+     * before directions existed, and what an unreadable circular state also becomes.
+     *
+     * <p>The wire is checked here too because the direction is only as good as the fact that reaches
+     * the client: a server reads MTR, encodes the reading and sends it, so a flag that survives the
+     * reflection but not {@link MtrSnapshotData} would leave every synced line two-way while every
+     * locally read one was right -- a difference nothing in a game would name.
+     */
+    private static void checkDirections() {
+        System.out.println("   which way a line may be ridden");
+
+        MtrClientData.Snapshot loop = reading(
+                List.of(station(1, "Loop", "TRAIN", 0, 0), station(2, "Round", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(mtrLine(5, "Circle", true)), List.of());
+        TransitLine oneWay = build(loop).lines().get(0);
+        expect("a circular MTR route becomes a one-way line", oneWay.oneWay());
+        expect("with the direction stated rather than only a flag",
+                oneWay.direction() == LineDirection.ONE_WAY);
+
+        MtrClientData.Snapshot bothWays = reading(
+                List.of(station(1, "Loop", "TRAIN", 0, 0), station(2, "Round", "TRAIN", 100, 0)),
+                List.of(platform(11, 1, "1", "TRAIN", 0, 0), platform(12, 2, "1", "TRAIN", 100, 0)),
+                List.of(mtrLine(6, "Both ways", false)), List.of());
+        TransitLine twoWay = build(bothWays).lines().get(0);
+        expect("an ordinary MTR route stays two-way", twoWay.direction() == LineDirection.TWO_WAY);
+        expect("and is not restricted to one direction", !twoWay.oneWay());
+
+        // The fact on the wire, both ways round: a synced reading that lost it would make every
+        // imported line of a server-owned railway two-way while the same railway read locally was not.
+        MtrSnapshotData.Snapshot carried = new MtrSnapshotData.Snapshot(List.of(
+                new MtrSnapshotData.Dimension("minecraft/overworld", List.of(), List.of(),
+                        List.of(snapshotLine(5, true), snapshotLine(6, false)), List.of())));
+        try {
+            MtrSnapshotData.Snapshot back = MtrSnapshotData.decode(MtrSnapshotData.encode(carried));
+            MtrSnapshotData.Dimension dimension = back.dimensions().get(0);
+            expect("a route's circular state survives the wire, so a synced line keeps its direction",
+                    dimension.lines().size() == 2 && dimension.lines().get(0).circular()
+                            && !dimension.lines().get(1).circular());
+            expect("and the format says so, rather than leaving an older peer to misread it",
+                    MtrSnapshotData.VERSION == 2);
+        } catch (IOException broken) {
+            expect("the snapshot round trip does not throw (" + broken + ")", false);
+        }
+
+        // The merge: a reading that knows the route is a loop must not be overruled by one that is
+        // silent, which is the rule the colour and the rails already follow. Nothing here would be
+        // visible in a game -- the line would simply become rideable in both directions.
+        MtrClientData.Snapshot saysLoop = new MtrClientData.Snapshot(List.of(), List.of(),
+                List.of(mtrLine(7, "Loop", true)), List.of());
+        MtrClientData.Snapshot saysPlain = new MtrClientData.Snapshot(List.of(), List.of(),
+                List.of(mtrLine(7, "Loop", false)), List.of());
+        expect("the reading that knows the route is a loop outranks one that is silent about it",
+                MtrClientData.merge(saysLoop, saysPlain).lines().get(0).circular()
+                        && MtrClientData.merge(saysPlain, saysLoop).lines().get(0).circular());
+    }
+
+    /** One line of a reading, with MTR's circular state on it as its readers carry it. */
+    private static MtrClientData.Line mtrLine(long id, String name, boolean circular) {
+        return new MtrClientData.Line(id, name, "TRAIN", 0,
+                List.of(stop(11, 1, "Alpha"), stop(12, 2, "Beta")), List.of(), circular);
+    }
+
+    /** The same line in the wire's own records, for the round trip. */
+    private static MtrSnapshotData.Line snapshotLine(long id, boolean circular) {
+        return new MtrSnapshotData.Line(id, "Line " + id, "TRAIN", 0,
+                List.of(new MtrSnapshotData.Stop(11, 1, "Alpha", ""),
+                        new MtrSnapshotData.Stop(12, 2, "Beta", "")),
+                List.of(), circular);
     }
 
     /**

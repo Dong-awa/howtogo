@@ -155,6 +155,14 @@ public final class RoadConfig {
         @SerializedName("voice_announcements")
         public boolean voiceAnnouncements = false;
 
+        // Whether a real junction the route carries straight through is called out as "go straight".
+        // On by default: a crossing road is a decision to get wrong, and the readout's "continue
+        // straight" says nothing about where that decision is. Only the declared default, like the
+        // voice switch above -- the settings screen's toggle writes the choice to the preference
+        // store, which re-seeds from here whenever there is no saved choice to read.
+        @SerializedName("straight_announcements")
+        public boolean straightAnnouncements = true;
+
         @SerializedName("create_train_tracks")
         public boolean createTrainTracks = true;
 
@@ -556,6 +564,20 @@ public final class RoadConfig {
 // 
     public static boolean voiceAnnouncements() {
         return values.voiceAnnouncements;
+    }
+
+// 
+// * Whether a junction the route carries straight through is called out, on before the config
+// * loads.
+// *
+// * <p>Only the declared default, like the voice switch above: the settings screen's toggle writes
+// * the player's answer to the preference store, which falls back to this whenever there is none.
+// * Read by the planner's own manoeuvre list, which is why the value has to reach it through the
+// * store rather than the other way round -- see
+// * {@code bili.dongsz.howtogo.route.Route#maneuvers}.
+// 
+    public static boolean straightAnnouncements() {
+        return values.straightAnnouncements;
     }
 
 // 
@@ -1027,6 +1049,8 @@ public final class RoadConfig {
     private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
     private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
+    /** Whether a junction the route carries straight through is called out; see {@link #straightAnnouncements()}. */
+    private static final ModConfigSpec.BooleanValue STRAIGHT_ANNOUNCEMENTS;
     private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_STATION_BLOCK_IDS;
@@ -1359,6 +1383,19 @@ public final class RoadConfig {
                         "for players who never open this file.")
                 .translation("howtogo.configuration.voice_announcements")
                 .define("voice_announcements", false);
+
+        STRAIGHT_ANNOUNCEMENTS = builder.comment(
+                        "Whether a real junction the route carries straight through is called out.",
+                        "On by default, because a crossing road is a decision the player can get wrong:",
+                        "the readout's own \"continue straight\" says nothing about where that decision",
+                        "is, so the junction gets a call with its distance and then a \"go straight\" as",
+                        "the player reaches it. Off, the junctions are skipped and the readout goes back",
+                        "to the distance-free \"continue straight\", which is what it did before this",
+                        "call existed. Only the declared default: the settings screen's toggle keeps the",
+                        "player's answer in the preference store, which falls back to this whenever",
+                        "there is none.")
+                .translation("howtogo.configuration.straight_announcements")
+                .define("straight_announcements", true);
 
         CREATE_TRAIN_TRACKS = builder.comment(
                         "Whether Create's train tracks are read out of the loaded chunks and offered as",
@@ -1824,6 +1861,24 @@ public final class RoadConfig {
             return VOICE_ANNOUNCEMENTS.get();
         } catch (IllegalStateException notLoadedYet) {
             return false;
+        }
+    }
+
+    /**
+     * Whether a real junction the route carries straight through is called out, on before the config
+     * loads.
+     *
+     * <p>Only the declared default, like the voice switch above: the settings screen's toggle writes
+     * the player's answer to the preference store, which falls back to this whenever there is none.
+     * The manoeuvre list itself reads the store rather than this -- see
+     * {@code bili.dongsz.howtogo.route.Route#maneuvers} -- so a value written here is only the
+     * fallback for a player who has never touched the setting.
+     */
+    public static boolean straightAnnouncements() {
+        try {
+            return STRAIGHT_ANNOUNCEMENTS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
         }
     }
 

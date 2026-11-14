@@ -205,6 +205,36 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** The most names one road gets, however much of it is on screen. */
     private static final int MAX_LABELS_PER_ROAD = 8;
     /**
+     * The screen distance two signs of one road keep between their centres, in pixels.
+     *
+     * <p>Wider than a name's spacing, and deliberately so: a name is ink lying along the road, while
+     * a sign is an opaque plate. Several plates on one stretch read as a row of fences rather than
+     * as the road's classification, and the road between them is exactly what the player zoomed in
+     * to look at. Reported in play as the signs repeating too densely on one road.
+     */
+    private static final double SIGN_LABEL_SPACING_PX = 420.0;
+    /** The most signs one road gets, however much of it is on screen. Fewer than names, for the same reason. */
+    private static final int MAX_SIGNS_PER_ROAD = 3;
+    /**
+     * The map scale at which a transit line's name is drawn, in Xaero's units per block.
+     *
+     * <p>Twenty pixels a block: the zoom the player has to be at before a line's name is worth a
+     * plate of its own on the map. Further out, a name a hundred blocks long would be a band across
+     * the line it names, and there are several lines in a city -- the names would be the map. The
+     * player asked for this gate in those terms, and the sign cards' own fraction of the zoom is
+     * what keeps the capsule's text readable once it appears.
+     */
+    private static final double LINE_NAME_LABEL_MIN_SCALE = 20.0;
+    /**
+     * How far a line's name floats above the line it names, in screen pixels.
+     *
+     * <p>A capsule lying on the stroke would be a second, opaque stroke; lifted clear of it, the
+     * line still reads as one line and the name is an object beside it. A screen distance rather
+     * than a block one: the plate does not grow with the zoom the way the line's stroke does, so a
+     * block offset would be a gap when zoomed out and a plate sitting on the stroke when zoomed in.
+     */
+    private static final double LINE_NAME_LABEL_RISE_PX = 7.0;
+    /**
      * How far a road or railway name sits off the middle of its line, in the label's own pixels.
      *
      * <p>Half the font's line height is not available here -- the name is written through the map's
@@ -1043,6 +1073,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         drawLineNames(graphics, pose, font, network, false, scale, projection, margin, viewRight,
                 viewBottom, board);
 
+        // The public transport lines' names, last among the line names: a line's plate belongs to a
+        // service rather than to the ground, so it yields the room to the roads, the railways and
+        // the places the map is read for. It is gated far above the road labels' zoom -- see
+        // LINE_NAME_LABEL_MIN_SCALE -- and only appears where the map has room for a plate.
+        drawTransitLineNames(graphics, font, scale, projection, margin, viewRight, viewBottom,
+                board);
+
         // Last of all, after every name, so no label is painted over the readout. Nothing here is a
         // label of the map: this is the place's own description, which only this mod has.
         drawPlaceHoverSummary(graphics, font, info, projection, scale);
@@ -1350,8 +1387,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 if (runLength < labelWidth + LABEL_CLEARANCE_PX * 2.0) {
                     continue;
                 }
-                double spacing = Math.max(LABEL_SPACING_PX, labelWidth + 48.0);
-                int count = Math.max(1, Math.min(MAX_LABELS_PER_ROAD,
+                double spacing = Math.max(sign ? SIGN_LABEL_SPACING_PX : LABEL_SPACING_PX,
+                        labelWidth + 48.0);
+                int count = Math.max(1, Math.min(sign ? MAX_SIGNS_PER_ROAD : MAX_LABELS_PER_ROAD,
                         (int) Math.floor(runLength / spacing)));
                 for (int i = 0; i < count; i++) {
                     LinePoint at = pointAt(run, runLength * (i + 0.5) / count);
@@ -1369,19 +1407,156 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     }
                     LabelBox box = rotatedBox(at.x(), at.y(), textWidth, font.lineHeight * factor,
                             at.angle());
-                    if (box.minX() < 0 || box.maxX() > viewRight
-                            || box.minY() < 0 || box.maxY() > viewBottom) {
+                    // The anchor, not the painted box, is what has to be on the map: a name whose
+                    // last letter met the screen edge used to vanish whole and come back a notch
+                    // later, which reads as flicker rather than as a rule. The map draws to the edge
+                    // of the screen, so the part past it is cut by the screen itself -- the same
+                    // thing a paper map does with a name at its own margin. What is reserved is
+                    // still the whole painted box, so the part inside cannot be painted over.
+                    if (!onScreen(at.x(), at.y(), 0, viewRight - margin, viewBottom - margin)) {
                         continue;
                     }
                     if (!board.fits(box)) {
                         continue;
                     }
                     board.reserve(box);
-                    drawLineLabel(graphics, pose, font, name, segment,
-                            rail ? COLOR_LABEL_RAIL : COLOR_LABEL_ROAD, projection, factor);
+                    drawLineLabel(graphics, pose, font, name, at,
+                            rail ? COLOR_LABEL_RAIL : COLOR_LABEL_ROAD, factor);
                 }
             }
         }
+    }
+
+    /**
+     * Names the public transport lines on the map, in each line's own colour.
+     *
+     * <h2>Why a plate rather than a name along the line</h2>
+     * A road's name belongs to the line it lies on, so it is ink turned with the road. A line's name
+     * is not that: the line is a service, and the plate is the same coloured object the line is in
+     * every other list and card in the mod. Drawn as a horizontal capsule in the line's colour it
+     * cannot be read as a road name, which is what the player asked for -- a line label that is
+     * distinguishable from the roads at a glance.
+     *
+     * <h2>When and where</h2>
+     * Only at the zoom the player named ({@link #LINE_NAME_LABEL_MIN_SCALE}), and only where the
+     * geometry offers a place: every {@link LineNameLabels#SPACING_BLOCKS} blocks along the track,
+     * plus the free room just outside both ends. The placing itself -- the fit test, and stepping
+     * along the line when a place is taken -- lives in {@link LineNameLabels}, shared with the maps
+     * this mod draws itself, so a line's name cannot land differently on two maps.
+     */
+    //? if >=1.21.6 {
+    /*private void drawTransitLineNames(MapElementGraphics graphics, Font font,
+                                      double scale, Projection projection, int margin,
+                                      int viewRight, int viewBottom, LabelBoard board) {
+    *///?} else {
+    private void drawTransitLineNames(GuiGraphics graphics, Font font,
+                                      double scale, Projection projection, int margin,
+                                      int viewRight, int viewBottom, LabelBoard board) {
+    //?}
+        if (!MapFilter.showsLines() || Math.abs(scale) < LINE_NAME_LABEL_MIN_SCALE) {
+            return;
+        }
+        java.util.List<TransitLine> lines = Navigation.linesInPlay();
+        if (lines.isEmpty()) {
+            return;
+        }
+        double screenRight = viewRight - margin;
+        double screenBottom = viewBottom - margin;
+        double height = LineNameLabels.height(font.lineHeight);
+        // The screen as a world rectangle, for the world-space cull below: a line is tens of
+        // thousands of points long and the places its name is offered at are every 160 blocks, so
+        // asking the placer about every one of them would walk the whole polyline per candidate --
+        // the square of the line's length, per frame. The handful of places anywhere near the
+        // screen are the only ones worth projecting.
+        double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
+                Math.abs(projection.scale() * projection.m11()));
+        double leftWorld = Math.min(projection.worldX(0), projection.worldX(screenRight));
+        double rightWorld = Math.max(projection.worldX(0), projection.worldX(screenRight));
+        double topWorld = Math.min(projection.worldZ(0), projection.worldZ(screenBottom));
+        double bottomWorld = Math.max(projection.worldZ(0), projection.worldZ(screenBottom));
+        for (NamedTransitStroke stroke : transitLineStrokesFor(lines)) {
+            double width = LineNameLabels.width(font.width(stroke.name()));
+            if (!(width > 0.0 && height > 0.0)) {
+                continue;
+            }
+            double marginBlocks = (width + 32.0) / Math.max(pixelsPerBlock, 1.0E-9);
+            for (LineNameLabels.Candidate candidate : LineNameLabels.candidatePoints(stroke.points())) {
+                if (candidate.x() < leftWorld - marginBlocks || candidate.x() > rightWorld + marginBlocks
+                        || candidate.z() < topWorld - marginBlocks
+                        || candidate.z() > bottomWorld + marginBlocks) {
+                    continue;
+                }
+                LabelBox[] claimed = new LabelBox[1];
+                double[] spot = LineNameLabels.find(candidate, width, height,
+                        LINE_NAME_LABEL_RISE_PX, new LineNameLabels.Screen() {
+                            @Override
+                            public double screenX(double worldX, double worldZ) {
+                                return projection.screenX(worldX);
+                            }
+
+                            @Override
+                            public double screenY(double worldX, double worldZ) {
+                                return projection.screenZ(worldZ);
+                            }
+
+                            @Override
+                            public boolean fits(double left, double top, double right,
+                                                double bottom) {
+                                if (left < 0 || right > screenRight
+                                        || top < 0 || bottom > screenBottom) {
+                                    return false;
+                                }
+                                LabelBox box = new LabelBox(left - LABEL_CLEARANCE_PX,
+                                        top - LABEL_CLEARANCE_PX, right + LABEL_CLEARANCE_PX,
+                                        bottom + LABEL_CLEARANCE_PX);
+                                if (!board.fits(box)) {
+                                    return false;
+                                }
+                                claimed[0] = box;
+                                return true;
+                            }
+                        });
+                if (spot == null) {
+                    continue;
+                }
+                board.reserve(claimed[0]);
+                drawLineNamePlate(graphics, font, stroke.name(), spot[0], spot[1], width, height,
+                        stroke.colour());
+            }
+        }
+    }
+
+    /**
+     * One line's name plate: a capsule in the line's colour with the name inside it.
+     *
+     * <p>The rounding is the plate's height, so the two ends are semicircles -- a capsule, which is
+     * deliberately not the shape a road's sign card is. The ink comes from the one contrast rule the
+     * sign cards use, so a pale line's name is dark and a dark line's name is pale without a second
+     * table of colours being kept anywhere.
+     */
+    //? if >=1.21.6 {
+    /*private void drawLineNamePlate(MapElementGraphics graphics, Font font, String name,
+                                   double centreX, double centreY, double width, double height,
+                                   int colour) {
+    *///?} else {
+    private void drawLineNamePlate(GuiGraphics graphics, Font font, String name,
+                                   double centreX, double centreY, double width, double height,
+                                   int colour) {
+    //?}
+        int x1 = (int) Math.round(centreX - width / 2.0);
+        int y1 = (int) Math.round(centreY - height / 2.0);
+        int x2 = (int) Math.round(centreX + width / 2.0);
+        int y2 = (int) Math.round(centreY + height / 2.0);
+        if (x2 <= x1 || y2 <= y1) {
+            return;
+        }
+        int ink = RoadSigns.ink(colour);
+        int radius = Math.max(1, (y2 - y1) / 2);
+        MapLabels.fillRoundedOnMap(graphics, x1, y1, x2, y2, radius, colour);
+        MapLabels.outlineRoundedOnMap(graphics, x1, y1, x2, y2, radius, ink);
+        drawMapLabel(graphics, font, name, centreX,
+                centreY - font.lineHeight * LineNameLabels.NAME_FACTOR / 2.0, ink,
+                LineNameLabels.NAME_FACTOR);
     }
 
     /**
@@ -1630,44 +1805,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     *///?} else {
     private void drawLineLabel(GuiGraphics graphics, PoseStack pose, Font font, String name,
     //?}
-                               RoadSegment segment, int color, Projection projection,
-                               float factor) {
-        double[] mid = segment.midpoint();
-        double x = projection.screenX(mid[0]);
-        double y = projection.screenZ(mid[1]);
-
+                               LinePoint at, int color, float factor) {
+        // At the point the label pass walked to, not at the segment's own middle. Those used to be
+        // two different places: the box that was tested and claimed was the run position's, while
+        // the word was painted at the middle of the chain's first piece -- so a long road's labels
+        // could sit past its ends, on top of each other, or off the stretch the fit test had just
+        // approved. The point carries the run's angle as well, which is the direction the line runs
+        // where the name actually sits.
         pose.pushPose();
-        pose.translate(x, y, 0.0);
+        pose.translate(at.x(), at.y(), 0.0);
         // 26.1 gave PoseStack a rotate(Axis, angle) that takes the angle directly, so the quaternion
         // this used to build and multiply in is no longer needed. Same rotation, one step instead of
         // two -- and the two-argument form is what the older nodes still have to spell out.
         //? if >=26.3 {
-        /*pose.rotate(Axis.ZP, (float) screenAngle(segment, projection));
+        /*pose.rotate(Axis.ZP, at.angle());
         *///?} else {
-        pose.mulPose(Axis.ZP.rotation((float) screenAngle(segment, projection)));
+        pose.mulPose(Axis.ZP.rotation(at.angle()));
         //?}
         pose.scale(factor, factor, 1.0F);
         mapLabel(graphics, font, name, -font.width(name) / 2, -LINE_LABEL_RISE_PX, color, true);
         pose.popPose();
-    }
-
-    /**
-     * The direction of a segment on screen, in radians, clamped so a name is never upside down.
-     *
-     * <p>Read from the segment's own two ends: the label sits at the segment's middle, and a segment
-     * of a road is short enough that its overall direction is its direction there. Past a right angle
-     * the label would be readable only by tilting one's head, so it is turned the other way instead --
-     * the same choice a printed map makes.
-     */
-    private static double screenAngle(RoadSegment segment, Projection projection) {
-        int last = segment.vertexCount() - 1;
-        double dx = projection.screenX(segment.x(last)) - projection.screenX(segment.x(0));
-        double dy = projection.screenZ(segment.z(last)) - projection.screenZ(segment.z(0));
-        double angle = Math.atan2(dy, dx);
-        if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
-            angle += Math.PI;
-        }
-        return angle;
     }
 
     // ------------------------------------------------------------ sign cards
@@ -1778,8 +1935,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // signs read as two signs" at map sizes. Reserved before drawing, so a later name can never
         // land on this card.
         LabelBox box = box(at.x(), at.y(), card.width(), card.height());
-        if (box.minX() < 0 || box.maxX() > viewRight
-                || box.minY() < 0 || box.maxY() > viewBottom) {
+        // The card's anchor -- the point on the road it stands on -- has to be on the map; its own
+        // painted edges may hang past a screen edge exactly as a name's may. Requiring the whole
+        // plate inside made a sign vanish as it approached the edge and reappear a notch later, which
+        // is the same flicker the names had.
+        if (!onScreen(at.x(), at.y(), 0, mapViewRight(graphics), mapViewBottom(graphics))) {
             return;
         }
         if (!board.fits(box)) {
@@ -1793,14 +1953,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int y1 = (int) Math.round(top);
         int x2 = (int) Math.round(left + card.width());
         int y2 = (int) Math.round(bottom);
-        MapLabels.fillOnMap(graphics, x1, y1, x2, y2, background);
-        // The border as four one-pixel bars rather than a frame of the card's own weight: it is a
+        // A printed plate, not a sharp-edged rectangle: the same rounding as on the maps that draw
+        // cards at a fixed size, from the one geometry helper in RoadSigns.
+        MapLabels.fillRoundedOnMap(graphics, x1, y1, x2, y2, RoadSigns.CARD_CORNER_PX, background);
+        // The border as a one-pixel rounded rim rather than a frame of the card's own weight: it is a
         // rim, and a rim that scaled with the zoom would be a band at close range. Same ink as the
         // number, so the whole card is one contrast decision made from its background.
-        MapLabels.fillOnMap(graphics, x1, y1, x2, y1 + 1, ink);
-        MapLabels.fillOnMap(graphics, x1, y2 - 1, x2, y2, ink);
-        MapLabels.fillOnMap(graphics, x1, y1 + 1, x1 + 1, y2 - 1, ink);
-        MapLabels.fillOnMap(graphics, x2 - 1, y1 + 1, x2, y2 - 1, ink);
+        MapLabels.outlineRoundedOnMap(graphics, x1, y1, x2, y2, RoadSigns.CARD_CORNER_PX, ink);
 
         // Both lines are centred on the card through the same helper the names use, which is also
         // what keeps the two graphics eras out of this method.
@@ -1844,6 +2003,54 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private static final int BANDS = 6;
     private static final double LINE_STOP_PX = 5.0;
+    /**
+     * How far apart the direction marks of a one-way line stand along it, in blocks.
+     *
+     * <p>A world distance, which is the opposite of the arrows a one-way road carries
+     * ({@link #ONEWAY_ARROW_SPACING_PX} is a screen distance). A road's arrows are a reading of the map
+     * at the zoom it is being read at; a line's direction is a property of the service, so the distance
+     * between marks must not change with the zoom -- a railway that gained a thousand arrowheads when
+     * the player zoomed in would be the map drawing its own marks rather than the line. The mark's size
+     * on the screen is fixed at {@link #TRANSIT_ARROW_PX}; the distance between marks is the line's.
+     */
+    private static final double TRANSIT_ARROW_SPACING_BLOCKS = 64.0;
+    /**
+     * How long a stretch of a one-way line has to be before it is marked at all, in blocks.
+     *
+     * <p>Below this a mark would sit on top of the stop markers at both ends, where an arrowhead and a
+     * round stop marker are the same smudge. Above it, a stretch shorter than the spacing still gets
+     * one mark at its middle, so a line whose stops are a few dozen blocks apart is not the one one-way
+     * line on the map with nothing saying which way it runs.
+     */
+    private static final double TRANSIT_ARROW_MIN_RUN_BLOCKS = 24.0;
+    /**
+     * The most marks one stretch of one line draws.
+     *
+     * <p>The spacing already decides how many a stretch gets; this bounds a stretch long enough for the
+     * marks to stop being a reading of its direction -- a line of a whole railway is one shape with one
+     * run, and marking every 64 blocks of it would be a texture along a line rather than an arrow on
+     * it. Such a stretch is marked evenly along all of itself rather than crowded at its start, so the
+     * bound thins the marks instead of truncating them.
+     */
+    private static final int TRANSIT_ARROW_MAX_PER_RUN = 8;
+    /**
+     * The most marks one line draws, across all of its stretches.
+     *
+     * <p>A backstop on a whole network being edited at once: the per-stretch bound says nothing about a
+     * line of a hundred stretches, and every mark is two triangles in the frame's buffer. A line that
+     * reaches this many keeps the marks of the stretches that came first.
+     */
+    private static final int TRANSIT_ARROW_MAX_PER_LINE = 32;
+    /**
+     * The length of one direction mark, in screen pixels.
+     *
+     * <p>Half of it is the distance from the point on the line that the mark stands for to its tip,
+     * between four and five pixels: enough to read as an arrowhead on a stroke two and a half pixels
+     * wide, and not enough to become a second marker beside the stops. Fixed in pixels rather than in
+     * blocks because it is a reading, like the stroke's own width -- legible zoomed out, and not a sign
+     * zoomed in.
+     */
+    private static final double TRANSIT_ARROW_PX = 9.0;
     /**
      * The map scale at which a marker is drawn at {@link HudDraw#PLACE_MARKER_PX} across, and the bounds
      * on how far it may grow or shrink from there.
@@ -1905,6 +2112,31 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * small maps ask for it every frame.
      */
     private static List<TransitStroke> transitStrokes = List.of();
+    /**
+     * The direction marks of the one-way lines, one list per line and in step with {@link #lineShapes}.
+     *
+     * <p>Worked out with the shapes and not per frame: a mark stands on a point of the drawn path every
+     * {@link #TRANSIT_ARROW_SPACING_BLOCKS} blocks, which is a walk of that path's points and the same
+     * answer on every frame until the line changes. The map redraws every line every frame, so planning
+     * the marks in the rebuild turns a walk of every line per frame into a walk of the lines that
+     * changed. The trade is the same one {@link #transitStrokes} makes, made for the same reason.
+     *
+     * <p>A two-way line's entry is an empty list rather than absent: the drawing pass walks this list by
+     * line index, and a hole would have to be explained at that site. The empty list says the same
+     * thing without a second rule.
+     */
+    private static List<List<LineArrow>> lineArrows = List.of();
+
+    /**
+     * One direction mark on a one-way line: where it stands in the world, and the unit direction a rider
+     * travels through it.
+     *
+     * <p>World blocks, not screen pixels: the mark belongs to the line and the zoom moves under it, so
+     * what is cached is the place and the bearing, and each frame projects them through its own
+     * {@link Projection} exactly as it projects the strokes the marks sit on.
+     */
+    private record LineArrow(double x, double z, double dirX, double dirZ) {
+    }
 
     /** One line's track in world blocks, and the colour that line is known by. */
     public record TransitStroke(List<double[]> points, int colour) {
@@ -1922,6 +2154,40 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     public static List<TransitStroke> transitStrokesFor(List<TransitLine> lines) {
         shapeLines(lines);
         return transitStrokes;
+    }
+
+    /** One line's track in world blocks, with the name and colour a map's label needs. */
+    public record NamedTransitStroke(String name, int colour, List<double[]> points) {
+    }
+
+    /**
+     * The same strokes as {@link #transitStrokesFor}, each carrying the name of the line it belongs
+     * to.
+     *
+     * <p>For the line name plates: a plate says which line a stretch of track serves, so it needs the
+     * line's name and its colour beside the geometry, and asking the drawing sites to pair up a flat
+     * stroke list with a line list themselves is how the two would eventually disagree. The geometry
+     * is the cached shapes' own point lists -- nothing is copied, so this is a walk over the shapes
+     * rather than a second set of geometry.
+     */
+    public static List<NamedTransitStroke> transitLineStrokesFor(List<TransitLine> lines) {
+        shapeLines(lines);
+        List<NamedTransitStroke> named = new java.util.ArrayList<>();
+        for (int index = 0; index < lines.size() && index < lineShapes.size(); index++) {
+            TransitLine line = lines.get(index);
+            String name = line.name();
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            // A name plate is part of the line's presence on the map, so it is drawn in the same
+            // colour the line itself is -- which is the whole of what makes the plate the line's
+            // rather than an anonymous label.
+            int colour = line.colorOr(RoadConfig.transitLineColor(line.kind()));
+            for (PathRuns.Run run : lineShapes.get(index).runs()) {
+                named.add(new NamedTransitStroke(name, colour, run.points()));
+            }
+        }
+        return named;
     }
     /** The line count the diagnostic last reported, so it speaks when that changes and not per frame. */
     private static int reportedLineCount = -1;
@@ -2032,6 +2298,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         StringBuilder signature = new StringBuilder();
         for (TransitLine line : lines) {
             signature.append(shapeKey(line));
+            // The direction marks are built from the direction as well as from the geometry, so a line
+            // whose direction was switched has to rebuild them -- but the direction is deliberately not
+            // in shapeKey, because shapeKey is the shape cache's key as well: putting it there would
+            // plan every route of the line again for a switch that does not move the geometry at all.
+            signature.append(line.oneWay() ? "+oneway" : "+twoway");
         }
         if (signature.toString().equals(lineShapeSignature)) {
             return;
@@ -2070,6 +2341,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         transitStrokes = strokes;
+        // The direction marks of the one-way lines, worked out here beside the same shapes: a mark is a
+        // world position and a world bearing, both taken from the unthinned run -- the marks do not
+        // change with the zoom, and the thinned copies in a Band are per-zoom drawings of the same path.
+        // Rebuilt only when this method rebuilds, which is what makes the per-frame pass a projection of
+        // a prepared list rather than a walk of every line.
+        List<List<LineArrow>> arrows = new java.util.ArrayList<>(lines.size());
+        for (int index = 0; index < lines.size() && index < shapes.size(); index++) {
+            arrows.add(planLineArrows(lines.get(index), shapes.get(index)));
+        }
+        lineArrows = arrows;
         reportLongSteps(lines, shapes);
     }
 
@@ -2236,6 +2517,208 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return LineShape.of(TrackRuns.ofPlanned(stretches));
     }
 
+    /**
+     * Works out where the direction marks of one line go, from the line's stops and its drawn shape.
+     *
+     * <p>One mark every {@link #TRANSIT_ARROW_SPACING_BLOCKS} blocks of drawn path, on each stretch of a
+     * line whose {@link TransitLine#oneWay()} is true; a two-way line gets an empty list. That is the
+     * whole of the visibility rule: the map is not annotating direction in general, and a line that can
+     * be ridden either way has no direction to annotate.
+     *
+     * <h2>Which way a stretch is travelled</h2>
+     * A run of drawn path has an order of its own -- the order its points are stored in -- and that
+     * order is not the travel order. A player's line is planned from each stop to the next in the
+     * line's list, but a track read out of MTR is drawn from the track's own pieces in the order their
+     * chain walk found them, which can be either way round. So a run is never asked which way it points:
+     * it is oriented by the line's own stops. A larger stop index means travel towards the list's end,
+     * which is what "from the first stop towards the last" means everywhere else in this feature (see
+     * {@link bili.dongsz.howtogo.transit.LineDirection}).
+     *
+     * <p>The first attempt is the run's ends: the stop nearest its first point and the stop nearest its
+     * last point, with the run travelled in the line's order when the second index is the larger and
+     * against it when the smaller. For a stretch that begins at one stop and ends at another, that is
+     * the answer.
+     *
+     * <p>A closed loop has no such ends: its stretch leaves a station and comes back to the same one,
+     * so the nearest stop at both ends is the same index and the ends say nothing. For that case the
+     * stretch is asked again at a quarter and at three quarters of its own length -- a loop passes its
+     * stops in the line's list order, so those two points stand next to different stops, and the larger
+     * of those two indices is the direction the loop is ridden in. This matters more than a corner
+     * case: a circular route is exactly how MTR hands this mod a one-way line, so leaving every loop
+     * unmarked would have left the direction marks with nothing to say about the case they exist for.
+     *
+     * <p>Only when those two indices are equal too is the stretch left unmarked, rather than given an
+     * invented direction. That is now the genuinely undecidable case: a ring whose whole stop list
+     * crowds one stretch of it, so no sample along the run lands nearer a different stop than the
+     * sample before it. A loop the ends alone could not tell is no longer this case, and a short
+     * stretch whose ends both stand nearer one stop than any other usually still finds two different
+     * stops a quarter and three quarters along it.
+     *
+     * <p>The nearest stop is found by distance alone, which assumes what the drawing already assumes:
+     * that a stretch of a line begins and ends at or near the stops it serves. The one case it gets
+     * wrong is a line that passes close to a stop it does not call at; the marks on that stretch would
+     * then be drawn the wrong way. There is no other evidence to use -- the direction is not stored on
+     * the geometry -- so the rule is stated here rather than hidden.
+     */
+    private static List<LineArrow> planLineArrows(TransitLine line, LineShape shape) {
+        if (!line.oneWay()) {
+            return List.of();
+        }
+        List<LineStop> stops = line.stops();
+        if (stops.size() < 2) {
+            return List.of();
+        }
+        List<LineArrow> arrows = new java.util.ArrayList<>();
+        for (PathRuns.Run run : shape.runs()) {
+            if (arrows.size() >= TRANSIT_ARROW_MAX_PER_LINE) {
+                break;
+            }
+            addRunArrows(stops, run.points(), arrows, TRANSIT_ARROW_MAX_PER_LINE - arrows.size());
+        }
+        return arrows.isEmpty() ? List.of() : List.copyOf(arrows);
+    }
+
+    /**
+     * Adds the marks of one run of a one-way line, evenly spaced along it.
+     *
+     * <p>Evenly spaced rather than at the exact spacing once the per-run bound applies: a run longer
+     * than the bound gets its marks at {@code length / count} blocks apart, so the whole run is marked
+     * rather than only the part of it the marks reached before the budget ran out. Below the bound the
+     * spacing is the world spacing and the marks are the reading asked for.
+     *
+     * <p>Which way the run is travelled is {@link #runTravelSign}'s answer; the rule behind it is
+     * stated on {@link #planLineArrows}, and a run it cannot orient is left unmarked.
+     */
+    private static void addRunArrows(List<LineStop> stops, List<double[]> points,
+                                     List<LineArrow> arrows, int budget) {
+        if (points.size() < 2 || budget <= 0) {
+            return;
+        }
+        double length = 0.0;
+        for (int i = 1; i < points.size(); i++) {
+            length += Math.hypot(points.get(i)[0] - points.get(i - 1)[0],
+                    points.get(i)[1] - points.get(i - 1)[1]);
+        }
+        if (!(length > 0.0)) {
+            return;
+        }
+        double travel = runTravelSign(stops, points, length);
+        if (travel == 0.0) {
+            // Neither the run's ends nor a sample a quarter and three quarters along it could tell
+            // which way it is ridden: a mark there would be a guess. See planLineArrows.
+            return;
+        }
+        int count = (int) Math.floor(length / TRANSIT_ARROW_SPACING_BLOCKS);
+        if (count == 0 && length >= TRANSIT_ARROW_MIN_RUN_BLOCKS) {
+            count = 1;
+        }
+        count = Math.min(count, Math.min(budget, TRANSIT_ARROW_MAX_PER_RUN));
+        if (count <= 0) {
+            return;
+        }
+        double step = length / count;
+        double nextAt = step * 0.5;
+        double travelled = 0.0;
+        int placed = 0;
+        for (int i = 1; i < points.size() && placed < count; i++) {
+            double fromX = points.get(i - 1)[0];
+            double fromZ = points.get(i - 1)[1];
+            double deltaX = points.get(i)[0] - fromX;
+            double deltaZ = points.get(i)[1] - fromZ;
+            double edge = Math.hypot(deltaX, deltaZ);
+            if (edge < 1.0E-9) {
+                continue;
+            }
+            while (placed < count && nextAt <= travelled + edge) {
+                double at = (nextAt - travelled) / edge;
+                // The mark's bearing is the local edge's, so a mark on a bend follows the bend instead
+                // of all of them pointing the way the run happened to begin.
+                arrows.add(new LineArrow(fromX + deltaX * at, fromZ + deltaZ * at,
+                        travel * deltaX / edge, travel * deltaZ / edge));
+                placed++;
+                nextAt += step;
+            }
+            travelled += edge;
+        }
+    }
+
+    /**
+     * Which way round a run is written relative to the line's travel order.
+     *
+     * <p>The first answer is the run's own ends: the stop nearest its first point and the stop nearest
+     * its last point, with the larger index meaning the stored order is the travel order. A closed
+     * loop has the same stop at both ends -- it leaves a station and comes back to it -- so it is
+     * asked again at a quarter and at three quarters of its length, whose nearest stops are different
+     * ones when the stops are spread round the ring. Larger again means the stored order is the travel
+     * order.
+     *
+     * @return +1 when the run's stored order is the line's travel order, -1 when it is against it, and
+     *         0 when neither pair of samples could tell the two apart: a ring whose whole stop list
+     *         crowds one stretch of it
+     */
+    private static double runTravelSign(List<LineStop> stops, List<double[]> points, double length) {
+        int fromIndex = nearestStop(stops, points.get(0)[0], points.get(0)[1]);
+        double[] last = points.get(points.size() - 1);
+        int toIndex = nearestStop(stops, last[0], last[1]);
+        if (fromIndex != toIndex) {
+            return toIndex > fromIndex ? 1.0 : -1.0;
+        }
+        // A quarter and three quarters along rather than the ends, which for a loop are the same
+        // place: a loop passes its stops in the line's list order, so these two samples stand next to
+        // different stops as long as the list is not crowded onto one stretch of the ring.
+        double[] quarter = pointAt(points, length, 0.25);
+        double[] threeQuarters = pointAt(points, length, 0.75);
+        int quarterIndex = nearestStop(stops, quarter[0], quarter[1]);
+        int threeQuarterIndex = nearestStop(stops, threeQuarters[0], threeQuarters[1]);
+        if (quarterIndex == threeQuarterIndex) {
+            return 0.0;
+        }
+        return threeQuarterIndex > quarterIndex ? 1.0 : -1.0;
+    }
+
+    /**
+     * The point a given fraction of the way along a run, interpolated inside the edge it falls on.
+     *
+     * <p>Used only to ask a closed loop which way round it is ridden, and only when the shapes are
+     * rebuilt -- never per frame. It falls back to the run's last point only when rounding has eaten
+     * the final edge, in which case that point is the place.
+     */
+    private static double[] pointAt(List<double[]> points, double length, double fraction) {
+        double target = length * fraction;
+        double travelled = 0.0;
+        for (int i = 1; i < points.size(); i++) {
+            double fromX = points.get(i - 1)[0];
+            double fromZ = points.get(i - 1)[1];
+            double deltaX = points.get(i)[0] - fromX;
+            double deltaZ = points.get(i)[1] - fromZ;
+            double edge = Math.hypot(deltaX, deltaZ);
+            if (edge > 0.0 && travelled + edge >= target) {
+                double at = (target - travelled) / edge;
+                return new double[] {fromX + deltaX * at, fromZ + deltaZ * at};
+            }
+            travelled += edge;
+        }
+        double[] last = points.get(points.size() - 1);
+        return new double[] {last[0], last[1]};
+    }
+
+    /** The index of the stop nearest the given world point, the earlier stop winning an exact tie. */
+    private static int nearestStop(List<LineStop> stops, double x, double z) {
+        int nearest = 0;
+        double best = Double.POSITIVE_INFINITY;
+        for (int index = 0; index < stops.size(); index++) {
+            LineStop stop = stops.get(index);
+            double deltaX = stop.x() - x;
+            double deltaZ = stop.z() - z;
+            double distance = deltaX * deltaX + deltaZ * deltaZ;
+            if (distance < best) {
+                best = distance;
+                nearest = index;
+            }
+        }
+        return nearest;
+    }
+
     private List<LineLabel> drawTransitLines(PoseStack pose, VertexConsumer vc, int margin,
                                              int viewRight, int viewBottom, double scale,
                                              java.util.List<TransitInterchanges.Interchange>
@@ -2306,6 +2789,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         MapPassReport.lines(System.nanoTime() - startedAt, lines.size(), stroked, sourcePoints, culled[0]);
+        // The direction of a one-way line, and only while the road editor is open. The map is not a
+        // sign: everywhere else it draws which lines exist and where they go, and marking the direction
+        // of every one-way line on it would be annotating the network rather than editing it. In the
+        // editor the direction is exactly the thing being worked on, and the marks are the same arrow
+        // the editor already draws along a one-way road -- same ink, same head, see emitLineArrows --
+        // so a rider reads one language for both. Emitted straight after the strokes they belong to,
+        // in the same screen space, so a mark cannot drift off the line under it while the map moves.
+        if (MapFilter.showsLines() && RoadEditSession.isActive()) {
+            HudDraw.VertexSink arrowSink = HudDraw.sink(screenPose, vc);
+            for (int index = 0; index < lines.size(); index++) {
+                if (!lines.get(index).oneWay()) {
+                    continue;
+                }
+                emitLineArrows(arrowSink, arrowsAt(index), projection, margin, viewRight, viewBottom);
+            }
+        }
         // No name is drawn along a line. It was tried at the middle stop and at the middle of the path
         // and was wrong in both places -- on a line that curves or loops, no single point along it is
         // the middle a reader means, and a name written over the stroke or beside a station marker is
@@ -2389,6 +2888,67 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** One line's shape, or nothing when the shapes and the lines have somehow come apart. */
     private static LineShape shapeAt(int index) {
         return index < lineShapes.size() ? lineShapes.get(index) : LineShape.EMPTY;
+    }
+
+    /** One line's direction marks, or nothing when the marks and the lines have somehow come apart. */
+    private static List<LineArrow> arrowsAt(int index) {
+        return index < lineArrows.size() ? lineArrows.get(index) : List.of();
+    }
+
+    /**
+     * Draws the direction marks of one one-way line that the screen can see.
+     *
+     * <p>Per frame this only projects and emits: where each mark stands and which way it points were
+     * worked out with the line's shape (see {@link #planLineArrows}), so what is left is the same
+     * arithmetic the strokes do -- this frame's own {@link Projection}, the same visible rectangle and
+     * margin, and one arrowhead of a fixed screen size. The marks are culled one by one rather than by
+     * the run's box because the box is the whole line: a line crossing the screen has most of its marks
+     * just off it, and the point test is two comparisons.
+     *
+     * <p>The bearing is taken by projecting a one-block step along the mark's direction and normalising
+     * the result, not from the projection's scale factors: that is the projection's own answer, so a
+     * pose whose scale signs flip the map still draws the mark pointing where the line goes on the
+     * screen. The arrowhead itself is {@link #emitArrowHead}, the one the editor draws on a one-way road
+     * -- a light head over a dark rim -- because a direction means the same thing whichever kind of way
+     * it belongs to. The ink is a fixed pair rather than one chosen per line: a line's colour may be any
+     * value a player typed, an imported route's colour, or its kind's configured colour, and this pair
+     * is legible on all of them -- the light head stands off the dark colours, and the rim separates it
+     * from the pale ones. That is the same reason the pair exists on the roads' own marks, and it is the
+     * labels' own two inks: the rim is the dark ink the sign cards are lettered in (0x10141A) carried at
+     * a slight transparency, and the head a light ink in the same family.
+     *
+     * <h2>What has and has not been checked</h2>
+     * This has not been looked at in a running game. What was checked is that the mod and the routing
+     * harness compile with it, and the geometry rules stated on {@link #planLineArrows} -- the travel
+     * order from the nearest stops, the placement, the bounds -- are worked out from the line's own data
+     * and not from anything read off a screen. What needs a human eye in the game is the reading: the
+     * marks' size on a stroke two and a half pixels wide at the zooms a player actually uses, their
+     * contrast on the palest line colours, and whether one mark every sixty-four blocks reads as a
+     * direction or as a texture along a long straight run. The three constants are the place to change
+     * those answers.
+     *
+     * @param out the sink for the frame's vertex batch, made once by the caller so a line with thirty
+     *            marks does not make thirty sinks
+     */
+    private static void emitLineArrows(HudDraw.VertexSink out, List<LineArrow> arrows,
+                                       Projection projection, int margin, int viewRight,
+                                       int viewBottom) {
+        for (LineArrow arrow : arrows) {
+            double x = projection.screenX(arrow.x());
+            double y = projection.screenZ(arrow.z());
+            if (x < -margin || x > viewRight || y < -margin || y > viewBottom) {
+                continue;
+            }
+            double directionX = projection.screenX(arrow.x() + arrow.dirX()) - x;
+            double directionY = projection.screenZ(arrow.z() + arrow.dirZ()) - y;
+            double length = Math.hypot(directionX, directionY);
+            if (!(length > 1.0E-9)) {
+                // The line is drawn so far zoomed out that a block is less than a pixel, and a mark
+                // whose direction has collapsed to a point is not a direction.
+                continue;
+            }
+            emitArrowHead(out, x, y, directionX / length, directionY / length, TRANSIT_ARROW_PX);
+        }
     }
 
     /**
@@ -3214,6 +3774,19 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /** One arrowhead: a dark rim with a light head on top of it, pointing along (ux, uy). */
     private static void emitArrowHead(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
                                       double ux, double uy, double size) {
+        emitArrowHead(HudDraw.sink(pose, vc), cx, cy, ux, uy, size);
+    }
+
+    /**
+     * The same arrowhead into a sink the caller already holds, so a line's marks share one sink.
+     *
+     * <p>{@code size} is the arrow's length in whatever unit the sink's pose is in: the map's local
+     * units for a road, where the caller has already scaled it to a screen size, and screen pixels for
+     * a transit line, whose marks are emitted in screen space. The head is the same shape either way --
+     * a direction mark is one thing on this map, whichever layer it belongs to.
+     */
+    private static void emitArrowHead(HudDraw.VertexSink out, double cx, double cy,
+                                      double ux, double uy, double size) {
         double nx = -uy;
         double ny = ux;
         double tipX = cx + ux * size * 0.5;
@@ -3224,11 +3797,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double wingY = ny * size * 0.62;
         double rim = size * 0.22;
 
-        HudDraw.emitTriangle(HudDraw.sink(pose, vc),
+        HudDraw.emitTriangle(out,
                 tipX + ux * rim, tipY + uy * rim,
                 backX + wingX - nx * rim, backY + wingY - ny * rim,
                 backX - wingX + nx * rim, backY - wingY + ny * rim, COLOR_ARROW_RIM);
-        HudDraw.emitTriangle(HudDraw.sink(pose, vc),
+        HudDraw.emitTriangle(out,
                 tipX, tipY,
                 backX + wingX, backY + wingY,
                 backX - wingX, backY - wingY, COLOR_ARROW);

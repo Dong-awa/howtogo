@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.route;
 
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -77,8 +78,25 @@ public final class Route {
      */
     private final TravelMode travelMode;
 
-    /** Cached turn points. */
+    /**
+     * Cached turn points, and the straight-through switch they were built for.
+     *
+     * <p>The switch is part of the cache rather than read per manoeuvre because it decides which
+     * manoeuvres exist at all -- see {@link #computeManeuvers} -- and a list built for the other
+     * answer would otherwise be served after the player changed the setting. Toggling it therefore
+     * costs one rebuild of this list and no re-plan: the road under the player has not changed, only
+     * what the guidance is allowed to say about it.
+     *
+     * <p>The switch is read through {@link RoutePreferenceStore}, the same place the voice switch is
+     * read from, because it is a guidance preference rather than a property of the geometry: the
+     * same road driven with the calls on and off is the same road. Reading it here rather than in the
+     * readouts is deliberate -- the readout, the voice and {@code TurnCursor} all index this one
+     * list, so a separate filtered copy at each of them would be three chances for the junction
+     * being announced not to be the junction being drawn.
+     */
     private List<Maneuver> maneuvers;
+    /** Whether that list was built with straight-through junctions called; null before any build. */
+    private Boolean maneuversWithStraight;
 
     /**
      * Drawn distance from the first point to each point, parallel to {@link #points}.
@@ -101,6 +119,18 @@ public final class Route {
 
     /** A turn sharper than this counts as a manoeuvre worth announcing. */
     private static final double TURN_THRESHOLD_DEG = 25.0;
+
+    /**
+     * How close two straight-through manoeuvres may be before the second is taken for the first.
+     *
+     * <p>A junction is one place, but the road data may draw it as two nodes a few blocks apart --
+     * the quad of a crossroads, or a short connector joining the two carriageways of a divided road
+     * -- and each of those nodes is a branch of its own. Without this, one junction the player
+     * carries straight through could be called twice within a couple of steps. Three blocks is
+     * wider than that pair and narrower than the gap between two junctions a driver would think of
+     * as separate decisions.
+     */
+    private static final double STRAIGHT_DUPLICATE_DISTANCE = 3.0;
 
     Route(List<double[]> points, double[] tolerances, int[] roadKeys, String[] roadNames,
           boolean[] branchAt, double startConnector, double goalConnector,
@@ -312,22 +342,34 @@ public final class Route {
     }
 
     /**
-     * One announced turn.
+     * One announced manoeuvre.
      *
      * @param distanceFromStart how far along the route the junction is
-     * @param turnDegrees       signed angle, positive being a right turn
+     * @param turnDegrees       signed angle, positive being a right turn; exactly zero for a
+     *                          straight-through call, which is a junction the route carries on
+     *                          through rather than a turn the player has to make
      * @param roadName          the road being turned onto, or null when it has no name
      * @param junctionX         world x of the junction itself
      * @param junctionZ         world z of the junction itself
      * @param bearingAfter      direction of the route leaving the junction, in degrees from +X
      *                          towards +Z, which is what a player's heading has to match for the
-     *                          turn to count as taken rather than passed
+     *                          turn to count as taken rather than passed. For a straight-through call
+     *                          this is the direction the route runs, which is the direction a player
+     *                          carrying straight on is already facing -- see {@code TurnCursor}
      * @param namesTheRoad      whether the road being entered is worth naming: it has a name, and not
      *                          the one the route was already on
+     * @param continuesNamedRoad whether the road entered carries the same name as the one left, which
+     *                          is a road worth naming but worded as carrying on along it rather than
+     *                          as turning into it. False for an unnamed road and for a straight-through
+     *                          call, neither of which names anything
+     * @param straight          whether this is a junction the route carries straight through rather
+     *                          than a turn. A flag rather than a test on {@code turnDegrees}, because a
+     *                          small angle and a straight-through call look the same in that number
+     *                          and are worded completely differently
      */
     public record Maneuver(double distanceFromStart, double turnDegrees, String roadName,
                            double junctionX, double junctionZ, double bearingAfter,
-                           boolean namesTheRoad) {
+                           boolean namesTheRoad, boolean continuesNamedRoad, boolean straight) {
     }
 
     public boolean isPresent() {
@@ -417,20 +459,59 @@ public final class Route {
 
     // ---------------------------------------------------------------- distance
 
-    /** Cached turn points, each as {@code {distanceFromStart, signedDegrees}}. */
+    /**
+     * Where the guidance has something to say along this route, in the order it is travelled.
+     *
+     * <p>Built for the straight-through switch the player has set, and rebuilt when that switch is
+     * changed: the cache field above says why that belongs here rather than in a readout, and
+     * {@link #computeManeuvers} says what the switch decides.
+     */
     public List<Maneuver> maneuvers() {
-        if (maneuvers == null) {
-            maneuvers = computeManeuvers();
+        boolean straightThroughJunctions = RoutePreferenceStore.straightAnnouncements();
+        if (maneuvers == null || maneuversWithStraight == null
+                || maneuversWithStraight != straightThroughJunctions) {
+            maneuversWithStraight = straightThroughJunctions;
+            maneuvers = computeManeuvers(straightThroughJunctions);
         }
         return maneuvers;
     }
 
-    private List<Maneuver> computeManeuvers() {
+    /**
+     * Works out where the guidance has something to say, once per list of manoeuvres.
+     *
+     * <h2>What is a manoeuvre</h2>
+     * A change of road is not enough on its own. A sharp corner inside one road is a bend, and
+     * announcing it would tell the player to turn when they are already on the right road; a class
+     * or name change at a pass-through node is a change of road data on one continuous piece of
+     * ground, and announcing that is what told players to turn onto the road they were already on.
+     *
+     * <h2>The junction carried straight through</h2>
+     * A real fork the route carries on through is the one decision a turn-based list used to drop:
+     * there is no angle to report, and the route is not entering a differently named road, so the
+     * point was skipped and the readout went back to "continue straight" with no idea where. That is
+     * exactly where a player has to be told to stay on the road they are on -- the crossing road is
+     * right there -- so the point is called, as a straight-through manoeuvre with no angle. What it
+     * must not be is a small-angle turn: the shape test that gives the angle also gives an almost
+     * zero angle here, and a "keep left" for a junction that goes straight on is worse than silence.
+     * See {@link Maneuver#straight()}.
+     *
+     * <p>{@code straightThroughJunctions} is the player's switch. Off, the list is exactly what it
+     * was before straight-through calls existed: those points are skipped, and the one case the old
+     * rule kept -- a straight fork onto a road with a name of its own, where the name is the news --
+     * still produces its ordinary sharp-or-slight turn.
+     *
+     * <p>A junction the road data draws as two adjacent nodes is one junction to the player, so
+     * straight-through calls within {@link #STRAIGHT_DUPLICATE_DISTANCE} of each other are one call.
+     */
+    private List<Maneuver> computeManeuvers(boolean straightThroughJunctions) {
         List<Maneuver> result = new ArrayList<>();
         if (points.size() < 3) {
             return result;
         }
         double travelled = 0;
+        // Where the previous straight-through call was placed, or NaN when there is none yet; see
+        // STRAIGHT_DUPLICATE_DISTANCE.
+        double lastStraightAt = Double.NaN;
         for (int i = 1; i < points.size() - 1; i++) {
             double[] a = points.get(i - 1);
             double[] b = points.get(i);
@@ -453,18 +534,44 @@ public final class Route {
             // Signed so that positive is a right turn, following Minecraft's axes (X east, Z south).
             double delta = Math.toDegrees(wrapRadians(
                     Math.atan2(outZ, outX) - Math.atan2(inZ, inX)));
-            // ... and it has to be a decision. Either the route genuinely bends here, or it carries
-            // on into a road with a name of its own at a real fork. A class or name change that does
-            // neither is the same piece of ground continuing, and calling that a turn is what told
-            // players to turn onto the road they were already on.
+            double bearingAfter = Math.toDegrees(Math.atan2(outZ, outX));
             boolean turns = Math.abs(delta) >= TURN_THRESHOLD_DEG;
-            if (!turns && !(isBranch(i) && entersADifferentRoad(i))) {
-                continue;
+            if (!turns) {
+                // ... and it has to be a decision. Either the route genuinely bends here, or it
+                // carries on into a road with a name of its own at a real fork. A class or name
+                // change that does neither is the same piece of ground continuing, and calling that
+                // a turn is what told players to turn onto the road they were already on.
+                //
+                // A real fork is where the two halves differ: the road data really does branch
+                // here, so the player has a choice to get wrong even though the route's own line
+                // does not bend. That is the junction the straight-through call exists for.
+                if (!isBranch(i)) {
+                    continue;
+                }
+                if (straightThroughJunctions) {
+                    if (!Double.isNaN(lastStraightAt)
+                            && travelled - lastStraightAt <= STRAIGHT_DUPLICATE_DISTANCE) {
+                        continue;
+                    }
+                    lastStraightAt = travelled;
+                    // Zero degrees on purpose: the arrow and the wording are both "straight on",
+                    // and it is the flag -- not the number -- that says which wording to use.
+                    // Nothing is named: a player carrying straight on has not entered a road.
+                    result.add(new Maneuver(travelled, 0.0, nameAt(i + 1), b[0], b[1], bearingAfter,
+                            false, false, true));
+                    continue;
+                }
+                // Switched off: the rule that existed before straight-through calls. The one case
+                // kept here is the straight fork onto a differently named road, where the name is
+                // what the player needs to know.
+                if (!entersADifferentRoad(i)) {
+                    continue;
+                }
             }
             // The junction's position and the bearing leaving it, both already in hand here, so
             // the caller can tell a turn the player took from one they walked straight past.
             result.add(new Maneuver(travelled, delta, nameAt(i + 1),
-                    b[0], b[1], Math.toDegrees(Math.atan2(outZ, outX)), namesTheRoad(i)));
+                    b[0], b[1], bearingAfter, namesTheRoad(i), continuesNamedRoad(i), false));
         }
         return result;
     }
@@ -476,11 +583,30 @@ public final class Route {
      * on an unnamed road, or onto the same road's name at a fork where the name carries on, reads as
      * the tool having lost track of where they are. The turn is still a turn and is still announced;
      * it is only the name that is dropped.
+     *
+     * <p>"Nothing to name" and "the same road's name" are different answers, so they are not
+     * collapsed into this one flag: {@link #continuesNamedRoad} is the second of them, and the two
+     * are worded differently -- dropping the name for the first, "continue on X" for the second.
      */
     private boolean namesTheRoad(int pointIndex) {
         String before = nameAt(pointIndex);
         String after = nameAt(pointIndex + 1);
         return after != null && !after.isBlank() && !after.equals(before);
+    }
+
+    /**
+     * Whether the turn enters a road that carries on the name of the one being left.
+     *
+     * <p>Two roads whose ends meet and whose names agree are one road to the player, whatever the
+     * data made of them -- a name edited on one piece, a junction point placed in the middle, a
+     * class change along the way. Calling that "turn right" and then dropping the name reads as the
+     * tool having lost the road; calling it "turn right, continue on X" says the thing that is true:
+     * the road goes on, the line bends.
+     */
+    private boolean continuesNamedRoad(int pointIndex) {
+        String before = nameAt(pointIndex);
+        String after = nameAt(pointIndex + 1);
+        return after != null && !after.isBlank() && after.equals(before);
     }
 
     /** Whether the polyline point is a real junction: a node with three or more segment ends. */

@@ -733,16 +733,23 @@ public final class Navigation {
     }
 
     /**
-     * A turn ahead, with the distance already rebased onto the player.
+     * A manoeuvre ahead, with the distance already rebased onto the player.
      *
-     * @param distanceAhead blocks from the player to the junction, following the route
-     * @param turnDegrees   signed angle, positive being a right turn
-     * @param roadName      the road being turned onto, or null when it has none
-     * @param namesTheRoad  whether that road is worth naming, which it is not when it is the one the
-     *                      route was already on
+     * @param distanceAhead     blocks from the player to the junction, following the route
+     * @param turnDegrees       signed angle, positive being a right turn; exactly zero for a
+     *                          straight-through call
+     * @param roadName          the road being turned onto, or null when it has none
+     * @param namesTheRoad      whether that road is worth naming, which it is not when it is the one
+     *                          the route was already on, or has no name, or when the call is a
+     *                          straight-through one that names nothing
+     * @param continuesNamedRoad whether the road being entered carries the name of the one being
+     *                          left, in which case it is worth naming but worded as carrying on
+     *                          along it rather than as turning into it
+     * @param straight          whether this is a junction the route carries straight through rather
+     *                          than a turn
      */
     public record Instruction(double distanceAhead, double turnDegrees, String roadName,
-                              boolean namesTheRoad) {
+                              boolean namesTheRoad, boolean continuesNamedRoad, boolean straight) {
     }
 
     /**
@@ -1338,6 +1345,10 @@ public final class Navigation {
      * <p>Which one that is, and whether it has been taken, is {@link TurnCursor}'s: the verdict has
      * to be remembered, and remembering it wrongly is what showed a junction the player had already
      * left behind as the next instruction.
+     *
+     * <p>A junction the route carries straight through is one of the manoeuvres this reports: the
+     * list is the one the player's settings ask for, see {@link Route#maneuvers}, so the readout,
+     * the voice and the cursor cannot disagree about whether it is there.
      */
     public static Instruction nextManeuver() {
         if (!route.isPresent()) {
@@ -1354,7 +1365,8 @@ public final class Navigation {
         }
         Route.Maneuver maneuver = route.maneuvers().get(index);
         return new Instruction(maneuver.distanceFromStart() - travelled,
-                maneuver.turnDegrees(), maneuver.roadName(), maneuver.namesTheRoad());
+                maneuver.turnDegrees(), maneuver.roadName(), maneuver.namesTheRoad(),
+                maneuver.continuesNamedRoad(), maneuver.straight());
     }
 
     /**
@@ -1830,13 +1842,45 @@ public final class Navigation {
      * entered, the player is going back the way they came. On a highway it is not worded as a turn
      * at all, because there is nowhere to turn, so the same junction is called as carrying on to it.
      *
+     * <p>A junction the route carries straight through is called as carrying straight on, not as a
+     * turn: there is no direction change to name, and the slight-turn band the angle would fall
+     * into is exactly wrong there -- a "keep left" for a road that goes straight on. A turn onto a
+     * road that carries on the name of the one being left is worded as continuing along it rather
+     * than as entering it; see {@link Route.Maneuver#continuesNamedRoad()}.
+     *
      * @param now whether the junction is close enough to act on, which drops the distance
      */
     public static String maneuverSentence(Instruction maneuver, boolean now) {
         if (isUturn(maneuver.turnDegrees())) {
             return uturnSentence(maneuver.distanceAhead(), now, onHighway());
         }
+        if (maneuver.straight()) {
+            return now
+                    ? net.minecraft.network.chat.Component
+                            .translatable("hud.howtogo.hud_straight_now").getString()
+                    : net.minecraft.network.chat.Component
+                            .translatable("hud.howtogo.hud_straight_ahead",
+                                    Route.formatDistance(maneuver.distanceAhead()))
+                            .getString().trim();
+        }
         String turn = turnPhrase(maneuver.turnDegrees());
+        // Always name the road being entered, falling back to the placeholder, so the sentence
+        // never quietly loses its destination. That swap is not needed for a continuing road, which
+        // has a name by definition, but the same expression serves both branches.
+        String road = maneuver.roadName() != null && !maneuver.roadName().isBlank()
+                ? maneuver.roadName()
+                : unnamedRoad();
+        // The same name on both sides of the junction is one road to the player: the line bends, the
+        // road carries on, and that is what is said instead of pretending they have entered a new one.
+        if (maneuver.continuesNamedRoad()) {
+            return now
+                    ? net.minecraft.network.chat.Component
+                            .translatable(continuesKey(true), turn, road).getString()
+                    : net.minecraft.network.chat.Component
+                            .translatable(continuesKey(false),
+                                    Route.formatDistance(maneuver.distanceAhead()), turn, road)
+                            .getString().trim();
+        }
         // Naming the road the player is already on tells them nothing they do not know, and reads as
         // the tool having lost track of where they are. The turn is still called; the name is not.
         if (!maneuver.namesTheRoad()) {
@@ -1848,17 +1892,41 @@ public final class Navigation {
                                     Route.formatDistance(maneuver.distanceAhead()), turn)
                             .getString().trim();
         }
-        // Always name the road being entered, falling back to the placeholder, so the sentence
-        // never quietly loses its destination.
-        String road = maneuver.roadName() != null && !maneuver.roadName().isBlank()
-                ? maneuver.roadName()
-                : unnamedRoad();
         if (now) {
             return net.minecraft.network.chat.Component
                     .translatable("hud.howtogo.hud_turn_now_named", turn, road).getString();
         }
         return net.minecraft.network.chat.Component.translatable("hud.howtogo.hud_turn_named",
                 Route.formatDistance(maneuver.distanceAhead()), turn, road).getString().trim();
+    }
+
+    /**
+     * The bare "continue on X" instruction for the readout's instruction line.
+     *
+     * <p>The readout shows the turn, or the road, without the distance -- that has a slot of its own
+     * beside it -- so this is the same wording as {@link #maneuverSentence} minus the countdown, and
+     * it lives here so the two cannot drift apart. Which of "driving" and "walking" the sentence
+     * uses is {@link #mode()}'s answer, exactly as it is for the spoken form.
+     */
+    public static String continuesAction(String turn, String road) {
+        return Component.translatable(mode() == TravelMode.WALK
+                ? "hud.howtogo.turn_continues_walk"
+                : "hud.howtogo.turn_continues", turn, road).getString();
+    }
+
+    /**
+     * The sentence key for "continue on the road that carries on": walking along a road is walked,
+     * every other way of travelling it is driven or ridden.
+     *
+     * <p>Two keys per form rather than a verb put into a slot: the verb does not sit in the same
+     * place in every language, and a slot in the middle of a sentence is what turns a translation
+     * into a word-ordering puzzle. English's two forms happen to read the same, which is a property
+     * of English and not of the sentence.
+     */
+    private static String continuesKey(boolean now) {
+        return "hud.howtogo.hud_turn_continues"
+                + (mode() == TravelMode.WALK ? "_walk" : "")
+                + (now ? "_now" : "");
     }
 
     /**
@@ -2413,10 +2481,12 @@ public final class Navigation {
      * plan it protects.
      *
      * <p>The player's transit lines have no version of their own, so the live list's identity, its
-     * size and its stop counts are folded in instead. Lines are replaced when the world changes and
-     * edited only from screens that cannot be open beside the picker, so those three together catch
-     * the changes that can actually happen while a list is on screen; the stop counts also catch an
-     * import that replaced the lines' stops behind an unchanged list.
+     * size, its stop counts and each line's direction are folded in instead. Lines are replaced when
+     * the world changes and edited only from screens that cannot be open beside the picker, so those
+     * together catch the changes that can actually happen while a list is on screen; the stop counts
+     * also catch an import that replaced the lines' stops behind an unchanged list. The direction is
+     * there because it changes which journeys exist without changing a single stop: a line marked
+     * one-way has no ride back along it, so a list planned before that edit would go on offering one.
      */
     private static long worldStamp() {
         RoadNetwork handDrawn = RoadStore.get();
@@ -2435,6 +2505,7 @@ public final class Navigation {
         stamp = stamp * 31 + System.identityHashCode(lines);
         for (TransitLine line : lines) {
             stamp = stamp * 31 + line.stopCount();
+            stamp = stamp * 31 + line.direction().ordinal();
         }
         return stamp;
     }

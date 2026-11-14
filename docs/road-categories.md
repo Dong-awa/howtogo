@@ -23,7 +23,7 @@ never changes the other.
 
 ## Editing a road
 
-The road editor is the panel opened with **N** on a road (see `RoadNameScreen`). It edits four things
+The road editor is the panel opened with **N** on a road (see `RoadNameScreen`). It edits five things
 in one visit:
 
 - **name** -- as before;
@@ -35,8 +35,13 @@ in one visit:
   While the road is 未分类 the field is simply disabled (no note under it): an unclassified road wears
   no plate, so there is nothing for a number to go on. Committing an unclassified edit clears the
   stored number.
+- **direction** -- a stepper at the foot of the panel: 双向 / 单行道（顺向）/ 单行道（逆向）, stepped by
+  its two halves or by the mouse wheel. It is the same three-state cycle the map's **O** key walks, and
+  what it writes is the direction of the **whole street**, not of the piece under the cursor: the pieces
+  of a bent road may be stored pointing opposite ways, and the editor orients each piece along the
+  street's own walk (see `RoadEditor#setChainDirection`).
 
-`Done` (or Enter) writes all four values onto every piece of the selected road, as **one undo step**.
+`Done` (or Enter) writes all five values onto every piece of the selected road, as **one undo step**.
 The storey is also remembered as the one the next road is drawn on, as it always was.
 
 ## The sign card on the map

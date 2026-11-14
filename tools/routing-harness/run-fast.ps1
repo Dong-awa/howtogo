@@ -88,6 +88,26 @@ if ($Refresh -or -not (Test-Path $classpathFile)) {
         Set-Content -Path $classpathFile -Encoding ASCII
 }
 
+# javac and java are started from a response file rather than from the command line.
+#
+# The toolchain is invoked twice with a whole source tree and a runtime classpath: this tree's classpath
+# alone is sixteen thousand characters, and the two source roots add one line per file. Windows caps a
+# process's command line at 32767 characters, and past that limit CreateProcess fails before javac ever
+# starts -- "The filename or extension is too long", which reads as a broken compiler rather than as a
+# long list. A response file has no such cap.
+#
+# Paths are written with forward slashes and quoted, so no argument in the file depends on how Windows
+# backslashes are escaped: javac and java accept forward slashes on Windows, and a quoted argument with no
+# backslash in it is read the same way by both.
+function Convert-ToArgFileLine([string]$value) {
+    return '"' + ($value -replace '\\', '/') + '"'
+}
+
+function New-ArgumentFile([string]$path, [string[]]$lines) {
+    Set-Content -LiteralPath $path -Value $lines -Encoding ASCII
+    return $path
+}
+
 $runtime = (Get-Content $classpathFile -Raw).Trim()
 
 # The compileOnly dependencies -- Xaero's World Map and the phone mod -- are in libs/ and are not on the
@@ -110,7 +130,12 @@ $sources = @('src\main\java', 'src\common\java') |
 # its users have would be a dependency by another name.
 Remove-Item $modClasses -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $modClasses -Force | Out-Null
-& javac -encoding UTF-8 -proc:none -nowarn -cp $compilePath -d $modClasses $sources
+$modArgs = @('-encoding', 'UTF-8', '-proc:none', '-nowarn',
+    '-cp', (Convert-ToArgFileLine $compilePath),
+    '-d', (Convert-ToArgFileLine $modClasses))
+$modArgs += $sources | ForEach-Object { Convert-ToArgFileLine $_ }
+$modArgFile = New-ArgumentFile (Join-Path $work 'javac-mod.args') $modArgs
+& javac "@$modArgFile"
 if ($LASTEXITCODE -ne 0) { throw "javac failed on the mod with $LASTEXITCODE" }
 
 # MTR itself is added after the mod has been compiled, and only for the harness: with its jar on the
@@ -156,8 +181,12 @@ New-Item -ItemType Directory -Path $harnessClasses -Force | Out-Null
 # Recurse: a check that has to reach package-private members lives in that package's directories
 # rather than in this one, so a top-level-only listing would compile every check but those.
 $harnessSources = Get-ChildItem $here -Recurse -Filter *.java | ForEach-Object { $_.FullName }
-& javac -encoding UTF-8 -proc:none -nowarn -cp "$modClasses;$harnessPath" -d $harnessClasses `
-    $harnessSources
+$harnessArgs = @('-encoding', 'UTF-8', '-proc:none', '-nowarn',
+    '-cp', (Convert-ToArgFileLine "$modClasses;$harnessPath"),
+    '-d', (Convert-ToArgFileLine $harnessClasses))
+$harnessArgs += $harnessSources | ForEach-Object { Convert-ToArgFileLine $_ }
+$harnessArgFile = New-ArgumentFile (Join-Path $work 'javac-harness.args') $harnessArgs
+& javac "@$harnessArgFile"
 if ($LASTEXITCODE -ne 0) { throw "javac failed on the harness with $LASTEXITCODE" }
 
 Write-Host 'running the harness...'
@@ -168,8 +197,12 @@ Write-Host ''
 # scripts and the vendored html2canvas out of the real files rather than out of a stub -- appended
 # rather than prepended, so nothing here can shadow a class or a resource the runtime already has.
 $resources = Join-Path $project 'src\main\resources'
+$runArgs = @("-Dhowtogo.webmap.fixture=$WriteWebMapFixture",
+    '-cp', (Convert-ToArgFileLine "$harnessClasses;$modClasses;$harnessPath;$resources"),
+    'Harness')
+$runArgFile = New-ArgumentFile (Join-Path $work 'java-harness.args') $runArgs
 Push-Location $work
-& java "-Dhowtogo.webmap.fixture=$WriteWebMapFixture" -cp "$harnessClasses;$modClasses;$harnessPath;$resources" Harness
+& java "@$runArgFile"
 $harnessCode = $LASTEXITCODE
 Pop-Location
 exit $harnessCode

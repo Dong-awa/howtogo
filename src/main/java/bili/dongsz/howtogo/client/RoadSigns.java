@@ -69,6 +69,60 @@ public final class RoadSigns {
     public static final int INK_LIGHT = 0xFFFFFFFF;
     public static final int INK_DARK = 0xFF10141A;
 
+    /**
+     * The scale a sign card is drawn at on the maps whose text does not follow their zoom.
+     *
+     * <p>The destination picker, the main screen's viewer and the phone page draw every label at one
+     * size, so the card there is a fixed fraction of the font. It used to be 0.72 of it, which read as
+     * a plate bigger than the streets it stood on once the card's border and padding were counted;
+     * 0.58 keeps the number legible and the plate a detail of the road rather than an object the map
+     * is about. The three maps share the number so the same road's shield is the same shield on all
+     * of them, which is the reason the world map's card is a fraction of its own label zoom instead
+     * of a size of its own.
+     */
+    public static final float FIXED_CARD_SCALE = 0.58F;
+
+    /**
+     * How far a card's corners are rounded, in screen pixels.
+     *
+     * <p>Small enough that a card a dozen pixels tall still reads as a card rather than as a pill,
+     * and large enough that the corners stop being the sharpest thing on the map -- a sign is a
+     * printed plate, and a printed plate has rounded corners.
+     */
+    public static final int CARD_CORNER_PX = 2;
+
+    /**
+     * How far a rounded box's row is inset from its left and right edges, in pixels.
+     *
+     * <p>The whole of the rounding is this one function: a box drawn row by row with this inset has
+     * quarter-circle corners, which is how the maps that can only fill rectangles draw a rounded
+     * card without a shader or a texture. {@code radius} is clamped to half the shorter side, so
+     * passing {@code height / 2} draws a capsule -- the shape a line's name carries, so that it
+     * cannot be mistaken for a road's sign.
+     *
+     * <p>Lives here rather than in each map for the same reason the card's proportions do: the
+     * world map, the viewer, the picker and the phone page all draw the same shape, and four copies
+     * of this arithmetic would drift apart about what a rounded corner is.
+     *
+     * @param row    the row being drawn, in the same space as {@code top}
+     * @param top    the box's top row
+     * @param bottom the box's bottom row, exclusive
+     * @param radius the rounding radius in pixels, clamped to half the box's height
+     */
+    public static int roundedInset(int row, int top, int bottom, int radius) {
+        int height = bottom - top;
+        int r = Math.max(0, Math.min(radius, height / 2));
+        if (r <= 0) {
+            return 0;
+        }
+        int edge = Math.min(row - top, bottom - 1 - row);
+        if (edge >= r) {
+            return 0;
+        }
+        double dy = r - edge - 0.5;
+        return (int) Math.round(r - Math.sqrt(Math.max(0.0, (double) r * r - dy * dy)));
+    }
+
     /** The luminance above which a card counts as light and is lettered in the dark ink. */
     private static final int DARK_INK_ABOVE = 140;
 
