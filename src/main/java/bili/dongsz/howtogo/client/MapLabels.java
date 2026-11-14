@@ -41,4 +41,32 @@ final class MapLabels {
         graphics.drawString(font, text, x, y, colour, shadow);
     }
     //?}
+
+    /**
+     * Fills one rectangle on the map: the backing of a road's sign card.
+     *
+     * <p>Written with the same two receivers as {@link #drawOnMap}, and for the same reason: the
+     * vanilla GUI context is {@code GuiGraphics} before 1.21.6 and Xaero's own
+     * {@code MapElementGraphics} from there on, and there is no expression that names both. The call
+     * inside is identical on the two -- {@code graphics.fill(x1, y1, x2, y2, argb)} -- so this
+     * helper is about the type alone; unlike the text call above, no method rename is involved, and
+     * the two bodies therefore stay literally the same line.
+     *
+     * <p>It lives here rather than in the renderer because this is the one file already written
+     * against both receivers, so the card's fill does not add a second copy of the fences for the
+     * build to keep in step. The renderer keeps a thin wrapper of its own for the text call, the same
+     * shape this helper gives the fill.
+     */
+    //? if >=1.21.6 {
+    /*static void fillOnMap(xaero.map.element.MapElementGraphics graphics, int x1, int y1, int x2, int y2,
+                          int argb) {
+        graphics.fill(x1, y1, x2, y2, argb);
+    }
+    *///?}
+    //? if <1.21.6 {
+    static void fillOnMap(net.minecraft.client.gui.GuiGraphics graphics, int x1, int y1, int x2, int y2,
+                          int argb) {
+        graphics.fill(x1, y1, x2, y2, argb);
+    }
+    //?}
 }

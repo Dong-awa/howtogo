@@ -181,6 +181,8 @@ public final class RoadStorage {
                 SegmentDto s = new SegmentDto();
                 s.id = segment.id();
                 s.roadClass = segment.roadClass().name();
+                s.category = segment.category().id();
+                s.number = segment.number();
                 s.from = segment.fromNode();
                 s.to = segment.toNode();
                 s.direction = segment.direction().name();
@@ -275,6 +277,13 @@ public final class RoadStorage {
         for (int i = 0; i < count; i++) {
             segment.addVertex(xs[i], zs[i]);
         }
+        // Tolerant like every other optional field: a file written before categories existed leaves
+        // the field null, which resolves to the class's own "not classified" -- every road that has
+        // never been classified looks exactly as it did. The id is opaque here: whether it names a
+        // category the player still has is the store's question, and a reference to a deleted one is
+        // drawn and edited as "not classified" rather than being an error in a save file.
+        segment.setCategory(RoadCategory.resolve(segment.roadClass(), s.category));
+        segment.setNumber(s.number);
         segment.setFromNode(s.from);
         segment.setToNode(s.to);
         segment.setDirection(directionOf(s));
@@ -361,6 +370,23 @@ public final class RoadStorage {
     private static final class SegmentDto {
         int id;
         String roadClass;
+        /**
+         * Which category of {@link #roadClass} the road is, as the category's opaque id.
+         *
+         * <p>Added after the first release and left absent in every file written before it: read
+         * tolerantly, and an absent one resolves to the class's "not classified", which is what those
+         * roads were. Written always, so the file states the category rather than relying on a
+         * default. The id is not a name: see {@link RoadCategory} for why a road carries a reference
+         * and the definition lives with the client's category store.
+         */
+        String category;
+        /**
+         * The road's number as the player typed it, or absent when it has none.
+         *
+         * <p>Not a number in the file either: a national highway is "G318" and a ring road may be
+         * "一环", so this is text and is written only when there is some.
+         */
+        String number;
         int from;
         int to;
         /**

@@ -12,6 +12,7 @@ import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
+import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.road.RoadStorage;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.LinePlanner;
@@ -731,11 +732,32 @@ public final class SelfTest {
                         "the network could not be written");
             }
             RoadNetwork read = RoadStorage.load(file);
+            // Category and number are fields this build writes and earlier files do not have, so the
+            // counts alone no longer prove the round trip: ask it back segment by segment. A file
+            // written before the fields existed loads them as the class's own "none" and no number,
+            // which is what the network in memory says too, so an old world passes this unchanged.
+            int classified = 0;
+            int mismatched = 0;
+            for (RoadSegment segment : network.segments()) {
+                RoadSegment back = read.segment(segment.id());
+                if (back == null) {
+                    continue;
+                }
+                if (!segment.category().isNone() || segment.hasSign()) {
+                    classified++;
+                }
+                if (!back.category().equals(segment.category())
+                        || !java.util.Objects.equals(back.number(), segment.number())) {
+                    mismatched++;
+                }
+            }
             boolean ok = read.nodeCount() == network.nodeCount()
-                    && read.segmentCount() == network.segmentCount();
+                    && read.segmentCount() == network.segmentCount()
+                    && mismatched == 0;
             return new Result("command.howtogo.selftest.check.storage", ok,
                     "wrote " + network.nodeCount() + "/" + network.segmentCount() + ", read "
-                            + read.nodeCount() + "/" + read.segmentCount() + "; lines="
+                            + read.nodeCount() + "/" + read.segmentCount() + "; classified="
+                            + classified + " mismatched=" + mismatched + "; lines="
                             + lines.size());
         } catch (IOException | RuntimeException failed) {
             return new Result("command.howtogo.selftest.check.storage", false,

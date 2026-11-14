@@ -174,6 +174,9 @@ public final class Harness {
         int[] selection = bili.dongsz.howtogo.road.SelectionCheck.run();
         checks += selection[0];
         failures += selection[1];
+        int[] categories = bili.dongsz.howtogo.road.RoadCategoryCheck.run();
+        checks += categories[0];
+        failures += categories[1];
         int[] transitions = bili.dongsz.howtogo.client.ScreenMotionCheck.run();
         checks += transitions[0];
         failures += transitions[1];

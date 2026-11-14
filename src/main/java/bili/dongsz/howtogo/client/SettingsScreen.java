@@ -38,14 +38,16 @@ import java.util.function.IntSupplier;
  * Every other screen this mod opens is drawn by hand in {@link UiTheme}'s colours; a column of
  * vanilla sliders would be the one part of the interface that did not belong to either theme. The
  * controls here are therefore the mod's own: a rounded toggle, a chip that cycles a short list, a
- * {@code - value +} stepper, and plain {@link PanelButton}s in the footer. A slider is deliberately
- * absent: the numeric settings are coordinates and distances where a step is more useful than a
- * drag, and a track would have to invent a colour role for its own knob.
+ * {@code - value +} stepper, a button that opens another page, and plain {@link PanelButton}s in the
+ * footer. A slider is deliberately absent: the numeric settings are coordinates and distances where
+ * a step is more useful than a drag, and a track would have to invent a colour role for its own knob.
  *
  * <h2>Saving</h2>
  * Every edit is written and saved at once, through {@link RoadConfig}'s typed setters. There is no
  * "apply" button and no close-time save: a player who changes something and then presses Escape has
- * already persisted it. The one line that matters is {@link #commit()}, which every control runs.
+ * already persisted it. The one line that matters is {@link #commit()}, which every control that
+ * holds a value runs -- the row that opens the category editor changes nothing here and so has
+ * nothing to save.
  *
  * <h2>Theme</h2>
  * No colour is written down here. Every surface, edge, text rank, control face and state comes from
@@ -77,6 +79,14 @@ final class SettingsScreen extends Screen {
     private static final int GROUP_HEIGHT = 18;
     private static final int CONTROL_HEIGHT = 14;
     private static final int TOGGLE_WIDTH = 46;
+    /**
+     * How wide the action row's control is.
+     *
+     * <p>Not measured from the label: the word is the same "open" in every language this file is
+     * translated into and a translated label that grew would push the control off the panel, so the
+     * label is elided into this width instead of the width following the label.
+     */
+    private static final int ACTION_WIDTH = 62;
     private static final int STEP_BOX = 16;
     private static final int STEP_VALUE_ROOM = 52;
     private static final int DESC_LINES = 3;
@@ -167,6 +177,7 @@ final class SettingsScreen extends Screen {
     private void buildRows() {
         List<UiTheme.Mode> themes = List.of(UiTheme.Mode.values());
         List<MapDisplayMode> displayModes = List.of(MapDisplayMode.values());
+        List<RoadLabelStyle> labelStyles = List.of(RoadLabelStyle.values());
         List<HudAnchor> anchors = List.of(HudAnchor.values());
         List<TravelMode> travelModes = List.of(TravelMode.values());
 
@@ -187,13 +198,23 @@ final class SettingsScreen extends Screen {
                         "screen.howtogo.settings.ui_animations.desc",
                         RoadConfig::uiAnimations,
                         RoadConfig::setUiAnimations, true),
-                Row.choice("howtogo.configuration.map_display_mode",
-                        "screen.howtogo.settings.map_display_mode.desc",
-                        List.of(label("howtogo.configuration.map_display_mode.hud"),
-                                label("howtogo.configuration.map_display_mode.xaero_minimap")),
-                        () -> displayModes.indexOf(RoadConfig.mapDisplayMode()),
-                        index -> RoadConfig.setMapDisplayMode(displayModes.get(index)),
-                        displayModes.indexOf(MapDisplayMode.defaultMode())));
+                // The third question about how a road reads on the map, and the one the sign card
+                // exists for: a name, a classification sign, or both in the same card. Under the
+                // animations because it is still a decision about how the interface reads rather
+                // than about what it does.
+                Row.choice("howtogo.configuration.road_label_style",
+                        "screen.howtogo.settings.road_label_style.desc",
+                        List.of(label("howtogo.configuration.road_label_style.name"),
+                                label("howtogo.configuration.road_label_style.sign"),
+                                label("howtogo.configuration.road_label_style.mixed")),
+                        () -> labelStyles.indexOf(RoadConfig.roadLabelStyle()),
+                        index -> RoadConfig.setRoadLabelStyle(labelStyles.get(index)),
+                        RoadLabelStyle.defaultStyle().ordinal()),
+                // The sign's colour and the word on it are per category, so this row is a door rather
+                // than a value: the page behind it edits the player's own categories.
+                Row.action("howtogo.configuration.road_categories",
+                        "screen.howtogo.settings.road_categories.desc",
+                        () -> Screens.set(new RoadCategoryScreen(this))));
 
         // The compact HUD card only exists while the map half is actually drawn on Xaero's Minimap,
         // so its three rows follow the effective mode rather than the chosen one: choosing Xaero's
@@ -202,6 +223,16 @@ final class SettingsScreen extends Screen {
         BooleanSupplier xaeroMode = () -> NavMapMode.effective() == MapDisplayMode.XAERO_MINIMAP;
         Component needsXaero = label("screen.howtogo.settings.needs_xaero");
         group("screen.howtogo.settings.group.hud",
+                // First, because it is the row that decides what this group is about: whether the
+                // navigation map is this mod's own panel or Xaero's Minimap. The compact-card rows
+                // under it only exist for the second answer.
+                Row.choice("howtogo.configuration.map_display_mode",
+                        "screen.howtogo.settings.map_display_mode.desc",
+                        List.of(label("howtogo.configuration.map_display_mode.hud"),
+                                label("howtogo.configuration.map_display_mode.xaero_minimap")),
+                        () -> displayModes.indexOf(RoadConfig.mapDisplayMode()),
+                        index -> RoadConfig.setMapDisplayMode(displayModes.get(index)),
+                        displayModes.indexOf(MapDisplayMode.defaultMode())),
                 Row.choice("howtogo.configuration.compact_hud_anchor",
                         "screen.howtogo.settings.compact_hud_anchor.desc",
                         List.of(label("howtogo.configuration.compact_hud_anchor.top_left"),
@@ -424,6 +455,10 @@ final class SettingsScreen extends Screen {
                         } else if (row.kind == Kind.CHOICE) {
                             row.stepChoice(1);
                             commit();
+                        } else if (row.kind == Kind.BUTTON) {
+                            // A door, not a value: nothing on this screen changed, so there is
+                            // nothing to commit. The page it opens owns whatever it writes.
+                            row.onAction.run();
                         } else if (mouseX < controlX + STEP_BOX) {
                             row.stepNumber(-1);
                             commit();
@@ -662,6 +697,12 @@ final class SettingsScreen extends Screen {
             int resting = row.boolValue() ? UiTheme.buttonOn() : UiTheme.button();
             face = !enabled ? UiTheme.button()
                     : UiMotion.mix(resting, UiTheme.buttonHover(), overControl ? lit : 0.0F);
+        } else if (row.kind == Kind.BUTTON) {
+            // The ordinary button face and its hover mix, because that is what the control is: a
+            // button that happens to live in a row instead of in the footer.
+            face = !enabled ? UiTheme.button()
+                    : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(),
+                            overControl ? lit : 0.0F);
         } else {
             face = !enabled ? UiTheme.button()
                     : UiMotion.mix(UiTheme.selectionSoft(), UiTheme.selection(),
@@ -708,6 +749,17 @@ final class SettingsScreen extends Screen {
             drawCentred(graphics, "-", x, STEP_BOX, textY,
                     UiMotion.fade(enabled ? UiTheme.onButton() : UiTheme.textFaint(), arrived));
             drawCentred(graphics, "+", x + width - STEP_BOX, STEP_BOX, textY,
+                    UiMotion.fade(enabled ? UiTheme.onButton() : UiTheme.textFaint(), arrived));
+            return;
+        }
+        if (row.kind == Kind.BUTTON) {
+            // The face is a button's, so the label is a button's too: centred on it, in the colour
+            // that face's text is drawn in, and elided rather than wrapped when a translation is
+            // wider than the control.
+            drawCentred(graphics, PlaceText.ellipsis(font,
+                            Component.translatable("howtogo.configuration.open").getString(),
+                            width - 6),
+                    x, width, y + (CONTROL_HEIGHT - 8) / 2,
                     UiMotion.fade(enabled ? UiTheme.onButton() : UiTheme.textFaint(), arrived));
             return;
         }
@@ -810,6 +862,7 @@ final class SettingsScreen extends Screen {
             case TOGGLE -> TOGGLE_WIDTH;
             case CHOICE -> Math.max(64, Math.min(150, row.choiceWidth(font) + 16));
             case NUMBER -> STEP_BOX * 2 + 2 + STEP_VALUE_ROOM;
+            case BUTTON -> ACTION_WIDTH;
         };
     }
 
@@ -846,7 +899,14 @@ final class SettingsScreen extends Screen {
     // -------------------------------------------------------------------- rows
 
     private enum Kind {
-        TOGGLE, CHOICE, NUMBER
+        /** A switch: one boolean, toggled in place. */
+        TOGGLE,
+        /** A chip that steps through a short list of named values. */
+        CHOICE,
+        /** A stepper: two boxes and a value between them. */
+        NUMBER,
+        /** A control that opens something else and holds no value of its own. */
+        BUTTON
     }
 
     private static final class Group {
@@ -888,6 +948,8 @@ final class SettingsScreen extends Screen {
 
         private BooleanSupplier enabledWhen;
         private Component disabledReason;
+        /** The action a {@link Kind#BUTTON} row runs; null on every other kind. */
+        private Runnable onAction;
         private Runnable resetValue;
         private int contentY;
         /** The row's place in the flat list, which is what its hover slide and stagger are keyed by. */
@@ -919,6 +981,24 @@ final class SettingsScreen extends Screen {
             row.choiceSetter = setter;
             row.choiceDefault = Math.max(0, defaultIndex);
             row.resetValue = () -> setter.accept(row.choiceDefault);
+            return row;
+        }
+
+        /**
+         * A row whose control is a button: the row opens another page rather than holding a value.
+         *
+         * <p>It is a row and not a footer button because what it opens is one of the settings this
+         * screen owns -- the content behind the road-label style -- and it belongs beside that
+         * setting rather than in the row that closes the screen.
+         *
+         * <p>It has no default to restore, which is not a gap in the pattern: the reset button
+         * restores <em>values</em>, and a door has none. Its {@code resetValue} is deliberately a
+         * no-op, so a reset pass can never open a screen as a side effect of being run.
+         */
+        private static Row action(String labelKey, String descriptionKey, Runnable action) {
+            Row row = new Row(Kind.BUTTON, label(labelKey), label(descriptionKey));
+            row.onAction = action;
+            row.resetValue = () -> { };
             return row;
         }
 

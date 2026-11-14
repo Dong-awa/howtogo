@@ -649,6 +649,42 @@ public final class RoadEditor {
         return true;
     }
 
+    /**
+     * Everything one visit to the road panel edits: name, storey, category and number.
+     *
+     * <p>One undo step rather than four, for the same reason {@link #setRoadNameAndLayer} is one:
+     * the player answered one panel, and taking it back should be one press. Every selected road
+     * gets the same four values -- what one field each says -- because a selection is the gesture
+     * "do this to all of these".
+     *
+     * <p>The category is clamped by the segment itself, so a passed category from another class
+     * lands on that class's "none" rather than mislabelling the road. Everything is written even
+     * when only one of the four changed: the panel is the source of truth for what the road should
+     * be, not a set of independent patches, and a segment that somehow differs from the panel would
+     * otherwise keep a value nobody can see.
+     */
+    public boolean setRoadDetails(int segmentId, String name, int layer, RoadCategory category,
+                                  String number) {
+        java.util.List<java.util.List<Integer>> chains = chainsToEdit(segmentId);
+        if (chains.isEmpty()) {
+            return false;
+        }
+        pushUndo();
+        for (java.util.List<Integer> chain : chains) {
+            for (int id : chain) {
+                RoadSegment segment = network.segment(id);
+                if (segment != null) {
+                    segment.setName(name);
+                    segment.setLayer(layer);
+                    segment.setCategory(category);
+                    segment.setNumber(number);
+                }
+            }
+        }
+        setActiveLayer(layer);
+        return true;
+    }
+
     public int chainNodeId() {
         return chainNodeId;
     }

@@ -1,6 +1,7 @@
 package bili.dongsz.howtogo.compat.mcphone;
 
 import bili.dongsz.howtogo.HowToGo;
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.client.Destinations;
 import bili.dongsz.howtogo.client.HudDraw;
 import bili.dongsz.howtogo.client.Navigation;
@@ -9,6 +10,9 @@ import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.RailLayers;
 import bili.dongsz.howtogo.client.RailNameStore;
 import bili.dongsz.howtogo.client.RailTrackStore;
+import bili.dongsz.howtogo.client.RoadCategoryStore;
+import bili.dongsz.howtogo.client.RoadLabelStyle;
+import bili.dongsz.howtogo.client.RoadSigns;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.UiMotion;
 import bili.dongsz.howtogo.client.UiTheme;
@@ -153,6 +157,24 @@ public final class DestinationPickerPage implements IPhonePage {
      * the next; the world map suppresses labels for the same reason.
      */
     private static final double MIN_LABEL_PPB = 0.5;
+
+    /**
+     * How much of the font a sign card is drawn at on this map: box and text alike, 0.72 of the font.
+     *
+     * <p>The world map's card is a fraction of its label zoom because a full-size plate is louder than
+     * the names around it and takes a bite out of the map; this page has no zoom of its own to follow,
+     * so the same decision is a fixed fraction of the font. 0.72 is taken from the top of the world
+     * map's range (its card lives between 0.5 and 0.8 of the font) because a phone map is tiny and the
+     * bottom of that range would not be readable on it, while a full-size card is exactly the
+     * billboard the shrink exists to avoid.
+     *
+     * <p>The whole card scales, not just its text: a small number in a full-sized plate is a box of
+     * padding round a small word and would take just as much of the map. The border stays one screen
+     * pixel, which at this size is a rim rather than a share of the card.
+     */
+    private static final float SIGN_CARD_SCALE = 0.72F;
+    /** The least share of the card's scale the mixed card's name line may shrink to. */
+    private static final double SIGN_CARD_NAME_FLOOR = 0.7;
 
     // The content area of the canvas being drawn, so the input methods -- which MCphone does not
     // hand a canvas -- can work out the same rectangles the renderer did.
@@ -666,9 +688,22 @@ public final class DestinationPickerPage implements IPhonePage {
         // piece carries the name. Asking for a chain per named road walks the network per name, and
         // this page redraws on every frame the phone app is open.
         RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        // How the player wants roads labelled, read once for the pass: the three answers are the
+        // same three the world map and the picker obey, so a road is drawn the same way on all of
+        // them -- see RoadLabelStyle.
+        RoadLabelStyle style = RoadConfig.roadLabelStyle();
+        boolean signMode = style != RoadLabelStyle.NAME;
+        boolean mixed = style == RoadLabelStyle.MIXED;
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
-            if (name == null || segment.vertexCount() < 2) {
+            boolean named = name != null && !name.isBlank();
+            // A sign needs a number and a category that still exists to print it on: the card's whole
+            // content is that number, and a category the player has deleted is not a category any
+            // more, so a road carrying one is drawn as unclassified (no card, name fallback). A road
+            // with a sign and no name is still labelled, by the card it has.
+            boolean sign = signMode && segment.hasSign()
+                    && RoadCategoryStore.has(segment.category());
+            if ((!named && !sign) || segment.vertexCount() < 2) {
                 continue;
             }
             double[] mid = segment.midpoint();
@@ -678,6 +713,12 @@ public final class DestinationPickerPage implements IPhonePage {
                 continue;
             }
             if (!grouping.carriesLabel(segment)) {
+                continue;
+            }
+            if (sign) {
+                // The card takes the label's place rather than joining it: one road gets one label
+                // at its carrying point, and a card beside a name would be two objects at one point.
+                drawSignCard(graphics, font, segment, x, z, mixed, minX, minY, maxX, maxY);
                 continue;
             }
             if (font.width(name) > chainScreenPx(network, grouping.chainOf(segment))) {
@@ -719,6 +760,130 @@ public final class DestinationPickerPage implements IPhonePage {
         pose.translate(x, y, 0.0);
         pose.mulPose(Axis.ZP.rotation(angle));
         graphics.drawString(font, name, -font.width(name) / 2, -4, colour, false);
+        pose.popPose();
+    }
+
+    /**
+     * One road's sign card on the phone's map: the category's colour, a one-pixel contrasting border,
+     * the number centred inside, and in mixed mode the road's name shrunk under the number.
+     *
+     * <p>The same object the world map and the picker draw, and deliberately the same rule: the card
+     * is upright because a sign is a plate standing beside the road rather than a word lying on it,
+     * it is centred on the road's midpoint -- not lifted above it -- because the stroke running into
+     * the plate and out of it is what makes the plate read as standing on the road it names, and its
+     * ink is chosen from the colour it paints (see {@link RoadSigns}), which is what keeps it readable
+     * after a player recolours a category. The room inside it, the ink rule and the mixed mode's
+     * shrink-with-a-floor are shared with those two maps; the placement and the scale are this page's
+     * own, because its map is a fixed-size canvas rather than a zoomable one.
+     *
+     * <h2>Why the card is scaled</h2>
+     * The other two maps draw it smaller than the font for the same reason: a full-size plate is
+     * opaque, coloured, and the loudest thing on a map whose names are ink. This page's map is the
+     * smallest of the three, so it is drawn at {@link #SIGN_CARD_SCALE} of the font -- the whole card,
+     * not just the words in it, or it would be a box of padding round small text.
+     *
+     * <h2>Why the card is measured from the number, and the name widened around</h2>
+     * A sign is a plate whose width is the word printed on it, and that word is the number. The mixed
+     * mode's name therefore gives way -- shrunk to the width the number's line leaves it -- but only
+     * down to {@link #SIGN_CARD_NAME_FLOOR} of the card's scale: a name below that is unreadable, so a
+     * name that would need more shrinking than that widens the plate instead and the number stays
+     * centred with plate either side of it. Same rule, same constants, as the world map's
+     * {@code measureSignCard}.
+     *
+     * <p>The whole label pass is already clipped to the map area by the caller, so a card that runs
+     * past an edge is cut there rather than painted over the phone's furniture; the bound check here
+     * only drops the ones that are wholly off the map.
+     */
+    private void drawSignCard(GuiGraphics graphics, Font font, RoadSegment segment, double x,
+                              double y, boolean withName, int minX, int minY, int maxX, int maxY) {
+        String number = segment.number();
+        if (number == null || number.isBlank()) {
+            return;
+        }
+        String name = withName ? segment.name() : null;
+        boolean named = name != null && !name.isBlank();
+        int numberWidth = font.width(number);
+        int nameWidth = named ? font.width(name) : 0;
+        // The name line's share of the card's scale, and the width the plate has to give it, both in
+        // the card's unscaled units: the world map's mixed rule, this page's pixels being its units.
+        double nameFactor = 1.0;
+        int innerWidth = numberWidth;
+        if (named) {
+            double raw = (double) numberWidth / nameWidth;
+            nameFactor = Math.min(1.0, Math.max(SIGN_CARD_NAME_FLOOR, raw));
+            // The hair is subtracted before the ceil for the reason the world map's copy states:
+            // raw was formed by a division and is multiplied back out here, so a name that fits the
+            // number's line exactly must not round up a pixel and widen a plate it already fits.
+            innerWidth = Math.max(numberWidth,
+                    (int) Math.ceil(nameWidth * nameFactor - 1.0E-6));
+        }
+        double nameLineUnits = named
+                ? font.lineHeight * nameFactor + RoadSigns.LINE_GAP
+                : 0.0;
+        // Everything in unscaled units up to here, and one scaling at the end, so the plate's
+        // proportions match the other two maps' cards.
+        int cardWidth = Math.max(1, (int) Math.round(
+                (innerWidth + RoadSigns.PAD_X * 2) * (double) SIGN_CARD_SCALE));
+        int cardHeight = Math.max(1, (int) Math.round(
+                (font.lineHeight + nameLineUnits + RoadSigns.PAD_Y * 2)
+                        * (double) SIGN_CARD_SCALE));
+        int left = (int) Math.round(x - cardWidth / 2.0);
+        // Centred on the road's midpoint rather than sitting above it: the plate is the sign standing
+        // on the road, so the stroke enters it and leaves it on both sides. See the method's note.
+        int top = (int) Math.round(y - cardHeight / 2.0);
+        int bottom = top + cardHeight;
+        if (left < minX + 1 || left + cardWidth > maxX - 1
+                || top < minY + 1 || bottom > maxY - 1) {
+            return;
+        }
+
+        int background = RoadCategoryStore.color(segment.category());
+        int ink = RoadSigns.ink(background);
+        // Faded with the page's own opacity, like every other colour this page draws: the card
+        // arrives and leaves with the page it belongs to rather than staying solid on it.
+        int card = UiMotion.fade(background, open);
+        int lettering = UiMotion.fade(ink, open);
+        graphics.fill(left, top, left + cardWidth, bottom, card);
+        graphics.fill(left, top, left + cardWidth, top + 1, lettering);
+        graphics.fill(left, bottom - 1, left + cardWidth, bottom, lettering);
+        graphics.fill(left, top + 1, left + 1, bottom - 1, lettering);
+        graphics.fill(left + cardWidth - 1, top + 1, left + cardWidth, bottom - 1, lettering);
+
+        // Both lines are drawn at the card's own scale through the pose, centred on the plate's
+        // middle: a scaled font written at an absolute position would be a small word in the corner
+        // of the plate instead of the plate's content.
+        double centreX = left + cardWidth / 2.0;
+        double numberTop = top + RoadSigns.PAD_Y * (double) SIGN_CARD_SCALE;
+        drawScaledCardText(graphics, font, number, centreX, numberTop, lettering,
+                SIGN_CARD_SCALE);
+        if (named) {
+            double nameTop = top + (RoadSigns.PAD_Y + font.lineHeight + RoadSigns.LINE_GAP)
+                    * (double) SIGN_CARD_SCALE;
+            drawScaledCardText(graphics, font, name, centreX, nameTop, lettering,
+                    SIGN_CARD_SCALE * (float) nameFactor);
+        }
+    }
+
+    /**
+     * Writes one line of a sign card at a given scale, centred on a point.
+     *
+     * <p>The font's draw call takes a position and no size, so the size has to be put on the pose
+     * around the call -- the same matrix the road names above are drawn through. The pose is pushed,
+     * moved to the line's centre, scaled, and the string is written at the origin offset by half its
+     * own width: that offset is what keeps the line centred on the card whatever the scale, and
+     * drawing at the origin is what keeps the scale about the point rather than the screen.
+     *
+     * <p>A PoseStack, the same stack {@link #drawAlongLine} draws the road names through: this page is
+     * written against the GUI era its phone API jar targets, so it keeps the one branch the name pass
+     * already has rather than the two the shipped source carries.
+     */
+    private static void drawScaledCardText(GuiGraphics graphics, Font font, String text,
+                                           double centreX, double top, int colour, float scale) {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(centreX, top, 0.0);
+        pose.scale(scale, scale, 1.0F);
+        graphics.drawString(font, text, -font.width(text) / 2, 0, colour, false);
         pose.popPose();
     }
 

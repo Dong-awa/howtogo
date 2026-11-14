@@ -17,7 +17,9 @@ reading the config file's comments". That leaves five groups:
 | Group | Setting | Config key | Default | Effect |
 | --- | --- | --- | --- | --- |
 | Appearance | Interface theme | `ui_theme` | `auto` | dark / light / follow the sky |
-| Appearance | Map display mode | `map_display_mode` | `hud` | own HUD map, or Xaero's Minimap |
+| Appearance | Road labels | `road_label_style` | `name` | a road's name, its classification sign, or both (see [road-categories.md](road-categories.md)) |
+| Appearance | Road categories | -- | -- | opens the category editor (`RoadCategoryScreen`): add/delete/rename categories, pick their colours |
+| Navigation HUD | Map display mode | `map_display_mode` | `hud` | own HUD map, or Xaero's Minimap (first row: it decides what this group is about) |
 | Navigation HUD | Compact HUD corner | `compact_hud_anchor` | `bottom_left` | where the readout-only card hangs |
 | Navigation HUD | Compact HUD horizontal offset | `compact_hud_offset_x` | `0` | pixels further in from that corner |
 | Navigation HUD | Compact HUD vertical offset | `compact_hud_offset_y` | `0` | the same, vertically |
@@ -35,9 +37,12 @@ reading the config file's comments". That leaves five groups:
 
 Everything else stays in the file. In particular:
 
-- **Colours, per-class tolerances and block ids** need a text field or a colour picker; NeoForge
-  already offers its own config screen for them, and a second editor here would be a second copy of
-  the values. On Fabric they remain file-only.
+- **Road class colours, per-class tolerances and block ids** need a text field or a colour picker;
+  NeoForge already offers its own config screen for them, and a second editor here would be a second
+  copy of the values. On Fabric they remain file-only. The **road categories** are the one exception:
+  the player defines them (add, delete, rename, recolour), so they get a page of their own behind the
+  appearance group (`RoadCategoryScreen`, with the colour picker in `RoadCategoryColorScreen`) rather
+  than rows on this screen.
 - **Route preference, avoided classes, prefer-major-roads, voice and transit-board-only** are
   shadowed by `config/howtogo/route_preferences.json`, which the destination picker writes: editing
   the config value would be a visible no-op on any install where the picker has been used. The
@@ -62,14 +67,16 @@ bug, while a greyed one with a reason explains itself.
 ## Controls, theme and scrolling
 
 All controls are the mod's own, over `UiTheme` colours: a rounded toggle (On/Off), a chip that cycles
-a short list (theme, map mode, corner, travel mode), and a `- value +` stepper for the numeric
-settings. There is no vanilla `Button`/`Slider` and no literal colour in the screen; both palettes
-resolve per call, so selecting a theme recolours the screen on the next frame. The list is scissored
-and scrolled with the wheel, with the mod's two-pixel scrollbar (`UiTheme.scrollTrack/scrollThumb`).
+a short list (theme, map mode, road labels, corner, travel mode), a `- value +` stepper for the numeric
+settings, and a button row for a setting that opens a page of its own (road categories). There is no
+vanilla `Button`/`Slider` and no literal colour in the screen; both palettes resolve per call, so
+selecting a theme recolours the screen on the next frame. The list is scissored and scrolled with the
+wheel, with the mod's two-pixel scrollbar (`UiTheme.scrollTrack/scrollThumb`).
 
 The strip under the list shows the hovered setting's description (wrapped and elided), the reset
 warning, or a short "Saved." acknowledgement. Footer buttons are **Reset to defaults** (two presses:
-the first arms, the second restores; only the rows on this screen) and **Back**.
+the first arms, the second restores; only the value rows on this screen -- the button row opens a page
+and has no value to reset) and **Back**.
 
 ## Saving and effect timing
 
@@ -78,7 +85,8 @@ screen or the game after an edit loses nothing. There is no Apply button.
 
 | Kind of change | When it takes effect |
 | --- | --- |
-| theme, map display mode, compact corner/offsets | next frame |
+| theme, map display mode, road labels, compact corner/offsets | next frame |
+| road category names/colours (the other page; its own store) | next frame, and every map redrawn after it |
 | Create / MTR / RoadWeaver read switches | next client tick (the layers are read per tick) |
 | fallback, transit mixed, walk off-road, station snap, transit wait | next route plan or guidance decision |
 | default travel mode | immediately if the player has not switched mode this session; otherwise it is the default next session (the session's choice is not taken away) |
@@ -94,7 +102,10 @@ re-reads the latched travel mode after a save.
 
 - The screen is client-side only and is opened over a world (the main screen itself has no title-screen
   entry); nothing it writes is sent to a server.
-- Reset restores the 16 rows above, not the whole config file.
+- Reset restores the value rows above, not the whole config file, and not the categories on the other
+  page (those are the player's own definitions with their own store, and have no reset-all).
+- The category page's colour change is immediate and is not undone by its Cancel; only the typed names
+  are a draft.
 - On Fabric the config JSON is normally loaded at startup, so a hand edit of the file still needs a
   restart; changes made **through this screen** update the in-memory values immediately. RoadWeaver's
   layer is not ticked on the Fabric arm at all yet (a pre-existing gap), so its read switch does
@@ -109,8 +120,11 @@ re-reads the latched travel mode after a save.
 | --- | --- |
 | `client/MainScreen` | the K-key screen; the title-line Settings button opens this screen |
 | `client/SettingsScreen` | the whole editor: grouped rows, controls, scrolling, reset, theme |
+| `client/RoadCategoryScreen` | the page behind the Road categories row |
+| `client/RoadCategoryColorScreen` | the colour picker it opens (palette grid, HEX field, preview) |
+| `client/RoadCategoryStore` | the categories it edits, and their own JSON file |
 | `client/PanelButton`, `client/HudDraw`, `client/PlaceText`, `client/UiTheme` | the style it reuses |
-| `RoadConfig` (both arms) | 16 typed setters, `save()`, `applyRuntimeChanges()`, range clamps |
+| `RoadConfig` (both arms) | the typed setters, `save()`, `applyRuntimeChanges()`, range clamps |
 | `assets/howtogo/lang/en_us.json`, `zh_cn.json` | names, descriptions, group titles, chrome |
 
 ## Verifying it

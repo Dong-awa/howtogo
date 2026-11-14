@@ -5,6 +5,7 @@ import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.place.PlaceDetails;
 import bili.dongsz.howtogo.place.PlaceSources;
 import bili.dongsz.howtogo.road.PlaceKind;
+import bili.dongsz.howtogo.road.RoadCategory;
 import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadDirection;
@@ -125,7 +126,7 @@ public final class RoadEditSession {
      * did while something was selected is already what {@code N} does, in a panel that also lets the
      * player see the number they are about to write. A selection moved onto a storey is still possible,
      * through that panel: the edit it commits walks every selected road (see
-     * {@link RoadEditor#setRoadNameAndLayer}), so multi-select does not need this key to grow a second
+     * {@link RoadEditor#setRoadDetails}), so multi-select does not need this key to grow a second
      * meaning.
      *
      * <p>No undo entry, and no log line: the drawing storey is a mode rather than a property of anything
@@ -532,24 +533,36 @@ public final class RoadEditSession {
     }
 
     /**
-     * Opens the editor for a road, addressed by segment: its name and its storey together.
+     * Opens the editor for a road, addressed by segment: its name, storey, category and number
+     * together.
      *
-     * <p>Both in the one panel, because N on a road is "what is this road" and a storey is half of the
-     * answer -- and because a storey is invisible on a map that cannot show height, so anything that
-     * made it a separate key would leave most players never setting one. The panel's own field is
-     * checked before anything is applied, so a mistyped level costs a correction rather than the edit.
+     * <p>All four in the one panel, because N on a road is "what is this road" and every one of the
+     * four is part of the answer -- the storey says which level it runs on, the category what kind of
+     * highway or street it is, and the number is the plate the map prints inside the category's sign.
+     * A storey and a classification are invisible on a map that cannot show height or a word nobody
+     * typed, so anything that made either a separate key would leave most players never setting one.
+     * The panel's own field is checked before anything is applied, so a mistyped level costs a
+     * correction rather than the edit.
      *
-     * <p>The segment is only the road the panel reads its initial values from: the edit it commits
+     * <p>The segment is only the road the panel reads its initial values from; the edit it commits
      * walks every selected road, because naming a road is a road-wide operation and a multi-selection
-     * is the gesture "do this to all of these". See {@link RoadEditor#setRoadNameAndLayer}.
+     * is the gesture "do this to all of these". See {@link RoadEditor#setRoadDetails}.
+     *
+     * <p>The category is handed over exactly as the segment carries it, and the number as the segment
+     * stores it. Not looked up here: the id may name a category the player has deleted since, and it
+     * is the panel that normalises such a road to its class's built-in category when it opens. A lookup
+     * here as well would be a second place deciding what a deleted category means, and the two would
+     * eventually disagree about what the player is looking at.
      */
     private static void promptRoadName(int segmentId) {
         RoadSegment segment = RoadStore.get().segment(segmentId);
         if (segment == null) {
             return;
         }
-        promptName(RoadNameScreen.TITLE_ROAD, segment.name(), segment.layer(), mouseScreenX(),
-                mouseScreenZ(), (name, layer) -> editor().setRoadNameAndLayer(segmentId, name, layer));
+        promptName(RoadNameScreen.TITLE_ROAD, segment.name(), segment.layer(), segment.category(),
+                segment.number(), mouseScreenX(), mouseScreenZ(),
+                (name, layer, category, number) ->
+                        editor().setRoadDetails(segmentId, name, layer, category, number));
     }
 
     /**
@@ -906,21 +919,25 @@ public final class RoadEditSession {
     }
 
     /**
-     * The same, for a road: its name and its storey handed back together.
+     * The same, for a road: its name, storey, category and number handed back together.
      *
      * <p>Deliberately deferred for the same reason as the name prompt: opening a screen from the input
      * handler is what makes a key look dead, and the tick of delay is the difference between a field
      * that receives an "n" and one that does not.
+     *
+     * <p>The mark is dirtied here rather than by the caller's own write, so the one place that opens
+     * this panel is also the one place that says the store needs saving -- a road edit is one write,
+     * whichever of the four values changed.
      */
-    private static void promptName(String titleKey, String initial, int layer, double anchorX,
-                                   double anchorY,
-                                   java.util.function.BiConsumer<String, Integer> apply) {
+    private static void promptName(String titleKey, String initial, int layer, RoadCategory category,
+                                   String number, double anchorX, double anchorY,
+                                   RoadNameScreen.RoadApply apply) {
         pendingAction = () -> {
             Screen parent = Screens.current();
             Screens.set(
-                    new RoadNameScreen(parent, titleKey, initial, layer, anchorX, anchorY,
-                            (name, storey) -> {
-                                apply.accept(name, storey);
+                    new RoadNameScreen(parent, titleKey, initial, layer, category, number, anchorX,
+                            anchorY, (name, storey, chosen, plate) -> {
+                                apply.accept(name, storey, chosen, plate);
                                 RoadStore.markDirty();
                             }));
         };

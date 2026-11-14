@@ -103,6 +103,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_LABEL_ROAD = 0xFFF0F0F0;
     /** Railway names, in a cool tint so an automatic line reads apart from a hand-drawn road. */
     private static final int COLOR_LABEL_RAIL = 0xFF9FD2FF;
+    // The ink a sign card's text is drawn in is not stated here: it belongs to the card's own colour
+    // and is chosen from it by RoadSigns.ink, which is the one copy of that rule for every map that
+    // draws a card. See the sign-card note below.
 
     /**
      * The editing controls, one lang key per line.
@@ -227,6 +230,64 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private static final float ROAD_LABEL_MIN_FACTOR = 0.5f;
 
+    // ------------------------------------------------------------- sign cards
+    //
+    // A road may carry a category and a number, and the player's road_label_style setting decides
+    // what its label is: the name as above, a sign card, or one card holding both. The card is a
+    // different kind of object from a name -- a rectangle of the category's colour with the number
+    // printed in it -- so it is laid out and drawn separately below, but it is offered the same box
+    // on the same LabelBoard, which is what keeps cards and names from ever covering each other.
+
+    /**
+     * What fraction of the map's label zoom a sign card's text is drawn at, and the bounds on it.
+     *
+     * <p>Not the whole of the label zoom. A card is not a name: a name belongs to its line and is
+     * read as part of the road, while a card is an object standing on the road, and drawn at a name's
+     * size it wins the contest it is in -- the card is opaque and coloured, the name is ink on the
+     * map, and a street with a card on it starts reading as a card with a street under it. Several
+     * cards along one road only make that worse: at the name's size they stop reading as a
+     * classification and start covering the stroke that carries them, which is the road the map is
+     * for. The fraction is what keeps a sign the small thing a sign is, and the bounds keep it in
+     * that place at both ends of the zoom range -- see the two constants below.
+     */
+    private static final double SIGN_CARD_ZOOM = 0.7;
+    /**
+     * The smallest text factor a card is drawn at, in font units.
+     *
+     * <p>The floor is legibility: a card below it is a coloured smudge rather than a plate with a
+     * number on it. A card needs a floor of its own because it is never capped by the road's width
+     * the way a name is (see {@link #roadLabelFactor}), so left to follow the map it would keep
+     * shrinking until nothing could be read on it.
+     */
+    private static final float SIGN_CARD_MIN_FACTOR = 0.5F;
+    /**
+     * The largest text factor a card is drawn at, in font units.
+     *
+     * <p>The ceiling is for the closest zoom, where the label zoom has grown well past the card's
+     * fraction of it: without one the card would be the loudest thing on the map, a billboard on a
+     * quiet lane rather than a detail of it.
+     */
+    private static final float SIGN_CARD_MAX_FACTOR = 0.8F;
+    /**
+     * The least share of the card's own factor the mixed card's name line may shrink to.
+     *
+     * <p>In the card's unscaled font units: the name under the number is shrunk to the width the
+     * number's line gives it, but no further than this. Below it the second line is a smudge nobody
+     * can read -- "Hauptstrasse" under "3" -- so a name that would need more shrinking than this
+     * widens the card instead, which keeps the second line legible and the number centred with plate
+     * either side of it. See {@link #measureSignCard}.
+     */
+    private static final double SIGN_CARD_NAME_FLOOR = 0.7;
+    // The room inside a card and the ink its text takes are the card's own proportions rather than
+    // this map's: RoadSigns holds them for every map that draws one, so the same road's shield has
+    // the same shape here as on the destination picker and on MCphone.
+    /** Room either side of the number inside a card, in the card's own font units. */
+    private static final int SIGN_CARD_PAD_X = RoadSigns.PAD_X;
+    /** Room above and below the card's lines, in the card's own font units. */
+    private static final int SIGN_CARD_PAD_Y = RoadSigns.PAD_Y;
+    /** Room between the number and the mixed card's second line, in the card's own font units. */
+    private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
+
     /**
      * The size a road's name is drawn at, in font units: its zoom size, capped by the road's width.
      *
@@ -272,6 +333,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         void reserve(LabelBox box) {
             placed.add(box);
         }
+    }
+
+    /**
+     * A sign card measured for the frame: its size on screen, and the factor its name line is drawn
+     * at, or zero when it has no name line.
+     *
+     * <p>Measured once and then both drawn and offered to the board from the same numbers: the box a
+     * card reserves has to be the rectangle it actually paints, and two separate layouts of the same
+     * card would be two boxes that could disagree about where the card is.
+     *
+     * @param factor     the map's label factor this card was measured at, kept so the card's own
+     *                   spacing scales with it without the drawing code having to be handed the
+     *                   zoom as well
+     * @param nameFactor the factor the mixed card's name is drawn at -- the card factor times the
+     *                   share of it the name is allowed (see {@link #measureSignCard}), so the
+     *                   drawing code does not have to work it out a second time -- or zero when this
+     *                   card is the number alone
+     */
+    private record SignCard(double width, double height, float factor, float nameFactor) {
     }
 
     /** A place's name, its marker's screen position, and where the place is in the world. */
@@ -413,6 +493,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double grown = LABEL_BASE_FACTOR + (LABEL_MAX_FACTOR - LABEL_BASE_FACTOR)
                 * Math.min(1.0, (magnitude - reference) / (reference * LABEL_GROWTH_SPAN));
         return (float) grown;
+    }
+
+    /**
+     * The factor a sign card's text is drawn at: a fraction of the map's label zoom, within bounds.
+     *
+     * <p>The card is offered the same box on the same board as a name, and it has to lose that
+     * contest gracefully: a sign is a small plate on the road, not a second name beside it. So its
+     * text is drawn at {@link #SIGN_CARD_ZOOM} of the label zoom, clamped by
+     * {@link #SIGN_CARD_MIN_FACTOR} and {@link #SIGN_CARD_MAX_FACTOR} -- a legible floor when zoomed
+     * all the way out and a ceiling against a billboard when zoomed all the way in. See those three
+     * constants for why each number is where it is.
+     *
+     * <p>Unlike a name, the card is not capped by the width of the road it belongs to: it is a plate
+     * centred on the road, not a word lying along it, so the label zoom and these bounds are the
+     * whole of its rule.
+     */
+    private static float signCardFactor(double scale) {
+        double factor = labelScale(scale) * SIGN_CARD_ZOOM;
+        return (float) Mth.clamp(factor, SIGN_CARD_MIN_FACTOR, SIGN_CARD_MAX_FACTOR);
     }
 
     /**
@@ -584,6 +683,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // The edit UI is appended after this one, so when it is present it owns the HUD and
             // drawing it here too would double up.
             if (!RoadEditSession.isActive() && !panelOverMap()) {
+                // The readout is a string, and a string is painted on the spot: the route's quads
+                // are still pending in this renderer's batch, so the road would be painted over
+                // the text. See the flush in renderLabels for the long form.
+                graphics.flush();
                 renderHud(graphics, pose);
             }
             return true;
@@ -602,6 +705,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             // does not reach -- so the key list ends up beside the line editor as if it belonged to
             // it.
             if (!panelOverMap()) {
+                // Same reason as the ROUTE branch: the handles and the rubber band are still in
+                // the vertex batch, and the control list is a string painted where it is written.
+                graphics.flush();
                 renderHud(graphics, pose);
             }
             return true;
@@ -907,6 +1013,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges, scale,
                 projection, board);
 
+        // Hand the shapes over before the first name is written, and for a newer reason than the
+        // one the labels themselves give. On 1.21.6 and later Xaero writes a map string through
+        // MapElementGraphics, which ends with BufferSource.endLastBatch: the name is painted on the
+        // spot, while the roads, the route, the transit lines and the markers are still sitting in
+        // this renderer's vertex batch, which the map only flushes once every element is done. The
+        // names therefore came out under the roads -- a place name with a highway painted across
+        // it, which is exactly what "a marker is hidden by a road" looks like from the player's
+        // side. Flushing here paints everything emitted above in its own order first; the names
+        // then land on top of it, which is what the pass's contract has always said they do.
+        // Nothing is emitted into vc after this point, so the batch may end here.
+        graphics.flush();
+
         // A place name stands aside from the roads it is next to, so the roads near the visible
         // places are read into boxes once. Only built when there is a name to place, which is what
         // keeps a map zoomed out -- where no place names are drawn -- from paying for it.
@@ -1117,6 +1235,20 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * hold a legible word keeps its name off the map until it is zoomed in enough to be wide enough,
      * which is what makes the names appear class by class: a highway is named first, a footpath last.
      *
+     * <h2>Why the sign replaces the name</h2>
+     * A road carries two identifiers and they are not the same kind of thing: its name is a word
+     * belonging to the line, and its number is a classification the player can read at a glance off a
+     * small coloured card. The player's {@code road_label_style} setting decides which one a labelled
+     * road shows -- see {@link RoadLabelStyle} -- and when it says a sign, the card takes the name's
+     * box on the board rather than being drawn beside it. Two objects at one point on the map are one
+     * object painted over another, and the name loses either way.
+     *
+     * <p>The positions are still the chain's, and still computed per visible run: a sign, like a
+     * name, is useless where the player cannot see the road it belongs to. The card is only drawn
+     * upright and centred on the position the run walked to -- see {@link #drawSignCard} for why it
+     * is not rotated with the road the way the name is, and for why its centre rather than its bottom
+     * edge is what sits on that point.
+     *
      * @param rail whether these are railway names, which are drawn in the railway palette
      */
     //? if >=1.21.6 {
@@ -1129,6 +1261,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (network == null || network.segmentCount() == 0) {
             return;
         }
+        // How the player wants roads labelled. Read once per pass, not per segment: it is one value
+        // in the config, and a pass that asked for it thousands of times could in principle see it
+        // change halfway through its own work.
+        RoadLabelStyle style = RoadConfig.roadLabelStyle();
+        // A railway has no category and no number -- those are the road editor's vocabulary, and the
+        // rail layer's names come from elsewhere -- so the sign modes are the road pass's business.
+        boolean signMode = !rail && style != RoadLabelStyle.NAME;
+        boolean mixed = style == RoadLabelStyle.MIXED;
+        float cardFactor = signCardFactor(scale);
         // A cheap "could any class be labelled at this zoom" before touching the network: a road's
         // name is capped by its width, so at a zoomed-out scale no class can carry one and the walk
         // below would be paid for every frame to find that out.
@@ -1139,15 +1280,27 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 break;
             }
         }
-        if (!anyClass) {
+        // A card is not capped by the road's width, so with signs switched on it is drawn at zooms
+        // where every class is too thin to carry a name: the cheap check above would then skip
+        // exactly the frames the mode exists for. The walk is the price of the mode, paid only while
+        // the player has chosen it.
+        if (!anyClass && !signMode) {
             return;
         }
         RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
         java.util.Set<Integer> roads = new java.util.HashSet<>();
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
-            if (name == null || name.isBlank()) {
-                // Only named roads are labelled. Most of a fresh network is unnamed, and a
+            boolean named = name != null && !name.isBlank();
+            // A sign needs a number, and a category that still exists to print it on. A category the
+            // player has deleted is not a category any more: the road carries an id nothing defines,
+            // and the store answers false for it (see RoadCategoryStore#has), so the road is drawn as
+            // unclassified -- no card, and its name is its label again. That is also why a road with
+            // a sign and no name is still labelled: the card is the label it has.
+            boolean sign = signMode && segment.hasSign()
+                    && RoadCategoryStore.has(segment.category());
+            if (!named && !sign) {
+                // Only labelled roads are drawn. Most of a fresh network is unnamed, and a
                 // placeholder on every one of them buries the names that do exist.
                 continue;
             }
@@ -1155,38 +1308,63 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 continue;
             }
             // One walk per road, not one per piece of it: every segment of a chain carries the same
-            // name, and the chain's own geometry is what places the names along the whole road.
+            // name, and the editor's panel writes a sign to every piece of the chain as well, so the
+            // chain is named -- and signed -- as one road rather than once per piece.
             if (!roads.add(grouping.keyOf(segment))) {
                 continue;
             }
             float factor = roadLabelFactor(segment.roadClass(), scale, font);
-            if (factor < ROAD_LABEL_MIN_FACTOR) {
+            if (!sign && factor < ROAD_LABEL_MIN_FACTOR) {
                 // The road is narrower than the smallest name that could sit on it. Its name waits
                 // for the zoom at which it is wide enough, rather than being written over 2 pixels.
+                // A card is not held to that cap: it is a plate centred on the road, not a word lying
+                // along it, so its size does not have to fit the width of the stroke.
                 continue;
             }
             java.util.List<double[]> points = chainPoints(network, grouping.chainOf(segment),
                     projection);
-            double textWidth = font.width(name) * factor;
             if (points.size() < 2) {
                 continue;
             }
-            // Names go on the stretches that are actually on the screen, not on the road's whole
+            SignCard card = sign ? measureSignCard(font, segment, cardFactor, mixed) : null;
+            if (sign && card == null) {
+                // hasSign() is number != null, so this cannot happen through the editor; treating
+                // it as no sign draws the road's name rather than an empty coloured box.
+                sign = false;
+                if (!named || factor < ROAD_LABEL_MIN_FACTOR) {
+                    continue;
+                }
+            }
+            double textWidth = !sign ? font.width(name) * factor : 0;
+            // The width the run must be long enough to carry: the card's own footprint when a sign
+            // is drawn, the painted word's when it is not. This is the same "too narrow to hang a
+            // label on" test in both cases, over a different label.
+            double labelWidth = sign ? card.width() : textWidth;
+            // Labels go on the stretches that are actually on the screen, not on the road's whole
             // length: a road that leaves the screen and comes back has two stretches worth naming,
             // and the kilometres between them are not places a name should be spent on. A stretch
-            // shorter than the name keeps no name -- it would hang off both its ends and read as a
+            // shorter than the label keeps no label -- it would hang off both its ends and read as a
             // label for whatever is beside it.
             for (java.util.List<double[]> run : visibleRuns(points, viewRight, viewBottom)) {
                 double runLength = polylineLength(run);
-                if (runLength < textWidth + LABEL_CLEARANCE_PX * 2.0) {
+                if (runLength < labelWidth + LABEL_CLEARANCE_PX * 2.0) {
                     continue;
                 }
-                double spacing = Math.max(LABEL_SPACING_PX, textWidth + 48.0);
+                double spacing = Math.max(LABEL_SPACING_PX, labelWidth + 48.0);
                 int count = Math.max(1, Math.min(MAX_LABELS_PER_ROAD,
                         (int) Math.floor(runLength / spacing)));
                 for (int i = 0; i < count; i++) {
                     LinePoint at = pointAt(run, runLength * (i + 0.5) / count);
                     if (at == null) {
+                        continue;
+                    }
+                    if (sign) {
+                        // The card's own box is worked out and offered to the board inside this
+                        // call, from the size measured above: the rectangle it reserves and the
+                        // rectangle it paints are then the same rectangle, both centred on the
+                        // label position.
+                        drawSignCard(graphics, font, segment, card, at, viewRight, viewBottom,
+                                board);
                         continue;
                     }
                     LabelBox box = rotatedBox(at.x(), at.y(), textWidth, font.lineHeight * factor,
@@ -1490,6 +1668,150 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             angle += Math.PI;
         }
         return angle;
+    }
+
+    // ------------------------------------------------------------ sign cards
+
+    /**
+     * Measures one road's sign card at the given factor, so the pass has a size before it has a
+     * position.
+     *
+     * <h2>Why the card is sized by the number</h2>
+     * The card's width belongs to the number, not to the road: a sign is a plate whose width is the
+     * word printed on it, and a number is short. Sized by the mixed mode's name instead, a card for a
+     * long street name would be a plate as long as the street, which is no longer a sign. So the
+     * number's line is drawn at the card's own factor and the name's line gives way -- it is shrunk to
+     * the width the number's line leaves it, which is what "fits inside the card" means when the card
+     * is sized by the sign rather than by the name. It is never enlarged: a short name under a long
+     * number keeps the size the number is drawn at, so the two lines of a mixed card stay one object
+     * rather than two labels of different weights.
+     *
+     * <h2>Why the name has a floor, and what the card does under it</h2>
+     * A name shrunk to a short number's width is a line nobody can read -- "Hauptstrasse" under "3"
+     * is a smudge. So the shrink stops at {@link #SIGN_CARD_NAME_FLOOR} of the card's factor, and a
+     * name that would need to go smaller than that widens the card instead: the number stays centred
+     * at its own size with {@link #SIGN_CARD_PAD_X} of plate either side of it, and the card grows to
+     * hold the readable name. That is the one case where the card is wider than the number's line plus
+     * its padding, and it is the case the floor exists for.
+     *
+     * <p>Everything here is worked out in the card's own unscaled font units and multiplied by the
+     * factor once, at the end: the proportions are then the same plate at every zoom, which is what
+     * makes a card the same object on a zoomed-in map and a zoomed-out one.
+     *
+     * @return the card, or null when the road has no number to print -- which a road with a sign
+     *         cannot have, but which makes this method answer for itself instead of trusting its call
+     */
+    private static SignCard measureSignCard(Font font, RoadSegment segment, float factor,
+                                            boolean withName) {
+        String number = segment.number();
+        if (number == null || number.isBlank()) {
+            return null;
+        }
+        int numberWidth = font.width(number);
+        String name = withName ? segment.name() : null;
+        boolean named = name != null && !name.isBlank();
+        // The name line's factor relative to the card's, and the width its plate has to give it.
+        // Zero means "no second line", which is also how the drawing code tells the two card kinds
+        // apart -- see SignCard#nameFactor.
+        double nameUnitFactor = 0.0;
+        double nameLineUnits = 0.0;
+        int innerWidth = numberWidth;
+        if (named) {
+            int nameWidth = font.width(name);
+            double raw = (double) numberWidth / nameWidth;
+            nameUnitFactor = Math.min(1.0, Math.max(SIGN_CARD_NAME_FLOOR, raw));
+            nameLineUnits = font.lineHeight * nameUnitFactor + SIGN_CARD_LINE_GAP;
+            // The hair is subtracted before the ceil because raw was formed by a division and is
+            // multiplied back out here: without it a name that fits the number's line exactly can
+            // round up a pixel and widen a card the floor did not ask to widen.
+            innerWidth = Math.max(numberWidth,
+                    (int) Math.ceil(nameWidth * nameUnitFactor - 1.0E-6));
+        }
+        double width = (innerWidth + SIGN_CARD_PAD_X * 2) * (double) factor;
+        double height = (font.lineHeight + nameLineUnits + SIGN_CARD_PAD_Y * 2) * (double) factor;
+        return new SignCard(width, height, factor, factor * (float) nameUnitFactor);
+    }
+
+    /**
+     * One sign card on the map: the category's colour, a one-pixel contrasting border, the number
+     * centred inside, and -- in mixed mode -- the road's name shrunk beneath it.
+     *
+     * <h2>Why the card is upright</h2>
+     * A name is a word that belongs to the line, so it is turned along the road and reads as part of
+     * it. A sign is not: it is an object standing at the roadside, a plate with a number printed
+     * straight across it, and a plate turned to the road's angle reads as a label lying on the road
+     * rather than as a sign beside it. Upright is also the only way both of a mixed card's lines can
+     * be read at once, since a rotated card would tilt its second line with the first.
+     *
+     * <h2>Why it is centred on the position</h2>
+     * The label positions come from the visible run, exactly as the name's do, so a card appears
+     * where the road is on screen and repeats along a long road instead of once at its middle. The
+     * card's centre is that point, not its bottom edge: a plate lifted clear of the stroke reads as an
+     * object beside the road with a gap to account for, while a plate centred on it has the road
+     * running into it and out of it, which is what a sign standing on the road looks like. The piece
+     * of stroke under the plate is the price, and it is a small one: the card is kept small exactly so
+     * that the stretch it covers is a stretch and not a boundary -- see {@link #signCardFactor}.
+     *
+     * <p>Everything drawn here is in screen space, after the label pass has flattened the pose, and
+     * the fills go through {@link MapLabels#fillOnMap} so the older and newer graphics eras are one
+     * branch in one file rather than one here as well.
+     */
+    //? if >=1.21.6 {
+    /*private void drawSignCard(MapElementGraphics graphics, Font font, RoadSegment segment,
+                              SignCard card, LinePoint at, int viewRight, int viewBottom,
+                              LabelBoard board) {
+    *///?} else {
+    private void drawSignCard(GuiGraphics graphics, Font font, RoadSegment segment, SignCard card,
+                              LinePoint at, int viewRight, int viewBottom, LabelBoard board) {
+    //?}
+        String number = segment.number();
+        if (card == null || number == null || number.isBlank()) {
+            return;
+        }
+        // Centred both ways on the label position: that point is the card's centre, so the stroke of
+        // the road passes through the middle of the plate it is labelled by.
+        double left = at.x() - card.width() / 2.0;
+        double top = at.y() - card.height() / 2.0;
+        double bottom = top + card.height();
+        // The same box the name path offers: the painted rectangle, centred on the label position,
+        // inflated by the label clearance -- which is what turns "the boxes do not overlap" into "two
+        // signs read as two signs" at map sizes. Reserved before drawing, so a later name can never
+        // land on this card.
+        LabelBox box = box(at.x(), at.y(), card.width(), card.height());
+        if (box.minX() < 0 || box.maxX() > viewRight
+                || box.minY() < 0 || box.maxY() > viewBottom) {
+            return;
+        }
+        if (!board.fits(box)) {
+            return;
+        }
+        board.reserve(box);
+
+        int background = RoadCategoryStore.color(segment.category());
+        int ink = RoadSigns.ink(background);
+        int x1 = (int) Math.round(left);
+        int y1 = (int) Math.round(top);
+        int x2 = (int) Math.round(left + card.width());
+        int y2 = (int) Math.round(bottom);
+        MapLabels.fillOnMap(graphics, x1, y1, x2, y2, background);
+        // The border as four one-pixel bars rather than a frame of the card's own weight: it is a
+        // rim, and a rim that scaled with the zoom would be a band at close range. Same ink as the
+        // number, so the whole card is one contrast decision made from its background.
+        MapLabels.fillOnMap(graphics, x1, y1, x2, y1 + 1, ink);
+        MapLabels.fillOnMap(graphics, x1, y2 - 1, x2, y2, ink);
+        MapLabels.fillOnMap(graphics, x1, y1 + 1, x1 + 1, y2 - 1, ink);
+        MapLabels.fillOnMap(graphics, x2 - 1, y1 + 1, x2, y2 - 1, ink);
+
+        // Both lines are centred on the card through the same helper the names use, which is also
+        // what keeps the two graphics eras out of this method.
+        double numberTop = top + SIGN_CARD_PAD_Y * card.factor();
+        drawMapLabel(graphics, font, number, left + card.width() / 2.0, numberTop, ink,
+                card.factor());
+        if (card.nameFactor() > 0.0F) {
+            double nameTop = numberTop + (font.lineHeight + SIGN_CARD_LINE_GAP) * card.factor();
+            drawMapLabel(graphics, font, segment.name(), left + card.width() / 2.0, nameTop, ink,
+                    card.nameFactor());
+        }
     }
 
     /**

@@ -61,6 +61,27 @@ public final class RoadSegment {
     private String name;
 
     /**
+     * What kind of road this is below its class: a national highway against a provincial one, a
+     * trunk street against a side street.
+     *
+     * <p>Never null and always a category of {@link #roadClass}: {@link #setRoadClass} moves the
+     * category with the class, because a category belongs to one class and a provincial-highway sign
+     * on a footpath would be a lie the map repeats. See {@link RoadCategory}.
+     */
+    private RoadCategory category;
+
+    /**
+     * The road's number, as the player types it: "G318", "S12", "3", or whatever their world calls
+     * it.
+     *
+     * <p>A string rather than a number on purpose. Real roads are not numbered with an integer alone
+     * -- national highways carry a letter prefix, a ring road may be "一环", and a world that names
+     * its roads after its own things is exactly what this mod is for -- so the field enforces nothing
+     * and the map prints whatever is in it. Null or blank means "no sign".
+     */
+    private String number;
+
+    /**
      * Which storey of the world this road is on: 0 is the surface, positive is above it and negative
      * below.
      *
@@ -139,6 +160,7 @@ public final class RoadSegment {
     public RoadSegment(int id, RoadClass roadClass, int y, int capacity) {
         this.id = id;
         this.roadClass = roadClass;
+        this.category = RoadCategory.none(roadClass);
         this.y = y;
         this.xs = new int[Math.max(2, capacity)];
         this.zs = new int[Math.max(2, capacity)];
@@ -177,8 +199,65 @@ public final class RoadSegment {
     public void setRoadClass(RoadClass roadClass) {
         if (roadClass != this.roadClass) {
             this.roadClass = roadClass;
+            // The category belongs to the class it was chosen under, so a re-class takes it along to
+            // the new class's "not classified" rather than leaving a provincial sign on a footpath.
+            // The number survives: it names the road, not the category, and the panel is where a
+            // number is cleared when a road stops carrying a plate.
+            if (category == null || category.roadClass() != roadClass) {
+                this.category = RoadCategory.none(roadClass);
+            }
             appearanceChanges++;
         }
+    }
+
+    /** The category this road is classified as; never null. */
+    public RoadCategory category() {
+        return category;
+    }
+
+    /**
+     * Classifies this road, clamped to a category of its own class.
+     *
+     * <p>A null or a category from another class falls back to this class's "not classified", which
+     * is the same tolerance {@link RoadStorage} applies when a file names a category that does not
+     * exist: what a road is drawn as must never depend on a value somebody typed. Whether the id
+     * names a category that exists is the store's question, not this one -- the segment only carries
+     * the reference.
+     */
+    public void setCategory(RoadCategory category) {
+        RoadCategory next = category == null || category.roadClass() != roadClass
+                ? RoadCategory.none(roadClass)
+                : category;
+        if (!next.equals(this.category)) {
+            this.category = next;
+            appearanceChanges++;
+        }
+    }
+
+    /** The road's number as typed, or null when it has none. */
+    public String number() {
+        return number;
+    }
+
+    /** Sets the road's number; null and blank both mean "no number". */
+    public void setNumber(String number) {
+        String next = number == null || number.isBlank() ? null : number.trim();
+        if (!Objects.equals(next, this.number)) {
+            this.number = next;
+            appearanceChanges++;
+        }
+    }
+
+    /**
+     * Whether this road wears a sign: a number is what goes inside the card, and a number only means
+     * something under a category -- an unclassified road has no plate to print one on.
+     *
+     * <p>So both are required: a road in the class's "not classified" category wears no sign however
+     * much text is stored beside it, which is what makes switching a road back to 未分类 remove its
+     * plate from the map without the number having to be found and deleted first.
+     */
+    public boolean hasSign() {
+        return number != null && category != null && !category.isNone();
     }
 
     public int fromNode() {
@@ -352,6 +431,8 @@ public final class RoadSegment {
         c.direction = direction;
         c.layer = layer;
         c.name = name;
+        c.category = category;
+        c.number = number;
         c.curve = curve;
         return c;
     }

@@ -18,6 +18,7 @@ package bili.dongsz.howtogo;
 
 import bili.dongsz.howtogo.client.HudAnchor;
 import bili.dongsz.howtogo.client.MapDisplayMode;
+import bili.dongsz.howtogo.client.RoadLabelStyle;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -112,6 +113,11 @@ public final class RoadConfig {
         // the same reason as ui_theme above: this arm is a hand-edited JSON file. See MapDisplayMode.
         @SerializedName("map_display_mode")
         public String mapDisplayMode = MapDisplayMode.defaultMode().id();
+
+        // How a road's own label is drawn: its name, its sign, or both. An id rather than the enum
+        // name, for the same reason as ui_theme and map_display_mode above. See RoadLabelStyle.
+        @SerializedName("road_label_style")
+        public String roadLabelStyle = RoadLabelStyle.defaultStyle().id();
 
         // The corner the small readout-only card hangs from, and how far inside it to sit. Only the
         // compact card has a corner to choose: the full panel is a fixed top-right card, while the
@@ -238,6 +244,9 @@ public final class RoadConfig {
             if (mapDisplayMode == null) {
                 mapDisplayMode = MapDisplayMode.defaultMode().id();
             }
+            if (roadLabelStyle == null) {
+                roadLabelStyle = RoadLabelStyle.defaultStyle().id();
+            }
             if (compactHudAnchor == null) {
                 compactHudAnchor = HudAnchor.defaultAnchor().id();
             }
@@ -342,6 +351,11 @@ public final class RoadConfig {
 // Where the map half of navigation is drawn.
     public static void setMapDisplayMode(MapDisplayMode mode) {
         values.mapDisplayMode = (mode == null ? MapDisplayMode.defaultMode() : mode).id();
+    }
+
+// How a road's own label is drawn: its name, its sign, or both.
+    public static void setRoadLabelStyle(RoadLabelStyle style) {
+        values.roadLabelStyle = (style == null ? RoadLabelStyle.defaultStyle() : style).id();
     }
 
 // The compact HUD card's corner, and how far inside that corner it sits.
@@ -615,6 +629,18 @@ public final class RoadConfig {
         return mode == null ? MapDisplayMode.defaultMode() : mode;
     }
 
+// 
+// * How a road's own label is drawn: its name, its sign, or both.
+// *
+// * <p>An id read through {@link RoadLabelStyle#byId}, so an entry that names no style costs the
+// * player the default rather than the whole file. The declared default is the name-only map, which
+// * is the behaviour every existing player has; a road with no number looks the same either way.
+// 
+    public static RoadLabelStyle roadLabelStyle() {
+        RoadLabelStyle style = RoadLabelStyle.byId(values.roadLabelStyle);
+        return style == null ? RoadLabelStyle.defaultStyle() : style;
+    }
+
 // The corner the readout-only card hangs from, defaulting to the bottom-left before the file loads.
     public static HudAnchor compactHudAnchor() {
         HudAnchor anchor = HudAnchor.byId(values.compactHudAnchor);
@@ -828,6 +854,7 @@ package bili.dongsz.howtogo;
 
 import bili.dongsz.howtogo.client.HudAnchor;
 import bili.dongsz.howtogo.client.MapDisplayMode;
+import bili.dongsz.howtogo.client.RoadLabelStyle;
 import bili.dongsz.howtogo.client.UiTheme;
 import bili.dongsz.howtogo.road.ColorHex;
 import bili.dongsz.howtogo.road.RoadClass;
@@ -975,6 +1002,14 @@ public final class RoadConfig {
      * name, which the enum's own reader accepts in any case.
      */
     private static final ModConfigSpec.EnumValue<MapDisplayMode> MAP_DISPLAY_MODE;
+    /**
+     * How a road's own label is drawn: its name, its sign, or both.
+     *
+     * <p>An enum rather than a string for the same reason as {@link #MAP_DISPLAY_MODE}: the config
+     * screen offers the three answers as a cycling button, so there is no spelling to get wrong and
+     * the file holds the constant name the enum's reader accepts either way.
+     */
+    private static final ModConfigSpec.EnumValue<RoadLabelStyle> ROAD_LABEL_STYLE;
     /** Whether this mod's interfaces animate; see {@link #uiAnimations()}. */
     private static final ModConfigSpec.BooleanValue UI_ANIMATIONS;
     /** The corner the readout-only card hangs from; see {@link #compactHudAnchor()}. */
@@ -1150,6 +1185,27 @@ public final class RoadConfig {
                         "file is read at startup, as every value in it is.")
                 .translation("howtogo.configuration.map_display_mode")
                 .defineEnum("map_display_mode", MapDisplayMode.defaultMode());
+
+        // Right under the map display mode, because it is the same question asked about the roads
+        // themselves: what the map prints for one. The three answers are the name alone (the map as
+        // it always looked), the sign alone when the road has one, and both in one card.
+        ROAD_LABEL_STYLE = builder.comment(
+                        "How a road's own label is drawn on the map.",
+                        "",
+                        "\"name\" -- the default -- prints the road's name along it, as the mod always",
+                        "has.",
+                        "",
+                        "\"sign\" prints a small sign instead, when the road has one: a card in its",
+                        "category's colour with the road's number in it, like a Chinese road sign.",
+                        "A road with no number keeps its name, so unnumbered roads look unchanged.",
+                        "",
+                        "\"mixed\" puts both in one card: the number, and the name under it scaled to",
+                        "fit inside the card.",
+                        "",
+                        "Categories and their colours are set in the category editor; this only",
+                        "chooses which of the two a road shows.")
+                .translation("howtogo.configuration.road_label_style")
+                .defineEnum("road_label_style", RoadLabelStyle.defaultStyle());
 
         COMPACT_HUD_ANCHOR = builder.comment(
                         "Which corner the small readout-only card hangs from, in the",
@@ -1878,6 +1934,23 @@ public final class RoadConfig {
         }
     }
 
+    /**
+     * How a road's own label is drawn: its name, its sign, or both, or the declared default before
+     * the config is read.
+     *
+     * <p>{@link RoadLabelStyle#NAME} is the declared default, so an install that has never said
+     * anything about this draws the map it always drew. A road with no number is drawn the same way
+     * in every mode -- there is nothing to put in a sign -- which is why this default costs nothing
+     * until the player starts numbering roads.
+     */
+    public static RoadLabelStyle roadLabelStyle() {
+        try {
+            return ROAD_LABEL_STYLE.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return RoadLabelStyle.defaultStyle();
+        }
+    }
+
     /** Which corner the readout-only card hangs from, or the declared default before the config loads. */
     public static HudAnchor compactHudAnchor() {
         try {
@@ -2139,6 +2212,11 @@ public final class RoadConfig {
 // Where the map half of navigation is drawn.
     public static void setMapDisplayMode(MapDisplayMode mode) {
         write(MAP_DISPLAY_MODE, mode == null ? MapDisplayMode.defaultMode() : mode);
+    }
+
+    /** How a road's own label is drawn; see {@link #roadLabelStyle()}. */
+    public static void setRoadLabelStyle(RoadLabelStyle style) {
+        write(ROAD_LABEL_STYLE, style == null ? RoadLabelStyle.defaultStyle() : style);
     }
 
 // The compact HUD card's corner, and how far inside that corner it sits.

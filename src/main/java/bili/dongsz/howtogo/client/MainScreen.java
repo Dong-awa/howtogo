@@ -6,7 +6,9 @@ import bili.dongsz.howtogo.api.SelfChecks;
 import bili.dongsz.howtogo.place.PlaceDetails;
 import bili.dongsz.howtogo.place.PlaceKey;
 import bili.dongsz.howtogo.place.PlaceSources;
+import bili.dongsz.howtogo.road.RoadChains;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.route.Route;
@@ -14,6 +16,11 @@ import bili.dongsz.howtogo.route.TravelMode;
 import bili.dongsz.howtogo.webmap.WebMapService;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+// 1.21.6 replaced the GUI's PoseStack with JOML's 2D matrix stack.
+//? if >=1.21.6 {
+/*import org.joml.Matrix3x2fStack;
+*///?}
+import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -101,6 +108,48 @@ public final class MainScreen extends Screen {
 
     /** Half the size of the favourite badge: the marker's own scale rather than a second marker. */
     private static final double FAVOURITE_BADGE_RADIUS = 2.0;
+
+    /** Height of one line of the font, for the box a rotated road name occupies once turned. */
+    private static final int LABEL_HEIGHT = 9;
+
+    /**
+     * How much of the font a road's sign card is drawn at on this map: the plate and its text alike,
+     * 0.72 of the font.
+     *
+     * <p>The same fraction, and the same reason, as the destination picker's card. A card at the
+     * font's own size is an opaque coloured plate among ink names, and on a map a couple of hundred
+     * pixels across it is one of the loudest things on it. This map has no label zoom of its own
+     * either -- the map zooms and the text does not -- so the decision is again a constant; 0.72 is
+     * the top of the range the world map's card moves through, because a panel this small cannot
+     * afford the bottom of it. The border stays one screen pixel: at this size it is a rim, not a
+     * share of the plate.
+     */
+    private static final float SIGN_CARD_SCALE = 0.72F;
+
+    /**
+     * The least share of the card's scale the mixed card's name line may shrink to.
+     *
+     * <p>The world map's rule, carried across: a name shrunk to a short number's width is a line
+     * nobody can read, so the shrink stops here and a name that would need more than this widens the
+     * plate instead, with the number centred and its padding either side of it. A share of the card
+     * rather than a size in pixels, so the two lines keep their relation at whatever the card is
+     * scaled to.
+     */
+    private static final double SIGN_CARD_NAME_FLOOR = 0.7;
+
+    /** The room inside a sign card, shared with the mod's other maps; see {@link RoadSigns}. */
+    private static final int SIGN_CARD_PAD_X = RoadSigns.PAD_X;
+    private static final int SIGN_CARD_PAD_Y = RoadSigns.PAD_Y;
+    private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
+
+    /**
+     * The narrowest the map panel may be, either way, and still be worth putting a road label on.
+     *
+     * <p>Below this the panel is a thumbnail: a label's own box is a good share of it, and the fit
+     * tests would reject nearly every one. The guard is here so a pass that would draw nothing does
+     * not walk the road network and measure labels to prove it.
+     */
+    private static final int MIN_LABEL_MAP_PX = 48;
 
     private final List<String> notices = new ArrayList<>();
 
@@ -315,8 +364,43 @@ public final class MainScreen extends Screen {
         }
     }
 
-    /** A place name and where it goes on the map, collected in the shape pass and drawn after it. */
-    private record MapLabel(String name, double x, double y) {
+    /**
+     * A rectangle some label has claimed on the map, in screen pixels.
+     *
+     * <p>One shape for both kinds of label -- a place's name, and a road's name or card -- because
+     * the rule that keeps them apart has to be one rule: two lists would let a road label land on a
+     * place name whose box was reserved in an earlier pass. The place-label pass fills the list and
+     * the road-label pass only adds to it, which is what "shared" means here.
+     */
+    private record LabelBox(double x, double y, double width, double height) {
+
+        /** Whether the two boxes intersect; boxes that only touch along an edge do not overlap. */
+        boolean overlaps(LabelBox other) {
+            return x < other.x + other.width && other.x < x + width
+                    && y < other.y + other.height && other.y < y + height;
+        }
+    }
+
+    /**
+     * A place name and where it goes on the map, collected in the shape pass and drawn after it.
+     *
+     * <p>The box travels with the label because it was measured in the shape pass, in the very
+     * numbers the collision rule decided with. Measuring it again in the text pass could round a
+     * coordinate differently and offer a box that is already taken to the road labels that follow.
+     */
+    private record MapLabel(String name, double x, double y, LabelBox box) {
+    }
+
+    /**
+     * What the map's shape pass hands to its text pass: the place names to write, and the boxes they
+     * have already claimed.
+     *
+     * <p>The two travel together because both later passes need the claim list. The place names are
+     * drawn first and get the first choice of room; the road labels test their own boxes against
+     * exactly the boxes reserved here. One list, filled by one pass and only added to by the other,
+     * is what makes that a single rule rather than two rules that happen to agree.
+     */
+    private record MapLabelPass(List<MapLabel> labels, List<LabelBox> reserved) {
     }
 
     /** Top of the status block under the map, worked out in {@link #init()}. */
@@ -946,9 +1030,11 @@ public final class MainScreen extends Screen {
         *///?}
         super.render(graphics, mouseX, mouseY, partialTick);
         // Shapes first, then every piece of text: drawing a string flushes the vertex buffer this
-        // uses, so a shape emitted after one would go through a stale consumer.
-        List<MapLabel> labels = drawMap(graphics);
-        drawText(graphics, labels, mouseX, mouseY);
+        // uses, so a shape emitted after one would go through a stale consumer. (The sign cards the
+        // text pass goes on to draw are the one exception, and not really one: they are fills made
+        // through the GUI's own batches after the map's block is closed, not vertices of that block.)
+        MapLabelPass mapLabels = drawMap(graphics);
+        drawText(graphics, mapLabels, mouseX, mouseY);
         // The details card last and alone: it is an opaque sheet standing over the map's right edge,
         // so every label the map drew under it has to come first. It opens its own drawing blocks
         // internally, which is also why it cannot be called inside the map's block above.
@@ -962,9 +1048,10 @@ public final class MainScreen extends Screen {
     /**
      * The map: roads, rails, RoadWeaver's roads, places, the route and the player.
      *
-     * @return the places' labels, for the text pass that has to come after the shapes
+     * @return the places' labels and the boxes they have claimed, for the text pass that has to come
+     *         after the shapes -- the road labels are tested against the same claims there
      */
-    private List<MapLabel> drawMap(GuiGraphics graphics) {
+    private MapLabelPass drawMap(GuiGraphics graphics) {
         List<MapLabel> labels = new ArrayList<>();
         // The map is part of the screen that is arriving, so everything in it is drawn at the
         // entrance's opacity: the backdrop, the strokes' own alphas and the marker colours. Only the
@@ -1035,9 +1122,12 @@ public final class MainScreen extends Screen {
         }
 
         // Places, and the labels to draw after the shapes. The names are thinned by the same rule
-        // the world map uses: only where they can be read, and never two on top of each other.
+        // the world map uses: only where they can be read, and never two on top of each other. The
+        // boxes reserved here are kept and handed to the text pass, where the road labels are tested
+        // against them: a road name may not be painted over a place name, and the only way to make
+        // that one rule is for both passes to share one list of claims.
         boolean names = scale >= 0.5;
-        List<int[]> taken = new ArrayList<>();
+        List<LabelBox> taken = new ArrayList<>();
         for (Destination place : Destinations.places()) {
             double sx = screenX(place.x());
             double sy = screenY(place.z());
@@ -1055,17 +1145,20 @@ public final class MainScreen extends Screen {
             if (!names) {
                 continue;
             }
-            int[] box = labelBox(place.name(), (int) sx + 5, (int) sy - 4);
+            // Measured once, here: the same box is reserved, travels with the label, and is what the
+            // road labels test against. A second measurement could round a coordinate differently
+            // and quietly free a box that has already been given away.
+            LabelBox box = labelBox(place.name(), (int) sx + 5, (int) sy - 4);
             boolean free = true;
-            for (int[] other : taken) {
-                if (box[0] < other[2] && box[2] > other[0] && box[1] < other[3] && box[3] > other[1]) {
+            for (LabelBox other : taken) {
+                if (box.overlaps(other)) {
                     free = false;
                     break;
                 }
             }
             if (free) {
                 taken.add(box);
-                labels.add(new MapLabel(place.name(), sx + 5, sy - 4));
+                labels.add(new MapLabel(place.name(), sx + 5, sy - 4, box));
             }
         }
 
@@ -1082,7 +1175,7 @@ public final class MainScreen extends Screen {
 
         drawPlayerArrow(sink);
         HudDraw.endBlock(graphics, drawing);
-        return labels;
+        return new MapLabelPass(labels, taken);
     }
 
     /** One segment as a continuous stroke: its bends are mitred and its smoothed curve used. */
@@ -1122,10 +1215,19 @@ public final class MainScreen extends Screen {
         };
     }
 
-    /** The square a label would occupy, for the overlap test. */
-    private int[] labelBox(String name, int x, int y) {
+    /**
+     * The rectangle a place name would occupy, for the overlap test.
+     *
+     * <p>The label is written with its first character at the point the marker is offset from, and
+     * the font's own height is nine pixels: the box is that text plus a pixel of slack on every side,
+     * which is what stops two labels being read as one long word when they land next to each other.
+     * One helper for both kinds of label so the boxes are measured in the same units; the rotated
+     * road names measure themselves through {@link HudDraw#rotatedExtents} because a turned word is
+     * not the rectangle its own width suggests.
+     */
+    private LabelBox labelBox(String name, int x, int y) {
         int width = Minecraft.getInstance().font.width(name);
-        return new int[]{x - 1, y - 1, x + width + 1, y + 9};
+        return new LabelBox(x - 1, y - 1, width + 2, LABEL_HEIGHT + 1);
     }
 
     /** The player as an arrow pointing where they are facing. */
@@ -1221,9 +1323,17 @@ public final class MainScreen extends Screen {
                 PlaceDetailPanel.Options.STANDARD, false, mouseX, mouseY);
     }
 
-    /** Every string on the screen, after every shape. */
-    private void drawText(GuiGraphics graphics, List<MapLabel> labels, int mouseX, int mouseY) {
+    /**
+     * Every string on the screen, after every shape.
+     *
+     * <p>The two map label kinds are written here together with the screen's own text because both
+     * need the same thing: the map's vertex block closed before the first character. The places'
+     * labels come first, then the roads', and both reserve their painted rectangles in the one list
+     * the shape pass handed in -- see {@link #drawRoadLabels}.
+     */
+    private void drawText(GuiGraphics graphics, MapLabelPass mapLabels, int mouseX, int mouseY) {
         var font = this.font;
+        List<MapLabel> labels = mapLabels.labels();
         // Written at the entrance's opacity, like the sheet and the map under it: text that stayed at
         // full strength while the panel faded in would be the one thing on screen that had not moved,
         // and it is what the eye lands on first.
@@ -1295,6 +1405,12 @@ public final class MainScreen extends Screen {
             graphics.drawString(font, label.name(), labelX, labelY, labelInk, false);
         }
 
+        // The road labels, in the same pass and against the same reserved boxes: places first
+        // because they are what the list and the trip are about, roads second because a road name is
+        // the background the places sit on. A box claimed by either kind is closed to both, which is
+        // what the single list carried out of the shape pass is for.
+        drawRoadLabels(graphics, mapLabels.reserved());
+
         // The browser map's address, on the line reserved for it between the notices and the buttons.
         if (webmap != null) {
             String line = Component.translatable("screen.howtogo.main.webmap_running", webmap)
@@ -1313,5 +1429,290 @@ public final class MainScreen extends Screen {
                 drawHoverSummary(graphics, hovered, mouseX, mouseY);
             }
         }
+    }
+
+    // -------------------------------------------------------------- road labels
+
+    /**
+     * Road names and sign cards on this screen's map, written in the place names' text pass.
+     *
+     * <h2>Why the pass lives here and not in {@link #drawMap}</h2>
+     * {@code drawMap} holds a vertex block open, and a string written inside it ends the builder
+     * behind it: every stroke, marker and route segment has to be out before the first character.
+     * This screen's text pass is exactly that "after the shapes" point, so the road labels run
+     * beside the place names. The place labels go first for the same reason the place markers are
+     * drawn before the destination's: a place is what the list, the hover and the trip are about,
+     * while a road name is the background those places sit on, so a place gets the first claim on
+     * the room. The order is enforced through the one shared reservation list, not by luck.
+     *
+     * <h2>Why the names are rotated and the cards are not</h2>
+     * A road name belongs to a line: turned along the stroke it reads as part of the road, and that
+     * is the only way a name of any length fits the narrow strip a road occupies on a panel this
+     * size. A sign card is not part of the line -- it is the player's classification of the road,
+     * an object standing at it -- so it is drawn upright and centred on the road's midpoint, with
+     * the stroke running into it and out of it. That is the same pair of decisions the destination
+     * picker made, deliberately: the same road should not look like a different object on the two
+     * screens.
+     *
+     * <h2>What is asked before anything is drawn</h2>
+     * The player's {@code road_label_style} picks the mode; {@link MapFilter#shows} hides a class
+     * that is not being drawn at this zoom, so no name floats over a road the map left out;
+     * {@link RoadChains.Grouping#carriesLabel} makes one piece of a chain the piece that names it,
+     * so a road is named once rather than once per segment; and each label's painted rectangle has
+     * to fit inside the map and miss every box already reserved. All of those are cheap tests on
+     * numbers already in hand -- the network walk is the only cost this pass adds per frame.
+     */
+    private void drawRoadLabels(GuiGraphics graphics, List<LabelBox> reserved) {
+        if (mapW < MIN_LABEL_MAP_PX || mapH < MIN_LABEL_MAP_PX) {
+            // A panel this small cannot hold a label's box without the box being most of the panel;
+            // the fit tests below would reject nearly every one. Returning here keeps the pass from
+            // walking the whole network every frame to prove it.
+            return;
+        }
+        RoadNetwork network = RoadStore.get();
+        // One reading of the roads for the whole pass: the chain a piece belongs to and the piece
+        // that carries a chain's name. Building one per road is what made the picker's pass cost a
+        // millisecond a frame before it was rewritten -- see the note on that pass.
+        RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        // Read once, not per road: the style is one value in the config, and a pass that asked for
+        // it thousands of times could in principle see it change halfway through its own work.
+        RoadLabelStyle style = RoadConfig.roadLabelStyle();
+        boolean signMode = style != RoadLabelStyle.NAME;
+        boolean mixed = style == RoadLabelStyle.MIXED;
+        int minX = mapX;
+        int minY = mapY;
+        int maxX = mapX + mapW;
+        int maxY = mapY + mapH;
+        for (RoadSegment segment : network.segments()) {
+            String name = segment.name();
+            boolean named = name != null && !name.isBlank();
+            // As on the world map and the picker: a card needs a number and a category that still
+            // exists to paint it on. A category the player has deleted is not a category any more --
+            // the store answers false for it -- so the road is drawn as unclassified: no card, and
+            // its name is its label again. A road with a sign and no name is still labelled, because
+            // the card is the label it has.
+            boolean sign = signMode && segment.hasSign()
+                    && RoadCategoryStore.has(segment.category());
+            if (!named && !sign) {
+                continue;
+            }
+            // A label must follow the same visibility the roads do: a name over a class the map is
+            // not drawing at this zoom would point at nothing.
+            if (!MapFilter.shows(segment.roadClass(), scale)) {
+                continue;
+            }
+            if (segment.vertexCount() < 2) {
+                // No two ends means no direction to turn a name along, and nothing to put a label on.
+                continue;
+            }
+            double[] mid = segment.midpoint();
+            double x = screenX(mid[0]);
+            double y = screenY(mid[1]);
+            // A label that fits the map is at most a map across, so a midpoint a whole map away from
+            // it cannot produce a box that passes the fit test below. A cheap guard, not the rule.
+            if (x < minX - mapW || x > maxX + mapW || y < minY - mapH || y > maxY + mapH) {
+                continue;
+            }
+            // The chain's carrying piece is the one label the road gets. Without this every piece of
+            // a long road would draw the same word and the road would read as a ladder of names.
+            if (!grouping.carriesLabel(segment)) {
+                continue;
+            }
+            if (sign) {
+                // The card takes the label's place rather than joining it: one road gets one label
+                // at its carrying point, and a card beside a name would be two objects at one point.
+                drawSignCard(graphics, segment, x, y, mixed, reserved);
+                continue;
+            }
+
+            // Along the line, from the road's own world direction. This map is north-up with one
+            // scale on both axes, so the world direction is already the screen direction: multiplying
+            // by the scale changes the vector's length, not its angle. It is written out anyway so
+            // the angle is read from the same pixels the label is drawn in.
+            int last = segment.vertexCount() - 1;
+            float angle = HudDraw.labelAngle((segment.x(last) - segment.x(0)) * scale,
+                    (segment.z(last) - segment.z(0)) * scale);
+            int width = font.width(name);
+            // The box that is actually painted, not the unrotated one the word would occupy flat: a
+            // diagonal name is wider and taller than its own width, so measuring the flat word would
+            // let it cross the map's edge and other labels while the fit test said it fitted.
+            double[] extents = HudDraw.rotatedExtents(width, LABEL_HEIGHT, angle);
+            double centreY = y - 4 + LABEL_HEIGHT / 2.0;
+            LabelBox box = new LabelBox(x - extents[0] / 2.0, centreY - extents[1] / 2.0,
+                    extents[0], extents[1]);
+            if (box.x() < minX + 1 || box.x() + box.width() > maxX - 1
+                    || box.y() < minY + 1 || box.y() + box.height() > maxY - 1) {
+                continue;
+            }
+            boolean clash = false;
+            for (LabelBox other : reserved) {
+                if (box.overlaps(other)) {
+                    clash = true;
+                    break;
+                }
+            }
+            if (clash) {
+                // One list, both kinds of label, and a box already reserved is closed to both: that
+                // is what stops a road name being painted over a place name or another road's card.
+                continue;
+            }
+            reserved.add(box);
+
+            // A rotated label. 1.21.6 moved the GUI matrix stack from a PoseStack to JOML's
+            // Matrix3x2fStack: for a 2D translate-and-rotate the two are the same operation under the
+            // new name, and the stack is part of GuiGraphics either way.
+            //? if >=1.21.6 {
+            /*Matrix3x2fStack pose = graphics.pose();
+            pose.pushMatrix();
+            pose.translate((float) x, (float) centreY);
+            pose.rotate(angle);
+            graphics.drawString(font, name, -width / 2, -4,
+                    UiMotion.fade(UiTheme.mapLabel(), open), false);
+            pose.popMatrix();
+            *///?} else {
+            PoseStack pose = graphics.pose();
+            pose.pushPose();
+            pose.translate(x, centreY, 0.0);
+            pose.mulPose(Axis.ZP.rotation(angle));
+            graphics.drawString(font, name, -width / 2, -4,
+                    UiMotion.fade(UiTheme.mapLabel(), open), false);
+            pose.popPose();
+            //?}
+        }
+    }
+
+    /**
+     * One road's sign card on this screen's map: the category's colour, a one-pixel contrasting
+     * border, the number centred inside, and in mixed mode the road's name shrunk beneath it.
+     *
+     * <p>The same object the destination picker draws, at the same scale and by the same rules: the
+     * plate is upright because a sign stands beside the road rather than lying along it, it is
+     * centred on the road's midpoint so the stroke enters and leaves it, and its ink is chosen from
+     * the colour it paints so it stays readable after a category is recoloured (see {@link RoadSigns}).
+     * Keeping the card identical is the point: the same road's shield should not be a different
+     * object on the two screens.
+     *
+     * <p>The card is measured from the number rather than from the name -- a sign's width is the word
+     * printed on it, and that word is the number -- and the mixed name gives way: it is shrunk to the
+     * width the number's line leaves it, but never below {@link #SIGN_CARD_NAME_FLOOR} of the card's
+     * scale, because a name shrunk past that is a line nobody can read. A name that would need more
+     * shrinking than that widens the plate instead, with the number centred and its padding either
+     * side of it -- the world map's rule, carried out in this map's font units. Everything is in
+     * unscaled units up to the last multiplication, which is what keeps the plate's proportions the
+     * same at every size.
+     */
+    private void drawSignCard(GuiGraphics graphics, RoadSegment segment, double x, double y,
+                              boolean withName, List<LabelBox> reserved) {
+        String number = segment.number();
+        if (number == null || number.isBlank()) {
+            // hasSign() is "the number is not null", so this cannot happen through the editor; it is
+            // answered here rather than trusted so that a road with an empty number draws its name
+            // instead of a coloured box with nothing in it.
+            return;
+        }
+        String name = withName ? segment.name() : null;
+        boolean named = name != null && !name.isBlank();
+        int numberWidth = font.width(number);
+        int nameWidth = named ? font.width(name) : 0;
+        // The mixed name's share of the card's scale, and the width the plate has to give it, both in
+        // the card's unscaled units.
+        double nameFactor = 1.0;
+        int innerWidth = numberWidth;
+        if (named) {
+            double raw = (double) numberWidth / nameWidth;
+            nameFactor = Math.min(1.0, Math.max(SIGN_CARD_NAME_FLOOR, raw));
+            // A hair is subtracted before the ceil: raw was formed by a division and is multiplied
+            // back out here, so a name that fits the number's line exactly must not round up a pixel
+            // and widen a plate it already fits.
+            innerWidth = Math.max(numberWidth, (int) Math.ceil(nameWidth * nameFactor - 1.0E-6));
+        }
+        double nameLineUnits = named ? font.lineHeight * nameFactor + SIGN_CARD_LINE_GAP : 0.0;
+        // The scaled rectangle is the only one measured, tested and reserved: what the card occupies
+        // and what it claims on the map cannot then differ.
+        int cardWidth = Math.max(1, (int) Math.round(
+                (innerWidth + SIGN_CARD_PAD_X * 2) * (double) SIGN_CARD_SCALE));
+        int cardHeight = Math.max(1, (int) Math.round(
+                (font.lineHeight + nameLineUnits + SIGN_CARD_PAD_Y * 2) * (double) SIGN_CARD_SCALE));
+        int left = (int) Math.round(x - cardWidth / 2.0);
+        // Centred on the road's midpoint rather than sitting above it: the plate is the sign standing
+        // on the road, so the stroke enters it and leaves it on both sides.
+        int top = (int) Math.round(y - cardHeight / 2.0);
+        int bottom = top + cardHeight;
+        LabelBox box = new LabelBox(left, top, cardWidth, cardHeight);
+        // A label that would reach outside the map is dropped rather than painted across the panel
+        // around it. A card that does not fit is dropped, not clipped: a half card is not a sign.
+        if (left < mapX + 1 || left + cardWidth > mapX + mapW - 1
+                || top < mapY + 1 || bottom > mapY + mapH - 1) {
+            return;
+        }
+        // And the same rule as the rotated names, against the same list: one list for both kinds of
+        // label is what keeps a card and a name -- place or road -- from covering each other.
+        for (LabelBox other : reserved) {
+            if (box.overlaps(other)) {
+                return;
+            }
+        }
+        reserved.add(box);
+
+        int colour = RoadCategoryStore.color(segment.category());
+        // The ink is decided from the colour as the category stores it, and only then are both faded
+        // with the screen: fading first would change the luminance the ink rule reads, and an
+        // arriving card could be lettered in the ink of a different colour.
+        int ink = UiMotion.fade(RoadSigns.ink(colour), open);
+        int background = UiMotion.fade(colour, open);
+        graphics.fill(left, top, left + cardWidth, bottom, background);
+        // Four one-pixel bars for the border, in the same ink as the text: the rim is a fixed weight
+        // rather than a share of the plate, and one contrast decision made from the background keeps
+        // the card reading as one object.
+        graphics.fill(left, top, left + cardWidth, top + 1, ink);
+        graphics.fill(left, bottom - 1, left + cardWidth, bottom, ink);
+        graphics.fill(left, top + 1, left + 1, bottom - 1, ink);
+        graphics.fill(left + cardWidth - 1, top + 1, left + cardWidth, bottom - 1, ink);
+
+        // Both lines are drawn at the card's own scale through the pose, centred on the plate's
+        // middle: a scaled font written at an absolute position would be a small word floating in a
+        // corner of the plate instead of the plate's content.
+        double centreX = left + cardWidth / 2.0;
+        double numberTop = top + SIGN_CARD_PAD_Y * (double) SIGN_CARD_SCALE;
+        drawScaledCardText(graphics, number, centreX, numberTop, ink, SIGN_CARD_SCALE);
+        if (named) {
+            double nameTop = top + (SIGN_CARD_PAD_Y + font.lineHeight + SIGN_CARD_LINE_GAP)
+                    * (double) SIGN_CARD_SCALE;
+            drawScaledCardText(graphics, name, centreX, nameTop, ink,
+                    SIGN_CARD_SCALE * (float) nameFactor);
+        }
+    }
+
+    /**
+     * Writes one line of a sign card at a given scale, centred on a point.
+     *
+     * <p>The font's draw call takes a position and no size, so the size has to be put on the pose
+     * around the call. The pose is pushed, moved to the line's centre, scaled, and the string is
+     * written at the origin offset by half its own width: that offset is what keeps the line centred
+     * on the card whatever the scale, and drawing at the origin is what keeps the scale about the
+     * point rather than about the screen's corner.
+     *
+     * <p>The two eras' stacks are the same two branches the rotated names keep: 1.21.6 replaced the
+     * GUI's PoseStack with JOML's Matrix3x2fStack, and for a translate-and-scale the two are the same
+     * operation under the new name.
+     */
+    private void drawScaledCardText(GuiGraphics graphics, String text, double centreX, double top,
+                                    int colour, float scale) {
+        int width = font.width(text);
+        //? if >=1.21.6 {
+        /*Matrix3x2fStack pose = graphics.pose();
+        pose.pushMatrix();
+        pose.translate((float) centreX, (float) top);
+        pose.scale(scale, scale);
+        graphics.drawString(font, text, -width / 2, 0, colour, false);
+        pose.popMatrix();
+        *///?} else {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(centreX, top, 0.0);
+        pose.scale(scale, scale, 1.0F);
+        graphics.drawString(font, text, -width / 2, 0, colour, false);
+        pose.popPose();
+        //?}
     }
 }

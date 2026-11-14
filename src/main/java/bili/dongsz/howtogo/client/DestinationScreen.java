@@ -25,6 +25,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 *///?}
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -378,6 +379,45 @@ public final class DestinationScreen extends Screen {
 
     /** Height of one line of the font, for the label boxes. */
     private static final int LABEL_HEIGHT = 9;
+
+    /**
+     * The sign card's measures: the room inside it, shared with the other two maps, and its scale.
+     *
+     * <p>Pixels rather than the world map's font-relative units: this map draws every one of its
+     * labels at the font's own size -- its zoom moves the world under them, not the text -- so the
+     * card here has no zoom factor of the map's to follow. The room inside the card is the shared
+     * {@link RoadSigns} one, which is what makes the same road's shield look like the same object on
+     * all three maps; one unit of it is drawn at {@link #SIGN_CARD_SCALE} screen pixels.
+     */
+    private static final int SIGN_CARD_PAD_X = RoadSigns.PAD_X;
+    private static final int SIGN_CARD_PAD_Y = RoadSigns.PAD_Y;
+    private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
+    /**
+     * How much of the font a sign card is drawn at on this map: box and text alike, 0.72 of the font.
+     *
+     * <p>A card at the font's own size is the billboard the world map's card was shrunk away from: it
+     * is opaque and coloured, the place names beside it are ink, and on a map a couple of hundred
+     * pixels across a full-size plate is one of the loudest things on it. This map has no zoom to
+     * follow, so the same decision is a constant here. 0.72 is a compromise: the world map's card
+     * lives between 0.5 and 0.8 of the font, but this map is small enough that the bottom of that
+     * range would be unreadable, so the number is taken from the top of it. It is still a clear step
+     * down from the font's own size, which is the point.
+     *
+     * <p>The whole card scales, not just its text: a smaller number in a full-sized plate is a box
+     * of padding round a small word, and would take just as much of the map as before. The border
+     * stays one screen pixel -- at this size it is a rim rather than a share of the card.
+     */
+    private static final float SIGN_CARD_SCALE = 0.72F;
+    /**
+     * The least share of the card's scale the mixed card's name line may shrink to.
+     *
+     * <p>The same floor, and for the same reason, as the world map's SIGN_CARD_NAME_FLOOR: a name
+     * shrunk to a short number's width is a line nobody can read, so the shrink stops here and a name
+     * that would need more shrinking than this widens the plate instead, with the number centred and
+     * padding either side of it. The value is a share of the card rather than a size in pixels, so
+     * the two lines keep their relation whatever the card is scaled to.
+     */
+    private static final double SIGN_CARD_NAME_FLOOR = 0.7;
 
     /** The side of a row's colour marker, and the room it and its gap take out of the row's text. */
     private static final int ROW_MARKER = 6;
@@ -2007,12 +2047,24 @@ public final class DestinationScreen extends Screen {
      * hundred and twenty milliseconds a frame). The answer is a property of the geometry, so it now
      * comes from the grouping, which is rebuilt only when the roads change -- and the roads are culled
      * against the map before they are asked about at all.
+     *
+     * <h2>What a label is</h2>
+     * The player's {@code road_label_style} setting decides what a road shows: its name, as this pass
+     * has always drawn it, or -- when the road carries a number -- a small upright sign card in its
+     * category's colour, or one card holding the number and the name together. A card replaces the
+     * name rather than joining it: one road gets one label at its carrying point, and the collision
+     * list is shared between the two kinds, so a card and a name can never be painted over each
+     * other. See {@link #drawSignCard} for the card itself, and for why it is upright, centred on
+     * the road rather than lifted above it, and drawn smaller than the font.
      */
     private void drawMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network, double scale,
                                double centerX, double centerY,
                                double minX, double minY, double maxX, double maxY) {
         List<double[]> placed = new ArrayList<>();
         RoadChains.Grouping grouping = RoadChains.cachedGrouping(network);
+        RoadLabelStyle style = RoadConfig.roadLabelStyle();
+        boolean signMode = style != RoadLabelStyle.NAME;
+        boolean mixed = style == RoadLabelStyle.MIXED;
         // A label that fits inside the map is at most as large as the map, so a road whose midpoint is
         // a whole map's dimension away from it cannot produce a box that passes the test below. Wider
         // than any label, and no assumption about the font: a cheap guard, not the rule.
@@ -2020,7 +2072,14 @@ public final class DestinationScreen extends Screen {
         double padY = maxY - minY;
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
-            if (name == null) {
+            boolean named = name != null && !name.isBlank();
+            // As on the world map, a sign needs a number and a category that still exists to print it
+            // on: the number is the card's whole content, and a category the player has deleted is not
+            // a category any more, so a road carrying one is drawn as unclassified (no card, name
+            // fallback). A road with a sign and no name is still labelled, by the card it has.
+            boolean sign = signMode && segment.hasSign()
+                    && RoadCategoryStore.has(segment.category());
+            if (!named && !sign) {
                 continue;
             }
             double[] mid = segment.midpoint();
@@ -2030,6 +2089,10 @@ public final class DestinationScreen extends Screen {
                 continue;
             }
             if (!grouping.carriesLabel(segment)) {
+                continue;
+            }
+            if (sign) {
+                drawSignCard(graphics, mc.font, segment, x, y, mixed, minX, minY, maxX, maxY, placed);
                 continue;
             }
 
@@ -2082,6 +2145,146 @@ public final class DestinationScreen extends Screen {
             pose.popPose();
             //?}
         }
+    }
+
+    /**
+     * One road's sign card on the picker map: the category's colour, a one-pixel contrasting border,
+     * the number centred inside, and in mixed mode the road's name shrunk beneath it.
+     *
+     * <h2>Why upright, and why here</h2>
+     * The name above is drawn along the road because it belongs to the line; a sign is an object
+     * standing beside the road, and a plate turned to the road's angle reads as a label lying on it
+     * rather than as a sign next to it. It is centred on the road's midpoint for the same reason it is
+     * centred on the label position on the world map: a plate lifted off the stroke is a second object
+     * with an unexplained gap under it, while a centred plate has the road running into it and out of
+     * it, which is what a sign standing on the road looks like.
+     *
+     * <h2>Why it is drawn at a scale</h2>
+     * The same reason the world map's card is a fraction of its label zoom: at the font's own size a
+     * card is louder than the names around it and takes a bite out of a small map. Everything -- the
+     * plate, the room inside it and both lines -- is therefore measured in the card's own units and
+     * drawn at {@link #SIGN_CARD_SCALE} of them, so the card is the same object at a smaller size.
+     * See that constant for why the number is 0.72.
+     *
+     * <h2>Why the card is measured from the number</h2>
+     * A sign is a plate whose width is the word printed on it, and that word is the number: sized by
+     * the mixed mode's name, a card for a long street name would be a plate as long as the street.
+     * The name's line therefore gives way -- it is shrunk to the width the number's line leaves it,
+     * but never below {@link #SIGN_CARD_NAME_FLOOR} of the card's scale; a name that would need more
+     * shrinking than that widens the plate instead. That is exactly the world map's rule (see its
+     * {@code measureSignCard}), carried out in this map's pixels rather than in font units.
+     */
+    private void drawSignCard(GuiGraphics graphics, Font font, RoadSegment segment, double x, double y,
+                              boolean withName, double minX, double minY, double maxX, double maxY,
+                              List<double[]> placed) {
+        String number = segment.number();
+        if (number == null || number.isBlank()) {
+            return;
+        }
+        String name = withName ? segment.name() : null;
+        boolean named = name != null && !name.isBlank();
+        int numberWidth = font.width(number);
+        int nameWidth = named ? font.width(name) : 0;
+        // The name line's share of the card's scale, and the width the plate has to give it, both in
+        // the card's unscaled units: the world map's mixed rule, one map's pixels being font units.
+        double nameFactor = 1.0;
+        int innerWidth = numberWidth;
+        if (named) {
+            double raw = (double) numberWidth / nameWidth;
+            nameFactor = Math.min(1.0, Math.max(SIGN_CARD_NAME_FLOOR, raw));
+            // The hair is subtracted before the ceil for the reason the world map's copy states:
+            // raw was formed by a division and is multiplied back out here, so a name that fits the
+            // number's line exactly must not round up a pixel and widen a plate it already fits.
+            innerWidth = Math.max(numberWidth,
+                    (int) Math.ceil(nameWidth * nameFactor - 1.0E-6));
+        }
+        double nameLineUnits = named
+                ? font.lineHeight * nameFactor + SIGN_CARD_LINE_GAP
+                : 0.0;
+        // Everything in unscaled units up to here, and one scaling at the end: that is what keeps the
+        // plate's proportions the same as on the other two maps.
+        int cardWidth = Math.max(1, (int) Math.round(
+                (innerWidth + SIGN_CARD_PAD_X * 2) * (double) SIGN_CARD_SCALE));
+        int cardHeight = Math.max(1, (int) Math.round(
+                (font.lineHeight + nameLineUnits + SIGN_CARD_PAD_Y * 2) * (double) SIGN_CARD_SCALE));
+        int left = (int) Math.round(x - cardWidth / 2.0);
+        // Centred on the road's midpoint rather than sitting above it: the plate is the sign standing
+        // on the road, so the stroke enters it and leaves it on both sides. See the method's note.
+        int top = (int) Math.round(y - cardHeight / 2.0);
+        int bottom = top + cardHeight;
+        // The same test the name path makes: a label that would reach outside the map is dropped
+        // rather than painted across the panel around it. The scaled rectangle is the one tested and
+        // the one reserved below, so what the card occupies and what it reserves cannot differ.
+        if (left < minX + 1 || left + cardWidth > maxX - 1
+                || top < minY + 1 || bottom > maxY - 1) {
+            return;
+        }
+        // And the same collision rule, against the boxes the names have already taken: one list for
+        // both kinds of label is what keeps a card and a name from covering each other.
+        for (double[] other : placed) {
+            if (left < other[0] + other[2] && other[0] < left + cardWidth
+                    && top < other[1] + other[3] && other[1] < top + cardHeight) {
+                return;
+            }
+        }
+        placed.add(new double[] {left, top, cardWidth, cardHeight});
+
+        int background = RoadCategoryStore.color(segment.category());
+        int ink = RoadSigns.ink(background);
+        graphics.fill(left, top, left + cardWidth, bottom, background);
+        // Four one-pixel bars for the border, in the same ink as the text: the rim is a fixed weight
+        // rather than a share of the card, and one contrast decision made from the background keeps
+        // the card reading as one object.
+        graphics.fill(left, top, left + cardWidth, top + 1, ink);
+        graphics.fill(left, bottom - 1, left + cardWidth, bottom, ink);
+        graphics.fill(left, top + 1, left + 1, bottom - 1, ink);
+        graphics.fill(left + cardWidth - 1, top + 1, left + cardWidth, bottom - 1, ink);
+
+        // Both lines are drawn at the card's own scale through the pose, centred on the plate's
+        // middle: a scaled font written at an absolute position would be a small word floating in a
+        // corner of the plate instead of the plate's content.
+        double centreX = left + cardWidth / 2.0;
+        double numberTop = top + SIGN_CARD_PAD_Y * (double) SIGN_CARD_SCALE;
+        drawScaledCardText(graphics, font, number, centreX, numberTop, ink, SIGN_CARD_SCALE);
+        if (named) {
+            double nameTop = top + (SIGN_CARD_PAD_Y + font.lineHeight + SIGN_CARD_LINE_GAP)
+                    * (double) SIGN_CARD_SCALE;
+            drawScaledCardText(graphics, font, name, centreX, nameTop, ink,
+                    SIGN_CARD_SCALE * (float) nameFactor);
+        }
+    }
+
+    /**
+     * Writes one line of a sign card at a given scale, centred on a point.
+     *
+     * <p>The font's draw call takes a position and no size, so the size has to be put on the pose
+     * around the call -- the same matrix the rotated road names above are drawn through. The pose is
+     * pushed, moved to the line's centre, scaled, and the string is written at the origin offset by
+     * half its own width: that offset is what keeps the line centred on the card whatever the scale,
+     * and drawing at the origin is what keeps the scale about the point rather than the screen.
+     *
+     * <p>The two eras' stacks are the two branches the name pass above already keeps: 1.21.6 replaced
+     * the GUI's PoseStack with JOML's Matrix3x2fStack, and for a translate-and-scale the two are the
+     * same operation under the new name.
+     */
+    private static void drawScaledCardText(GuiGraphics graphics, Font font, String text,
+                                           double centreX, double top, int colour, float scale) {
+        int width = font.width(text);
+        //? if >=1.21.6 {
+        /*Matrix3x2fStack pose = graphics.pose();
+        pose.pushMatrix();
+        pose.translate((float) centreX, (float) top);
+        pose.scale(scale, scale);
+        graphics.drawString(font, text, -width / 2, 0, colour, false);
+        pose.popMatrix();
+        *///?} else {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(centreX, top, 0.0);
+        pose.scale(scale, scale, 1.0F);
+        graphics.drawString(font, text, -width / 2, 0, colour, false);
+        pose.popPose();
+        //?}
     }
 
     private void drawPickerMap(GuiGraphics graphics, int mouseX, int mouseY) {
