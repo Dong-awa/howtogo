@@ -275,9 +275,7 @@ public final class Navigation {
      * this session.
      */
     public static void reloadConfiguredMode() {
-        if (modeChosen) {
-            return;
-        }
+        if (modeChosen)return;
         loadConfiguredMode();
     }
 
@@ -291,16 +289,12 @@ public final class Navigation {
         modeChosen = true;
         HowToGo.LOGGER.info("[HowToGo] travel mode: {}", mode.id());
         announceMode();
-        if (target != null) {
-            recompute();
-        }
+        if (target != null)recompute();
     }
 
     private static void announceMode() {
         LocalPlayer player = Minecraft.getInstance().player;
-        if (player == null) {
-            return;
-        }
+        if (player == null)return;
         // 26.1 removed the overlay flag, so an action-bar line became a system message.
         //? if >=26.1 {
         /*player.sendSystemMessage(

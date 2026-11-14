@@ -4,89 +4,97 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 
 /**
- * The three things this mod does to the game's screen stack: read the screen, replace it, and delay a swap by one exit animation (~140 ms).
- * Reading and replacing moved from a game field to minecraft.gui.screen()/setScreen(...) in 26.2; both are asked through here rather than a condition at each of the twenty-odd call sites, and the tests ask more often than the writes.
- * A swap waits for UiMotion's exit: set starts the leaving screen's exit and records the target, and pump installs it when that exit finishes or EXIT_TIMEOUT_NANOS later. Only screens the mod animates (UiMotion tracked) are deferred; a pending swap is dropped if the game replaces the screen itself, and a second set while one is pending is swallowed.
+ * Everything this mod does to the screen stack goes through here: read the current screen,
+ * replace it, and delay a swap by one exit animation (~140ms).
+ *
+ * Read/write used to be a field on the game; 26.2 moved it to minecraft.gui.screen()/
+ * setScreen(...). Rather than sprinkle version checks over twenty-odd call sites, both ends
+ * go through this class, and reads outnumber writes anyway.
+ *
+ * A swap waits for UiMotion's exit: set() starts the exiting screen's leave and remembers the
+ * target, pump() installs it once that exit finishes or EXIT_TIMEOUT_NANOS elapses. Only
+ * screens the mod animates are deferred. A pending swap is dropped if the game changes the
+ * screen itself; a second set() while one is pending is swallowed.
  */
 public final class Screens {
-
-    /** How long the swap waits for an exit animation before installing regardless. */
+    /** Upper bound on how long a swap waits for the exit animation before forcing through. */
     private static final long EXIT_TIMEOUT_NANOS = 400_000_000L;
-
-    /** The screen waiting for the current one to finish leaving; null when the swap closes the GUI. */
+    /** Where the swap is headed; null when the swap is a close. */
     private static Screen pendingTarget;
-    /**
-     * Whether a swap is in flight.
-     * A flag of its own, not pendingTarget != null: closing records a null target, and using the target as the flag left the screen installed at zero opacity, taking every keystroke -- a frozen game behind an invisible window.
-     */
     private static boolean swapping;
-    /** The screen that is drawing its exit right now, or null when no swap is in flight. */
+    /** The screen currently playing its exit, or null when no swap is in flight. */
     private static Screen leaving;
-    /** When the swap stops waiting for the animation, in System nanoTime terms. */
+    /** System.nanoTime() deadline after which we stop waiting on the animation. */
     private static long deadlineNanos;
-
-    private Screens() {
-    }
-
-    /**
-     * The screen showing now, or null if none is. 26.2 moved this onto the GUI layer; before that it was a field on the game.
-     */
+    private Screens() { }
+    /** The screen showing now, or null. 26.2 moved this onto the GUI layer. */
     public static Screen current() {
         //? if >=26.2 {
         /*return Minecraft.getInstance().gui.screen();
-        *///?} else {
+         *///?} else {
         return Minecraft.getInstance().screen;
         //?}
     }
 
     /**
-     * Whether the screen showing now is that exact screen. Identity rather than equality: callers ask whether the screen they pressed a button on is still up, and a new screen of the same class is not that screen.
+     * Whether the given screen is the one on display, by identity.
+     *
+     * Identity, not equals: callers are asking "is the screen I clicked on still up", and a
+     * fresh instance of the same class doesn't count.
      */
     public static boolean isCurrent(Screen screen) {
         return screen != null && current() == screen;
     }
 
     /**
-     * Replaces the showing screen, or closes it when given null. The replacement is deferred by one exit animation when the screen being replaced is one of the mod's own; every call site goes through here, so that one animation covers Escape, footer buttons, imports and commands.
+     * Show the given screen, or close the GUI when null. If the screen being replaced belongs
+     * to this mod the swap is deferred by one exit animation -- one path covers Escape, footer
+     * buttons, imports and commands alike.
      */
     public static void set(Screen screen) {
-        if (defer(current(), screen)) {
+        if (defer(current(),screen)) {
             return;
         }
         install(screen, false);
     }
 
     /**
-     * Whether a swap is in flight, the window in which the interface is on its way out. For a caller that answers input differently while the screen leaves; the screens do not need it, because a second set is swallowed anyway.
+     * True while the interface is on its way out. Exposed for callers that want to answer input
+     * differently during a swap; the screens themselves don't need it since a second set is
+     * swallowed anyway.
      */
     public static boolean swapping() {
         return swapping;
     }
 
     /**
-     * The frame's pump for a deferred swap. Called once per frame by the screen that is drawing (UiMotion of), since a screen that is still drawing is a screen that can still finish leaving.
+     * Per-frame driver for a deferred swap, called by whichever screen is drawing (via UiMotion
+     * of). A screen that's still drawing is one that can still finish leaving.
      */
     static void pump() {
         if (!swapping) {
             return;
         }
-        if (current() != leaving) {
-            // The game (or another mod) put something else on screen during the exit: drop the swap rather than install a screen over it.
+        if (current()!=leaving) {
+            // The game (or another mod) put something else up during the exit -- drop the swap
+            // rather than install over it.
             clear();
             return;
         }
-        if (System.nanoTime() < deadlineNanos && !UiMotion.left(leaving)) {
+        if (System.nanoTime()<deadlineNanos&&!UiMotion.left(leaving)) {
             return;
         }
+
         Screen target = pendingTarget;
         Screen gone = leaving;
-        // Read before the record is cleared: the page being installed has to continue the transition the leaving page started, or the hand-off becomes two fades.
+        // Read before clear(): the incoming page has to continue the transition the outgoing
+        // one started, or the hand-off turns into two separate fades.
         boolean handoff = UiMotion.leavingAsHandoff(gone);
         clear();
-        install(target, handoff);
+        install(target,handoff);
     }
 
-    /** Forgets the swap in flight, whichever end it reached. */
+    /** Forget the in-flight swap, whichever end it reached. */
     private static void clear() {
         swapping = false;
         pendingTarget = null;
@@ -94,33 +102,36 @@ public final class Screens {
     }
 
     /**
-     * Whether the screen is one of this mod's own. Asked by package name rather than a marker, so a screen added later needs no list to keep in step; a screen of ours in another package would be missed.
+     * Whether the screen belongs to this mod. Checked by package name rather than a marker so
+     * screens added later need no list to keep in step; a mod screen living outside
+     * bili.dongsz.howtogo.* would be missed.
      */
     private static boolean isModScreen(Screen screen) {
         return screen != null && screen.getClass().getName().startsWith("bili.dongsz.howtogo.");
     }
 
-    /**
-     * Starts the exit animation when the swap can be animated, and records the target.
-     * Answers whether the caller should skip the swap: true when the exit was started, or when one was already in flight and this request is dropped.
-     * A pending swap may only swallow a request while it can still happen -- the leaving screen is still on show and the deadline has not passed. Otherwise a single missed pump would swallow every later set, killing navigation until restart.
-     */
     private static boolean defer(Screen current, Screen target) {
         if (swapping) {
-            if (current == leaving && System.nanoTime() < deadlineNanos) {
+            if (current==leaving && System.nanoTime()<deadlineNanos) {
                 return true;
             }
             clear();
         }
-        if (!UiMotion.on() || current == null || current == target) {
+        if (!UiMotion.on() || current==null || current==target) {
             return false;
         }
-        // A dialog is not a page: it draws over the screen it belongs to, re-rendering its parent underneath, so in both directions the page underneath stays where it is. Opening must not fade the parent out (the dialog would redraw it a frame later, flashing the whole interface) and closing must not fade it in (it never left).
+        // A dialog isn't a page: it draws over its parent and re-renders it underneath, so the
+        // parent never actually moves. Fading it out on open would make the dialog's first
+        // frame flash the whole UI; fading it in on close would fade something that never left.
         if (current instanceof ParentBackdrop || target instanceof ParentBackdrop) {
             return false;
         }
-        // Two of the mod's own pages, one after the other: a hand-off. The outgoing content fades to HANDOFF_FLOOR while its sheet stays up, and the incoming content picks the fade up from there on the same sheet. Playing the old page's full exit first would show the world between two pages -- the flash a page change must never have.
-        // Closing to the world (a null target) keeps the full exit, since the surface really is going away.
+        // Two of our own pages back-to-back is a hand-off: the outgoing content fades to
+        // HANDOFF_FLOOR while its sheet stays up, and the incoming content picks the fade up
+        // from there on the same sheet. A full exit first would flash the world between pages.
+        //
+        // Closing to the world (null target) keeps the full exit -- the surface really is going
+        // away.
         boolean handoff = isModScreen(target);
         if (!UiMotion.beginLeave(current, handoff)) {
             return false;
@@ -133,25 +144,38 @@ public final class Screens {
     }
 
     /**
-     * Installs a screen, at whatever point of its transition it belongs at.
-     * Every other screen's state is deliberately left alone: screen instances are reused as parents -- a picker holds the main screen and returns to that same object -- and two of the mod's screens draw their parent underneath themselves, so a parent whose state was dropped would fade in again behind its own child. UiMotion adopt decides between continuing a hand-off, revealing a page that never left, and opening one never drawn.
-     * The replaced screen is not settled here: nothing draws it any more (only dialogs draw another screen, and a dialog swap is never deferred), and settling it produced one frame of a fully opaque screen that had just faded to nothing -- the second blink on the last button of a panel.
-     * Only a screen the mod animates is adopted: its exit can only finish if it calls UiMotion of, so a screen handed back to the game without the mod ever drawing it must not be recorded as something whose exit can be waited for -- that left Xaero's map swallowing every later set until it was closed. A screen with no state loses nothing: its first UiMotion of frame opens it.
+     * Install a screen at whatever point of its transition it belongs at.
+     *
+     * Other screens' state is deliberately left alone: parents get reused as instances (a
+     * picker holds the main screen and returns to that same object), and two of our screens
+     * draw their parent underneath, so a parent whose state was dropped would fade in again
+     * behind its own child. UiMotion.adopt decides between continuing a hand-off, revealing a
+     * page that never left, and opening one never drawn.
+     *
+     * The replaced screen is not settled here: nothing draws it anymore (only dialogs draw
+     * another screen, and dialog swaps are never deferred), and settling it produced one frame
+     * of a fully opaque screen that had just faded to nothing -- the second blink on a panel's
+     * last button.
+     *
+     * Only screens the mod animates get adopted: an exit can only finish if the screen calls
+     * UiMotion.of, so handing a screen back to the game without ever drawing it must not be
+     * recorded as waitable -- that left Xaero's map swallowing later sets until it was closed.
+     * A screen with no state loses nothing; its first UiMotion.of frame opens it.
      */
     private static void install(Screen screen, boolean handoff) {
         UiMotion.adopt(screen, handoff);
         //? if >=26.2 {
         /*Minecraft.getInstance().gui.setScreen(screen);
-        *///?} else {
+         *///?} else {
         Minecraft.getInstance().setScreen(screen);
         //?}
     }
 
-    /** The screen as mc.screen would read, for callers holding the game already. */
+    /** The current screen as mc.screen would read, for callers already holding the game. */
     public static Screen of(Minecraft minecraft) {
         //? if >=26.2 {
         /*return minecraft.gui.screen();
-        *///?} else {
+         *///?} else {
         return minecraft.screen;
         //?}
     }
