@@ -173,6 +173,9 @@ public final class Harness {
         int[] lineDirection = bili.dongsz.howtogo.transit.LineDirectionCheck.run();
         checks += lineDirection[0];
         failures += lineDirection[1];
+        int[] lineLabels = bili.dongsz.howtogo.client.LineLabelCheck.run();
+        checks += lineLabels[0];
+        failures += lineLabels[1];
         int[] routeInk = RouteInkCheck.run();
         checks += routeInk[0];
         failures += routeInk[1];

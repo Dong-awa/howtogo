@@ -467,16 +467,18 @@ public final class DestinationScreen extends Screen {
      * The widest view, in blocks from the map's centre to its edge, at which this map names a public
      * transport line.
      *
-     * <p>A line's name plate is an opaque capsule, and this map is used at a wide zoom to compare
-     * whole journeys: past a hundred and forty blocks of radius the visible area spans several
-     * hundred blocks, which at the plates' fixed size is a band of capsules along every line. Inside
-     * it the map is close enough that a plate names a stretch of track rather than covering the
-     * route the picker exists to show. The figure is the one the player asked for, and it is stated
-     * as a radius because that is what this map's zoom control actually moves -- pixels per block
-     * would mean a different amount of world here than on the K screen, whose map is several times
-     * this one's size.
+     * <p>A hundred blocks of radius, so the visible area spans two hundred -- a zoomed-in view of one
+     * part of a trip rather than the whole plan. A line's name plate is an opaque capsule at a fixed
+     * size whatever the zoom, and past this view the visible area already holds more than one of the
+     * plates' 160-block candidates on a line crossing it, so the map becomes a band of capsules along
+     * every line. Inside it the map is close enough that a plate names a stretch of track rather than
+     * covering the route the picker exists to show. The default view is 260 blocks of radius, so the
+     * names appear only once the player zooms in past it. The figure is the one the player asked for,
+     * and it is stated as a radius because that is what this map's zoom control actually moves --
+     * pixels per block would mean a different amount of world here than on the K screen, whose map is
+     * several times this one's size.
      */
-    private static final double LINE_NAME_MAX_VIEW_RADIUS = 140.0;
+    private static final double LINE_NAME_MAX_VIEW_RADIUS = 100.0;
 
     /**
      * How far above the line a name plate floats, in screen pixels.

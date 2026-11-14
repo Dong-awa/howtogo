@@ -1,11 +1,9 @@
 package bili.dongsz.howtogo.client.xaero.minimap;
 
 import bili.dongsz.howtogo.client.HudDraw;
-import bili.dongsz.howtogo.client.MapFilter;
 import bili.dongsz.howtogo.client.MtrTransit;
 import bili.dongsz.howtogo.client.Navigation;
 import bili.dongsz.howtogo.client.RailTrackStore;
-import bili.dongsz.howtogo.client.RoadElementRenderer;
 import bili.dongsz.howtogo.client.RoadRenderContext;
 import bili.dongsz.howtogo.client.RoadStore;
 import bili.dongsz.howtogo.client.RoadWeaverLayer;
@@ -31,10 +29,16 @@ import java.util.List;
  * <h2>The order, and why it is that order</h2>
  * The centre probe first, because it carries the parent pose's linear part and the anchor's screen
  * position; then the six axis probes; then the four edge probes; then the layers, wide to narrow
- * (roads, rails, MTR, RoadWeaver, then the two halves of the route); then the markers. Xaero gives
- * each drawn element a slightly larger depth than the one before it, so that order is also the
- * paint order -- road network under rails under the route under the markers -- which is what the
- * navigation panel draws.
+ * (roads, rails, MTR, RoadWeaver, the transit line strokes, then the two halves of the route); then
+ * the markers. Xaero gives each drawn element a slightly larger depth than the one before it, so
+ * that order is also the paint order -- road network under rails under the route under the markers --
+ * which is what the navigation panel draws.
+ *
+ * <p>The transit lines are drawn as strokes and are not named here. A line's name plate is a
+ * fixed-size capsule, and this map is a few dozen blocks across at most: a plate that fits at all
+ * covers a large share of the map it is naming, which is what the player reported after seeing it in
+ * game. The two big maps keep their plates -- there is room for them there -- and the minimap draws
+ * the line itself.
  *
  * <h2>What needs a trip and what does not</h2>
  * The road network is a property of the world, so it is in the list whenever the overlay draws at
@@ -79,7 +83,6 @@ public final class XaeroMinimapRouteProvider
         appendProbes(anchorX, anchorZ);
         appendLayers(anchorX, anchorZ);
         appendTransitLines(anchorX, anchorZ);
-        appendTransitLineNames(anchorX, anchorZ);
         appendRoute(anchorX, anchorZ);
         appendMarkers();
     }
@@ -209,30 +212,6 @@ public final class XaeroMinimapRouteProvider
             buffer.add(XaeroMinimapRouteElement.routeLayer(
                     XaeroMinimapRouteElement.Kind.TRANSIT_LINES, anchorX, anchorZ,
                     stroke.colour(), stroke.points()));
-        }
-    }
-
-    /**
-     * One name plate per stretch of one named line, in the line's own colour.
-     *
-     * <p>After the line strokes and before the route, so the plate sits over the track it names and
-     * under the trip. The renderer places it with {@code LineNameLabels}, the same helper the world
-     * map, the K screen, the picker, the HUD's mini-map and the phone page use, so a line's badge is
-     * in the same kind of place on every map and at the same size.
-     *
-     * <p>Gated on the player's lines switch, the same condition the world map draws the strokes and
-     * their names under: a plate names a line, and a line that is switched off has nothing for the
-     * plate to name. The elements carry the geometry rather than the renderer reaching into the
-     * stores again, for the reason {@link #begin} gives for the layers.
-     */
-    private void appendTransitLineNames(double anchorX, double anchorZ) {
-        if (!MapFilter.showsLines()) {
-            return;
-        }
-        for (RoadElementRenderer.NamedTransitStroke stroke :
-                RoadElementRenderer.transitLineStrokesFor(Navigation.linesInPlay())) {
-            buffer.add(XaeroMinimapRouteElement.lineNameLayer(anchorX, anchorZ,
-                    stroke.colour(), stroke.points(), stroke.name()));
         }
     }
 

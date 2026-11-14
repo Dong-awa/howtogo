@@ -114,18 +114,17 @@ public final class MainScreen extends Screen {
 
     /**
      * How much of the font a road's sign card is drawn at on this map: the plate and its text alike,
-     * {@link RoadSigns#FIXED_CARD_SCALE} of the font.
+     * this fraction of the font -- a little under the 0.58 the world map and the picker share.
      *
-     * <p>The same fraction, and the same reason, as the destination picker's and the phone page's
-     * cards, and now the same number: the three maps that draw every label at one size share the
-     * constant, because the same road's shield must be the same object on all of them. It used to be
-     * 0.72 of the font, which made the plate bigger than the streets it stood on once its border and
-     * padding were counted; 0.58 keeps the number legible while leaving the card a detail of the road
-     * rather than an object the map is about. This map has no label zoom of its own either -- the map
-     * zooms and the text does not -- so the decision is a constant here as well. The border stays one
-     * screen pixel: at this size it is a rim, not a share of the plate.
+     * <p>This map's road strokes are a fixed two to six screen pixels wide at every zoom (see
+     * {@link #ROAD_NAME_MIN_FACTOR}), so a plate held at the shared size never has a wider road under
+     * it to belong to and reads largest here. 0.52 keeps the number legible while leaving the card a
+     * detail of the road rather than an object the map is about. The card itself -- its shape, its
+     * lines of text, the ink rule and which roads get one -- is the shared card's, unchanged; only
+     * its size on this screen is shrunk. The border stays one screen pixel: at this size it is a rim,
+     * not a share of the plate.
      */
-    private static final float SIGN_CARD_SCALE = RoadSigns.FIXED_CARD_SCALE;
+    private static final float SIGN_CARD_SCALE = 0.52F;
 
     /**
      * The least share of the card's scale the mixed card's name line may shrink to.
@@ -154,14 +153,19 @@ public final class MainScreen extends Screen {
     private static final double LABEL_CLEARANCE_PX = RoadSigns.LABEL_CLEARANCE_PX;
 
     /**
-     * The least zoom, in screen pixels per block, at which this map draws a sign card.
+     * The least zoom, in screen pixels per block, at which this map draws a road's sign card.
      *
-     * <p>Shared with the picker, and for the same reason: a plate is a fixed-size object on a map
-     * that zooms, so a zoomed-out view would be all plates. Below this zoom a classified road shows
-     * its name instead -- the classification is not lost, it is written as ink along the road the way
-     * a name is, which is what a map this far out can hold.
+     * <p>Three quarters of a pixel a block: far enough in that the roads under the cards are wider
+     * than a plate's border rather than a few hairlines a card stands over. This screen gives the
+     * gate its own number rather than the shared {@link RoadSigns#LABEL_MIN_SCALE} the picker still
+     * uses, because this map draws road strokes at a fixed few pixels and its panel is the largest of
+     * the mod's maps -- a fixed-size card therefore reads largest here, and a gate low enough to show
+     * one over a zoomed-out town was the complaint ("this one is too big too early, hide it sooner").
+     * Below this zoom a classified road shows its plain name instead: the same fallback a road with
+     * no number already gets, so the classification is not lost, it is written as ink along the road,
+     * which is what a map this far out can hold.
      */
-    private static final double LABEL_MIN_SCALE = RoadSigns.LABEL_MIN_SCALE;
+    private static final double SIGN_CARD_MIN_SCALE = 0.75;
 
     /**
      * The least share of the font a road's name is drawn at on this map.
@@ -198,15 +202,17 @@ public final class MainScreen extends Screen {
     /**
      * The least zoom, in screen pixels per block, at which this map names a public transport line.
      *
-     * <p>One and a half pixels a block -- the figure the player asked for, in the terms the map
-     * zooms in: the panel then shows a couple of hundred blocks across. A line's name plate is an
-     * opaque capsule the height of a word whatever the zoom does, so a zoomed-out map would be a
-     * band of plates along every line; from here the line is long enough on screen for a plate to be
-     * a name on a stretch of track rather than a band across the city. The world map's own gate is
-     * stated in its pixels per block and this map is a fraction of its size, which is why the two
-     * numbers are not the same one.
+     * <p>Three pixels a block, twice the figure the gate started at: a plate is an opaque capsule the
+     * height of a word whatever the zoom does, so it is only worth its room once the map is zoomed in
+     * far enough to show a stretch of track rather than a town. The panel is some five hundred pixels
+     * across at its widest, so at this zoom it spans under two hundred blocks -- about one candidate
+     * per line at the plates' 160-block spacing -- while at the old figure it spanned some three
+     * hundred and fifty and every line offered several plates across the same view, which is the band
+     * of capsules the player asked to be rid of ("the line signs should show only when the map is
+     * zoomed in far enough"). The world map's own gate is stated in its pixels per block and this map
+     * is a fraction of its size, which is why the two numbers are not the same one.
      */
-    private static final double LINE_NAME_MIN_SCALE = 1.5;
+    private static final double LINE_NAME_MIN_SCALE = 3.0;
 
     /**
      * How far above the line a name plate floats, in screen pixels.
@@ -1588,7 +1594,7 @@ public final class MainScreen extends Screen {
      * A name is furniture on the map: it is drawn at a size its road can hold and it takes the shape
      * of the line. A card is not -- it is an opaque plate whose size does not follow the zoom, so the
      * further out the map is, the more of it a plate covers, and one road's plate lands beside the
-     * next one's. Past {@link #LABEL_MIN_SCALE} the card is therefore not drawn and the road
+     * next one's. Below {@link #SIGN_CARD_MIN_SCALE} the card is therefore not drawn and the road
      * shows its name instead: the same fallback a road with no number already gets, so no road loses
      * its label to the zoom.
      *
@@ -1614,12 +1620,14 @@ public final class MainScreen extends Screen {
         RoadLabelStyle style = RoadConfig.roadLabelStyle();
         boolean signMode = style != RoadLabelStyle.NAME;
         boolean mixed = style == RoadLabelStyle.MIXED;
-        // The zoom at which a plate stops being worth its room: a card keeps its size whatever the
-        // map does, so past this point a zoomed-out view is plates over strokes. Read once for the
-        // pass, like the style, so one frame cannot decide it road by road. Below it a classified
-        // road falls back to its name -- which is the same fallback a road with no number already
-        // has -- instead of the map losing the road's identity altogether.
-        boolean signZoom = scale >= LABEL_MIN_SCALE;
+        // The zoom at which a card stops being worth its room: a card keeps its size whatever the
+        // map does, so below this point a zoomed-out view is plates over strokes. Read once for the
+        // pass, like the style, so one frame cannot decide it road by road. This screen's gate is its
+        // own and later than the picker's -- see SIGN_CARD_MIN_SCALE -- because its fixed-width
+        // strokes make a fixed-size card read larger here. Below it a classified road falls back to
+        // its name -- which is the same fallback a road with no number already has -- instead of the
+        // map losing the road's identity altogether.
+        boolean signZoom = scale >= SIGN_CARD_MIN_SCALE;
         int minX = mapX;
         int minY = mapY;
         int maxX = mapX + mapW;

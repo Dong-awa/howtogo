@@ -118,25 +118,6 @@ public final class NavHudRenderer {
     /** A line is map content rather than the trip, so it is drawn a little softer than the route. */
     private static final int LINE_ALPHA = 0xC8;
 
-    /**
-     * How far above a line its name plate floats, in screen pixels.
-     *
-     * <p>The world map's figure, and for the same reason: a capsule lying on the stroke would be a
-     * second, opaque stroke, while one lifted clear of it leaves the line reading as one line with a
-     * name beside it. Screen pixels rather than blocks, because the plate does not grow with the zoom
-     * the way the stroke does.
-     */
-    private static final double LINE_NAME_RISE_PX = 7.0;
-
-    /**
-     * The most line name plates this map draws at once.
-     *
-     * <p>Two, and that is the whole map's worth: the mini-map is 120 pixels across, and two capsules a
-     * word tall are already a fifth of it. The plate is only placed where it wholly fits, so on most
-     * frames the answer is one or none.
-     */
-    private static final int MAX_LINE_NAMES = 2;
-
     // ------------------------------------------------------------------- motion
 
     /**
@@ -360,6 +341,14 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     // ------------------------------------------------------------------ mini-map
 
+    /**
+     * The rotating mini-map: the roads and rails, the transit line strokes, the route and the places.
+     *
+     * <p>No transit line names are drawn on it. A line's name is a fixed-size capsule, and this map is
+     * 120 pixels across: a plate that fits at all covers a large share of the ground the map exists to
+     * show, which is what the player reported after seeing it in game. The two big maps keep their
+     * plates -- there is room for them there -- and this pass draws the lines themselves as strokes.
+     */
     private static void drawMiniMap(GuiGraphics graphics, Minecraft mc, int mapX, int mapY) {
         double playerX = mc.player.getX();
         double playerZ = mc.player.getZ();
@@ -427,11 +416,13 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY,
                 playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
-        // The public transport lines, with the ground they run on and under the route: the panel used
-        // to draw the roads and the rails and nothing else, which left the line name plates below
-        // naming a line that was not on the map. Same strokes the world map and the two viewers draw
-        // -- see RoadElementRenderer.transitStrokesFor -- thinned to the zoom the same way. The
-        // player's own switch hides them, as it does everywhere the filter is asked.
+        // The public transport lines, with the ground they run on and under the route: the panel draws
+        // the strokes so a journey can be read off the mini-map without opening the full map. No line
+        // names are drawn here -- a name plate is a fixed-size capsule and this map is 120 pixels
+        // across, so a plate that fits at all covers the ground the map exists to show; the two big
+        // maps keep theirs. Same strokes the world map and the two viewers draw -- see
+        // RoadElementRenderer.transitStrokesFor -- thinned to the zoom the same way. The player's own
+        // switch hides them, as it does everywhere the filter is asked.
         if (MapFilter.showsLines()) {
             emitTransitLines(last, Navigation.linesInPlay(), m00, m01, m02, m10, m11, m12,
                     LINE_HALF_WIDTH_PX, (int) (LINE_ALPHA * open + 0.5F), minX, minY, maxX, maxY);
@@ -585,174 +576,6 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             pose.popPose();
             //?}
         }
-        // The public transport lines' names, last: plates in the lines' own colours, offered the room
-        // the road names have already claimed rather than displacing one. The map is 120 pixels
-        // across, so most frames leave the lines unnamed -- see MAX_LINE_NAMES.
-        drawLineNamePlates(graphics, mc, placed, playerX, playerZ, cos, sin, scale, centerX,
-                centerY, minX, minY, maxX, maxY);
-    }
-
-    /**
-     * A public transport line's name, as a capsule in the line's own colour above the line.
-     *
-     * <h2>Why a capsule, and why above the line</h2>
-     * A road's name is ink lying along its stroke; a line's name names a service, and the mod draws a
-     * line's identity as a coloured object with the name in it in the list and on a place card. The
-     * capsule is that object on a map: horizontal whatever the line does, rounded by half its height
-     * so its ends are semicircles, which is what keeps it from being mistaken for a road's sign card.
-     * It floats {@link #LINE_NAME_RISE_PX} above the line because a capsule on the stroke would be a
-     * second, opaque stroke.
-     *
-     * <h2>Where the names are offered</h2>
-     * The positions come from {@link LineNameLabels} -- every 160 blocks of the line's drawn track plus
-     * one just outside each end -- so they belong to the line rather than to this map. This map is a
-     * fixed 120 pixels across and has no zoom of its own, so it needs no zoom gate; what it needs is
-     * the fit test below: a capsule must lie wholly inside the mini-map and clear of every name
-     * already placed, or it is not drawn at all. On a map this size that is the whole rule.
-     *
-     * <p>Last in the pass, as on the world map: the plate is the larger, newer object and it is the
-     * one that can do without a spot.
-     */
-    private static void drawLineNamePlates(GuiGraphics graphics, Minecraft mc, List<double[]> placed,
-                                           double playerX, double playerZ, double cos, double sin,
-                                           double scale, double centerX, double centerY,
-                                           double minX, double minY, double maxX, double maxY) {
-        if (!MapFilter.showsLines()) {
-            return;
-        }
-        List<RoadElementRenderer.NamedTransitStroke> strokes =
-                RoadElementRenderer.transitLineStrokesFor(Navigation.linesInPlay());
-        Font font = mc.font;
-        double height = LineNameLabels.height(font.lineHeight);
-        if (strokes.isEmpty() || !(height > 0.0)) {
-            return;
-        }
-        int drawn = 0;
-        // One projection and one fit test for the whole pass: the mini-map's transform is the same for
-        // every candidate and the claim list is the same object throughout. The box the fit test
-        // approved is handed back through this array rather than measured again by the caller: a
-        // second measurement could round a corner differently.
-        double[][] claimed = new double[1][];
-        LineNameLabels.Screen screen = new LineNameLabels.Screen() {
-            @Override
-            public double screenX(double worldX, double worldZ) {
-                // The mini-map turns with the player, so a world point is projected through this map's
-                // own rotation; the plate itself stays horizontal.
-                return NavHudRenderer.screenX(worldX - playerX, worldZ - playerZ, cos, sin, scale,
-                        centerX);
-            }
-
-            @Override
-            public double screenY(double worldX, double worldZ) {
-                return NavHudRenderer.screenY(worldX - playerX, worldZ - playerZ, cos, sin, scale,
-                        centerY);
-            }
-
-            @Override
-            public boolean fits(double left, double top, double right, double bottom) {
-                // Wholly inside the mini-map, or not at all: the panel's frame would cut a capsule, and
-                // a half plate over the readout below would be a label for the trip rather than for the
-                // line.
-                if (left < minX + 1 || right > maxX - 1 || top < minY + 1 || bottom > maxY - 1) {
-                    return false;
-                }
-                double[] box = new double[] {
-                        left - RoadSigns.LABEL_CLEARANCE_PX,
-                        top - RoadSigns.LABEL_CLEARANCE_PX,
-                        right - left + RoadSigns.LABEL_CLEARANCE_PX * 2.0,
-                        bottom - top + RoadSigns.LABEL_CLEARANCE_PX * 2.0};
-                for (double[] other : placed) {
-                    if (box[0] < other[0] + other[2] && other[0] < box[0] + box[2]
-                            && box[1] < other[1] + other[3] && other[1] < box[1] + box[3]) {
-                        return false;
-                    }
-                }
-                claimed[0] = box;
-                return true;
-            }
-        };
-        for (RoadElementRenderer.NamedTransitStroke stroke : strokes) {
-            double width = LineNameLabels.width(font.width(stroke.name()));
-            if (!(width > 0.0)) {
-                continue;
-            }
-            // The candidate points are worked out in one walk of the line, and each is then placed in
-            // constant time -- see LineNameLabels, which states why the distance form is the wrong
-            // shape for a line read out of MTR.
-            for (LineNameLabels.Candidate candidate : LineNameLabels.candidatePoints(stroke.points())) {
-                claimed[0] = null;
-                double[] spot = LineNameLabels.find(candidate, width, height, LINE_NAME_RISE_PX,
-                        screen);
-                if (spot == null) {
-                    continue;
-                }
-                placed.add(claimed[0]);
-                drawLineNamePlate(graphics, mc, stroke.name(), spot[0], spot[1], width, height,
-                        stroke.colour());
-                if (++drawn >= MAX_LINE_NAMES) {
-                    return;
-                }
-            }
-        }
-    }
-
-    /**
-     * One line's name plate: a capsule in the line's colour with the name printed in it.
-     *
-     * <p>The rounding is half the plate's height, so the two ends are semicircles -- deliberately not
-     * the shape a road's sign card is. Both shapes are fills made through the GUI's own batches before
-     * their text. The ink comes from the sign cards' own contrast rule, so a pale line is lettered
-     * dark and a dark line pale without a second table of colours. Faded with the rest of the panel,
-     * like every other colour this overlay draws.
-     */
-    private static void drawLineNamePlate(GuiGraphics graphics, Minecraft mc, String name,
-                                          double centreX, double centreY, double width,
-                                          double height, int colour) {
-        int x1 = (int) Math.round(centreX - width / 2.0);
-        int y1 = (int) Math.round(centreY - height / 2.0);
-        int x2 = (int) Math.round(centreX + width / 2.0);
-        int y2 = (int) Math.round(centreY + height / 2.0);
-        if (x2 <= x1 || y2 <= y1) {
-            return;
-        }
-        int background = UiMotion.fade(colour, open);
-        int ink = UiMotion.fade(RoadSigns.ink(colour), open);
-        int radius = Math.max(1, (y2 - y1) / 2);
-        fillRounded(graphics, x1, y1, x2, y2, radius, background);
-        outlineRounded(graphics, x1, y1, x2, y2, radius, ink);
-        drawScaledText(graphics, mc.font, name, centreX,
-                centreY - mc.font.lineHeight * (double) LineNameLabels.NAME_FACTOR / 2.0, ink,
-                LineNameLabels.NAME_FACTOR);
-    }
-
-    /**
-     * Writes one line at a given scale, centred on a point.
-     *
-     * <p>The font's draw call takes a position and no size, so the size has to be put on the pose
-     * around the call: pushed, moved to the line's centre, scaled, and written at the origin offset by
-     * half its own width -- which is what keeps the line centred whatever the scale. The two eras'
-     * stacks are the same two branches the rotated road names above keep: 1.21.6 replaced the GUI's
-     * PoseStack with JOML's Matrix3x2fStack, and for a translate-and-scale the two are the same
-     * operation under the new name.
-     */
-    private static void drawScaledText(GuiGraphics graphics, Font font, String text,
-                                       double centreX, double top, int colour, float scale) {
-        int width = font.width(text);
-        //? if >=1.21.6 {
-        /*Matrix3x2fStack pose = graphics.pose();
-        pose.pushMatrix();
-        pose.translate((float) centreX, (float) top);
-        pose.scale(scale, scale);
-        graphics.drawString(font, text, -width / 2, 0, colour, false);
-        pose.popMatrix();
-        *///?} else {
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        pose.translate(centreX, top, 0.0);
-        pose.scale(scale, scale, 1.0F);
-        graphics.drawString(font, text, -width / 2, 0, colour, false);
-        pose.popPose();
-        //?}
     }
 
     /**

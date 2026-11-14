@@ -2,15 +2,11 @@ package bili.dongsz.howtogo.client.xaero.minimap;
 
 import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.client.HudDraw;
-import bili.dongsz.howtogo.client.LineNameLabels;
 import bili.dongsz.howtogo.client.MapDisplayMode;
 import bili.dongsz.howtogo.client.RoadRenderContext;
-import bili.dongsz.howtogo.client.RoadSigns;
 import bili.dongsz.howtogo.client.Screens;
 import bili.dongsz.howtogo.road.RoadNetwork;
-import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.MultiBufferSource;
 import org.joml.Matrix4f;
@@ -19,12 +15,16 @@ import xaero.hud.minimap.element.render.MinimapElementRenderInfo;
 import xaero.hud.minimap.element.render.MinimapElementRenderLocation;
 import xaero.hud.minimap.element.render.MinimapElementRenderer;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Draws the navigation overlay onto Xaero's Minimap: the road network, the route, and the trip's
- * markers.
+ * Draws the navigation overlay onto Xaero's Minimap: the road network, the transit line strokes,
+ * the route, and the trip's markers.
+ *
+ * <p>No transit line name plates are drawn here. A line's name is a fixed-size capsule, and a
+ * minimap shows a few dozen blocks across at most -- a plate that fits at all is a large share of
+ * the map it is naming, which is what the player reported after seeing it in game. The two big maps
+ * keep their plates, where there is room for them; this overlay draws the lines themselves.
  *
  * <h2>What the pipeline gives, and what it does not</h2>
  * Xaero calls this renderer once per element, with the element already projected: the pose has been
@@ -96,39 +96,6 @@ public final class XaeroMinimapRouteRenderer
     private static final double DESTINATION_RADIUS_PX = 3.2;
 
     /**
-     * How far above a line its name plate floats, in GUI pixels.
-     *
-     * <p>The world map's figure, and for the same reason: a capsule lying on the stroke would be a
-     * second, opaque stroke, while one lifted clear of it leaves the line reading as one line with a
-     * name beside it. In GUI pixels rather than blocks, because the plate does not grow with the
-     * zoom the way the stroke does -- a block offset would be a gap when zoomed out and a plate on
-     * the stroke when zoomed in.
-     */
-    private static final double LINE_NAME_RISE_PX = 7.0;
-
-    /**
-     * The most line name plates this overlay draws in one frame.
-     *
-     * <p>Two, the figure the player asked for on a map this small: a minimap shows a few dozen blocks
-     * across at most, so a plate is a large share of it, and a plate per line would be the map. The
-     * cap is per frame rather than per line because it is the map's room that runs out.
-     */
-    private static final int MAX_LINE_NAMES = 2;
-
-    /**
-     * The rectangles this frame's name plates have claimed, in the projection's local units.
-     *
-     * <p>Per frame, cleared at the frame's centre probe -- the first element of every frame -- so the
-     * plates are placed against each other and against nothing else. Kept as fields rather than in a
-     * list handed from the provider because an element cannot reach the next one: the renderer sees
-     * one element at a time, which is the same constraint the frame's transform is measured under.
-     */
-    private static final List<double[]> plateBoxes = new ArrayList<>();
-
-    /** How many plates this frame has drawn, against {@link #MAX_LINE_NAMES}. */
-    private static int platesDrawn;
-
-    /**
      * How far around the anchor the RoadWeaver layer is asked for, in blocks.
      *
      * <p>That layer holds a whole region's roads read out of another mod, so it is the one layer
@@ -190,10 +157,6 @@ public final class XaeroMinimapRouteRenderer
                 if (clamped) {
                     return false;
                 }
-                // The first element of every frame, so this is where the frame's plate claims start
-                // over: a plate placed last frame must not reserve its rectangle in this one.
-                plateBoxes.clear();
-                platesDrawn = 0;
                 Matrix4f pose = pose(graphics);
                 XaeroMinimapProjection.readCentre(pose,
                         screenX(pose, translateX, translateY),
@@ -238,7 +201,6 @@ public final class XaeroMinimapRouteRenderer
             case ROADS, RAILS, MTR_LAYER -> drawNetwork(element.network(), graphics);
             case ROADWEAVER -> drawNetworkInBox(element, graphics);
             case TRANSIT_LINES -> drawLineStroke(element, graphics);
-            case TRANSIT_LINE_NAME -> drawLineName(element, graphics);
             case ROUTE_DONE, ROUTE_AHEAD -> drawRoute(element, graphics);
             case DESTINATION -> drawMarker(DESTINATION_RADIUS_PX, element.argb(), graphics);
             case ORIGIN -> clamped ? false : drawMarker(ORIGIN_RADIUS_PX, element.argb(), graphics);
@@ -343,12 +305,17 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * Draws a marker as one disc at the element's own origin.
+     * Draws one stretch of a public transport line, as a thin stroke in the line's own colour.
      *
-     * <p>Xaero has already placed the element, so there is nothing to project: the disc's centre is
-     * {@code (0, 0)} and only its size needs converting, because the pose's local units are not
-     * pixels. {@code radiusPx} is the size the navigation panel uses for the same marker, so a
-     * destination is the same dot on both maps.
+     * <p>The element carries the stretch's world points; the frame's measured transform projects
+     * them, and the emitters clip against the minimap rectangle exactly as they do for a road layer
+     * or a route. A line is map content rather than the trip, so it is drawn thinner and softer than
+     * the route -- see {@link #LINE_HALF_WIDTH_PX} and {@link #LINE_ALPHA}.
+     *
+     * <p>The line is not named here. A line's name plate is a fixed-size capsule, and this map shows
+     * a few dozen blocks across at most: a plate that fits at all covers a large share of the map it
+     * is naming, which is what the player reported after seeing it in game. The two big maps keep
+     * their plates; the minimap draws the track itself.
      */
     private static boolean drawLineStroke(XaeroMinimapRouteElement element, GuiGraphics graphics) {
         List<double[]> points = element.routePoints();
@@ -369,158 +336,13 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * One line's name plate: a capsule in the line's own colour with the name printed in it.
+     * Draws a marker as one disc at the element's own origin.
      *
-     * <h2>Why the plate is placed here and not in the provider</h2>
-     * Where a plate may stand depends on the measured projection, which only exists once the frame's
-     * probes have arrived; the provider builds its elements before any of that. So the element carries
-     * the line's track, its name and its colour, and this method offers candidate positions along the
-     * track to {@link LineNameLabels} -- the same placer the world map and the mod's own screens use,
-     * so a line's badge is at the same kind of place and at the same size on every map.
-     *
-     * <h2>Units</h2>
-     * The pose and the emitters work in the projection's local units while a plate's size is a
-     * quantity of screen pixels, so every size below is converted through
-     * {@link XaeroMinimapProjection#localPerScreenPx()}. The rounding is half the plate's height, which
-     * makes the ends semicircles -- deliberately not the shape a road's sign card is.
-     *
-     * <h2>The ink, and the failure</h2>
-     * The ink is the sign cards' contrasting colour chosen from the line's own, so a pale line is
-     * lettered dark. A plate that finds no room anywhere along its track is not drawn at all: on a map
-     * this small that is the common answer rather than an error, and {@link #MAX_LINE_NAMES} caps the
-     * ones that do fit.
+     * <p>Xaero has already placed the element, so there is nothing to project: the disc's centre is
+     * {@code (0, 0)} and only its size needs converting, because the pose's local units are not
+     * pixels. {@code radiusPx} is the size the navigation panel uses for the same marker, so a
+     * destination is the same dot on both maps.
      */
-    private static boolean drawLineName(XaeroMinimapRouteElement element, GuiGraphics graphics) {
-        List<double[]> points = element.routePoints();
-        String name = element.lineName();
-        if (points == null || points.size() < 2 || name == null || name.isEmpty()
-                || platesDrawn >= MAX_LINE_NAMES) {
-            return false;
-        }
-        Font font = Minecraft.getInstance().font;
-        if (font == null) {
-            return false;
-        }
-        double localPerPx = XaeroMinimapProjection.localPerScreenPx();
-        double widthLocal = LineNameLabels.width(font.width(name)) * localPerPx;
-        double heightLocal = LineNameLabels.height(font.lineHeight) * localPerPx;
-        if (!(widthLocal > 0.0) || !(heightLocal > 0.0)) {
-            return false;
-        }
-        // One screen pixel is this many local units; the frame keeps one of them clear on each side.
-        double edge = localPerPx;
-        double clipMinX = XaeroMinimapProjection.localClipMinX();
-        double clipMinY = XaeroMinimapProjection.localClipMinY();
-        double clipMaxX = XaeroMinimapProjection.localClipMaxX();
-        double clipMaxY = XaeroMinimapProjection.localClipMaxY();
-        // One projection and one fit test for the whole plate: the frame's transform is the same for
-        // every candidate and the claim list is the same object throughout. The box the fit test
-        // approved is handed back through this array rather than measured again by the caller.
-        double[][] claimed = new double[1][];
-        LineNameLabels.Screen screen = new LineNameLabels.Screen() {
-            @Override
-            public double screenX(double worldX, double worldZ) {
-                return XaeroMinimapProjection.m00() * worldX
-                        + XaeroMinimapProjection.m01() * worldZ
-                        + XaeroMinimapProjection.m02();
-            }
-
-            @Override
-            public double screenY(double worldX, double worldZ) {
-                return XaeroMinimapProjection.m10() * worldX
-                        + XaeroMinimapProjection.m11() * worldZ
-                        + XaeroMinimapProjection.m12();
-            }
-
-            @Override
-            public boolean fits(double left, double top, double right, double bottom) {
-                // Wholly inside the minimap, and clear of the plates already placed this frame. Both in
-                // the projection's local units, so they are comparable.
-                if (left < clipMinX + edge || right > clipMaxX - edge
-                        || top < clipMinY + edge || bottom > clipMaxY - edge) {
-                    return false;
-                }
-                double[] box = new double[] {left, top, right - left, bottom - top};
-                for (double[] other : plateBoxes) {
-                    if (box[0] < other[0] + other[2] && other[0] < box[0] + box[2]
-                            && box[1] < other[1] + other[3] && other[1] < box[1] + box[3]) {
-                        return false;
-                    }
-                }
-                claimed[0] = box;
-                return true;
-            }
-        };
-        double[] spot = null;
-        // The candidate points are worked out in one walk of the line, and each is then placed in
-        // constant time -- see LineNameLabels, which states why the distance form is the wrong shape
-        // for a line read out of MTR.
-        for (LineNameLabels.Candidate candidate : LineNameLabels.candidatePoints(points)) {
-            claimed[0] = null;
-            spot = LineNameLabels.find(candidate, widthLocal, heightLocal,
-                    LINE_NAME_RISE_PX * localPerPx, screen);
-            if (spot != null) {
-                plateBoxes.add(claimed[0]);
-                break;
-            }
-        }
-        if (spot == null) {
-            return false;
-        }
-        platesDrawn++;
-        int ink = RoadSigns.ink(element.argb());
-        // The plate is built from whole screen-pixel rows so its rounding is the same arithmetic the
-        // other maps fill with, each row written in local units.
-        int rows = Math.max(1, (int) Math.round(heightLocal / localPerPx));
-        int radius = Math.max(1, rows / 2);
-        double leftLocal = spot[0] - widthLocal / 2.0;
-        double topLocal = spot[1] - heightLocal / 2.0;
-        double rightLocal = spot[0] + widthLocal / 2.0;
-        HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
-        HudDraw.VertexSink sink = drawing.sink;
-        for (int row = 0; row < rows; row++) {
-            int inset = RoadSigns.roundedInset(row, 0, rows, radius);
-            double y1 = topLocal + row * heightLocal / rows;
-            double y2 = topLocal + (row + 1) * heightLocal / rows;
-            double x1 = leftLocal + inset * localPerPx;
-            double x2 = rightLocal - inset * localPerPx;
-            HudDraw.emitQuad(sink, x1, y1, x2, y1, x2, y2, x1, y2, element.argb());
-        }
-        // Then the rim in the same ink as the text: the outermost pixel of every row, which follows
-        // the rounded corners because the insets are the fill's own.
-        for (int row = 0; row < rows; row++) {
-            int inset = RoadSigns.roundedInset(row, 0, rows, radius);
-            double y1 = topLocal + row * heightLocal / rows;
-            double y2 = topLocal + (row + 1) * heightLocal / rows;
-            if (row == 0 || row == rows - 1) {
-                double x1 = leftLocal + inset * localPerPx;
-                double x2 = rightLocal - inset * localPerPx;
-                HudDraw.emitQuad(sink, x1, y1, x2, y1, x2, y2, x1, y2, ink);
-            } else {
-                double x1 = leftLocal + inset * localPerPx;
-                double x2 = leftLocal + (inset + 1) * localPerPx;
-                HudDraw.emitQuad(sink, x1, y1, x2, y1, x2, y2, x1, y2, ink);
-                double x3 = rightLocal - (inset + 1) * localPerPx;
-                double x4 = rightLocal - inset * localPerPx;
-                HudDraw.emitQuad(sink, x3, y1, x4, y1, x4, y2, x3, y2, ink);
-            }
-        }
-        HudDraw.endBlock(graphics, drawing);
-
-        // The name, after the block: drawing a string flushes the buffer the block writes into, so the
-        // text is the one thing that cannot go into it. The pose is scaled by the local-to-screen
-        // factor so a font unit lands on NAME_FACTOR of a screen pixel, exactly as on the other maps.
-        int width = font.width(name);
-        float fontScale = LineNameLabels.NAME_FACTOR * (float) localPerPx;
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        pose.translate(spot[0], spot[1] - font.lineHeight * fontScale / 2.0, 0.0);
-        pose.scale(fontScale, fontScale, 1.0F);
-        graphics.drawString(font, name, -width / 2, 0, ink, false);
-        pose.popPose();
-        return true;
-    }
-
     private static boolean drawMarker(double radiusPx, int argb, GuiGraphics graphics) {
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
         HudDraw.emitDisc(drawing.sink, 0, 0,
@@ -568,7 +390,7 @@ public final class XaeroMinimapRouteRenderer
     /** Whether an element kind draws a layer anchored at the frame anchor. */
     private static boolean isLayer(XaeroMinimapRouteElement.Kind kind) {
         return switch (kind) {
-            case ROADS, RAILS, MTR_LAYER, ROADWEAVER, TRANSIT_LINES, TRANSIT_LINE_NAME,
+            case ROADS, RAILS, MTR_LAYER, ROADWEAVER, TRANSIT_LINES,
                     ROUTE_DONE, ROUTE_AHEAD -> true;
             default -> false;
         };

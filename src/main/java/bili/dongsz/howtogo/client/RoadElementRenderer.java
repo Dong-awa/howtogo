@@ -226,6 +226,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      */
     private static final double LINE_NAME_LABEL_MIN_SCALE = 20.0;
     /**
+     * The least real zoom at which a transit line's name is drawn, in screen pixels per block.
+     *
+     * <p>A plate is a fixed-size capsule, so what makes it worth drawing is not the map's own scale
+     * number but how much ground the screen shows: at two pixels a block the map spans a couple of
+     * hundred blocks and a plate names a stretch of line; further out it would be a badge on a map
+     * that is a diagram. This is asked <em>as well as</em> {@link #LINE_NAME_LABEL_MIN_SCALE}, so the
+     * rule can only ever be stricter than the gate the player asked for -- the two are the same
+     * statement in two units, and the projection's own pixels per block is the one that cannot drift
+     * if Xaero's unit changes between versions.
+     */
+    private static final double LINE_NAME_MIN_PPB = 2.0;
+    /**
      * How far a line's name floats above the line it names, in screen pixels.
      *
      * <p>A capsule lying on the stroke would be a second, opaque stroke; lifted clear of it, the
@@ -786,6 +798,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // two cannot disagree while the map is moving.
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
+                // The one-way marks first, and from here rather than from the roads' own pass: they are
+                // ink about the roads, so they go under the route, the lines, the markers and the names,
+                // and above every road -- see drawOneWayMarks for the overlay that used to hide them.
+                drawOneWayMarks(pose, vc, Math.abs(info.scale), projection,
+                        -lineMargin, -lineMargin,
+                        mapViewRight(graphics) + lineMargin, mapViewBottom(graphics) + lineMargin);
                 drawTransitLines(pose, vc, lineMargin, mapViewRight(graphics) + lineMargin,
                         mapViewBottom(graphics) + lineMargin, Math.abs(info.scale), interchanges,
                         projection);
@@ -863,13 +881,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10, halfWidth,
                 r, g, b, a);
 
-        // A one-way road says so on the map. Emitted here, in the segment's own pass and right after
-        // the road it belongs to, so the arrows travel with the stroke: drawn from anywhere else they
-        // would be a second pass that could disagree with it about the road's colour, width or visibility.
-        if (segment.direction().isOneWay() && Math.abs(info.scale) >= ONEWAY_ARROW_MIN_SCALE) {
-            emitOneWayArrows(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
-                    posePerPixel);
-        }
+        // A one-way road's direction marks are not drawn here. They are emitted from the trailing
+        // labels pass instead, because a road drawn after this one used to paint straight over them:
+        // only the arrows of whichever one-way roads happened to be drawn last survived, which is
+        // what "only part of the one-way road has arrows" looked like. See drawOneWayMarks.
 
         // Rail diagnostic: one of the auto-detected layer's segments was actually stroked, past the
         // level-of-detail filter, which is the difference between "never handed over" and "handed over
@@ -1470,6 +1485,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // screen are the only ones worth projecting.
         double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
                 Math.abs(projection.scale() * projection.m11()));
+        if (pixelsPerBlock < LINE_NAME_MIN_PPB) {
+            // "Only name a line once the zoom is close enough": a fixed-size capsule on a wider view is
+            // a badge over a diagram. See LINE_NAME_MIN_PPB.
+            return;
+        }
         double leftWorld = Math.min(projection.worldX(0), projection.worldX(screenRight));
         double rightWorld = Math.max(projection.worldX(0), projection.worldX(screenRight));
         double topWorld = Math.min(projection.worldZ(0), projection.worldZ(screenBottom));
@@ -3698,11 +3718,29 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * <p>A screen distance rather than a world one: the arrows are a reading of the map, and how many of
      * them fit along a road is a question about the screen. Zoomed out, a fixed world spacing would put
      * them all on top of each other; zoomed in, it would leave a street with one arrow on it that points
-     * off the edge of the screen.
+     * off the edge of the screen. It is also a *floor*: a road drawn wider than usual pushes its arrows
+     * apart so that a mark is never closer to the next than three of its own widths.
      */
     private static final double ONEWAY_ARROW_SPACING_PX = 26.0;
-    /** Length of one arrowhead, which is also the size the dark rim around it is grown by. */
+    /**
+     * The largest an arrowhead is drawn, in screen pixels.
+     *
+     * <p>A cap, not the size: the head is sized from the road it sits on (see
+     * {@link #ONEWAY_ARROW_FITS}), because an arrow wider than its road reads as an object beside the
+     * road rather than as a mark on it, which is exactly what was reported from play. The cap is what a
+     * very wide road -- a highway drawn at the widest it is allowed to be -- is held to, so one street
+     * cannot carry arrowheads the size of its junctions.
+     */
     private static final double ONEWAY_ARROW_PX = 7.5;
+    /**
+     * How much of the road's half-width one arrowhead may be, end to end.
+     *
+     * <p>The head's own width across is 1.24 of its length (see {@link #emitArrowHead}), and the whole
+     * road is two half-widths across, so a length of 1.5 half-widths puts the widest part of the mark at
+     * 93% of the road's width -- inside the stroke, which is what "the arrow should be within the road's
+     * width" asks for, with the rim still on the road rather than hanging off its edge.
+     */
+    private static final double ONEWAY_ARROW_FITS = 1.5;
     /** The most arrowheads one segment draws, so a long road cannot fill the map with them. */
     private static final int ONEWAY_ARROW_LIMIT = 40;
     /**
@@ -3720,70 +3758,101 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_ARROW_RIM = 0xB0101418;
 
     /**
-     * Draws arrowheads along a one-way segment, pointing the way travel is allowed.
+     * Draws the direction arrows of every one-way road, above every road.
      *
-     * <p>The polyline is walked in the allowed direction -- forwards for a segment that runs from its
-     * from-node to its to-node, backwards for the other -- and an arrowhead is placed at every spacing,
-     * each one turned to the local direction of the road so it follows a bend instead of pointing at the
-     * first arrow's angle.
+     * <h2>Why this is its own pass, from the trailing element</h2>
+     * The arrows used to be emitted from each segment's own pass, right after the stroke it belongs to.
+     * That is where they went wrong: the map draws one element after another, so any road element drawn
+     * later paints over the arrows of the one before it -- at a junction, or wherever two roads overlap.
+     * Only the arrows of whichever one-way roads happened to be drawn last survived, which from play
+     * looked like "only part of the one-way road has arrows". Drawn here, from the labels element that
+     * is always last in the map's order, no road can cover them.
      *
-     * <p>Everything here is in the segment's own local (map) units, the same as the stroke, so the arrows
-     * pan and zoom with the road they belong to.
+     * <p>The cost is that the pass walks the one-way segments once a frame, in screen space. There are
+     * only ever as many as the player marked, the pass is gated by {@link #ONEWAY_ARROW_MIN_SCALE} and
+     * by the map's own class switches, and each segment's marks are computed from the same display line
+     * the stroke is -- so this is the same arithmetic as before, moved, not added.
+     *
+     * <p>Each mark is sized from the road's stroke half-width ({@link #ONEWAY_ARROW_FITS}) rather than
+     * from a fixed screen size, so it fits inside the road at every zoom and every class width.
+     *
+     * @param left,top,right,bottom the screen rectangle a mark has to stand in to be worth emitting
      */
-    private static void emitOneWayArrows(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
-                                         int count, double anchorX, double anchorZ, double fracX,
-                                         double fracY, double p10, double posePerPixel) {
-        if (count < 2) {
+    private void drawOneWayMarks(PoseStack pose, VertexConsumer vc, double scale,
+                                 Projection projection, double left, double top, double right,
+                                 double bottom) {
+        if (Math.abs(scale) < ONEWAY_ARROW_MIN_SCALE) {
             return;
         }
-        double spacing = ONEWAY_ARROW_SPACING_PX * posePerPixel;
-        double size = ONEWAY_ARROW_PX * posePerPixel;
-        if (!(spacing > 0.0) || !(size > 0.0)) {
-            return;
-        }
-        boolean backward = segment.direction() == RoadDirection.BACKWARD;
-        // The first arrow sits a little way in from the end rather than in the very first pixel of the
-        // road, where it would overlap the junction's round cap and the arrows of the road meeting it.
-        double nextAt = spacing * 0.75;
-        double travelled = 0.0;
-        int drawn = 0;
-
-        for (int step = 1; step < count && drawn < ONEWAY_ARROW_LIMIT; step++) {
-            int a = backward ? count - step : step - 1;
-            int b = backward ? count - step - 1 : step;
-            double x1 = localX(displayX(segment, a), anchorX, fracX, p10);
-            double y1 = localY(displayZ(segment, a), anchorZ, fracY, p10);
-            double x2 = localX(displayX(segment, b), anchorX, fracX, p10);
-            double y2 = localY(displayZ(segment, b), anchorZ, fracY, p10);
-            double length = Math.hypot(x2 - x1, y2 - y1);
-            if (length < 1.0E-6) {
+        pose.pushPose();
+        pose.last().pose().identity();
+        pose.last().normal().identity();
+        HudDraw.VertexSink sink = HudDraw.sink(pose.last(), vc);
+        for (RoadSegment segment : RoadStore.get().segments()) {
+            if (!segment.direction().isOneWay()) {
                 continue;
             }
-            double ux = (x2 - x1) / length;
-            double uy = (y2 - y1) / length;
-            while (nextAt <= travelled + length && drawn < ONEWAY_ARROW_LIMIT) {
-                double at = nextAt - travelled;
-                emitArrowHead(pose, vc, x1 + ux * at, y1 + uy * at, ux, uy, size);
-                drawn++;
-                nextAt += spacing;
+            if (!MapFilter.shows(segment.roadClass(), scale)) {
+                continue;
             }
-            travelled += length;
+            int count = displayPointCount(segment);
+            if (count < 2) {
+                continue;
+            }
+            double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
+            double size = Math.min(ONEWAY_ARROW_PX, halfWidthPx * ONEWAY_ARROW_FITS);
+            if (!(size > 0.75)) {
+                // Below this a mark is a speck on a road a few pixels wide; the gate above is where a
+                // zoomed-out map stops drawing them at all, and this is the second half of the same
+                // decision for a road that is simply narrow.
+                continue;
+            }
+            double spacing = Math.max(ONEWAY_ARROW_SPACING_PX, size * 3.0);
+            boolean backward = segment.direction() == RoadDirection.BACKWARD;
+            // The same little way in from the end as before: the first mark of a road sits clear of the
+            // junction cap at its own end.
+            double nextAt = spacing * 0.75;
+            double travelled = 0.0;
+            int drawn = 0;
+            for (int step = 1; step < count && drawn < ONEWAY_ARROW_LIMIT; step++) {
+                int a = backward ? count - step : step - 1;
+                int b = backward ? count - step - 1 : step;
+                double ax = projection.screenX(displayX(segment, a));
+                double ay = projection.screenZ(displayZ(segment, a));
+                double bx = projection.screenX(displayX(segment, b));
+                double by = projection.screenZ(displayZ(segment, b));
+                double edge = Math.hypot(bx - ax, by - ay);
+                if (edge < 1.0E-6) {
+                    continue;
+                }
+                double ux = (bx - ax) / edge;
+                double uy = (by - ay) / edge;
+                // The marks are stepped whatever the edge does -- culling an edge out of the walk
+                // instead would make the first mark back on screen land at a distance that ignores the
+                // road travelled off it -- and only the emission is gated on being visible.
+                while (nextAt <= travelled + edge && drawn < ONEWAY_ARROW_LIMIT) {
+                    double at = nextAt - travelled;
+                    double cx = ax + ux * at;
+                    double cy = ay + uy * at;
+                    if (cx >= left && cx <= right && cy >= top && cy <= bottom) {
+                        emitArrowHead(sink, cx, cy, ux, uy, size);
+                        drawn++;
+                    }
+                    nextAt += spacing;
+                }
+                travelled += edge;
+            }
         }
-    }
-
-    /** One arrowhead: a dark rim with a light head on top of it, pointing along (ux, uy). */
-    private static void emitArrowHead(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
-                                      double ux, double uy, double size) {
-        emitArrowHead(HudDraw.sink(pose, vc), cx, cy, ux, uy, size);
+        pose.popPose();
     }
 
     /**
-     * The same arrowhead into a sink the caller already holds, so a line's marks share one sink.
+     * One arrowhead: a dark rim with a light head on top of it, pointing along (ux, uy).
      *
-     * <p>{@code size} is the arrow's length in whatever unit the sink's pose is in: the map's local
-     * units for a road, where the caller has already scaled it to a screen size, and screen pixels for
-     * a transit line, whose marks are emitted in screen space. The head is the same shape either way --
-     * a direction mark is one thing on this map, whichever layer it belongs to.
+     * <p>{@code size} is the arrow's length in whatever unit the sink's pose is in: screen pixels for
+     * both the roads' marks and a transit line's, since both are emitted from a screen-space pose. The
+     * head is the same shape either way -- a direction mark is one thing on this map, whichever layer
+     * it belongs to.
      */
     private static void emitArrowHead(HudDraw.VertexSink out, double cx, double cy,
                                       double ux, double uy, double size) {

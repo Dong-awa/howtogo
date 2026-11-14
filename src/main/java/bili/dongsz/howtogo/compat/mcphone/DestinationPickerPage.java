@@ -194,14 +194,15 @@ public final class DestinationPickerPage implements IPhonePage {
     /**
      * How many screen pixels per block the map must show before a line's name plate is allowed.
      *
-     * <p>One pixel a block is the page's own default zoom, and the figure is chosen from what the map
-     * shows at it: a phone map a hundred-odd pixels across then spans a couple of hundred blocks, so
-     * the plates' 160-block spacing puts about one per line on the screen. Further out the view is
-     * several hundred blocks and every line offers several candidates inside it, which on a map this
-     * size is a wall of capsules; the road names themselves already wait for
-     * {@link #MIN_LABEL_PPB}, and a plate is bigger and opaque, so it waits for more.
+     * <p>One and a half pixels a block, half again the page's own default zoom: a plate is a fixed-size
+     * opaque capsule, and at the default zoom a phone map a hundred-odd pixels across spans a couple
+     * of hundred blocks, so the plates' 160-block spacing offers one on every line at once -- which on
+     * a map this size is a wall of capsules. From here the map shows under a hundred blocks, so a plate
+     * appears only when the player has zoomed in to read one line rather than to compare the whole
+     * trip. The road names themselves already wait for {@link #MIN_LABEL_PPB}, and a plate is bigger
+     * and opaque, so it waits for more.
      */
-    private static final double LINE_NAME_MIN_PPB = 1.0;
+    private static final double LINE_NAME_MIN_PPB = 1.5;
 
     /**
      * How far above a line its name plate floats, in screen pixels.
