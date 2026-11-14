@@ -69,6 +69,45 @@ three screens whose maps draw labels at a fixed size -- the destination picker, 
 main screen -- draw the same card at about 0.72 of the font size, so it is the same small object on
 all of them. In mixed mode a name that would need shrinking below 0.7 widens the card instead.
 
+### Spacing and zoom on the fixed-size maps
+
+A map whose labels are all drawn at one size has no zoom of its own to tell it when a label is too
+crowded or too big, so two rules are constants (`RoadSigns`) rather than a function of the scale:
+
+- **Clearance.** Every label on the picker and on the K screen reserves its painted rectangle grown by
+  `LABEL_CLEARANCE_PX` (3 px; the world map keeps 2), so two plates -- or a plate and a name -- stand a
+  visible gap apart instead of touching and reading as one band of colour;
+- **Zoom gate.** Past `LABEL_MIN_SCALE` (0.22 px per block, the zoom at which ordinary roads stop being
+  drawn) a classified road shows its **name** instead of its plate: a card keeps its pixel size however
+  far out the map is, so beyond that zoom the plates would cover the roads the player zoomed out to
+  see. The road is not left unlabelled -- it falls back to the name, the same fallback a road with no
+  number already gets;
+- **Name size.** On the K screen a road's name is drawn no taller than the road under it
+  (`RoadSigns.nameFactor`): a word taller than its street reads as a word standing beside it. Since
+  that map's strokes are a fixed two to six pixels wide, the cap has a floor of 0.55 so the narrow
+  classes keep a readable name at every zoom.
+
+### What a road's name has to fit
+
+A name is written along its road, so it may not be wider than the road it names -- otherwise it hangs
+past both ends and reads as a label for whatever is beside it. Both the K screen and the picker
+therefore measure the **chain's drawn length in pixels** (walked along its vertices, not the straight
+line between its ends) and write the name only when it fits with `ROAD_NAME_END_MARGIN` (4 px) of road
+showing at each end. Zooming out takes the names away in the order the roads become too short to hold
+them, instead of leaving words sticking out of the strokes.
+
+And a name near the map's edge is **cut by the frame** rather than dropped: the label is kept as long
+as its anchor -- the point on the road -- is inside the map, and the drawing is clipped to the map's
+rectangle for the pass. Before that, a label whose last letter met the border vanished whole and came
+back one zoom step later, which read as flicker rather than as a rule.
+
+The picker keeps one further rule of its own: it writes **nothing** when the map is showing more than
+`NAME_MAX_VIEW_BLOCKS` (900 blocks) across -- the whole trip seen end to end, which is the reading the
+picker is for. The limit is in blocks rather than in pixels per block because that map is a fraction of
+the K screen's size, so one number for pixels per block would mean a village on one and a region on the
+other. The phone page needs neither the gate nor the clearance: it already suppresses all of its labels
+below 0.5 px per block, and its map area is small enough that the gate is the crowding rule.
+
 ## The display-mode setting
 
 **Settings -> Navigation HUD -> Map display mode** (`map_display_mode`) decides where the navigation

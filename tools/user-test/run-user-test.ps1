@@ -13,6 +13,7 @@
 #   .\tools\user-test\run-user-test.ps1                     # start the client, wait until the mod is up
 #   .\tools\user-test\run-user-test.ps1 -Auto               # open TEST, self-test, report, quit
 #   .\tools\user-test\run-user-test.ps1 -Auto -World MyWorld
+#   .\tools\user-test\run-user-test.ps1 -Screen main        # open a screen and stay up, for a picture
 #   .\tools\user-test\run-user-test.ps1 -Stop               # stop client(s) started from this project
 #   .\tools\user-test\run-user-test.ps1 -ResetData          # back up and clear the mod's own data files
 #
@@ -27,7 +28,11 @@ param(
     [int]$TimeoutSeconds = 900,
     # Seconds to wait in the world before the checks run: long enough for the road network, the machine
     # -read rail layers and MTR's own data to have arrived.
-    [int]$SettleSeconds = 25
+    [int]$SettleSeconds = 25,
+    # One of the mod's screens to open for a picture instead of running the checks: 'main',
+    # 'destination', 'settings' or 'categories'. The client stays up afterwards, so the picture is taken
+    # from outside the game -- synthetic key presses never reach it, so no rig can walk there by itself.
+    [string]$Screen = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +101,9 @@ if (Test-Path $latest) {
 }
 
 $properties = @('--offline', '--console=plain')
+# Picture mode: the same timing as -Auto, without the report and without the quit. A window that closed
+# itself could not be photographed, and the screen is opened by the mod because keys do not reach it.
+$picture = $Screen.Trim() -ne ''
 if ($Auto) {
     # The trigger the mod reads, and the world to open: both through the run config, because Gradle's
     # --args would replace the launcher's own arguments rather than add to them.
@@ -104,6 +112,12 @@ if ($Auto) {
     $properties += "-PhtgQuickPlay=$World"
     Write-Host "starting the client from $project (build, then launch; this takes a minute or two)..."
     Write-Host "it will open '$World', run the self-test after ${SettleSeconds}s, and quit."
+} elseif ($picture) {
+    $properties += "-PhtgSelftest=$SettleSeconds"
+    $properties += "-PhtgScreen=$($Screen.Trim())"
+    $properties += "-PhtgQuickPlay=$World"
+    Write-Host "starting the client from $project (build, then launch; this takes a minute or two)..."
+    Write-Host "it will open '$World', then the '$($Screen.Trim())' screen after ${SettleSeconds}s, and stay up."
 } else {
     Write-Host "starting the client from $project (this takes a minute or two)..."
 }
@@ -149,7 +163,27 @@ while ((Get-Date) -lt $deadline) {
             break
         }
     } elseif (Test-Path $latest) {
-        if (Select-String -Path $latest -Pattern '\[HowToGo\] constructed' -Quiet) {
+        # Picture mode waits for the screen itself rather than for the mod to load: the point of the run
+        # is the screen being up, and the mod logs the line when it opens it. Only new lines count, for
+        # the reason the report above reads only new lines: the previous run left the same line in this
+        # file, and finding it there must not end this run before its own screen has even opened.
+        $marker = if ($picture) { '\[HowToGo\] rig \| opening' } else { '\[HowToGo\] constructed' }
+        $found = if ($picture) {
+            $lines = ''
+            $stream = [System.IO.File]::Open($latest, 'Open', 'Read', 'ReadWrite')
+            try {
+                $offset = if ($fromByte -le $stream.Length) { $fromByte } else { 0 }
+                $null = $stream.Seek($offset, 'Begin')
+                $reader = New-Object System.IO.StreamReader($stream)
+                try { $lines = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally {
+                $stream.Dispose()
+            }
+            $lines -match $marker
+        } else {
+            Select-String -Path $latest -Pattern $marker -Quiet
+        }
+        if ($found) {
             $up = $true
             break
         }
@@ -183,6 +217,16 @@ if ($Auto) {
     Write-Host ''
     Write-Host "$failed failure(s) of $($report.Count - 1) check(s)"
     if ($failed -eq 0) { exit 0 } else { exit 1 }
+}
+
+if ($picture) {
+    Write-Host ''
+    Write-Host "the '$($Screen.Trim())' screen is open and the client is staying up."
+    Write-Host 'take the picture with whatever screen capture you use, then stop the client:'
+    Write-Host '  .\tools\user-test\run-user-test.ps1 -Stop'
+    Write-Host ''
+    Write-Host "mod log:      $latest   (filter for [HowToGo])"
+    exit 0
 }
 
 Write-Host ''

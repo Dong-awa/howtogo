@@ -143,6 +143,49 @@ public final class MainScreen extends Screen {
     private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
 
     /**
+     * The room every road label keeps from the labels already on the map, in screen pixels.
+     *
+     * <p>The picker's rule and this one are one rule, held in {@link RoadSigns}: a label claims its
+     * painted box grown by this much, so two plates -- or a plate and a name -- stand a visible gap
+     * apart instead of touching. Without it the map reads as a single crowded band of labels the
+     * moment two roads run near each other.
+     */
+    private static final double LABEL_CLEARANCE_PX = RoadSigns.LABEL_CLEARANCE_PX;
+
+    /**
+     * The least zoom, in screen pixels per block, at which this map draws a sign card.
+     *
+     * <p>Shared with the picker, and for the same reason: a plate is a fixed-size object on a map
+     * that zooms, so a zoomed-out view would be all plates. Below this zoom a classified road shows
+     * its name instead -- the classification is not lost, it is written as ink along the road the way
+     * a name is, which is what a map this far out can hold.
+     */
+    private static final double LABEL_MIN_SCALE = RoadSigns.LABEL_MIN_SCALE;
+
+    /**
+     * The least share of the font a road's name is drawn at on this map.
+     *
+     * <p>{@link RoadSigns#nameFactor} caps a name's height by the width of the road under it, which
+     * is the world map's rule: a word taller than its street reads as a word standing beside it. On
+     * the world map the cap can be met by zooming in, because the stroke widens with the zoom. Here
+     * the strokes are a fixed two to six pixels wide at every zoom, so the cap is fixed too, and
+     * without a floor the paths and the rails would carry no name at any zoom -- a road the map
+     * stopped naming rather than a name that fits. This is the smallest factor at which the
+     * narrowest stroke still holds a readable word.
+     */
+    private static final float ROAD_NAME_MIN_FACTOR = 0.55F;
+
+    /**
+     * The room a road's name leaves at each end of its road, in screen pixels.
+     *
+     * <p>A name is centred on its road, so a word exactly as wide as the road has its first and last
+     * letter on the road's two ends and reads as a label for the junction at either end. A few pixels
+     * of road showing past the word is all it takes to keep the name on the road rather than across
+     * the corner it meets.
+     */
+    private static final double ROAD_NAME_END_MARGIN = 4.0;
+
+    /**
      * The narrowest the map panel may be, either way, and still be worth putting a road label on.
      *
      * <p>Below this the panel is a thumbnail: a label's own box is a good share of it, and the fit
@@ -378,6 +421,18 @@ public final class MainScreen extends Screen {
         boolean overlaps(LabelBox other) {
             return x < other.x + other.width && other.x < x + width
                     && y < other.y + other.height && other.y < y + height;
+        }
+
+        /**
+         * The same box grown by a margin on every side: the room a label claims on the map.
+         *
+         * <p>What a label paints and what it claims are two different rectangles, and this is the
+         * second: a plate that only just misses the next one reads as one pair of plates, so the
+         * claim is the painted box plus the clearance and it is the claim that is tested and kept.
+         */
+        LabelBox inflated(double margin) {
+            return new LabelBox(x - margin, y - margin, width + margin * 2.0,
+                    height + margin * 2.0);
         }
     }
 
@@ -1216,6 +1271,32 @@ public final class MainScreen extends Screen {
     }
 
     /**
+     * How long a chain is on screen, in pixels: the room a name has to lie in.
+     *
+     * <p>Walked along the chain's own vertices rather than measured between the two ends, because a
+     * curved road is longer than the straight line across it and a name may be bent along it. The
+     * figure is in screen pixels like everything the label pass decides with, so it shrinks with the
+     * map and a name stops fitting exactly when the road does.
+     *
+     * <p>One walk per label, over the pieces of one chain: the network is not scanned again, and the
+     * chains this is asked about are the handful that carry a name.
+     */
+    private double chainScreenPx(RoadNetwork network, int[] chain) {
+        double total = 0.0;
+        for (int id : chain) {
+            RoadSegment member = network.segment(id);
+            if (member == null) {
+                continue;
+            }
+            for (int i = 1; i < member.vertexCount(); i++) {
+                total += Math.hypot((member.x(i) - member.x(i - 1)) * scale,
+                        (member.z(i) - member.z(i - 1)) * scale);
+            }
+        }
+        return total;
+    }
+
+    /**
      * The rectangle a place name would occupy, for the overlap test.
      *
      * <p>The label is written with its first character at the point the marker is offset from, and
@@ -1459,8 +1540,17 @@ public final class MainScreen extends Screen {
      * that is not being drawn at this zoom, so no name floats over a road the map left out;
      * {@link RoadChains.Grouping#carriesLabel} makes one piece of a chain the piece that names it,
      * so a road is named once rather than once per segment; and each label's painted rectangle has
-     * to fit inside the map and miss every box already reserved. All of those are cheap tests on
-     * numbers already in hand -- the network walk is the only cost this pass adds per frame.
+     * to fit inside the map and its claim -- that rectangle with {@link #LABEL_CLEARANCE_PX} round it
+     * -- has to miss every claim already reserved. All of those are cheap tests on numbers already in
+     * hand -- the network walk is the only cost this pass adds per frame.
+     *
+     * <h2>Why a card gives way to the name when the map is zoomed out</h2>
+     * A name is furniture on the map: it is drawn at a size its road can hold and it takes the shape
+     * of the line. A card is not -- it is an opaque plate whose size does not follow the zoom, so the
+     * further out the map is, the more of it a plate covers, and one road's plate lands beside the
+     * next one's. Past {@link #LABEL_MIN_SCALE} the card is therefore not drawn and the road
+     * shows its name instead: the same fallback a road with no number already gets, so no road loses
+     * its label to the zoom.
      */
     private void drawRoadLabels(GuiGraphics graphics, List<LabelBox> reserved) {
         if (mapW < MIN_LABEL_MAP_PX || mapH < MIN_LABEL_MAP_PX) {
@@ -1479,10 +1569,21 @@ public final class MainScreen extends Screen {
         RoadLabelStyle style = RoadConfig.roadLabelStyle();
         boolean signMode = style != RoadLabelStyle.NAME;
         boolean mixed = style == RoadLabelStyle.MIXED;
+        // The zoom at which a plate stops being worth its room: a card keeps its size whatever the
+        // map does, so past this point a zoomed-out view is plates over strokes. Read once for the
+        // pass, like the style, so one frame cannot decide it road by road. Below it a classified
+        // road falls back to its name -- which is the same fallback a road with no number already
+        // has -- instead of the map losing the road's identity altogether.
+        boolean signZoom = scale >= LABEL_MIN_SCALE;
         int minX = mapX;
         int minY = mapY;
         int maxX = mapX + mapW;
         int maxY = mapY + mapH;
+        // Everything below is painted inside the map's frame: a label whose anchor is on the map is
+        // kept and its overflowing part is cut, the way a paper map cuts a name at its edge. The frame's
+        // own displacement is what UiMotion.clip accounts for; the game's scissor takes screen pixels
+        // and would cut in the wrong place while the sheet is still sliding in.
+        UiMotion.clip(graphics, minX, minY, maxX, maxY);
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             boolean named = name != null && !name.isBlank();
@@ -1490,8 +1591,9 @@ public final class MainScreen extends Screen {
             // exists to paint it on. A category the player has deleted is not a category any more --
             // the store answers false for it -- so the road is drawn as unclassified: no card, and
             // its name is its label again. A road with a sign and no name is still labelled, because
-            // the card is the label it has.
-            boolean sign = signMode && segment.hasSign()
+            // the card is the label it has. And a card too big for the zoom on screen -- see
+            // signZoom -- gives way to the name for the same reason.
+            boolean sign = signMode && signZoom && segment.hasSign()
                     && RoadCategoryStore.has(segment.category());
             if (!named && !sign) {
                 continue;
@@ -1533,20 +1635,44 @@ public final class MainScreen extends Screen {
             float angle = HudDraw.labelAngle((segment.x(last) - segment.x(0)) * scale,
                     (segment.z(last) - segment.z(0)) * scale);
             int width = font.width(name);
+            // The name is drawn no taller than the road under it, which is the world map's rule and
+            // this map's floor -- see ROAD_NAME_MIN_FACTOR. Its width and its offset above the stroke
+            // follow the same factor, so the word stays one object rather than a small line floating
+            // where a big one used to sit.
+            float factor = RoadSigns.nameFactor(2.0 * roadHalfWidth(segment.roadClass()),
+                    font.lineHeight, ROAD_NAME_MIN_FACTOR);
+            // And it has to fit along the road it names: a word wider than its road reaches past both
+            // of the road's ends, which is a label for whatever happens to be on either side of it. A
+            // name waits for the zoom at which its road is long enough to carry it -- the rule the
+            // world map and the picker follow too -- rather than being written once and left sticking
+            // out of a road too short to hold it.
+            double textWidth = width * (double) factor;
+            if (textWidth > chainScreenPx(network, grouping.chainOf(segment))
+                    - ROAD_NAME_END_MARGIN * 2.0) {
+                continue;
+            }
+            double textHeight = LABEL_HEIGHT * (double) factor;
             // The box that is actually painted, not the unrotated one the word would occupy flat: a
             // diagonal name is wider and taller than its own width, so measuring the flat word would
             // let it cross the map's edge and other labels while the fit test said it fitted.
-            double[] extents = HudDraw.rotatedExtents(width, LABEL_HEIGHT, angle);
-            double centreY = y - 4 + LABEL_HEIGHT / 2.0;
+            double[] extents = HudDraw.rotatedExtents(textWidth, textHeight, angle);
+            double centreY = y - 4 * (double) factor + textHeight / 2.0;
             LabelBox box = new LabelBox(x - extents[0] / 2.0, centreY - extents[1] / 2.0,
                     extents[0], extents[1]);
-            if (box.x() < minX + 1 || box.x() + box.width() > maxX - 1
-                    || box.y() < minY + 1 || box.y() + box.height() > maxY - 1) {
+            // The label is anchored where the road is on screen and the map's frame cuts it, the way a
+            // paper map cuts a name at its edge. A label that had to fit whole vanished the moment its
+            // last letter met the border and came back a notch later; this replaces that with one
+            // rule. What it claims is still the whole painted box, so the part inside the map cannot
+            // be painted over.
+            if (x < minX || x >= maxX || centreY < minY || centreY >= maxY) {
                 continue;
             }
+            // What is tested and kept is the room the label takes, not only the ink it puts there:
+            // see LABEL_CLEARANCE_PX for why the two rectangles are not the same one.
+            LabelBox claim = box.inflated(LABEL_CLEARANCE_PX);
             boolean clash = false;
             for (LabelBox other : reserved) {
-                if (box.overlaps(other)) {
+                if (claim.overlaps(other)) {
                     clash = true;
                     break;
                 }
@@ -1556,16 +1682,18 @@ public final class MainScreen extends Screen {
                 // is what stops a road name being painted over a place name or another road's card.
                 continue;
             }
-            reserved.add(box);
+            reserved.add(claim);
 
             // A rotated label. 1.21.6 moved the GUI matrix stack from a PoseStack to JOML's
             // Matrix3x2fStack: for a 2D translate-and-rotate the two are the same operation under the
-            // new name, and the stack is part of GuiGraphics either way.
+            // new name, and the stack is part of GuiGraphics either way. The name's size is a third
+            // operation on the same pose, and the eras spell it the same way but for its arity.
             //? if >=1.21.6 {
             /*Matrix3x2fStack pose = graphics.pose();
             pose.pushMatrix();
             pose.translate((float) x, (float) centreY);
             pose.rotate(angle);
+            pose.scale(factor, factor);
             graphics.drawString(font, name, -width / 2, -4,
                     UiMotion.fade(UiTheme.mapLabel(), open), false);
             pose.popMatrix();
@@ -1574,11 +1702,13 @@ public final class MainScreen extends Screen {
             pose.pushPose();
             pose.translate(x, centreY, 0.0);
             pose.mulPose(Axis.ZP.rotation(angle));
+            pose.scale(factor, factor, 1.0F);
             graphics.drawString(font, name, -width / 2, -4,
                     UiMotion.fade(UiTheme.mapLabel(), open), false);
             pose.popPose();
             //?}
         }
+        graphics.disableScissor();
     }
 
     /**
@@ -1627,8 +1757,8 @@ public final class MainScreen extends Screen {
             innerWidth = Math.max(numberWidth, (int) Math.ceil(nameWidth * nameFactor - 1.0E-6));
         }
         double nameLineUnits = named ? font.lineHeight * nameFactor + SIGN_CARD_LINE_GAP : 0.0;
-        // The scaled rectangle is the only one measured, tested and reserved: what the card occupies
-        // and what it claims on the map cannot then differ.
+        // The painted rectangle is measured once, and the claim tested and reserved below is that
+        // same rectangle with the clearance round it: the card cannot paint one box and claim another.
         int cardWidth = Math.max(1, (int) Math.round(
                 (innerWidth + SIGN_CARD_PAD_X * 2) * (double) SIGN_CARD_SCALE));
         int cardHeight = Math.max(1, (int) Math.round(
@@ -1646,13 +1776,16 @@ public final class MainScreen extends Screen {
             return;
         }
         // And the same rule as the rotated names, against the same list: one list for both kinds of
-        // label is what keeps a card and a name -- place or road -- from covering each other.
+        // label is what keeps a card and a name -- place or road -- from covering each other. What a
+        // card keeps clear is its painted rectangle grown by the label clearance, so two plates of
+        // neighbouring roads read as two signs rather than as one long fence of colour.
+        LabelBox claim = box.inflated(LABEL_CLEARANCE_PX);
         for (LabelBox other : reserved) {
-            if (box.overlaps(other)) {
+            if (claim.overlaps(other)) {
                 return;
             }
         }
-        reserved.add(box);
+        reserved.add(claim);
 
         int colour = RoadCategoryStore.color(segment.category());
         // The ink is decided from the colour as the category stores it, and only then are both faded

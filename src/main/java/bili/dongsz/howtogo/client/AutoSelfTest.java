@@ -2,8 +2,10 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Runs the in-game self-test by itself, for a launcher that asked for it.
@@ -14,6 +16,14 @@ import java.util.List;
  * {@code --quickPlaySingleplayer} argument), and the report has to land in the log for the rig to read
  * and grade. That is what this is, and {@code tools/user-test/run-user-test.ps1 -Auto} is the rig that
  * sets it up.
+ *
+ * <h2>And one screen, for a picture</h2>
+ * The same rig cannot photograph a screen the way a player would: synthetic key presses never reach
+ * the game, so nothing on the keyboard can open the K screen for it. A launcher may therefore ask for
+ * one of the mod's screens by name ({@code -PhtgScreen}), and this opens it once the world is up and
+ * leaves the client running -- the picture is taken from outside the game. With a screen asked for,
+ * the self-test itself is not run: a picture is a different job from a report, and a client that quit
+ * after the report could not have its picture taken.
  *
  * <h2>What it will not do</h2>
  * Nothing at all unless the property is set, and then exactly once per run: a switch that ran the
@@ -28,6 +38,14 @@ public final class AutoSelfTest {
 
     /** Whether to stop the client once the report is written, which is what a rig wants. */
     private static final String QUIT_PROPERTY = "howtogo.selftest.quit";
+
+    /**
+     * Which of the mod's screens to open instead of running the checks, for a screenshot rig.
+     *
+     * <p>Named rather than handed a screen: a property is a string, and a switch that named a class
+     * would let a launcher open anything at all on the classpath.
+     */
+    private static final String SCREEN_PROPERTY = "howtogo.selftest.screen";
 
     /** How long to wait when the property is set to something that is not a number. */
     private static final double DEFAULT_DELAY_SECONDS = 15.0;
@@ -57,11 +75,40 @@ public final class AutoSelfTest {
             return;
         }
         ran = true;
+        Screen screen = requestedScreen();
+        if (screen != null) {
+            // Leave the client up: the rig is going to photograph this screen from outside it, and a
+            // report line followed by a quit would close the window before the picture is taken.
+            HowToGo.LOGGER.info("[HowToGo] rig | opening {} for a screenshot",
+                    System.getProperty(SCREEN_PROPERTY, "").trim());
+            minecraft.setScreen(screen);
+            return;
+        }
         report();
         if (quitAsked()) {
             HowToGo.LOGGER.info("[HowToGo] selftest asked the client to stop");
             minecraft.stop();
         }
+    }
+
+    /**
+     * The mod's screen the launcher asked to see, or null when it asked for none (or for a name this
+     * build does not know, which is logged rather than guessed at).
+     */
+    private static Screen requestedScreen() {
+        String raw = System.getProperty(SCREEN_PROPERTY, "").trim().toLowerCase(Locale.ROOT);
+        return switch (raw) {
+            case "", "none" -> null;
+            case "main" -> new MainScreen();
+            case "destination" -> new DestinationScreen(null);
+            case "settings" -> new SettingsScreen(null);
+            case "categories" -> new RoadCategoryScreen(null);
+            default -> {
+                HowToGo.LOGGER.warn("[HowToGo] rig | no screen called '{}'; the picture will be of"
+                        + " the world", raw);
+                yield null;
+            }
+        };
     }
 
     /**

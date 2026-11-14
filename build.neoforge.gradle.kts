@@ -178,6 +178,9 @@ neoForge {
             // The in-game self-test rig (tools/user-test/run-user-test.ps1) drives these.
             systemProperty("howtogo.selftest", rootProject.findProperty("htgSelftest")?.toString() ?: "")
             systemProperty("howtogo.selftest.quit", rootProject.findProperty("htgSelftestQuit")?.toString() ?: "")
+            // And the same rig's picture mode: open one of the mod's screens and leave the client up,
+            // because synthetic keys never reach the game for a player-style walk to that screen.
+            systemProperty("howtogo.selftest.screen", rootProject.findProperty("htgScreen")?.toString() ?: "")
             if (rootProject.hasProperty("htgQuickPlay")) {
                 programArgument("--quickPlaySingleplayer")
                 programArgument(rootProject.property("htgQuickPlay").toString())
