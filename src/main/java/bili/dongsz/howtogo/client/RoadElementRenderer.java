@@ -128,12 +128,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * How far below a place's marker its name is written, before the name's own size scales it. Scaled with the name, since a fixed pixel gap drifts when the text changes size; small because the marker already has size.
      */
     private static final double PLACE_NAME_GAP_PX = 6.0;
-    /**
-     * How close the cursor must be to a place's marker, in screen pixels, for the map to print that place's description.
-     *
-     * Screen pixels rather than blocks because Xaero's zoom sweeps orders of magnitude; a block radius would be a dot zoomed out and a village zoomed in. Slightly larger than the marker, so pointing need not be pixel-perfect.
-     */
-    private static final double PLACE_HOVER_RADIUS_PX = 8.0;
 
 
     private static final double LABEL_CLEARANCE_PX = 2.0;
@@ -807,63 +801,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         drawTransitLineNames(graphics, font, scale, projection, margin, viewRight, viewBottom,
                 board);
 
-        // Last of all, after every name, so no label is painted over the readout: this is the place's own
-        // description, which only this mod has.
-        drawPlaceHoverSummary(graphics, font, info, projection, scale);
-
         pose.popPose();
-    }
-
-    /**
-     * The description of the place under the cursor, printed under the cursor.
-     *
-     * Xaero already highlights the marker and names the place, but a description is text the player wrote and lives in this mod's store, so no other map can show it. The nearest place marker within PLACE_HOVER_RADIUS_PX of the cursor is measured in screen pixels through the same Projection the markers were drawn with -- the map can pan between two readings of one frame. Nothing is drawn when the place has no description or the cursor is not on a marker.
-     */
-    //? if >=1.21.6 {
-    /*private void drawPlaceHoverSummary(MapElementGraphics graphics, Font font, ElementRenderInfo info,
-                                        Projection projection, double scale) {
-    *///?} else {
-    private void drawPlaceHoverSummary(GuiGraphics graphics, Font font, ElementRenderInfo info,
-                                       Projection projection, double scale) {
-    //?}
-        double mouseX = projection.screenX(info.mouseX);
-        double mouseY = projection.screenZ(info.mouseZ);
-        Destination nearest = null;
-        double nearestDistance = PLACE_HOVER_RADIUS_PX;
-        for (Destination place : Destinations.places()) {
-            if (!MapFilter.shows(place.kind(), scale)) {
-                continue;
-            }
-            double distance = Math.hypot(projection.screenX(place.x()) - mouseX,
-                    projection.screenZ(place.z()) - mouseY);
-            if (distance <= nearestDistance) {
-                nearestDistance = distance;
-                nearest = place;
-            }
-        }
-        if (nearest == null) {
-            return;
-        }
-        int screenW = mapViewRight(graphics);
-        int screenH = mapViewBottom(graphics);
-        String summary = PlaceText.summary(font,
-                PlaceDetailStore.detailsOf(nearest).description(), Math.max(1, screenW - 8));
-        if (summary.isEmpty()) {
-            return;
-        }
-        // Centred under the cursor, flipped above it when there is no room below, and clamped to the window
-        // both ways: a readout half off the map cannot be finished.
-        double width = font.width(summary);
-        double x = Mth.clamp(mouseX, width / 2.0 + 4.0, screenW - width / 2.0 - 4.0);
-        double y = mouseY + 12.0;
-        if (y + font.lineHeight > screenH - 4) {
-            y = mouseY - 12.0 - font.lineHeight;
-        }
-        y = Mth.clamp(y, 4.0, screenH - font.lineHeight - 4.0);
-        // Full size rather than the map's label size: a description is a readout, not a name belonging to
-        // the map, and map-scaled text would be unreadable when zoomed out -- when a saved place is hardest
-        // to find.
-        drawMapLabel(graphics, font, summary, x, y, HudDraw.COLOR_PLACE, 1.0F);
     }
 
     /**

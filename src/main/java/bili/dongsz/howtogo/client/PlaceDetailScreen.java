@@ -7,6 +7,7 @@ import bili.dongsz.howtogo.road.PlaceKind;
 import bili.dongsz.howtogo.route.Destination;
 import bili.dongsz.howtogo.transit.TransitLine;
 import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -386,6 +387,15 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         return String.join(",", tags);
     }
 
+    /**
+     * The system clipboard as text, for the description's paste.
+     * Read here rather than inside MultilineField so the hand-drawn field never has to know about the
+     * client: it takes a String, which is all a paste needs to be.
+     */
+    private static String clipboardText() {
+        return Minecraft.getInstance().keyboardHandler.getClipboard();
+    }
+
 
     @Override
     //? if >=1.21.9 {
@@ -431,12 +441,16 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
 
     @Override
     // 1.21.9 made key input a record and moved key codes onto InputConstants. The record is unpacked on
-    // entry so the body below reads the same either way, as RoadNameScreen does.
+    // entry so the body below reads the same either way, as RoadNameScreen does. The paste shortcut is
+    // unpacked in the same place: 1.20.1-1.21.8 answer Screen.isPaste(keyCode), 1.21.9+ answer
+    // KeyEvent.isPaste(), and the field itself cannot ask either question without a version branch.
     //? if >=1.21.9 {
     /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
         int keyCode = event.key();
+        boolean paste = event.isPaste();
     *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        boolean paste = Screen.isPaste(keyCode);
     //?}
         // Tab is the only way the two fields trade focus: a plain Screen has no tab order, and without this
         // the description could never be reached from the widgets.
@@ -452,6 +466,14 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 descriptionFocused = true;
                 setFocused(null);
             }
+            return true;
+        }
+        // Paste is the one shortcut the description needs, and it is answered here rather than in the
+        // field: the field is not a widget, so this screen is its only key source, and the shortcut is
+        // the one key that needs the modifier state. Swallowed even when the clipboard is empty, so a
+        // paste intended for the description never falls through to whatever screen is underneath.
+        if (descriptionFocused && paste) {
+            description.paste(clipboardText());
             return true;
         }
         if (descriptionFocused && description.keyPressed(this.font, keyCode)) {

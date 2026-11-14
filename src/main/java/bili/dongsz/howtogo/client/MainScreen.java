@@ -1108,27 +1108,6 @@ public final class MainScreen extends Screen {
     }
 
     /**
-     * The one-line description of the place under the cursor, when there is one.
-     * Beside the cursor rather than in a fixed line, and clamped inside the map: a fixed line would cover the foot hint or point at nothing, and a summary outside the frame would read as part of the panel. Only the first line is shown -- the full text is the details card's job.
-     */
-    private void drawHoverSummary(GuiGraphics graphics, Destination place, int mouseX, int mouseY) {
-        String summary = PlaceText.summary(font,
-                PlaceDetailStore.detailsOf(place).description(), Math.max(1, mapW - 16));
-        if (summary.isEmpty()) {
-            return;
-        }
-        int textW = font.width(summary);
-        int x = Mth.clamp(mouseX + 10, mapX + 2, Math.max(mapX + 2, mapX + mapW - textW - 2));
-        int y = mouseY - 12;
-        if (y < mapY + 2) {
-            y = mouseY + 12;
-        }
-        y = Mth.clamp(y, mapY + 2, Math.max(mapY + 2, mapY + mapH - LINE_HEIGHT - 2));
-        graphics.drawString(font, summary, x, y, UiMotion.fade(UiTheme.mapLabelStrong(), open),
-                false);
-    }
-
-    /**
      * The details card of the selected place, standing down the map's right side.
      * Inside the map, not beside it: the card belongs to the place under it and the map is what is being read. It is a column now -- the map frame's height less a margin top and bottom, flush with the right edge; the old corner strip read as a band across the map's foot. The width is what the content asks for, clamped to the map, and a window too short for the card leaves the map alone. Nothing here writes: favourite and delete are reported by the card and routed by this screen.
      */
@@ -1237,15 +1216,6 @@ public final class MainScreen extends Screen {
                     .getString();
             graphics.drawString(font, font.plainSubstrByWidth(line, panelW - PAD * 2),
                     panelX + PAD, addressY, mutedInk, false);
-        }
-
-        // The hover readout comes after every other string so a place name beside it cannot hide
-        if (insideMap(mouseX, mouseY)
-                && (selectedPlace == null || !detailPanel.contains(mouseX, mouseY))) {
-            Destination hovered = placeAt(mouseX, mouseY);
-            if (hovered != null) {
-                drawHoverSummary(graphics, hovered, mouseX, mouseY);
-            }
         }
     }
 

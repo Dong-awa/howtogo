@@ -13,6 +13,7 @@ import java.util.List;
  * Hand-drawn multi-line plain-text editor for the place description.
  * Not a widget: EditBox is single-line and MultiLineEditBox does not exist before 1.20.5 while this tree still builds 1.20.1, so one hand-drawn field keeps a single implementation across nodes.
  * Committed text arrives through Screen.charTyped: input methods deliver text as committed characters, never GLFW key codes, so key codes only handle editing keys. This is what keeps non-ASCII descriptions -- most of them Chinese -- typable.
+ * Pasting is not a key here: the shortcut needs the platform's modifier state, which the screen already unpacks per version, so the screen calls paste with the clipboard's text and this class only decides where it lands.
  * The caret is a code-point index. Layout uses PlaceText.wrap, the same wrapping as the read-only card, and lines are walked back to char ranges so drawing and caret never disagree.
  * Code points rather than chars because PlaceDetails.MAX_DESCRIPTION counts code points, and a char index could split a surrogate pair.
  */
@@ -179,7 +180,7 @@ final class MultilineField {
 
     /**
      * Runs one editing key.
-     * Takes Font because this is not a widget and layout needs the measurements first; takes no modifiers because every key here is a plain editing key.
+     * Takes Font because this is not a widget and layout needs the measurements first; takes no modifiers because every key here is a plain editing key. Paste is the one shortcut, and it is answered in the screen, where the modifier state is already unpacked per version.
      * @return whether the key was used, so the screen knows whether to try the rest
      */
     boolean keyPressed(Font font, int keyCode) {
@@ -260,6 +261,43 @@ final class MultilineField {
                 .toString();
         caret = value.codePointCount(0, charIndex + text.length());
         revealCaret = true;
+    }
+
+    /**
+     * Inserts clipboard text at the caret.
+     * The clipboard is a document, not a keystroke: its line breaks are kept because a description has
+     * them too, while every other control character is dropped because this field can neither type nor
+     * draw one -- a tab would come out as a missing glyph and a NUL would travel into the saved text.
+     * Text longer than the room left is cut to that room instead of being refused whole, so a pasted
+     * paragraph still delivers its beginning rather than nothing at all.
+     * @param clipboard the clipboard's text, possibly null or empty
+     * @return whether anything was inserted
+     */
+    boolean paste(String clipboard) {
+        if (clipboard == null || clipboard.isEmpty()) {
+            return false;
+        }
+        String normalized = clipboard.replace("\r\n", "\n").replace('\r', '\n');
+        int room = limit - value.codePointCount(0, value.length());
+        if (room <= 0) {
+            return false;
+        }
+        StringBuilder accepted = new StringBuilder();
+        int added = 0;
+        for (int i = 0; i < normalized.length() && added < room; ) {
+            int codePoint = normalized.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (codePoint != '\n' && Character.isISOControl(codePoint)) {
+                continue;
+            }
+            accepted.appendCodePoint(codePoint);
+            added++;
+        }
+        if (added == 0) {
+            return false;
+        }
+        insert(accepted.toString());
+        return true;
     }
 
     /** Removes the code points in [from, to) and leaves the caret at from. */

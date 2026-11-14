@@ -2076,8 +2076,10 @@ function sectionAsync(title, body) {
     const markerAt = geom.worldToScreen(app.state.view, 20, 20);
     byId['map'].dispatch('pointermove', {clientX: markerAt.x, clientY: markerAt.y, pointerId: 5});
     const cardHover = byId['status-hover'].textContent;
-    ok('the hover readout keeps a place description on one line, collapsing its breaks',
-      cardHover.indexOf('第一行摘要 第二行摘要') >= 0 && cardHover.indexOf('\n') === -1,
+    ok('the hover readout names the place and leaves its description to the card',
+      cardHover.indexOf('卡片里的地点') >= 0 &&
+      cardHover.indexOf(model.placeKindLabel('RESOURCE')) >= 0 &&
+      cardHover.indexOf('第一行摘要') === -1 && cardHover.indexOf('第二行摘要') === -1,
       JSON.stringify(cardHover));
     const clickMarker = () => {
       byId['map'].dispatch('pointerdown',

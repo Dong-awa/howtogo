@@ -557,17 +557,16 @@
       return;
     }
     // A place wins when the cursor is within its marker, because that is the smaller
-    // target and the one the user is aiming at.
+    // target and the one the user is aiming at. The status bar only identifies the place:
+    // its description belongs to the card opened by a click, and printing the payload's
+    // description here would follow the cursor across the map as a paragraph.
     if (place && (!road || place.distance <= PLACE_HOVER_PX / scale)) {
       const found = place.place;
       const parts = [model.placeKindLabel(found.kind)];
       if (found.sourceLabel) parts.push(found.sourceLabel);
       const head = '地点：' + (found.hasName ? found.name : '未命名地点')
         + '（' + parts.join(' · ') + '）';
-      // The payload's description keeps its line breaks for the card, but the status bar is one
-      // line: collapse the whitespace here rather than making the payload carry two forms of it.
-      const line = found.description.replace(/\s+/g, ' ').trim();
-      refs.hover.textContent = line !== '' ? head + ' · ' + line : head;
+      refs.hover.textContent = head;
       return;
     }
     const seg = road.segment;

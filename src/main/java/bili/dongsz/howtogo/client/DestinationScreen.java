@@ -1969,29 +1969,21 @@ public final class DestinationScreen extends Screen {
             String coordinates = Math.round(worldX) + ", " + Math.round(worldZ);
             // Pointing at a place marker names it. The list can be long and the map crowded, so this
             // is how a marker is tied to the entry it stands for without having to click it. The
-            // coordinates stay, because they are what makes a point choosable precisely.
+            // coordinates stay, because they are what makes a point choosable precisely. The place's
+            // description is deliberately not part of this readout: the marker only has to say which
+            // place it is, and a paragraph following the cursor covers the map the player is choosing on.
             PlaceHit hovered = placeAt(places, mouseX, mouseY);
             String label = hovered == null
                     ? coordinates
                     : Component.translatable("screen.howtogo.hover_place",
                             hovered.destination().name(), coordinates).getString();
-            // What the player wrote about the place, if anything, on a line under the name: the map
-            // says which place a marker is, and this is the one line that says what it is like.
-            // Clipped to the map's own width so a long note cannot reach past its edge, and dropped
-            // whole when the readout has no room for a second line.
-            String summary = hovered == null ? "" : PlaceText.summary(font,
-                    PlaceDetailStore.detailsOf(hovered.destination()).description(), mapW - 12);
-            int labelLines = summary.isEmpty() ? 1 : 2;
             // Above the cursor when there is room, otherwise below it; only if neither side fits is
             // the readout dropped, which can only happen on a map shorter than the text itself.
             int labelY = (int) mouseY - 12;
             if (labelY < minY + 1) {
                 labelY = (int) mouseY + 6;
             }
-            if (labelY + labelLines * LABEL_HEIGHT > maxY - 1) {
-                labelLines = 1;
-            }
-            if (labelY >= minY + 1 && labelY + labelLines * LABEL_HEIGHT <= maxY - 1) {
+            if (labelY >= minY + 1 && labelY + LABEL_HEIGHT <= maxY - 1) {
                 int labelX = (int) mouseX + 5;
                 int width = font.width(label);
                 if (labelX + width > maxX - 1) {
@@ -2000,16 +1992,6 @@ public final class DestinationScreen extends Screen {
                 if (labelX >= minX + 1 && labelX + width <= maxX - 1) {
                     graphics.drawString(font, label, labelX, labelY,
                             UiMotion.fade(UiTheme.textStrong(), open), true);
-                    if (labelLines > 1) {
-                        // Clamped rather than hung off the name's own position: the name may have
-                        // been flipped to the cursor's left, and the summary is measured against the
-                        // map's width instead of the label's.
-                        int summaryWidth = mapW - 12;
-                        int summaryX = (int) Math.max(minX + 1,
-                                Math.min(labelX, maxX - 1 - summaryWidth));
-                        graphics.drawString(font, summary, summaryX, labelY + LABEL_HEIGHT,
-                                UiMotion.fade(UiTheme.textSecondary(), open), true);
-                    }
                 }
             }
         }

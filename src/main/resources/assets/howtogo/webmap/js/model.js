@@ -240,8 +240,8 @@
    *
    * `description` is the cut payload text the server computed -- shortened, with its line breaks
    * kept, because the card wraps -- never the full detail text; the card fetches that separately.
-   * `descriptionTruncated` says whether there is more to fetch. Anything that needs a single line
-   * (the hover readout) collapses the whitespace itself rather than the payload being pre-flattened.
+   * `descriptionTruncated` says whether there is more to fetch. Only the card reads `description`:
+   * the hover readout names the place and stops there.
    */
   function normalizePlace(raw, index) {
     const p = raw && typeof raw === 'object' ? raw : {};
