@@ -66,8 +66,13 @@ public final class LineNameLabels {
      * so it is drawn at a readable size of its own and the plate is sized around it. All the maps
      * that draw one use the same factor so the same line's badge is the same badge wherever it
      * appears.
+     *
+     * <p>0.65 rather than the 0.8 this started at: with the plates finally sitting on their own
+     * lines, the player read them as large for a badge and asked for one step smaller. It is the
+     * whole plate that shrinks -- text, padding and all -- so the capsule keeps its shape and only
+     * its size changes.
      */
-    public static final float NAME_FACTOR = 0.8F;
+    public static final float NAME_FACTOR = 0.65F;
 
     /** Room inside the capsule either side of the name, in unscaled font units. */
     public static final int PAD_X = 4;
