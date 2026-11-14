@@ -1,8 +1,6 @@
 package bili.dongsz.howtogo.road;
 
-/**
- * A graph vertex: either a road junction/endpoint, or a named point of interest.
- */
+/** A graph vertex: a road junction/endpoint, or a named point of interest. */
 public final class RoadNode {
 
     public enum Type {
@@ -18,13 +16,7 @@ public final class RoadNode {
     private Type type;
     private String name;
 
-    /**
-     * What kind of place this is, for a {@link Type#POI} node.
-     *
-     * <p>Initialised rather than required, so the constructor every existing caller uses keeps working
-     * and a node read from a file that predates this field is an ordinary place. Only ever read for a
-     * {@code POI} node: whether a node is a place at all is its {@link #type()}.
-     */
+    /** Place kind of a POI node; defaults to PLACE so old files stay valid. */
     private PlaceKind placeKind = PlaceKind.PLACE;
 
     public RoadNode(int id, int x, int y, int z, Type type, String name) {
@@ -68,7 +60,6 @@ public final class RoadNode {
         this.name = name;
     }
 
-    /** What kind of place this is. Meaningful only for a {@link Type#POI} node. */
     public PlaceKind placeKind() {
         return placeKind;
     }
@@ -83,14 +74,13 @@ public final class RoadNode {
         this.z = z;
     }
 
-    /** Deep copy, used by the editor's snapshot-based undo. */
+    /** Deep copy, used by the editor's snapshot undo. */
     public RoadNode copy() {
         RoadNode copy = new RoadNode(id, x, y, z, type, name);
         copy.setPlaceKind(placeKind);
         return copy;
     }
 
-    /** Squared horizontal distance to a point. Cheaper than {@link Math#sqrt} for snapping. */
     public double distSq(double px, double pz) {
         double dx = px - x;
         double dz = pz - z;

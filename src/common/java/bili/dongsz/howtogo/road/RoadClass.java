@@ -1,13 +1,7 @@
 package bili.dongsz.howtogo.road;
 
 /**
- * Road grades. The colour and width here drive rendering; what a grade is worth in time depends on
- * which vehicle is on it, so the pace lives with the {@code TravelMode} rather than here.
- *
- * <p>The colour is the class's <em>default</em>: a player may override it per class in the client
- * config's {@code road_colors} section, which is why drawing code asks {@code RoadConfig.roadColor}
- * rather than {@link #color()}. The enumeration's own value stays the one that answers "what is this
- * class when nothing has been configured", which the config's own defaults are written from.
+ * Road grades. color() and width() are rendering defaults; drawing code asks RoadConfig.roadColor because players may override per class. Pace per grade lives with TravelMode.
  */
 public enum RoadClass {
 
@@ -28,7 +22,7 @@ public enum RoadClass {
         this.width = width;
     }
 
-    /** Default ARGB colour of this class of road; the configured colour may differ. */
+    /** Default ARGB colour; the configured colour may differ. */
     public int color() {
         return color;
     }
@@ -38,12 +32,7 @@ public enum RoadClass {
         return width;
     }
 
-    /**
-     * Class for a configured id, or null when the id names no class.
-     *
-     * <p>Null rather than a default so a typo in the avoid list is ignored instead of silently
-     * banning a road the player never asked to avoid.
-     */
+    /** Configured id to class, or null for an unknown id; null bans nothing. */
     public static RoadClass byId(String id) {
         if (id != null) {
             for (RoadClass roadClass : VALUES) {

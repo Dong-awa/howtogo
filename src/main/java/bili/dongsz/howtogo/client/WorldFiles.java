@@ -13,39 +13,16 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
 /**
- * Where this mod's per-world data files live.
- *
- * <h2>Why this is its own class</h2>
- * Two things are stored per world and dimension now -- the road network and the names of the
- * automatically detected rail layer -- and they have to agree on which world and which dimension
- * they are talking about, or a name saved in one dimension would be looked up in another. One
- * resolver, used by both, is the only way that cannot drift apart; two copies of the same four lines
- * would agree today and disagree after the next edit to either.
- *
- * <h2>Why the config directory</h2>
- * Not the save folder: on a multiplayer server the client has no access to the save at all. The
- * dimension is part of the file name because coordinates are only meaningful within one dimension.
- *
- * <h2>Why this is public</h2>
- * Because an addon storing a little of its own data has exactly the same problem, and the same
- * answer: per world, per dimension, beside the roads rather than in a directory it invented. It gets
- * there through {@code HowToGoApi.dataFile(suffix)}, which is the documented way in; this class is
- * public only so that entry point does not have to be a second copy of these four lines.
+ * Where this mod's per-world data files live: config/howtogo/<world>/<dimension><suffix>.json.
+ * One resolver shared by the road network and the rail layer so both agree on the world and the dimension; the config dir is used because a multiplayer client cannot reach the save. The dimension is in the file name because coordinates only mean something within one. Public so an addon can get a per-world file through HowToGoApi.dataFile without a second copy of this logic.
  */
 public final class WorldFiles {
 
-    /** Names the world a directory was made for; see {@link #worldDirectory}. */
+    /** Names the world a directory was made for; see worldDirectory. */
     private static final String WORLD_MARKER = ".world";
 
     /**
-     * The longest directory name this writer will produce.
-     *
-     * <p>Pinyin is longer than the characters it replaces -- one Chinese syllable can take six or
-     * seven ASCII letters plus a separator -- so a long Chinese world name would otherwise outgrow
-     * the length a single path component is allowed and the directory could not be created at all.
-     * The cap is well under that limit and leaves room for the disambiguating suffix. Two names that
-     * share the first part of a long pinyin name are still told apart by the world record and the
-     * hash, exactly like any other collision.
+     * Longest directory name this writer produces. Pinyin is longer than the characters it replaces and a path component has a length limit; the cap leaves room for the disambiguating suffix.
      */
     private static final int MAX_DIRECTORY_NAME = 120;
 
@@ -53,36 +30,20 @@ public final class WorldFiles {
     }
 
     /**
-     * {@code config/howtogo/<world>/<dimension><suffix>.json} for the level now loaded.
-     *
-     * @param suffix distinguishes the files stored for one dimension; the road network passes
-     *               {@code ""}, which keeps its path exactly what it was before this class existed.
-     *               Anything unsafe in a file name is replaced, so a suffix can lengthen the name but
-     *               never move the file out of the world's directory
+     * config/howtogo/<world>/<dimension><suffix>.json for the level now loaded. The suffix distinguishes files stored for one dimension (the road network passes "") and is sanitized, so it cannot move the file out of the world's directory.
      */
     public static Path of(String suffix) {
         return directory().resolve(fileStem(dimensionName()) + safeSuffix(suffix) + ".json");
     }
 
     /**
-     * {@code config/howtogo/<world>/<name>.json}: a file of this world's own rather than one dimension's.
-     *
-     * <h2>Why not per dimension, like everything else here</h2>
-     * A place detail is keyed by dimension, source and id (see {@code PlaceKey}), so the dimension is
-     * part of the record rather than part of the file name. Keeping the details in one file per world
-     * is what lets the unlinked-details screen count every record this world still has -- a
-     * per-dimension file would make the count mean "in the dimension the player happens to be in",
-     * which is a different and much less useful question. The dimension is still in the key, so a
-     * record about the Nether can never be confused with one about the overworld.
-     *
-     * <p>Package-private because what names these files is the mod's own decision, not an addon's:
-     * addons store per dimension through {@code HowToGoApi.dataFile}.
+     * config/howtogo/<world>/<name>.json: a file of this world's own rather than one dimension's. Place details carry the dimension in their key, so one file per world lets the unlinked-details screen count every record. Package-private because addons store per dimension through HowToGoApi.dataFile.
      */
     static Path worldFile(String name) {
         return directory().resolve(safeWorldFileName(name) + ".json");
     }
 
-    /** A file-name stem for {@link #worldFile}; blank input becomes a usable name rather than ".json". */
+    /** A file-name stem for worldFile; blank input becomes a usable name rather than ".json". */
     private static String safeWorldFileName(String name) {
         if (name == null || name.isBlank()) {
             return "data";
@@ -92,13 +53,7 @@ public final class WorldFiles {
     }
 
     /**
-     * The data directory of the level now loaded: {@code config/howtogo/<world>}, with its record.
-     *
-     * <p>What {@link #of} resolves one file against, and what the import and export need as a whole:
-     * exporting a world is packing this directory, and importing into one is replacing it. Asking for
-     * it also claims it for this world and writes the record, exactly as asking for a file in it does
-     * -- so a world whose map has never been saved still has a directory to export, even if it holds
-     * nothing yet.
+     * The data directory of the level now loaded: config/howtogo/<world>, with its record. What of resolves against and what import and export pack; asking for it also claims it for this world, so an unsaved world still has a directory to export.
      */
     static Path directory() {
         Path root = configRoot();
@@ -106,10 +61,7 @@ public final class WorldFiles {
     }
 
     /**
-     * {@code config/howtogo}, where every world's data and the transfer folders live.
-     *
-     * <p>Delegates to {@code GamePaths} rather than reading {@code FMLPaths} here: the answer comes
-     * from a different place on each loader, and this class is shared by both. See GamePaths.
+     * config/howtogo, where every world's data and the transfer folders live. Delegates to GamePaths for the loader-specific base path.
      */
     static Path configRoot() {
         return GamePaths.modConfigDir();
@@ -126,19 +78,7 @@ public final class WorldFiles {
     }
 
     /**
-     * The file-name stem for a dimension: the plain rule, deliberately with no pinyin in it.
-     *
-     * <h2>Why the dimension does not get the world directory's naming</h2>
-     * A dimension id is a resource location ({@code minecraft:overworld}), not a player-facing name:
-     * there is nothing in it to transliterate, and what pinyin does to the colon is not harmless --
-     * ICU turns it into a colon and a space, so the file becomes {@code minecraft__overworld.json}
-     * while every existing world has {@code minecraft_overworld.json}. Silently looking at a
-     * different file is exactly the "my roads are gone" failure this mod cannot afford, so the two
-     * names are produced by two rules with two jobs: the directory is a name a player reads, and this
-     * is a key the mod uses to find its own file again.
-     *
-     * <p>Package-private so the harness can pin the dimension file names, which are a data
-     * compatibility contract rather than an implementation detail: {@link #of} itself needs a game.
+     * The file-name stem for a dimension, deliberately without pinyin: a dimension id is a resource location, and ICU turns its colon into a colon plus space, so minecraft:overworld would become a different file than the existing minecraft_overworld.json. Package-private so the harness can pin this data-compatibility contract.
      */
     static String fileStem(String dimension) {
         if (dimension == null || dimension.isBlank()) {
@@ -148,16 +88,7 @@ public final class WorldFiles {
     }
 
     /**
-     * The suffix with anything unsafe in a file name replaced.
-     *
-     * <p>Not {@link #sanitize}, which turns a blank name into "unknown" and would therefore turn the
-     * road network's empty suffix into {@code unknownownknown.json}. An empty suffix is not a missing
-     * one here -- it is the oldest file this mod has.
-     *
-     * <p>Package-private rather than private so the harness can assert the boundary directly: what an
-     * addon passes through {@code HowToGoApi.dataFile} must lengthen the file name and must not be
-     * able to move it out of the world's directory, and {@link #of} itself cannot be called without a
-     * running game.
+     * The suffix with anything unsafe in a file name replaced. An empty suffix is valid and is the oldest file this mod has, so blank must not become "unknown". Package-private so the harness can assert the boundary directly.
      */
     static String safeSuffix(String suffix) {
         if (suffix == null || suffix.isEmpty()) {
@@ -167,32 +98,11 @@ public final class WorldFiles {
     }
 
     /**
-     * The directory one world's data lives in, kept to itself when two worlds clean to one name.
-     *
-     * <p>A file name may only hold some characters, and {@link #sanitize} replaces the rest -- which
-     * means two different world names can clean to the same string. That used to be the case for
-     * every Chinese world: the replacement is per character, so {@code 新世界} and {@code 旧世界}
-     * both became the same run of underscores, and two saves shared one road network, one opening
-     * onto the other's roads and the next autosave writing both sets back into the same file. Pinyin
-     * fixes the readability half of that: the directory is now {@code sp_xin_shi_jie}.
-     *
-     * <p>The directory records which world claimed it, in a file of its own, and a world whose name
-     * cleans to a directory another world already owns is given a name with a short hash of its own
-     * appended. Nothing is renamed while it can be avoided: a directory without the record -- every
-     * directory written before this existed -- is claimed by the world that asks for it first, so the
-     * paths players already have keep pointing at the data they already have.
-     *
-     * <h2>Moving an existing world to its pinyin name</h2>
-     * A directory whose record names the world is the world's directory whatever it is called, which
-     * is what makes the pinyin name safe to introduce: an existing world in {@code sp_____} is renamed
-     * to its pinyin name the first time it is opened after this change, with its files carried along
-     * by the rename. If the new name is already taken, or the rename fails, the old directory stays in
-     * use -- a world must never lose its roads because its directory name could not be improved.
-     * Because the record is the authority rather than the computed name, a later change to the
-     * transliteration cannot move a world's data either.
-     *
-     * <p>Package-private so the harness can exercise the naming and the migration on a temporary
-     * directory: {@link #of} itself cannot be called without a running game.
+     * The directory one world's data lives in, kept apart when two worlds clean to one name.
+     * Sanitizing maps different names to the same string -- every Chinese world used to collapse to underscores -- so pinyin keeps the name readable and a per-directory marker records which world claimed it; a collision gets a short hash appended.
+     * A directory without a record, written before this existed, is claimed by the first world that maps to it, so existing paths keep pointing at existing data.
+     * A recorded directory is the world's whatever it is called, so a world in an old underscore directory is renamed to its pinyin name on first open with its files carried along; if the rename fails the old directory stays in use.
+     * Package-private so the harness can exercise naming and migration on a temporary directory.
      */
     static String worldDirectory(Path root, String world) {
         String desired = sanitize(world);
@@ -207,9 +117,7 @@ public final class WorldFiles {
             return renamed != null ? renamed : owned;
         }
 
-        // A world that predates the pinyin rule lives in the old, all-underscore directory. The
-        // first world whose name cleans to it has always claimed it, and renaming it is the moment
-        // it gets the record that says so.
+        // A world that predates the pinyin rule lives in the old underscore directory; the first world whose name maps to it has always claimed it, and the rename is when it gets the record.
         String legacy = legacySanitize(world);
         if (!legacy.equals(desired)) {
             Path legacyDirectory = root.resolve(legacy);
@@ -219,8 +127,7 @@ public final class WorldFiles {
                 if (renamed != null) {
                     return renamed;
                 }
-                // The pinyin name is taken, so the old directory is claimed and kept in use: an
-                // obscure but working name beats a hash-named copy beside a stranded data set.
+                // The pinyin name is taken, so the old directory is claimed and kept in use rather than stranding its data.
                 writeMarker(legacyDirectory, world);
                 return legacy;
             }
@@ -230,13 +137,7 @@ public final class WorldFiles {
     }
 
     /**
-     * Uses a free directory name for this world, or a disambiguated form of it.
-     *
-     * <p>The un-hashed name is tried first, and only when it is absent or already this world's. A
-     * directory that exists without a record is only claimed when it is the name the old rule would
-     * have produced for this world, which is the first-claim behaviour every pre-record directory
-     * relies on; an unrecorded directory under the new pinyin name may be some other world's older
-     * data that only the new naming made collide, so it is left alone and this world gets a hash.
+     * Uses a free directory name for this world, or a disambiguated form of it. The plain name is taken when absent or already this world's; an unrecorded directory is claimed only if the old rule produced it for this world, and any other one is left alone while this world gets a hash.
      */
     private static String claim(Path root, String base, String legacy, String world) {
         String claimed = tryClaim(root, base, legacy, world);
@@ -257,8 +158,7 @@ public final class WorldFiles {
     }
 
     /**
-     * Claims one directory name if it is free or already this world's, or returns null when it is
-     * another world's.
+     * Claims one directory name if it is free or already this world's, or returns null when it is another world's.
      */
     private static String tryClaim(Path root, String base, String legacy, String world) {
         Path directory = root.resolve(base);
@@ -275,8 +175,7 @@ public final class WorldFiles {
             Files.writeString(marker, world, StandardCharsets.UTF_8);
             return base;
         } catch (IOException e) {
-            // Losing the record costs the disambiguation, not the data: the world still gets a
-            // directory and still reads and writes it. Better a shared name than no name at all.
+            // Losing the record costs disambiguation, not data: the world still gets a usable directory.
             HowToGo.LOGGER.warn("[HowToGo] could not record which world owns {}: {}",
                     marker.getParent(), e.toString());
             return base;
@@ -312,10 +211,7 @@ public final class WorldFiles {
     }
 
     /**
-     * Renames a directory to a free name, writing the world record into it afterwards.
-     *
-     * <p>Returns null when the target is taken or the move fails; the caller then keeps the old
-     * directory, so a failed tidy-up costs a name and never data.
+     * Renames a directory to a free name and writes the world record into it afterwards. Returns null when the target is taken or the move fails, so a failed tidy-up costs a name and never data.
      */
     private static String renameIfFree(Path root, String from, String to, String world) {
         if (from.equals(to)) {
@@ -358,11 +254,7 @@ public final class WorldFiles {
     }
 
     /**
-     * Which world the data belongs to.
-     *
-     * <p>A singleplayer world is named by its level name and a server by its address, because those
-     * are the two things that stay the same across sessions. Two worlds with the same name are the
-     * one case this cannot tell apart, and they would share a file.
+     * Which world the data belongs to: the level name in singleplayer, the address on a server, the two things that stay the same across sessions. Two same-named worlds cannot be told apart and would share a file.
      */
     private static String worldKey(Minecraft mc) {
         if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
@@ -376,26 +268,14 @@ public final class WorldFiles {
     }
 
     /**
-     * The key of the world now loaded, for something that has to say which world it is showing.
-     *
-     * <p>Public so that the browser map can name the world in its title without a second copy of the
-     * rule above -- two copies would agree today and disagree the first time this one is corrected,
-     * which is the same argument that put this class in one piece to begin with. This is the name the
-     * player gave the world ({@code sp_我的世界}), not the directory it is stored in: the directory
-     * name runs through {@link #sanitize}, which transliterates Chinese to pinyin. The page wants the
-     * name, the filesystem wants the pinyin.
+     * The key of the world now loaded, for anything that must name the world it is showing. Public to avoid a second copy of the rule; this is the player-visible name, not the sanitized pinyin directory.
      */
     public static String currentWorldKey() {
         return worldKey(Minecraft.getInstance());
     }
 
     /**
-     * Strips characters that are not safe in a file name, after transliterating Chinese to pinyin.
-     *
-     * <p>The transliteration is what keeps a Chinese world name recognisable instead of becoming a
-     * row of underscores: {@code sp_新世界} becomes {@code sp_xin_shi_jie}. Anything ICU cannot turn
-     * into Latin falls through to the old rule, so a name that transliterates to nothing is unusable
-     * as a file name but never unsafe.
+     * Strips characters that are not safe in a file name after transliterating Chinese to pinyin, so sp_新世界 becomes sp_xin_shi_jie. Anything ICU cannot turn into Latin falls through to the old rule.
      */
     private static String sanitize(String raw) {
         if (raw == null || raw.isBlank()) {

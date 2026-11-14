@@ -15,27 +15,9 @@ import java.util.List;
 
 /**
  * The read-only details of one place, drawn inside a rectangle the caller owns.
- *
- * <h2>Why this is not a screen</h2>
- * The same panel has to appear in two places with different geometry: the destination picker's right
- * column, where it shares the band with the list, and the main screen's map, where it floats over the
- * map. A {@code Screen} would have owned the whole window in both, and a copy in each would be two
- * panels that drift. So this is a drawing-and-hit-test helper: the caller decides where it goes and
- * what a click on one of its controls means, and the panel decides what it says and where the
- * controls are.
- *
- * <h2>Read-only</h2>
- * Nothing here writes anything. The favourite toggle, the edit route and the delete rule are
- * <em>actions</em> reported to the caller -- {@link Action} -- because only the screen knows what its
- * parent is, whether the place is a node in the editor's network, and where to go after a delete. The
- * panel reports, the screen decides.
- *
- * <h2>Drawing order</h2>
- * Everything is drawn as a shape first and as text after: a string flushes the vertex batch the mod's
- * markers are emitted into, so a card that drew half its rectangles after its title would lose the
- * other half. The star is the one mark that needs vertices of its own, and it is emitted through its
- * own block before the text pass. Callers must therefore call {@link #render} outside any block of
- * their own -- both callers draw their map first and close its block before the panel.
+ * Not a screen: the same panel appears in the destination picker's right column and floating over the main screen's map, so it is a drawing-and-hit-test helper -- the caller decides where it goes and what a click means, the panel decides what it says and where the controls are.
+ * Read-only: nothing here writes. The favourite toggle, the edit route and the delete are reported as an Action because only the screen knows its parent, whether the place is a node in the editor's network, and where to go after a delete.
+ * Draw every shape first and every string after: a string flushes the vertex batch the mod's markers are emitted into. Callers must call render outside any block of their own.
  */
 public final class PlaceDetailPanel {
 
@@ -51,12 +33,7 @@ public final class PlaceDetailPanel {
 
     /**
      * What the screen wants offered, since only the screen knows what its buttons can do.
-     *
-     * <p>Deletion is deliberately not in {@link #STANDARD}. A place is deleted in the world map's
-     * edit mode -- the mode that owns the node and the undo history -- not from a card that is being
-     * read on a phone map or in the destination picker; a delete button there would be the one
-     * destructive control in a panel whose job is to describe. The flag stays because the panel can
-     * draw the control for a caller that has the edit mode's authority, but no card offers it today.
+     * Deletion is deliberately not in STANDARD: a place is deleted in the world map's edit mode, which owns the node and the undo history, not from a card being read; the flag stays for a caller with that authority.
      */
     public record Options(boolean edit, boolean navigate, boolean back, boolean delete) {
 
@@ -72,7 +49,7 @@ public final class PlaceDetailPanel {
     /** Below this inner width the four controls are laid out in two rows rather than one. */
     private static final int ONE_ROW_BUTTONS_FROM = 224;
 
-    /** One control's rectangle, remembered by the last {@link #render} for {@link #actionAt}. */
+    /** One control's rectangle, remembered by the last render for actionAt. */
     private record Hit(int x1, int y1, int x2, int y2, Action action) {
     }
 
@@ -81,12 +58,7 @@ public final class PlaceDetailPanel {
     }
 
     /**
-     * One chip and its two colours: the fill, and the text that has to read on that fill.
-     *
-     * <p>The text colour travels with the chip rather than being decided at paint time because a
-     * line chip's fill is the line's own colour, so the pair is per chip and cannot be looked up
-     * from a theme role. The other chips have a fixed fill and a fixed white, which is the same
-     * idea stated for each.
+     * One chip and its two colours. The text colour travels with the chip because a line chip's fill is the line's own colour, so the pair cannot be looked up from a theme role.
      */
     private record Chip(String label, int face, int text) {
     }
@@ -102,37 +74,23 @@ public final class PlaceDetailPanel {
 
     /**
      * How far the card has appeared, 0 to 1.
-     *
-     * <p>A {@link UiMotion.Slide} rather than a screen's state, because this is not a screen: it is a
-     * card a caller draws inside a rectangle it owns, so there is nothing for {@link UiMotion#of} to
-     * key a state by and asking would need a screen that does not exist. The duration is
-     * {@link UiMotion#HUD} -- a card that floats over a map is a thing on the interface, not a window
-     * arriving, and {@link UiMotion#ENTER} is reserved for the sheets that replace one.
+     * A UiMotion.Slide rather than screen state because this is a card the caller draws inside a rectangle it owns, so there is no screen for UiMotion.of to key by. The duration is HUD: a card over a map is an interface element, not a window arriving.
      */
     private final UiMotion.Slide appear = new UiMotion.Slide(UiMotion.Easing.OUT_CUBIC, 0.0F,
             UiMotion.HUD);
 
-    /** Whether {@link #render} has drawn a card at all, and for which place; see the fade below. */
+    /** Whether render has drawn a card at all, and for which place; see the fade below. */
     private boolean shown;
     private int shownX;
     private int shownZ;
 
     /**
-     * The hover of each action control, keyed by its slot in the row.
-     *
-     * <p>A pool, and a field: the controls are rebuilt into {@link #faces} every frame, so a slide
-     * made at the call site would never travel, and the four of them are asked about once per frame
-     * per card -- which with the map moving under it is the one place in this class where an
-     * allocation would be noticed.
+     * The hover of each action control, keyed by its slot in the row. A field pool because the controls are rebuilt into faces every frame, so a slide made at the call site would never travel.
      */
     private final UiMotion.Slides controlHovers = new UiMotion.Slides();
 
     /**
      * Draws the panel, and remembers where its controls are.
-     *
-     * @param place       the selected place; its name and source are shown read-only
-     * @param details     what the player wrote, or {@link PlaceDetails#EMPTY}
-     * @param options     which controls the caller offers
      * @param deleteArmed whether the delete button is asking for confirmation
      */
     public void render(GuiGraphics graphics, Font font, int x, int y, int w, int h,
@@ -146,18 +104,13 @@ public final class PlaceDetailPanel {
         cardH = Math.max(1, h);
         if (place == null) {
             drawn = false;
-            // A card that has been taken away is a card the next place has to appear as: the caller
-            // clears the selection between two places often enough (a delete, a tap on empty map) that
-            // treating the gap as nothing happening would leave the next card switched on.
+            // A card taken away is a card the next place has to appear as: the selection is cleared often enough (a delete, a tap on empty map) that treating the gap as nothing would leave the next card switched on.
             shown = false;
             return;
         }
         drawn = true;
 
-        // A card for a different place is a new card, not the old one with new words in it: it starts
-        // at nothing and fades in, so following a selection around the map reads as one card after
-        // another rather than as text changing in place. The place is keyed by where it is, which is
-        // what the card's own address line is derived from and costs two integer comparisons.
+        // A card for a different place is a new card: it starts at nothing and fades in, so following a selection around the map reads as one card after another rather than text changing in place. Keyed by position, which the address line derives from.
         if (!shown || shownX != place.x() || shownZ != place.z()) {
             shown = true;
             shownX = place.x();
@@ -167,20 +120,11 @@ public final class PlaceDetailPanel {
         appear.to(1.0F);
         float open = appear.eased();
 
-        // The card slides up into place by HUD_RISE while it appears, on top of the fade: a card
-        // that only faded read as a cut, and the travel is what makes following a selection around
-        // the map feel like one card arriving after another.
-        //
-        // Pushed around the drawing rather than added to the geometry, because this class computes
-        // its control rectangles from the same y the sheet is drawn at -- and those rectangles are
-        // hit-tested in actionAt/contains against logic that must not move. The displacement is
-        // therefore a property of the paint only, and the frame the card is clicked on stays where
-        // the card will be once it has arrived.
+        // Slides up by HUD_RISE while appearing: a card that only faded read as a cut.
+        // Pushed around the drawing rather than added to the geometry, because the control rectangles are computed from the same y and hit-tested where the card will be once it has arrived.
         UiMotion.pushFrame(graphics, 0.0F, (1.0F - open) * UiMotion.HUD_RISE);
 
-        // The sheet first: an opaque card, because in the main screen this floats over a map that is
-        // otherwise drawn all the way to the panel's edge and any transparency would turn the text
-        // into a picture of roads.
+        // The sheet first: opaque, because over the map any transparency would turn the text into a picture of roads.
         HudDraw.fillRounded(graphics, x, y, x + w, y + h, 4,
                 UiMotion.fade(UiTheme.panelSolid(), open));
         HudDraw.outlineRounded(graphics, x, y, x + w, y + h, 4,
@@ -190,7 +134,6 @@ public final class PlaceDetailPanel {
         int innerX = x + pad;
         int innerW = Math.max(1, w - pad * 2);
 
-        // ---- title row: the name, and the favourite star at the far right -------------------------
         int titleY = y + pad;
         int starCx = x + w - pad - STAR_BOX / 2;
         int starCy = titleY + 4;
@@ -199,20 +142,13 @@ public final class PlaceDetailPanel {
         int nameW = Math.max(1, innerW - STAR_BOX - 2);
         String name = PlaceText.ellipsis(font, place.name(), nameW);
 
-        // ---- address: one read-only line under the title ------------------------------------------
-        // Under the title rather than among the chips because it is a sentence, not a label: it says
-        // where the place is, and it is the first thing that should answer "where am I going". The
-        // coordinates are deliberately absent -- see PlaceAddress for why a road name is the more
-        // useful answer. PlaceAddressView caches the geometry, so this is a field read per frame
-        // rather than a search of the network.
+        // The address sits under the title rather than among the chips because it is a sentence, not a label. Coordinates are deliberately absent -- a road name is the more useful answer; PlaceAddressView caches the geometry, so this is a field read per frame.
         int addressY = titleY + LINE_HEIGHT + 2;
         String address = PlaceAddressView.line(place.x(), place.z());
 
-        // ---- chips: the sections this kind of place shows, in PlaceSections' order -----------------
         int chipsTop = addressY + LINE_HEIGHT + 3;
         List<Chip> placeChips = chips(place, details);
 
-        // ---- action row, anchored to the card's bottom ---------------------------------------------
         List<Control> controls = controls(options, place, deleteArmed);
         boolean twoRows = innerW < ONE_ROW_BUTTONS_FROM;
         int perRow = twoRows ? 2 : Math.max(1, controls.size());
@@ -223,18 +159,12 @@ public final class PlaceDetailPanel {
         boolean deleteHint = options.delete() && PlaceSources.isAutomatic(place.source());
         int hintTop = actionTop - (deleteHint ? LINE_HEIGHT + 2 : 0);
 
-        // ---- the chips' flow: two lines at most, then "+N" -----------------------------------------
-        // Two lines rather than however many fit because the card shares its height with the
-        // description: a place with twenty tags would otherwise push its own description off the
-        // panel, and the tags are the part a reader can live without. The third line is replaced by
-        // a count so the reader still knows something was left out -- silently dropping tags would
-        // make a mistake in the list look like the whole list.
+        // Two chip lines at most, then +N: the card shares its height with the description, and a count tells the reader something was left out where silently dropping tags would look like the whole list.
         int chipLine = 0;
         int chipX = innerX;
         int chipLines = 0;
         int overflow = 0;
-        // The last line a chip may occupy: a very short card must clip its chips rather than paint
-        // them over the action row, which is the part a click needs.
+        // The last line a chip may occupy: a short card clips its chips rather than painting them over the action row.
         int chipBottomLimit = hintTop - 2;
         for (int i = 0; i < placeChips.size(); i++) {
             Chip chip = placeChips.get(i);
@@ -248,13 +178,11 @@ public final class PlaceDetailPanel {
                 chipX = innerX;
             }
             if (chipsTop + chipLine * (PILL_HEIGHT + 3) + PILL_HEIGHT > chipBottomLimit) {
-                // Not even a first line fits: draw no chips and claim no count, rather than draw a
-                // "+N" over a row that does not exist.
+                // No first line fits: draw no chips and claim no count, rather than a +N over a row that does not exist.
                 overflow = chipLine == 0 ? 0 : placeChips.size() - i;
                 break;
             }
-            // Each chip is a row of a short list: it arrives with the card and one stagger step after
-            // the chip before it, so the tags are read left to right rather than appearing as a block.
+            // Each chip arrives one stagger step after the one before, so tags are read left to right rather than appearing as a block.
             float arrived = UiMotion.stagger(i, open);
             faces.add(new Face(chipX, chipsTop + chipLine * (PILL_HEIGHT + 3), chipW, PILL_HEIGHT,
                     UiMotion.fade(chip.face(), arrived), chip.label(),
@@ -275,16 +203,13 @@ public final class PlaceDetailPanel {
                     UiMotion.fade(UiTheme.onChip(), open)));
         }
 
-        // ---- description: whatever the card has left ----------------------------------------------
         int descTop = chipsBottom + 4;
         if (descTop > hintTop - LINE_HEIGHT) {
-            // A card too short for a description still says what it can: the chips and the buttons
-            // are the parts a click needs, and clipping the body is honest about the space there is.
+            // A card too short for a description still shows what it can: chips and buttons are what a click needs.
             descTop = Math.max(chipsBottom + 4, hintTop - LINE_HEIGHT);
         }
         int descBottom = Math.max(descTop, hintTop - 2);
 
-        // ---- shapes and controls, collected first -------------------------------------------------
         int gap = 4;
         int buttonW = rows == 0 ? 0 : (innerW - (perRow - 1) * gap) / perRow;
         for (int i = 0; i < controls.size(); i++) {
@@ -314,11 +239,7 @@ public final class PlaceDetailPanel {
             }
             boolean hot = control.enabled() && mouseX >= bx && mouseX <= bx + buttonW
                     && mouseY >= by && mouseY <= by + BUTTON_HEIGHT;
-            // The face under the cursor is the same second face this card always had -- the danger
-            // hover on a delete, the button hover on everything else -- reached by mixing rather than
-            // by switching, so the control is walked to it while the cursor arrives. The action row
-            // starts after the chips in the stagger, and past the limit every row shares the last
-            // delay anyway, so the two cannot disagree about how late a row may be.
+            // The face under the cursor is mixed rather than switched, so the control is walked to it while the cursor arrives. Past the limit every row shares the last delay, so the two cannot disagree about how late a row may be.
             float lit = controlHovers.get(i).to(hot ? 1.0F : 0.0F).eased();
             int hoveredFace = control.action() == Action.DELETE
                     ? UiTheme.dangerHover() : UiTheme.buttonHover();
@@ -331,7 +252,6 @@ public final class PlaceDetailPanel {
             }
         }
 
-        // ---- paint: faces, then the star, then every string ---------------------------------------
         for (Face face : faces) {
             HudDraw.fillRounded(graphics, face.x(), face.y(), face.x() + face.w(),
                     face.y() + face.h(), 3, face.colour());
@@ -345,8 +265,7 @@ public final class PlaceDetailPanel {
 
         graphics.drawString(font, name, innerX, titleY,
                 UiMotion.fade(UiTheme.textStrong(), UiMotion.stagger(0, open)), false);
-        // The address is a read-only sentence, so it is drawn in the secondary rank: it matters, and
-        // it must not compete with the place's name above it for the first glance.
+        // The address is drawn in the secondary rank: it matters, but must not compete with the place's name for the first glance.
         graphics.drawString(font, PlaceText.ellipsis(font, address, innerW), innerX, addressY,
                 UiMotion.fade(UiTheme.textSecondary(), UiMotion.stagger(1, open)), false);
         for (Face face : faces) {
@@ -362,7 +281,7 @@ public final class PlaceDetailPanel {
                     innerX, hintTop, UiMotion.fade(UiTheme.textFaint(), open), false);
         }
 
-        // The description last, so it is clipped by the room the actions left rather than drawn over.
+        // The description is drawn last, so it is clipped by the room the actions left.
         int lineHeight = LINE_HEIGHT;
         int maxLines = Math.max(0, (descBottom - descTop) / lineHeight);
         if (isBlank(details.description())) {
@@ -371,8 +290,7 @@ public final class PlaceDetailPanel {
                         Component.translatable("screen.howtogo.place_details.empty").getString(),
                         innerX, descTop, UiMotion.fade(UiTheme.textFaint(), open), false);
             }
-            // This branch finishes the card, so it has to hand the matrix back before it returns:
-            // a push left open would displace everything the caller draws after the panel.
+            // This branch finishes the card, so it hands the matrix back before returning: a push left open would displace everything the caller draws after the panel.
             UiMotion.popFrame(graphics);
             return;
         }
@@ -389,7 +307,7 @@ public final class PlaceDetailPanel {
         UiMotion.popFrame(graphics);
     }
 
-    /** The control at a screen point, as of the last {@link #render}. */
+    /** The control at a screen point, as of the last render. */
     public Action actionAt(double mouseX, double mouseY) {
         if (!drawn) {
             return Action.NONE;
@@ -404,10 +322,7 @@ public final class PlaceDetailPanel {
     }
 
     /**
-     * Whether a point is inside the card.
-     *
-     * <p>Asked before the panel's controls and before the caller's own map, so a click on the card's
-     * empty space is a click on the panel rather than the beginning of a map drag underneath it.
+     * Whether a point is inside the card. Asked before the controls and before the caller's map, so a click on empty card space is not the beginning of a map drag underneath.
      */
     public boolean contains(double mouseX, double mouseY) {
         return drawn && mouseX >= cardX && mouseX <= cardX + cardW
@@ -415,29 +330,15 @@ public final class PlaceDetailPanel {
     }
 
     /**
-     * A height that fits the content at this width, for a caller sizing the panel before drawing it.
-     *
-     * <p>An estimate, not a promise: the caller clamps it to the room it has, and the panel draws
-     * what fits. It exists so the picker can decide where the list ends and the panel begins without
-     * knowing how the panel is laid out.
-     *
-     * <p>It takes the place as well as the details because what the card has room for now depends on
-     * the kind: a station's line chips and a shop's type chip are counted here, whereas the old
-     * estimate knew only the tags. That is why this method can no longer be called before a place is
-     * selected -- which no caller did, and which would have been asking for the height of nothing.
-     *
-     * <p>The floor moved up from 84 to 96 when the address line was added: a card shorter than that
-     * cannot fit the title, the address, one row of chips and the buttons, and claiming it can would
-     * make the caller lay out a band that clips the controls.
+     * A height that fits the content at this width, for a caller sizing the panel before drawing it. An estimate, not a promise: the caller clamps it and the panel draws what fits.
+     * It takes the place because what fits depends on the kind -- a station's line chips, a shop's type chip -- so it cannot be called before a place is selected. The floor of 96 fits the title, address, one chip row and the buttons; a shorter claim would make the caller clip the controls.
      */
     public static int preferredHeight(Font font, int width, Destination place, PlaceDetails details) {
         int innerW = Math.max(1, width - PAD * 2);
         int height = PAD + LINE_HEIGHT + 2 + LINE_HEIGHT + 3;
         List<Chip> placeChips = place == null ? List.of() : chips(place, details);
         if (!placeChips.isEmpty()) {
-            // Two lines is the most a card ever gives the chips; estimating a third would make the
-            // panel claim room it will not use. The row count is measured rather than guessed from
-            // the chip count, because a chip's width depends on its text.
+            // Two lines is the most the chips ever get; the row count is measured because a chip's width depends on its text.
             height += chipRowCount(font, innerW, placeChips) * (PILL_HEIGHT + 3);
         }
         String description = details.description();
@@ -449,16 +350,8 @@ public final class PlaceDetailPanel {
     }
 
     /**
-     * The chips this place shows, in the order {@link PlaceSections} gives its kind.
-     *
-     * <p>One function for the drawing and the height estimate, so the two cannot disagree about how
-     * many chips there are. The switch is over {@link PlaceSections.Section} rather than over
-     * {@code PlaceKind} because the section list <em>is</em> the per-kind rule: a kind that does not
-     * list LINES gets no line chips without this method knowing which kind it is drawing.
-     *
-     * <p>A blank label is skipped rather than drawn as an empty chip: a source with no id (a point
-     * picked on the map) or a blank tag would otherwise put a grey rectangle with nothing in it on
-     * the card, which reads as a rendering bug rather than as missing data.
+     * The chips this place shows, in the order PlaceSections gives its kind. One function for the drawing and the height estimate, so the two cannot disagree; the switch is over Section because the section list is the per-kind rule.
+     * A blank label is skipped rather than drawn as an empty chip: a source with no id or a blank tag would put a grey rectangle with nothing in it on the card, which reads as a rendering bug rather than as missing data.
      */
     private static List<Chip> chips(Destination place, PlaceDetails details) {
         List<Chip> chips = new ArrayList<>(8);
@@ -466,9 +359,7 @@ public final class PlaceDetailPanel {
             switch (section) {
                 case LINES -> {
                     for (TransitLine line : PlaceLines.at(place.x(), place.z())) {
-                        // A line chip is filled with the line's own colour -- its configured colour
-                        // when it has one, its kind's colour otherwise -- and its text is chosen
-                        // against that fill, so a pale line does not get white text.
+                        // A line chip is filled with the line's own colour when it has one and its kind's colour otherwise, and its text is chosen against that fill.
                         int fill = line.colorOr(RoadConfig.transitLineColor(line.kind()));
                         chips.add(new Chip(line.label(), fill, UiTheme.onChipFor(fill)));
                     }
@@ -518,7 +409,6 @@ public final class PlaceDetailPanel {
         return lines;
     }
 
-    // ---------------------------------------------------------------- controls
 
 
     /** One action the caller offers, with the label and state the panel draws. */

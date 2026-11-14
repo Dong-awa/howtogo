@@ -7,24 +7,9 @@ import bili.dongsz.howtogo.road.RoadSpatialIndex;
 
 /**
  * Resolves a raw mouse position into a road vertex position.
- *
- * <p>Snapping is evaluated in <b>screen</b> space, not world space. A fixed world radius would be
- * unusable at high zoom (everything is within 8 blocks) and useless at low zoom (nothing is), so
- * the catch radius is a pixel budget that feels the same at every zoom level.
- *
- * <p>Priority: existing node &gt; point on an existing segment &gt; 45-degree angle constraint
- * relative to the node being drawn from &gt; free placement.
- *
- * <h2>How the near-enough points are found</h2>
- * The catch radius is a screen distance and the geometry is in world blocks, so the radius is
- * converted to blocks against the viewport and handed to {@link RoadSpatialIndex}, which reads the
- * grid cells around the cursor instead of walking the network. The conversion used to be the other
- * way round -- every node and every vertex projected to the screen and measured there -- which was
- * exact but linear in the network, on every frame.
- *
- * <p>The two axes are converted separately and the test stays elliptical in blocks, because the
- * viewport's pixels-per-block can differ between them. The result is the same point the projected
- * walk would have chosen; {@link RoadSpatialIndex} carries the argument for why.
+ * Snapping works in screen space: the catch radius is a pixel budget converted to blocks per axis
+ * against the viewport, so it feels the same at every zoom and the test stays elliptical in blocks.
+ * Priority: existing node > point on an existing segment > 45-degree constraint > free placement.
  */
 public final class RoadSnapper {
 
@@ -34,47 +19,31 @@ public final class RoadSnapper {
         SEGMENT,
         ANGLE,
         /**
-         * On an automatically detected rail, as a position only.
-         *
-         * <p>Its own kind rather than {@link #SEGMENT} because what the caller may do differs: a
-         * hand-drawn segment can be split and joined at the cursor, while a rail is a reading of the
-         * world that the editor does not own and must only be able to land on. Reporting it as a
-         * plain segment would send it into the split path, which finds no such segment in the
-         * editor's network and silently does nothing -- a click that places no point at all.
+         * On an automatically detected rail, as a position only. Its own kind because a rail may only be
+         * landed on, not split or joined like a hand-drawn segment.
          */
         RAIL,
 
         /**
-         * On a road, or at a structure, read out of RoadWeaver: a position only, for the same reason
-         * as {@link #RAIL}.
-         *
-         * <p>A player drawing their own road up to one of RoadWeaver's is a normal thing to want --
-         * it is the only way to join the two networks -- and without this the click landed a few
-         * blocks short or long of it. It is a position rather than an edit because the geometry is
-         * RoadWeaver's: nothing here may split, join or move it.
+         * On a RoadWeaver road or structure, as a position only: the geometry belongs to RoadWeaver, so
+         * nothing here may split, join or move it.
          */
         ROADWEAVER
     }
 
-    /**
-     * Catch radius, in screen pixels, for snapping onto an existing node.
-     *
-     * <p>Kept fairly tight on purpose: a generous radius makes precise placement impossible and is
-     * the usual complaint about map editors. Alt bypasses snapping entirely when more precision
-     * than this allows is needed.
-     */
+    /** Catch radius in screen pixels for snapping onto an existing node; Alt bypasses snapping. */
     public static final double NODE_SNAP_PX = 9.0;
-    /** Catch radius, in screen pixels, for snapping onto the interior of a segment. */
+    /** Catch radius in screen pixels for snapping onto a segment's interior. */
     public static final double SEGMENT_SNAP_PX = 6.0;
-    /** Angular tolerance, in degrees, for the 45-degree constraint. */
+    /** Angular tolerance in degrees for the 45-degree constraint. */
     public static final double ANGLE_SNAP_DEG = 5.0;
 
     /**
      * @param x           snapped world X
      * @param z           snapped world Z
      * @param kind        which rule fired
-     * @param nodeId      node that was snapped to, or {@link RoadSegment#NO_NODE}
-     * @param segmentId   segment that was snapped to, or {@link RoadSegment#NO_SEGMENT}
+     * @param nodeId      node that was snapped to, or RoadSegment.NO_NODE
+     * @param segmentId   segment that was snapped to, or RoadSegment.NO_SEGMENT
      * @param vertexIndex index at which a new vertex would be inserted into that segment
      */
     public record Result(double x, double z, Kind kind, int nodeId, int segmentId, int vertexIndex) {
@@ -85,13 +54,8 @@ public final class RoadSnapper {
     }
 
     /**
-     * The index most recently used, kept for the network revision it was built from.
-     *
-     * <p>The editor asks once a frame and the rail layer asks again whenever the hand-drawn roads
-     * were not close enough, so a build per query would spend the saving on rebuilding a structure
-     * that has not changed. The revision is a counter rather than the reference because the editor
-     * mutates one network in place for the whole session: a cache keyed on the reference alone would
-     * keep serving a reading of roads that have since moved.
+     * The index last built and the network revision it was built from. The editor mutates one network
+     * in place, so the key is a revision counter rather than the reference.
      */
     private static RoadSpatialIndex cachedIndex;
     private static RoadNetwork cachedNetwork;
@@ -109,14 +73,7 @@ public final class RoadSnapper {
         return cachedIndex;
     }
 
-    /**
-     * Drops the cached reading, for a caller that has changed a network it does not own the index for.
-     *
-     * <p>Not needed for an edit made through {@link bili.dongsz.howtogo.road.RoadEditor}, which bumps
-     * the network's revision and so invalidates this by itself. It is here for a layer rebuilt
-     * wholesale, where the sensible thing is to say so rather than to rely on the builder having
-     * remembered.
-     */
+    /** Drops the cached reading, for a caller that changed a network it does not own the index for. */
     public static void invalidateIndex() {
         cachedIndex = null;
         cachedNetwork = null;
@@ -147,26 +104,15 @@ public final class RoadSnapper {
         return Result.free(worldX, worldZ);
     }
 
-    /**
-     * The world radius a pixel catch radius corresponds to, at the current zoom.
-     *
-     * <p>For a caller that has to search something that is not a {@link RoadNetwork} -- a layer of
-     * points it can only walk -- before handing the candidate over. Zero when there is no viewport,
-     * which is also when snapping cannot mean anything.
-     */
+    /** World radius a pixel catch radius means at the current zoom, or zero when there is no viewport. */
     public static double worldRadius(double pixels) {
         Viewport viewport = Viewport.current();
         return viewport == null ? 0.0 : Math.max(viewport.radiusX(pixels), viewport.radiusZ(pixels));
     }
 
     /**
-     * The nearest of a list of points, as a position-only snap of the given kind.
-     *
-     * <p>Same pixel budget and same elliptical test as a node snap: the catch radius belongs to the
-     * cursor, not to what it is pointing at, so a structure a few pixels away is as easy to land on
-     * as a hand-drawn node.
-     *
-     * @return null when nothing is within the catch radius
+     * Nearest of a list of points, as a position-only snap of the given kind; same pixel budget and
+     * elliptical test. Returns null when nothing is in range.
      */
     public static Result snapToPoints(java.util.List<double[]> points, double worldX, double worldZ,
                                       double catchPixels, Kind kind) {
@@ -192,15 +138,12 @@ public final class RoadSnapper {
     }
 
     /**
-     * The viewport as a blocks-per-pixel conversion.
-     *
-     * <p>Snapping measures in pixels and the index measures in blocks, so the two have to meet
-     * somewhere; this is that place. It exists so that the conversion is done once per query in one
-     * direction (pixels to blocks) rather than once per candidate in the other (blocks to pixels).
+     * Blocks-per-pixel conversion, so pixels-to-blocks happens once per query rather than once per
+     * candidate.
      */
     private record Viewport(double blocksPerPixelX, double blocksPerPixelZ) {
 
-        /** Null when there is no usable viewport, which is when snapping cannot mean anything. */
+        /** Null when there is no usable viewport. */
         static Viewport current() {
             if (!MapViewState.isValid()) {
                 return null;
@@ -213,7 +156,7 @@ public final class RoadSnapper {
             return new Viewport(1.0 / perBlockX, 1.0 / perBlockZ);
         }
 
-        /** The world radius a pixel catch radius corresponds to, per axis. */
+        /** World radius a pixel catch radius means on this axis. */
         double radiusX(double pixels) {
             return pixels * blocksPerPixelX;
         }
@@ -227,20 +170,16 @@ public final class RoadSnapper {
                                      Viewport viewport) {
         double radiusX = viewport.radiusX(NODE_SNAP_PX);
         double radiusZ = viewport.radiusZ(NODE_SNAP_PX);
-        // The index ranks candidates by plain distance, over a radius wide enough to hold the whole
-        // ellipse: every point the elliptical test would accept is inside this circle, so the nearest
-        // node the index can miss is none. It may hand back a node the ellipse then refuses, and that
-        // is the one case the test below exists for -- the node it hands back is no further than the
-        // node the ellipse wanted, so refusing it cannot hide that one.
+        // The index ranks by plain distance over a radius wide enough to hold the ellipse, so it may
+        // return a node the ellipse then refuses.
         RoadNode best = indexFor(network).nearestNode(worldX, worldZ, Math.max(radiusX, radiusZ));
         if (best == null) {
             return null;
         }
         double dx = worldX - best.x();
         double dz = worldZ - best.z();
-        // The same elliptical test the per-candidate projection used to make: each offset over its
-        // own axis's radius is the screen offset in pixels, so the sum of squares is the squared
-        // screen distance.
+        // Each offset over its own axis radius is the screen offset in pixels; the sum of squares is the
+        // squared screen distance.
         double sx = dx / radiusX;
         double sz = dz / radiusZ;
         if (sx * sx + sz * sz > NODE_SNAP_PX * NODE_SNAP_PX) {
@@ -254,8 +193,7 @@ public final class RoadSnapper {
         double radiusX = viewport.radiusX(SEGMENT_SNAP_PX);
         double radiusZ = viewport.radiusZ(SEGMENT_SNAP_PX);
         double pixelSq = SEGMENT_SNAP_PX * SEGMENT_SNAP_PX;
-        // Only the radius is stated; which of two equally near points is the answer is the index's
-        // own rule, so that a click at a shared vertex does not depend on the grid's reading order.
+        // Only the radius is stated; ties are the index's own rule.
         RoadSpatialIndex.Coverage coverage = (dx, dz) -> {
             double sx = dx / radiusX;
             double sz = dz / radiusZ;

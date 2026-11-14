@@ -15,28 +15,9 @@ import java.util.List;
 
 /**
  * The detail records that no current place accounts for, and the way to delete them.
- *
- * <h2>Why this screen exists</h2>
- * A detail record is keyed by the place it describes, not by the place itself, so a place that
- * another mod stops producing -- a dismantled station, a deleted waypoint, a removed mod -- leaves
- * its record behind. Losing the player's notes because the world changed would be data loss, so the
- * records are kept; but a note about a place that is provably gone is also something the player
- * should be able to clear. This is that list: the notes that {@link PlaceDetailStore#orphans()} can
- * prove are unlinked, with a delete button each.
- *
- * <h2>What a row says</h2>
- * Source, id and the first line of the description -- the three things that identify a note without
- * opening it. The description is the note; the source and id are what will never match a place
- * again, and a player reading the row is deciding whether to lose the text under it.
- *
- * <h2>Deletion is a two-step press</h2>
- * There is no undo and no way to recover a record once it is gone, so the first press arms the row's
- * button and the second one deletes. Clicking anywhere else disarms it: a confirmation that survived
- * a glance at another row would be a confirmation of the wrong one.
- *
- * <h2>Style</h2>
- * The same hand-drawn sheet and footer as {@link MapDataScreen}, for the same reason: a vanilla
- * widget list would be the one system-styled thing in a window that is otherwise this mod's own.
+ * A place another mod stops producing -- a dismantled station, a deleted waypoint, a removed mod -- leaves its detail record behind. The notes are kept rather than lost, but PlaceDetailStore.orphans() proves which are unlinked and this screen lets the player clear them.
+ * A row shows source, id and the first line of the description; deletion takes two presses because it cannot be undone, and any other click disarms it.
+ * Style matches MapDataScreen: a hand-drawn sheet and footer.
  */
 public final class PlaceOrphanScreen extends Screen {
 
@@ -70,10 +51,10 @@ public final class PlaceOrphanScreen extends Screen {
     private int visibleRows;
     private int listScroll;
 
-    /** Where the result of the last delete is drawn, worked out in {@link #init()}. */
+    /** Where the result of the last delete is drawn, worked out in init(). */
     private int statusLineY;
 
-    /** The footer, built in {@link #init()} and drawn and hit-tested by hand. */
+    /** The footer, built in init() and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
 
     /** The record whose delete button is armed for a second press, or null when none is. */
@@ -82,26 +63,15 @@ public final class PlaceOrphanScreen extends Screen {
     /** What the last delete did, so the row disappearing is confirmed in words as well. */
     private Component status;
 
-    /** The opacity the whole window is drawn at this frame; the row helpers read it. See {@link #render}. */
+    /** The opacity the whole window is drawn at this frame; the row helpers read it. See render. */
     private float open = 1.0F;
 
     /**
-     * The opacity of the sheet and its edge this frame, as against the rows on top of them.
-     *
-     * <p>The same number as {@link #open} except during a hand-off to another page, where the sheet
-     * is held at full while the content cross-fades -- see {@link UiMotion.ScreenState#surface()}.
-     * A field because the sheet is drawn from {@link #renderBackground}, before the rest of the frame.
+     * The opacity of the sheet and its edge this frame, as against the rows on top. Same as open except during a hand-off to another page, where the sheet stays full while the content cross-fades.
      */
     private float surface = 1.0F;
 
-    /**
-     * Each visible row's delete control, keyed by the row's position on screen.
-     *
-     * <p>Position rather than identity, because what it animates is a highlight and a highlight
-     * belongs to whatever the cursor is over now; a pool that outlives the list is also what keeps
-     * this allocation-free after the first pass. The row's own band has no hover state -- these rows
-     * are not selectable -- so nothing else uses the pool.
-     */
+    /** Each visible row's delete control keyed by screen position, so the pool stays allocation-free. */
     private final UiMotion.Slides deleteHovers = new UiMotion.Slides();
 
     public PlaceOrphanScreen(Screen parent) {
@@ -109,10 +79,7 @@ public final class PlaceOrphanScreen extends Screen {
         this.parent = parent;
     }
 
-    /**
-     * Not a pause screen, for the same reason the map-data screen is not: this is a panel over a
-     * world that keeps running, and opening it on a server cannot stop anything anyway.
-     */
+    /** Not a pause screen: this is a panel over a world that keeps running. */
     @Override
     public boolean isPauseScreen() {
         return false;
@@ -123,8 +90,7 @@ public final class PlaceOrphanScreen extends Screen {
         orphans = PlaceDetailStore.orphans();
         listScroll = clampScroll(listScroll);
         if (armedKey != null && !containsKey(armedKey)) {
-            // The armed record was deleted (or disappeared) while this screen was open: an arm on a
-            // row that is no longer there must not survive into the next press.
+            // The armed record was deleted or disappeared while the screen was open; an arm must not survive into the next press.
             armedKey = null;
         }
 
@@ -136,9 +102,7 @@ public final class PlaceOrphanScreen extends Screen {
         int rowY = panelY + panelH - PAD - BUTTON_HEIGHT;
         listX = panelX + PAD;
         listW = panelW - PAD * 2;
-        // A hint line explains what the list is before its rows: the records are here because a
-        // place disappeared, and a player who has never seen this screen needs that sentence to
-        // understand why deleting is safe.
+        // A hint line explains why the records are here before its rows, so deleting reads as safe.
         int hintY = panelY + PAD + LINE_HEIGHT + 2;
         listY = hintY + LINE_HEIGHT + 4;
         // One line above the footer carries the result of a delete; the list stops above it.
@@ -182,8 +146,7 @@ public final class PlaceOrphanScreen extends Screen {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
         if (button == MouseButton.LEFT) {
-            // The footer is drawn, not a widget, so nothing else will route a click to it: this is
-            // its only chance to see one.
+            // The footer is drawn, not a widget, so this is its only chance to see a click.
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
@@ -199,8 +162,7 @@ public final class PlaceOrphanScreen extends Screen {
                 }
                 return true;
             }
-            // Any other press in the list disarms: a confirmation belongs to the row it was armed
-            // on, and the row under a new press is not that row.
+            // Any other press disarms: a confirmation belongs to the row it was armed on.
             armedKey = null;
         }
         //? if >=1.21.9 {
@@ -272,7 +234,7 @@ public final class PlaceOrphanScreen extends Screen {
         return false;
     }
 
-    // ------------------------------------------------------------------ drawing
+    // ----------------------------------------------------------------- drawing
 
 
     @Override
@@ -281,9 +243,7 @@ public final class PlaceOrphanScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        // The edge and sheet belong to renderBackground so that everything render() draws afterwards
-        // lands on the panel rather than behind it, as on the map-data screen. Both are drawn at the
-        // window's own opacity, so the panel arrives over the map instead of appearing on it.
+        // The edge and sheet are drawn in renderBackground so everything render() draws afterwards lands on the panel. Both use the window's own opacity, so the panel arrives over the map instead of appearing on it.
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
                 UiMotion.fade(UiTheme.windowEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
@@ -292,18 +252,13 @@ public final class PlaceOrphanScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The frame's motion first, before the background could be asked for by either path: 1.20.2
-        // draws it from super.render below, 1.20.1 by hand after this, and both need this frame's
-        // opacity. UiMotion.of is also what pumps a deferred screen swap, so it is read once here.
+        // The frame's motion comes first, before either background path: 1.20.2 draws it from super.render, 1.20.1 by hand after this. UiMotion.of also pumps a deferred screen swap, so it is read once.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
         surface = motion.surface();
-        // The card then travels as one piece, and it is pushed before either background path is
-        // entered: the sheet and its edge are the card, so they have to move with the rows rather
-        // than staying put while the contents rise past them.
+        // The card travels as one piece, pushed before either background path so the sheet and edge move with the rows.
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
-        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
-        // 1.20.1 has no such call, so a screen that wants the edge and sheet asks for it here.
+        // 1.20.2 is where the game began drawing a screen's background from Screen.render itself; 1.20.1 asks for the edge and sheet here.
         //? if <1.20.2 {
         /*renderBackground(graphics);
         *///?}
@@ -312,8 +267,7 @@ public final class PlaceOrphanScreen extends Screen {
         listScroll = clampScroll(listScroll);
         graphics.drawString(this.font, this.title, panelX + PAD, panelY + PAD,
                 UiMotion.fade(UiTheme.title(), open), false);
-        // Ellipsised, not hard-cut: the hint is a full sentence and at a narrow window it is longer
-        // than the sheet, where a cut mid-word reads as a rendering fault.
+        // Ellipsised, not hard-cut: a full sentence in a narrow window would read as a rendering fault.
         String hint = Component.translatable("screen.howtogo.orphans.hint").getString();
         graphics.drawString(this.font, PlaceText.ellipsis(this.font, hint, listW),
                 panelX + PAD, panelY + PAD + LINE_HEIGHT + 2,
@@ -331,8 +285,7 @@ public final class PlaceOrphanScreen extends Screen {
                     UiMotion.fade(UiTheme.okSoft(), open));
         }
         drawButtons(graphics, mouseX, mouseY);
-        // Last, and unconditional: everything above was drawn inside the displacement pushed at the
-        // top of this method, and leaving it pushed would misplace the frames that follow.
+        // Last and unconditional: everything above was drawn inside this displacement, and leaving it pushed would misplace the frames that follow.
         UiMotion.popFrame(graphics);
     }
 
@@ -343,12 +296,7 @@ public final class PlaceOrphanScreen extends Screen {
     }
 
     /**
-     * The rows: source, id, and the first line of the description.
-     *
-     * <p>The rows are not selectable -- the only control on one is its delete button -- so a row's
-     * band is its resting shape rather than a selection, and only the button under the cursor
-     * changes. The summary is clipped by {@link PlaceText#summary} rather than by the font, so a
-     * Chinese description gives a readable beginning instead of a cut in the middle of nothing.
+     * The rows: source, id and the first line of the description. Rows are not selectable, so a row's band is its resting shape and only its delete button changes; the summary is clipped by PlaceText.summary so a Chinese description gives a readable beginning.
      */
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         if (orphans.isEmpty()) {
@@ -364,16 +312,12 @@ public final class PlaceOrphanScreen extends Screen {
             PlaceDetailStore.Orphan orphan = orphans.get(index);
             PlaceKey key = orphan.key();
             int y = listY + row * ROW_HEIGHT;
-            // Two values, not one: how far the row has arrived as part of the list's entrance, and how
-            // far the cursor has moved onto its delete control. The row is faded by the first and the
-            // control's face is mixed by the second, so a row the cursor is already over when the
-            // screen opens still arrives before it answers.
+            // Two values: how far the row has arrived in the list's entrance, and how far the cursor has moved onto its delete control.
             float arrived = UiMotion.stagger(row, open);
             graphics.fill(listX, y, listX + listW, y + ROW_HEIGHT - 2,
                     UiMotion.fade(UiTheme.rowSurface(), arrived));
 
-            // The source badge first, because it is the part of the identity that survives a rename:
-            // what the player recognises is "an MTR station" long before the id means anything.
+            // Source badge first, because that is the part of the identity that survives a rename.
             String source = Destinations.sourceLabel(key.source());
             int pillW = Math.min(Math.max(1, deleteX() - listX - 8), this.font.width(source) + 8);
             HudDraw.fillRounded(graphics, listX + 4, y + 3, listX + 4 + pillW, y + 13, 3,
@@ -391,9 +335,7 @@ public final class PlaceOrphanScreen extends Screen {
             String summary = PlaceText.summary(this.font, orphan.details().description(),
                     Math.max(1, deleteX() - 8 - listX));
             if (!summary.isEmpty()) {
-                // A record with no description is a favourite or a tag set: its row is the identity
-                // line alone, rather than a placeholder sentence about editing something that has
-                // no edit control here.
+                // A record with no description is a favourite or tag set: the identity line alone, rather than a placeholder about editing.
                 graphics.drawString(this.font, summary, listX + 4, y + ROW_TEXT_STEP,
                         UiMotion.fade(UiTheme.textFaint(), arrived), false);
             }
@@ -408,12 +350,7 @@ public final class PlaceOrphanScreen extends Screen {
     }
 
     /**
-     * One row's delete control, in the theme's danger colour.
-     *
-     * <p>The same two-step wording the details card uses, so a delete means the same gesture and
-     * the same words wherever this mod offers one. Arming a row and pointing at it are the same two
-     * faces -- both mean "this control is about to act" -- so both travel towards the hover face on
-     * one slide, and the second press reads as the fill having been ready rather than as a new fill.
+     * One row's delete control, in the theme's danger colour. The same two-step wording as the details card, and arming and hovering share one slide so the second press reads as the fill having been ready.
      */
     private void drawDeleteButton(GuiGraphics graphics, int row, boolean armed, boolean hovered,
                                   float arrived) {

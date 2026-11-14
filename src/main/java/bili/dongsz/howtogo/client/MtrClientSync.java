@@ -15,49 +15,31 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The client's half of the MTR sync: ask the server for its reading, assemble what arrives, offer it.
- *
- * <h2>What this adds to the readings the client already has</h2>
- * {@code MtrClientData} already folds three readings together: MTR's own window, the simulation this
- * process runs when the player hosts the world (see {@code MtrWholeMap}), and MTR Map Overlay's
- * snapshot when that mod is installed on both sides. This is the fourth, and the one that needs
- * nothing but this mod on the server: the server reads the whole railway it is simulating and sends
- * it here. {@code MtrClientData} prefers it over the overlay's copy, and only falls back to the
- * overlay when no own reading exists -- see the note on the merge there.
- *
- * <h2>The handshake, and why there is one</h2>
- * A server that has this mod must not send anything to a client that does not: the payload classes
- * would be unknown there. So the client says {@link MtrWire#HELLO} while the sync is enabled, and
- * repeats it once a second as a heartbeat; a server sends to nobody else. That also covers the
- * other order -- a client that joins before the server has finished reading -- without either side
- * needing to know when the other is ready.
- *
- * <h2>Assembly</h2>
- * The reading arrives in parts, by session. A session is the server's number for one snapshot; parts
- * of a session the client is not assembling are ignored, and the part that completes the set is the
- * only thing that changes what is offered. Malformed frames lose themselves and nothing else.
+ * The client's half of the MTR sync: ask the server for its reading, assemble the parts, offer the result.
+ * A fourth reading for MtrClientData, after MTR's own window, the local simulation and the Map Overlay snapshot, and the only one needing nothing but this mod on the server; MtrClientData prefers it over the overlay's copy.
+ * Handshake: the client sends MtrWire.HELLO while the sync is enabled and repeats it once a second, because a server running this mod must not send to a client without it. Assembly: parts arrive by session, parts of other sessions are ignored, and malformed frames lose nothing else.
  */
 public final class MtrClientSync {
 
-    /** How often the client heartbeat is repeated, in client ticks. One second. */
+    /** Client heartbeat interval, in client ticks. One second. */
     private static final int HELLO_TICKS = 20;
 
-    /** The most one assembled reading may inflate to; the server caps a session at 2048 x 30 kB. */
+    /** Cap on one assembled reading; the server caps a session at 2048 x 30 kB. */
     private static final long MAX_ASSEMBLED_BYTES = 64L << 20;
 
     private static volatile MtrSnapshotData.Snapshot latest = MtrSnapshotData.Snapshot.EMPTY;
 
-    /** The session being assembled, or -1 when nothing is: parts of any other session are ignored. */
+    /** Session being assembled, or -1 when none is; parts of any other session are ignored. */
     private static int session = -1;
     private static int total;
     private static final Map<Integer, byte[]> parts = new HashMap<>();
 
-    /** The conversion for the dimension it was made for, so a per-tick ask is not a per-tick walk. */
+    /** Conversion cached for the dimension it was made for, so the per-tick ask is not a per-tick walk. */
     private static MtrClientData.Snapshot converted = MtrClientData.Snapshot.EMPTY;
     private static String convertedFor;
     private static MtrSnapshotData.Snapshot convertedFrom;
 
-    /** The world the reading belongs to: a different level means the previous server's reading is void. */
+    /** The world the reading belongs to: a different level voids the previous server's reading. */
     private static Object lastLevel;
 
     private static int ticks;
@@ -71,18 +53,13 @@ public final class MtrClientSync {
         return RoadConfig.mtrServerSync() ? latest : MtrSnapshotData.Snapshot.EMPTY;
     }
 
-    /** Whether anything has arrived that the merge can use. */
     public static boolean received() {
         return RoadConfig.mtrServerSync() && !latest.isEmpty();
     }
 
     /**
-     * Drives the handshake, from the client tick.
-     *
-     * <p>Also the only place a change of world is noticed: a reading belongs to the server it came
-     * from, so entering a different level drops it and starts asking again. This is why there is no
-     * join event on either loader to keep in step -- a reference comparison covers single player,
-     * a server switch and a disconnect alike.
+     * Drives the handshake from the client tick.
+     * Also the only place a world change is noticed: a reading belongs to the server it came from, and a reference comparison covers single player, server switch and disconnect alike, so no loader join event is needed.
      */
     public static void tick() {
         Minecraft minecraft = Minecraft.getInstance();
@@ -105,18 +82,14 @@ public final class MtrClientSync {
         if (minecraft.player == null) {
             return;
         }
-        // Heartbeat even after a reading has arrived: this keeps the server queue alive and lets
-        // a queue expire after the client turns the sync off.
+        // Heartbeat continues after a reading arrives: it keeps the server queue alive and lets a queue expire once the client turns the sync off.
         if (++ticks % HELLO_TICKS == 0) {
             MtrSync.sendHello();
         }
     }
 
     /**
-     * One part of the server's reading arrived, already on the client thread.
-     *
-     * <p>Called by the payload handler, which is the only caller and which has already moved off the
-     * network thread.
+     * One part of the server's reading, already on the client thread; the payload handler has moved off the network thread.
      */
     public static void onPart(byte[] body) {
         if (!RoadConfig.mtrServerSync()) {
@@ -179,11 +152,7 @@ public final class MtrClientSync {
     }
 
     /**
-     * The server's reading as this mod's own records, for the dimension the player is standing in.
-     *
-     * <p>Empty when no snapshot has arrived, when the dimension it holds is not the player's, and when
-     * the player is not in a world. MTR's own simulator spells a dimension {@code minecraft/overworld},
-     * so the player's dimension is compared in that spelling rather than in the registry's.
+     * The server's reading as this mod's own records, for the dimension the player is standing in. Empty when nothing arrived, when the held dimension is not the player's, and when the player is not in a world. MTR spells a dimension minecraft/overworld, so compare in that spelling rather than the registry's.
      */
     public static MtrClientData.Snapshot snapshot() {
         if (!RoadConfig.mtrServerSync()) {
@@ -222,8 +191,7 @@ public final class MtrClientSync {
                 return dimension;
             }
         }
-        // No name to match is usable only when the sole dimension is unnamed; a named one that
-        // does not match is a different dimension and must not be guessed at.
+        // An unnamed sole dimension is the only usable fallback; a named one that does not match is a different dimension and must not be guessed at.
         return count == 1 && only != null && only.id() == null ? only : null;
     }
 
@@ -269,8 +237,7 @@ public final class MtrClientSync {
             length += part.length;
         }
         if (length > MAX_ASSEMBLED_BYTES) {
-            // A reading bigger than this is a broken or hostile session, not a railway: refuse it
-            // instead of letting the frame count decide how much memory the client spends.
+            // A reading this large is a broken or hostile session, not a railway: refuse it instead of letting the frame count decide how much memory the client spends.
             HowToGo.LOGGER.warn("[HowToGo] MTR snapshot refused: {} bytes assembled, over the {} limit",
                     length, MAX_ASSEMBLED_BYTES);
             return null;

@@ -9,21 +9,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * The self-checks addons have contributed, run after this mod's own.
- *
- * <h2>Why they run last and separately</h2>
- * {@code SelfTest} owns the mod's own checks and edits its world freely -- it sets a destination and
- * puts back the one being navigated. An addon's check is not part of that sequence and must not be
- * able to disturb it, so the two lists are kept apart and this one is only concatenated onto the
- * report. A check that throws is caught here, one check at a time: the mod's own report still gets
- * written, and the addon responsible is named in the line that failed.
- *
- * <h2>Where these appear, and where they deliberately do not</h2>
- * In {@code /howtogo selftest} -- the player asking about the world they are standing in. They are
- * <em>not</em> part of the launcher-driven run ({@code howtogo.selftest}, see {@code AutoSelfTest})
- * that the build rig grades: that run is this mod's own build check, its pass or fail is an exit code
- * somebody acts on, and an addon's broken source turning this mod's check red is a report about the
- * wrong mod. An addon that wants its checks graded by a rig has its own build for that.
+ * Addon-contributed self-checks, run after and separately from the mod's own.
+ * SelfTest edits the world freely, so addon checks are kept apart and only concatenated onto
+ * the report; a throwing check is caught per check and named in its failed line. They run in
+ * /howtogo selftest only, never in the launcher-driven run the build rig grades.
  */
 public final class SelfChecks {
 
@@ -35,12 +24,7 @@ public final class SelfChecks {
     private SelfChecks() {
     }
 
-    /**
-     * Adds a check to the report.
-     *
-     * <p>A duplicate name is refused and logged: the report is read by a person, and two identical
-     * lines in it are worse than one line fewer.
-     */
+    /** Adds a check to the report. A duplicate name is refused and logged. */
     public static void register(SelfCheck check) {
         if (check == null) {
             throw new NullPointerException("self check");
@@ -64,12 +48,7 @@ public final class SelfChecks {
         return CHECKS.size();
     }
 
-    /**
-     * Runs every registered check, in registration order, on the calling thread.
-     *
-     * <p>Never throws: a check that throws comes back as a failed outcome naming the throwable, so the
-     * caller can concatenate the result onto a report without a guard of its own.
-     */
+    /** Runs every registered check on the calling thread; never throws, failures come back as outcomes. */
     public static List<Outcome> runAll() {
         List<Outcome> outcomes = new ArrayList<>(CHECKS.size());
         for (SelfCheck check : CHECKS) {
@@ -82,21 +61,14 @@ public final class SelfChecks {
                     outcomes.add(new Outcome(name, result.ok(), result.detail()));
                 }
             } catch (Throwable threw) {
-                // Deliberately Throwable: a check reaching another mod's reflective reader can fail
-                // with a LinkageError, and a report that stops at the first such check is no report.
+                // Deliberately Throwable: reflective readers can fail with a LinkageError.
                 outcomes.add(new Outcome(name, false, String.valueOf(threw)));
             }
         }
         return outcomes;
     }
 
-    /**
-     * One check's line in the report.
-     *
-     * @param name   the check's translation key
-     * @param ok     whether it passed
-     * @param detail what it saw
-     */
+    /** One check's line in the report: name (translation key), ok, detail. */
     public record Outcome(String name, boolean ok, String detail) {
     }
 }

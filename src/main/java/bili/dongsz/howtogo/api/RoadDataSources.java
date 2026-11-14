@@ -11,29 +11,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Every addon road layer this process knows about, in registration order.
- *
- * <h2>What a registration is</h2>
- * An id and a {@link RoadDataSource}. The id names the layer in the log and in the refusal messages;
- * the source supplies the points and lines. The mod reads every registered source on the client tick
- * whenever the source says its version has moved -- see {@link RoadDataSource} for that contract.
- *
- * <h2>Order and duplicates</h2>
- * Layers are drawn in registration order, under everything the player's own data draws. An id already
- * in use is refused rather than replaced, in the same way and for the same reason as
- * {@link DestinationSources}: two layers answering to one id would make every log line about either of
- * them ambiguous.
- *
- * <h2>Threading</h2>
- * Registration is safe from any thread -- the list is concurrent and there is nothing to rebuild -- so
- * an addon may register from its own constructor, from {@link HowToGoRegistrationEvent}, or from a
- * config callback. Reading happens on the client thread only.
+ * A registration is an id plus a RoadDataSource; the id names the layer in logs and refusal messages, and the source states when its version moves (read on the client tick).
+ * Layers draw in registration order, under the player's own data. A duplicate id is refused rather than replaced, so log lines stay unambiguous.
+ * Registration is safe from any thread (concurrent list, nothing to rebuild); reading is client-thread only.
  */
 public final class RoadDataSources {
 
     /** The registered layers, in registration order. */
     private static final List<Entry> REGISTERED = new CopyOnWriteArrayList<>();
 
-    /** Every id in use, so a collision is refused rather than absorbed. */
     private static final Set<String> IDS = ConcurrentHashMap.newKeySet();
 
     private RoadDataSources() {
@@ -41,13 +27,8 @@ public final class RoadDataSources {
 
     /**
      * Adds a layer of points and lines contributed by another mod.
-     *
-     * <p>Registering the same id twice changes nothing the second time and says so in the log: a
-     * registration is a caller in this process, not a resource with a lifetime, so there is nothing to
-     * replace and nothing to unregister.
-     *
-     * @throws NullPointerException if the source is null, which is a bug in the caller rather than a
-     *                              condition to carry on from
+     * Registering an id twice does nothing and logs it: a registration is a caller in this process, not a resource with a lifetime, so there is nothing to replace or unregister.
+     * @throws NullPointerException if the source is null (a caller bug)
      */
     public static void register(String id, RoadDataSource source) {
         if (source == null) {
@@ -66,17 +47,14 @@ public final class RoadDataSources {
         HowToGo.LOGGER.info("[HowToGo] api | road data source registered: {}", id);
     }
 
-    /** Every registered layer, in registration order. Never null. */
     public static List<Entry> all() {
         return Collections.unmodifiableList(REGISTERED);
     }
 
-    /** How many layers have been registered. */
     public static int registeredCount() {
         return REGISTERED.size();
     }
 
-    /** The ids of every registered layer, in registration order. */
     public static List<String> ids() {
         List<String> ids = new ArrayList<>(REGISTERED.size());
         for (Entry entry : REGISTERED) {
@@ -86,10 +64,7 @@ public final class RoadDataSources {
     }
 
     /**
-     * One registration: the id the layer is named by, and the source that states it.
-     *
-     * <p>A record rather than a map entry so that the two cannot drift apart, and so a caller that
-     * walks {@link #all()} cannot accidentally reorder what it found.
+     * One registration: the id the layer is named by, and the source that states it. A record so the two cannot drift apart.
      */
     public record Entry(String id, RoadDataSource source) {
     }

@@ -8,19 +8,8 @@ import java.util.List;
 /**
  * One map element.
  *
- * <p>Normally this wraps a single road polyline, so a whole road is drawn in one call and the
- * per-element overhead is paid once per road rather than once per vertex.
- *
- * <p>There are also four singleton overlays. Xaero calls renderers in order and we are the only
- * renderer in our layer, so appending these last draws them on top of the roads without needing a
- * second renderer/reader pair:
- * <ul>
- *   <li>{@link #MARKS} - the track MTR's lines run along, drawn as the polylines the lines are drawn
- *       from rather than as one element per rail</li>
- *   <li>{@link #EDIT_UI} - node handles, snap indicator and rubber band, only while editing</li>
- *   <li>{@link #ROUTE} - the active navigation route, drawn whenever a destination is set</li>
- *   <li>{@link #LABELS} - road and place names, always, and last so text is never painted over</li>
- * </ul>
+ * Normally wraps a single road polyline, so per-element overhead is paid once per road rather than once per vertex.
+ * Four singleton overlays are appended last -- we are the only renderer in our layer, so Xaero's render order paints them on top: MARKS (MTR lines as track polylines), EDIT_UI (handles, only while editing), ROUTE (active route), LABELS (names, always last so text is never covered).
  */
 public final class RoadElement {
 
@@ -35,7 +24,7 @@ public final class RoadElement {
     private final Kind kind;
     private final RoadSegment segment;
 
-    /** Anchor for overlays; kept at the map camera so pose translations stay small. */
+    /** Overlay anchor, kept at the map camera so pose translations stay small. */
     private double overlayAnchorX;
     private double overlayAnchorZ;
 
@@ -70,48 +59,28 @@ public final class RoadElement {
         this.overlayAnchorZ = z;
     }
 
-    /** Anchor X used for culling and for Xaero's element placement. */
+    /** Anchor X for culling and Xaero element placement. */
     public double anchorX() {
         return kind == Kind.ROAD ? segment.x(0) : overlayAnchorX;
     }
 
-    /** Anchor Z used for culling and for Xaero's element placement. */
+    /** Anchor Z for culling and Xaero element placement. */
     public double anchorZ() {
         return kind == Kind.ROAD ? segment.z(0) : overlayAnchorZ;
     }
 
     /**
-     * Where this element sits in the paint order: the storey of the road it draws, or after every road
-     * for the overlay elements.
-     *
-     * <p>A storey is a height, and a flat map has exactly one way to show which of two roads is
-     * overhead: paint the lower one first. So this is the key the roads are sorted by, and it is the
-     * only thing about an element's place in the frame that is not simply "the order it was added".
+     * Paint order key: the storey of the road drawn, or after every road for overlays.
+     * Storey is the only depth cue a flat map has -- lower roads paint first.
      */
     private int drawOrder() {
         return kind == Kind.ROAD ? segment.layer() : Integer.MAX_VALUE;
     }
 
     /**
-     * Puts a frame's elements in the order the map paints them: road by road, from the lowest storey up,
-     * with the overlays still last.
+     * Reorders a frame's elements in place: roads by storey low to high, overlays still last.
      *
-     * <h2>Why the sort is stable, and why the overlays are in the list at all</h2>
-     * Two roads on the same storey have no reason to be reordered, and Xaero draws the elements in the
-     * order the provider hands them over, so a stable sort keeps the frame identical to what it was
-     * before this existed -- same storey, same order, same picture -- while moving only the roads that
-     * were being painted on the wrong level. The overlays all share the same key, so the sort leaves
-     * them exactly where the provider put them: after every road, in their documented order. That is
-     * what keeps this one change from turning rubber bands, routes or names into things a bridge can
-     * cover.
-     *
-     * <h2>What it fixes</h2>
-     * The network hands out its segments in the order its id-keyed {@code HashMap} iterates, which has
-     * nothing to do with height: whether a bridge came out over the road it crosses or under it was
-     * decided by which of the two segment ids hashed first. Sorting by storey makes the paint order a
-     * fact about the network rather than about the enumerator.
-     *
-     * @param elements the frame's elements, reordered in place
+     * Stable sort, so same-storey roads keep provider order and overlays (one shared key) stay after every road. The network hands segments out in HashMap id order, which has nothing to do with height; sorting by storey makes paint order a fact about the network.
      */
     public static void sortForDraw(List<RoadElement> elements) {
         elements.sort(Comparator.comparingInt(RoadElement::drawOrder));

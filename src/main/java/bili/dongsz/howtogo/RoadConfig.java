@@ -1,17 +1,7 @@
 // The config, in the two shapes the loaders offer.
-//
-// NeoForge generates the file and owns the schema: every key is a ModConfigSpec entry, the file is
-// written on first run, and a config screen is built from the spec for free. Fabric has no config
-// service at all, so the same keys are read from a TOML file this class parses itself and kept in
-// one values object.
-//
-// The accessor surface is identical -- the same twenty-one methods with the same names and return
-// types -- because every caller in the mod reads the config through them and knows nothing about
-// either mechanism. What differs is entirely behind them: a spec entry against a field, a
-// try/catch for "the config has not been read yet" against a loaded flag.
-//
-// Written twice rather than conditioned inside, because the two halves share no implementation at
-// all -- not the storage, not the loading, not the defaults. Only the signatures match.
+// NeoForge generates the file from a ModConfigSpec, with a screen built from it.
+// Fabric has no config service, so the same keys are parsed from a TOML file.
+// The accessor surface is identical; only storage, loading and defaults differ.
 //? if fabric {
 /*
 package bili.dongsz.howtogo;
@@ -48,24 +38,24 @@ import java.util.Set;
 // 
 // * Client configuration.
 // *
-// * <p>Written to {@code config/howtogo-client.json} and read by {@link #load()}.
+// * Written to config/howtogo-client.json and read by load().
 // *
-// * <h2>What the Fabric port had to change</h2>
-// * The NeoForge build declared these values through {@code ModConfigSpec} and let the loader own the
+// * What the Fabric port had to change
+// * The NeoForge build declared these values through ModConfigSpec and let the loader own the
 // * file, the reload and the config screen. Fabric has no equivalent service -- there is no
-// * {@code ModConfigSpec} in the API and no built-in config UI -- so the values are declared here as a
-// * plain {@link Values} object, serialised as JSON by Gson, and read and written by this class. A
+// * ModConfigSpec in the API and no built-in config UI -- so the values are declared here as a
+// * plain Values object, serialised as JSON by Gson, and read and written by this class. A
 // * config screen is not part of this port yet; editing the file and restarting is the whole story.
 // *
-// * <p>The public surface is deliberately unchanged: every getter below keeps the name, the return
+// * The public surface is deliberately unchanged: every getter below keeps the name, the return
 // * type and the declared default it had on NeoForge, because 58 call sites across the mod read these
-// * values. What mattered most to preserve is the <em>"not loaded yet"</em> behaviour -- on NeoForge a
-// * read before the file had been parsed threw {@code IllegalStateException} and each getter turned
-// * that into its declared default, while {@link #defaultTravelMode()} returned <em>null</em> rather
+// * values. What mattered most to preserve is the "not loaded yet" behaviour -- on NeoForge a
+// * read before the file had been parsed threw IllegalStateException and each getter turned
+// * that into its declared default, while defaultTravelMode() returned null rather
 // * than a value so a caller could tell "the file has not been read" apart from "the file says walk".
-// * {@link #loaded} reproduces both halves of that.
+// * loaded reproduces both halves of that.
 // *
-// * <p>Keys keep their original snake_case spellings, so an existing {@code howtogo-client.toml} can
+// * Keys keep their original snake_case spellings, so an existing howtogo-client.toml can
 // * be transcribed into the JSON file without translating anything.
 // 
 public final class RoadConfig {
@@ -73,15 +63,15 @@ public final class RoadConfig {
     private static final String FILE_NAME = "howtogo-client.json";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 
-// The values in force. Never null; the declared defaults until {@link #load()} replaces them. 
+// The values in force. Never null; the declared defaults until load() replaces them.
     private static volatile Values values = new Values();
 
-// Whether a config file has actually been read. Gates the null-returning getters, see above. 
+// Whether a config file has actually been read. Gates the null-returning getters, see above.
     private static volatile boolean loaded;
 
     // ---------------------------------------------------------------- the file
 
-// The configuration as it is written to disk. Field names are the on-disk keys. 
+// The configuration as it is written to disk. Field names are the on-disk keys.
     public static final class Values {
 
         @SerializedName("on_road_tolerance_blocks")
@@ -234,10 +224,10 @@ public final class RoadConfig {
 // 
 // * These values with any field a hand-edited file left null replaced by its declared default.
 // *
-// * <p>Gson leaves a field alone when its key is absent, so the initialisers above survive a
-// * partial file; but an explicit {@code null} in the JSON does reach the field, and a null
+// * Gson leaves a field alone when its key is absent, so the initialisers above survive a
+// * partial file; but an explicit null in the JSON does reach the field, and a null
 // * tolerance map or block-id list is a crash rather than a fallback. This is the one place that
-// * is repaired, and it is why {@link #load()} does not assign the parsed object directly.
+// * is repaired, and it is why load() does not assign the parsed object directly.
 // 
         Values filledIn() {
             if (onRoadToleranceBlocks == null) {
@@ -291,7 +281,7 @@ public final class RoadConfig {
         return tolerances;
     }
 
-// Where the file lives: {@code config/howtogo-client.json}. 
+// Where the file lives: config/howtogo-client.json.
     public static Path file() {
         return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
     }
@@ -299,7 +289,7 @@ public final class RoadConfig {
 // 
 // * Reads the configuration, writing the declared defaults out first if there is no file yet.
 // *
-// * <p>Called from the client entry point. A malformed file is reported and the declared defaults
+// * Called from the client entry point. A malformed file is reported and the declared defaults
 // * stay in force rather than the game failing to start: a typo in a tuning value is not a reason
 // * to refuse to run.
 // 
@@ -321,7 +311,7 @@ public final class RoadConfig {
         }
     }
 
-// Writes the values in force back to disk. 
+// Writes the values in force back to disk.
     public static void save() {
         Path path = file();
         try {
@@ -336,10 +326,10 @@ public final class RoadConfig {
 
     // --------------------------------------------------- writing (in-game settings)
     //
-    // The settings screen writes through these instead of through {@link Values}: one named method
+    // The settings screen writes through these instead of through Values: one named method
     // per key is the same surface the NeoForge arm offers, so the screen is written once and knows
     // nothing about the two storage shapes. A setter only writes the value in memory. The screen
-    // calls {@link #save()} after it, which persists it, and {@link #applyRuntimeChanges()}, which
+    // calls save() after it, which persists it, and applyRuntimeChanges(), which
     // re-reads the few keys the mod latches rather than reads where it uses them.
     //
     // Range checks live here rather than in the screen because the JSON arm has no validator of its
@@ -351,7 +341,7 @@ public final class RoadConfig {
         values.uiTheme = (mode == null ? UiTheme.Mode.AUTO : mode).id();
     }
 
-// Whether the interface animates; see {@link #uiAnimations()} and {@code UiMotion}.
+// Whether the interface animates; see uiAnimations() and UiMotion.
     public static void setUiAnimations(boolean on) {
         values.uiAnimations = on;
     }
@@ -433,13 +423,13 @@ public final class RoadConfig {
 //
 // * Applies the keys the mod holds rather than reads where it uses them.
 // *
-// * <p>This arm has no loader config service and so no reload event: the default travel mode is
-// * latched in {@link Navigation}, so a saved change to it would otherwise wait for the next game
-// * launch. NeoForge's arm has the same method, but there {@link #save()} fires
-// * {@code ModConfigEvent.Reloading} itself and the listener in {@code HowToGo} already does this
+// * This arm has no loader config service and so no reload event: the default travel mode is
+// * latched in Navigation, so a saved change to it would otherwise wait for the next game
+// * launch. NeoForge's arm has the same method, but there save() fires
+// * ModConfigEvent.Reloading itself and the listener in HowToGo already does this
 // * work.
 // *
-// * <p>The other key the NeoForge listener invalidates -- RoadWeaver's road class -- is not one of
+// * The other key the NeoForge listener invalidates -- RoadWeaver's road class -- is not one of
 // * the keys this screen exposes, and the Fabric arm does not tick that layer at all yet, so there is
 // * nothing here to invalidate.
 //
@@ -461,7 +451,7 @@ public final class RoadConfig {
 // 
 // * Default tolerance before any configuration, per class.
 // *
-// * <h2>Why these are bigger than a road is wide</h2>
+// * Why these are bigger than a road is wide
 // * A tolerance is not the width of the road, it is how far off the drawn line still counts as being
 // * on it -- and the drawn line is one polyline through the middle of a road the player built, not the
 // * road itself. Getting this too tight is the expensive mistake: a driver on the far carriageway of a
@@ -471,8 +461,8 @@ public final class RoadConfig {
 // * the cheaper mistake: the reading is a little vague about which road is underfoot, and the next
 // * re-plan sorts it out.
 // *
-// * <p>Water is the widest of all, deliberately: a boat is not tied to a line at all, and a canal is
-// * wider than any street. Footpaths stay the tightest because a footpath <em>is</em> narrow, and a
+// * Water is the widest of all, deliberately: a boat is not tied to a line at all, and a canal is
+// * wider than any street. Footpaths stay the tightest because a footpath is narrow, and a
 // * walker who is eight blocks off it has genuinely left it.
 // 
     private static double defaultTolerance(RoadClass roadClass) {
@@ -486,7 +476,7 @@ public final class RoadConfig {
         };
     }
 
-// Tolerance for the given class, falling back to a sane value before configs have loaded. 
+// Tolerance for the given class, falling back to a sane value before configs have loaded.
     public static double onRoadTolerance(RoadClass roadClass) {
         Double value = values.onRoadToleranceBlocks.get(roadClass.name().toLowerCase(Locale.ROOT));
         return value == null ? defaultTolerance(roadClass) : value;
@@ -495,7 +485,7 @@ public final class RoadConfig {
 // 
 // * Configured starting travel mode, or null while the config has not been read yet.
 // *
-// * <p>Null rather than the default so the caller can tell "the file has not been read" apart
+// * Null rather than the default so the caller can tell "the file has not been read" apart
 // * from "the file says walk", and read it once the value genuinely exists instead of pinning
 // * the default for the rest of the session.
 // 
@@ -506,7 +496,7 @@ public final class RoadConfig {
         return TravelMode.byId(values.defaultTravelMode);
     }
 
-// Configured metric, falling back to the default before the config has been read. 
+// Configured metric, falling back to the default before the config has been read.
     public static RoutePreference routePreference() {
         RoutePreference preference = RoutePreference.byId(values.routePreference);
         return preference == null ? RoutePreference.FASTEST_TIME : preference;
@@ -515,7 +505,7 @@ public final class RoadConfig {
 // 
 // * Classes the player has asked to avoid, as an empty set before the config has been read.
 // *
-// * <p>Ids that name no class are dropped here rather than rejected by the config validator, so
+// * Ids that name no class are dropped here rather than rejected by the config validator, so
 // * an out-of-date or misspelled entry costs the player that one entry and nothing else.
 // 
     public static Set<RoadClass> avoidedRoadClasses() {
@@ -533,12 +523,12 @@ public final class RoadConfig {
         return avoided;
     }
 
-// Whether minor roads are penalised rather than left unmentioned, off before the config loads. 
+// Whether minor roads are penalised rather than left unmentioned, off before the config loads.
     public static boolean preferMajorRoads() {
         return values.preferMajorRoads;
     }
 
-// Whether a slower-than-walking trip is replanned on foot, on before the config loads. 
+// Whether a slower-than-walking trip is replanned on foot, on before the config loads.
     public static boolean fallBackToWalkingWhenSlower() {
         return values.fallBackToWalkingWhenSlower;
     }
@@ -559,7 +549,7 @@ public final class RoadConfig {
 // 
 // * Whether navigation events are spoken aloud, off before the config loads.
 // *
-// * <p>Only the declared default: the picker's switch writes its choice to the preference store,
+// * Only the declared default: the picker's switch writes its choice to the preference store,
 // * which re-seeds from here whenever there is no saved choice to read.
 // 
     public static boolean voiceAnnouncements() {
@@ -570,11 +560,11 @@ public final class RoadConfig {
 // * Whether a junction the route carries straight through is called out, on before the config
 // * loads.
 // *
-// * <p>Only the declared default, like the voice switch above: the settings screen's toggle writes
+// * Only the declared default, like the voice switch above: the settings screen's toggle writes
 // * the player's answer to the preference store, which falls back to this whenever there is none.
 // * Read by the planner's own manoeuvre list, which is why the value has to reach it through the
 // * store rather than the other way round -- see
-// * {@code bili.dongsz.howtogo.route.Route#maneuvers}.
+// * bili.dongsz.howtogo.route.Route#maneuvers.
 // 
     public static boolean straightAnnouncements() {
         return values.straightAnnouncements;
@@ -583,7 +573,7 @@ public final class RoadConfig {
 // 
 // * Whether a transit journey is guided by boarding and alighting only, on before the config loads.
 // *
-// * <p>Only the declared default, like the voice switch beside it: the picker's own switch keeps the
+// * Only the declared default, like the voice switch beside it: the picker's own switch keeps the
 // * player's answer in the preference store, which falls back to this whenever there is none. The
 // * value answered before the config has been read is the declared one, so nothing can act on the
 // * opposite of what the file says in the window before it is loaded.
@@ -595,7 +585,7 @@ public final class RoadConfig {
 // 
 // * Whether this mod's own diagnostics are written to the log, off before the config loads.
 // *
-// * <p>Read by {@code HowToGo.diagnostic}, which is the one gate every diagnostic line goes through,
+// * Read by HowToGo.diagnostic, which is the one gate every diagnostic line goes through,
 // * so there is exactly one answer to "was that line meant to be printed" and it is this one.
 // 
     public static boolean debugLog() {
@@ -605,7 +595,7 @@ public final class RoadConfig {
 // 
 // * How close to a stop of the journey counts as being at that stop, in blocks.
 // *
-// * <p>Read by the navigation when it decides whether the player has left the route: inside this
+// * Read by the navigation when it decides whether the player has left the route: inside this
 // * radius of any stop the journey calls at -- a platform, a second platform at the same interchange,
 // * the forecourt -- the player is at the station and not off the route. See the class's own note on
 // * why a station is a place rather than a point.
@@ -617,7 +607,7 @@ public final class RoadConfig {
 // 
 // * The interface theme in force, or the declared default before the config has been read.
 // *
-// * <p>The file holds the id ("auto", "light", "dark"), so an id that names no mode -- a typo, or
+// * The file holds the id ("auto", "light", "dark"), so an id that names no mode -- a typo, or
 // * a value written by a newer version -- costs the player the default rather than the whole file.
 // * The default is auto: the white style in daylight and the black one at night, which is the
 // * answer that needs no configuration to make sense.
@@ -630,7 +620,7 @@ public final class RoadConfig {
 // 
 // * Whether this mod's interfaces animate, on before the config has been read.
 // *
-// * <p>Read by {@link bili.dongsz.howtogo.client.UiMotion#on()} on every animation, once per frame
+// * Read by bili.dongsz.howtogo.client.UiMotion#on() on every animation, once per frame
 // * per animated thing, so it has to stay a field read. The default is on and the same on both
 // * arms: an interface that animates has to be the one a player who has never opened the file gets,
 // * or the motion is a setting only its author ever sees.
@@ -642,7 +632,7 @@ public final class RoadConfig {
 // 
 // * Where the map half of navigation is drawn, or the declared default before the file has been read.
 // *
-// * <p>An id read through {@link MapDisplayMode#byId}, so an entry that names no mode -- a typo, or a
+// * An id read through MapDisplayMode#byId, so an entry that names no mode -- a typo, or a
 // * value a newer version wrote -- costs the player the default rather than the whole file. The
 // * declared default is the mod's own panel, which is the behaviour every existing player has.
 // 
@@ -654,7 +644,7 @@ public final class RoadConfig {
 // 
 // * How a road's own label is drawn: its name, its sign, or both.
 // *
-// * <p>An id read through {@link RoadLabelStyle#byId}, so an entry that names no style costs the
+// * An id read through RoadLabelStyle#byId, so an entry that names no style costs the
 // * player the default rather than the whole file. The declared default is the name-only map, which
 // * is the behaviour every existing player has; a road with no number looks the same either way.
 // 
@@ -669,12 +659,12 @@ public final class RoadConfig {
         return anchor == null ? HudAnchor.defaultAnchor() : anchor;
     }
 
-// The horizontal offset inside that corner, in pixels; see {@link #compactHudAnchor()}.
+// The horizontal offset inside that corner, in pixels; see compactHudAnchor().
     public static int compactHudOffsetX() {
         return values.compactHudOffsetX;
     }
 
-// The vertical offset inside that corner, in pixels; see {@link #compactHudAnchor()}.
+// The vertical offset inside that corner, in pixels; see compactHudAnchor().
     public static int compactHudOffsetY() {
         return values.compactHudOffsetY;
     }
@@ -682,7 +672,7 @@ public final class RoadConfig {
 // 
 // * The routing policy in force, read in one go.
 // *
-// * <p>One read rather than three at each use, so a single plan cannot be costed half by the old
+// * One read rather than three at each use, so a single plan cannot be costed half by the old
 // * policy and half by the new one after the config has been reloaded mid-session.
 // 
     public static RoutePreferences routePreferences() {
@@ -691,27 +681,27 @@ public final class RoadConfig {
 
     // ------------------------------------------------- Create's train tracks
 
-// Whether the track layer is on, on before the config loads since that is the declared default. 
+// Whether the track layer is on, on before the config loads since that is the declared default.
     public static boolean createTrainTracks() {
         return values.createTrainTracks;
     }
 
-// Block ids to read as track, empty only when the config says so. 
+// Block ids to read as track, empty only when the config says so.
     public static List<? extends String> createTrackBlockIds() {
         return configuredList(values.createTrackBlockIds, "create:track");
     }
 
-// Block ids whose positions become destinations. 
+// Block ids whose positions become destinations.
     public static List<? extends String> createStationBlockIds() {
         return configuredList(values.createStationBlockIds, "create:track_station");
     }
 
-// Scan radius around the player in blocks, or the declared default before the config loads. 
+// Scan radius around the player in blocks, or the declared default before the config loads.
     public static int createTrackScanRadius() {
         return values.createTrackScanRadius;
     }
 
-// Chunks one second of the scan may read, or the declared default before the config loads. 
+// Chunks one second of the scan may read, or the declared default before the config loads.
     public static int createTrackChunksPerSecond() {
         return values.createTrackChunksPerSecond;
     }
@@ -722,22 +712,22 @@ public final class RoadConfig {
 
     // ------------------------------------------------------------------- MTR
 
-// Whether MTR's stations and lines are read out, on before the config loads. 
+// Whether MTR's stations and lines are read out, on before the config loads.
     public static boolean mtrTransit() {
         return values.mtrTransit;
     }
 
-// Whether MTR's whole railway is read rather than only the window around the player. 
+// Whether MTR's whole railway is read rather than only the window around the player.
     public static boolean mtrFullMap() {
         return values.mtrFullMap;
     }
 
-// Whether the whole railway MTR Map Overlay fetched is read, on before the config loads. 
+// Whether the whole railway MTR Map Overlay fetched is read, on before the config loads.
     public static boolean mtrMapOverlay() {
         return values.mtrMapOverlay;
     }
 
-// Whether the server's own reading of MTR is asked for and used, on before the config loads. 
+// Whether the server's own reading of MTR is asked for and used, on before the config loads.
     public static boolean mtrServerSync() {
         return values.mtrServerSync;
     }
@@ -745,7 +735,7 @@ public final class RoadConfig {
 // 
 // * How far apart two of MTR's stations may be and still be one place here, in blocks.
 // *
-// * <p>The declared default stands in wherever the config has not been read, including in the
+// * The declared default stands in wherever the config has not been read, including in the
 // * regression harness, which has no config file at all -- so a reading of MTR's own shapes is
 // * converted the same way there as it is in a running game.
 // 
@@ -753,7 +743,7 @@ public final class RoadConfig {
         return values.mtrStationMergeBlocks;
     }
 
-// Whether a line read out of MTR brings its own rails with it, on before the config loads. 
+// Whether a line read out of MTR brings its own rails with it, on before the config loads.
     public static boolean mtrAutoRouteMarks() {
         return values.mtrAutoRouteMarks;
     }
@@ -763,7 +753,7 @@ public final class RoadConfig {
 // 
 // * The port the browser map asks for, or the declared default before the config has been read.
 // *
-// * <p>A default rather than a null: unlike the travel mode there is no answer that is wrong here,
+// * A default rather than a null: unlike the travel mode there is no answer that is wrong here,
 // * and the port is needed the instant a player types the command, which can be before the config
 // * file has ever been read.
 // 
@@ -771,7 +761,7 @@ public final class RoadConfig {
         return values.webmapPort;
     }
 
-// Whether the browser map's server starts with the first world loaded, off before the config loads. 
+// Whether the browser map's server starts with the first world loaded, off before the config loads.
     public static boolean webMapAutoStart() {
         return values.webmapAutoStart;
     }
@@ -897,11 +887,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToIntFunction;
 
 /**
- * Client configuration.
- *
- * <p>Written to {@code config/howtogo-client.toml} and reloadable through the usual mod config
- * UI. Everything here is a tuning value that depends on taste or on how wide roads are drawn, so
- * nothing is hard-coded in the algorithms.
+ * Client configuration, written to config/howtogo-client.toml and reloadable through the mod config UI. Every value here is taste or drawing-dependent; nothing is hard-coded in the algorithms.
  */
 public final class RoadConfig {
 
@@ -911,13 +897,8 @@ public final class RoadConfig {
             new EnumMap<>(RoadClass.class);
 
     /**
-     * The colour each class of road is drawn in, and the colour each kind of transit line is drawn
-     * in.
-     *
-     * <p>Two sections of the same shape: a colour per class, writeable by hand, shown by the config
-     * screen. They are separate because they answer different questions -- the colour of a railway on
-     * the ground and the colour of a rail <em>line</em> over it are deliberately different, and a
-     * player changing one is not asking for the other.
+     * The colour each class of road and each kind of transit line is drawn in, as two sections of the same shape.
+     * Separate because they answer different questions: the colour of a railway on the ground and of a rail line over it are deliberately different, and changing one is not asking for the other.
      */
     private static final ColorSection ROAD_COLORS =
             new ColorSection("road_colors", RoadClass::color);
@@ -925,29 +906,20 @@ public final class RoadConfig {
             new ColorSection("transit_line_colors", RoadConfig::defaultTransitLineColor);
 
     /**
-     * One section of "a colour per class": its values, and the parsed number cached against the text.
-     *
-     * <h2>Why the parse is cached</h2>
-     * A road colour is read once per segment per frame, tens of thousands of times on a drawn map, so
-     * the text has to be parsed once rather than each time. The config value itself is a field read
-     * rather than a file read, and the raw string is what says whether the parse still holds -- which
-     * also means a change made in the config screen takes effect on the next frame.
-     *
-     * <p>Concurrent because these are not read from one thread: the world map draws on the render
-     * thread while the config screen saves on whichever thread the game saves on, and a browser map
-     * snapshot is asked for on the game thread. A value written twice is the same value, so there is
-     * nothing to lock.
+     * One "colour per class" section: its values, and the parsed number cached against the text.
+     * Caching matters because a road colour is read once per segment per frame, so the text is parsed once. The raw string is what says whether the parse still holds, so a config-screen change takes effect next frame.
+     * Concurrent because these are read from several threads and writing the same value twice is harmless.
      */
     private static final class ColorSection {
 
-        /** The section's name, for the warning a bad entry earns. */
         private final String name;
-        /** What a class is drawn in when nothing has been configured. */
         private final ToIntFunction<RoadClass> defaults;
         private final Map<RoadClass, ModConfigSpec.ConfigValue<String>> values =
                 new EnumMap<>(RoadClass.class);
         private final Map<RoadClass, ParsedColor> parsed = new ConcurrentHashMap<>();
-        /** The bad text last reported per class, so one broken entry is one warning and not one a frame. */
+        /**
+         * The bad text last reported per class, so one broken entry is one warning and not one per frame.
+         */
         private final Map<RoadClass, String> reported = new ConcurrentHashMap<>();
 
         ColorSection(String name, ToIntFunction<RoadClass> defaults) {
@@ -955,7 +927,6 @@ public final class RoadConfig {
             this.defaults = defaults;
         }
 
-        /** Defines the section's values, in the order the classes are given. */
         void define(ModConfigSpec.Builder builder, Iterable<RoadClass> classes) {
             for (RoadClass roadClass : classes) {
                 String key = keyOf(roadClass);
@@ -979,9 +950,7 @@ public final class RoadConfig {
                 return fallback;
             }
             if (text == null) {
-                // A config value with no entry is not something this format can produce, but this is
-                // read in the middle of a frame and an NPE here would cost the whole map. An empty
-                // string fails to parse and takes the same road as any other non-colour.
+                // A config value with no entry cannot be produced by this format, but this is read
                 text = "";
             }
             ParsedColor cached = parsed.get(roadClass);
@@ -996,8 +965,7 @@ public final class RoadConfig {
                 }
                 read = fallback;
             } else {
-                // Fixed since the last visit: a later breakage is worth its own warning rather than
-                // being silenced by the one already given for the old text.
+                // Fixed since the last visit: a later breakage earns its own warning rather
                 reported.remove(roadClass);
             }
             parsed.put(roadClass, new ParsedColor(text, read));
@@ -1009,36 +977,25 @@ public final class RoadConfig {
         }
     }
 
-    /** A written colour and the number it was read as, kept together so the two cannot disagree. */
+    /** A written colour and the number it was read as, kept together so they cannot disagree. */
     private record ParsedColor(String text, int argb) {
     }
 
-    /** The interface theme; see {@link #uiTheme()} and {@code UiTheme}. */
+    /** The interface theme; see uiTheme() and UiTheme. */
     private static final ModConfigSpec.EnumValue<UiTheme.Mode> UI_THEME;
     /**
      * Where the map half of navigation is drawn: this mod's own panel, or Xaero's Minimap.
-     *
-     * <p>See {@link #mapDisplayMode()} for the fallback rule and {@link MapDisplayMode} for what the
-     * two answers mean. Declared as an enum rather than a string so the config screen offers the two
-     * as a cycling button -- there is no spelling to get wrong, and the file then holds the constant
-     * name, which the enum's own reader accepts in any case.
+     * See mapDisplayMode() for the fallback rule. An enum so the config screen cycles the two answers rather than accepting a misspelling, and the file holds the constant name.
      */
     private static final ModConfigSpec.EnumValue<MapDisplayMode> MAP_DISPLAY_MODE;
     /**
      * How a road's own label is drawn: its name, its sign, or both.
-     *
-     * <p>An enum rather than a string for the same reason as {@link #MAP_DISPLAY_MODE}: the config
-     * screen offers the three answers as a cycling button, so there is no spelling to get wrong and
-     * the file holds the constant name the enum's reader accepts either way.
+     * An enum for the same reason as MAP_DISPLAY_MODE: no spelling to get wrong.
      */
     private static final ModConfigSpec.EnumValue<RoadLabelStyle> ROAD_LABEL_STYLE;
-    /** Whether this mod's interfaces animate; see {@link #uiAnimations()}. */
     private static final ModConfigSpec.BooleanValue UI_ANIMATIONS;
-    /** The corner the readout-only card hangs from; see {@link #compactHudAnchor()}. */
     private static final ModConfigSpec.EnumValue<HudAnchor> COMPACT_HUD_ANCHOR;
-    /** How far inside that corner it sits, in pixels; see {@link #compactHudOffsetX()}. */
     private static final ModConfigSpec.IntValue COMPACT_HUD_OFFSET_X;
-    /** The same, vertically; see {@link #compactHudOffsetY()}. */
     private static final ModConfigSpec.IntValue COMPACT_HUD_OFFSET_Y;
     private static final ModConfigSpec.ConfigValue<String> DEFAULT_TRAVEL_MODE;
     private static final ModConfigSpec.ConfigValue<String> ROUTE_PREFERENCE;
@@ -1049,7 +1006,6 @@ public final class RoadConfig {
     private static final ModConfigSpec.DoubleValue TRANSIT_WAIT_SECONDS;
     private static final ModConfigSpec.BooleanValue TRANSIT_BOARD_ONLY;
     private static final ModConfigSpec.BooleanValue VOICE_ANNOUNCEMENTS;
-    /** Whether a junction the route carries straight through is called out; see {@link #straightAnnouncements()}. */
     private static final ModConfigSpec.BooleanValue STRAIGHT_ANNOUNCEMENTS;
     private static final ModConfigSpec.BooleanValue CREATE_TRAIN_TRACKS;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> CREATE_TRACK_BLOCK_IDS;
@@ -1058,14 +1014,7 @@ public final class RoadConfig {
     private static final ModConfigSpec.DoubleValue STATION_SNAP_BLOCKS;
     /**
      * How far a walker may cross open country that no road covers, in blocks.
-     *
-     * <p>The first and last hop of a walking trip is walked whatever this says -- a player standing
-     * in a field is a walk from the road, not a routing failure. This number bounds the middle of a
-     * trip: the furthest a walker may step from the end of one road across the ground to the next
-     * when the two do not quite meet, and only on the surface. A car and a ride have their own rules
-     * in {@link bili.dongsz.howtogo.route.TravelMode}, because their numbers are not about taste: a
-     * car may only be as far from its road's centre as the road is wide, and a ride may only be as
-     * far from its track as a station platform is from it.
+     * The first and last hop is always walked -- a player standing in a field is a walk from the road, not a routing failure -- so this bounds the middle of a trip, and only on the surface. Cars and rides have their own rules in TravelMode because their limits come from road width and platform distance, not taste.
      */
     private static final ModConfigSpec.DoubleValue WALK_OFFROAD_BLOCKS;
     private static final ModConfigSpec.IntValue CREATE_TRACK_CHUNKS_PER_SECOND;
@@ -1080,7 +1029,6 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue ROADWEAVER_FULL_MAP;
     private static final ModConfigSpec.BooleanValue ROADWEAVER_STRUCTURES;
     private static final ModConfigSpec.BooleanValue ROADWEAVER_ROUTING;
-    /** Whether the mod's own diagnostics are written; see {@link #debugLog()}. */
     private static final ModConfigSpec.BooleanValue DEBUG_LOG;
     private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
     private static final ModConfigSpec.IntValue WEBMAP_PORT;
@@ -1130,15 +1078,7 @@ public final class RoadConfig {
         }
         builder.pop();
 
-        // Fourth in the file, deliberately: after the three lists a player tunes once and before
-        // the routing switches, so it is one of the first rows the config screen shows rather than
-        // something to go looking for. It is a display setting and it sits with the colours.
-        //
-        // An enum rather than a string so the config screen offers the three answers as a button
-        // that cycles through them, instead of a text box in which "auto" has to be typed and a
-        // typo turns the entry red. The file then holds the constant name, which the enum's own
-        // reader accepts in any case; the Fabric arm's JSON holds the id instead, because that file
-        // is written in the spellings a player edits by hand.
+        // Fourth in the file deliberately: after the three lists a player tunes once and before
         UI_THEME = builder.comment(
                         "Which style this mod's interfaces are drawn in.",
                         "",
@@ -1161,10 +1101,7 @@ public final class RoadConfig {
                 .translation("howtogo.configuration.ui_theme")
                 .defineEnum("ui_theme", UiTheme.Mode.AUTO);
 
-        // Right after the theme, because the two are the same kind of decision: how the interface
-        // looks rather than what it does. On by default -- the timings in UiMotion are short enough
-        // that nothing waits for one, and the interface was laid out around the motion, so the
-        // animation is the designed state rather than an extra.
+        // Right after the theme, the same kind of decision: how the interface looks rather
         UI_ANIMATIONS = builder.comment(
                         "Whether this mod's interfaces animate.",
                         "",
@@ -1210,9 +1147,7 @@ public final class RoadConfig {
                 .translation("howtogo.configuration.map_display_mode")
                 .defineEnum("map_display_mode", MapDisplayMode.defaultMode());
 
-        // Right under the map display mode, because it is the same question asked about the roads
-        // themselves: what the map prints for one. The three answers are the name alone (the map as
-        // it always looked), the sign alone when the road has one, and both in one card.
+        // Right under the map display mode, the same question asked about the roads themselves
         ROAD_LABEL_STYLE = builder.comment(
                         "How a road's own label is drawn on the map.",
                         "",
@@ -1312,10 +1247,6 @@ public final class RoadConfig {
                         "Valid ids: \"highway\", \"road\", \"path\", \"rail\", \"water\" and \"ice\";",
                         "unknown entries are ignored. Empty by default.")
                 // Water is what the list exists for, so it is what the config UI offers to add.
-                //
-                // Three arguments, not four: the four-argument overload takes a Supplier of a default
-                // LIST, not of a single suggested entry, and 1.20.4 and 1.20.6 have no overload that
-                // would accept the latter. The suggestion is the config screen's to make.
                 .translation("howtogo.configuration.avoid_road_classes")
                 .defineListAllowEmpty("avoid_road_classes", java.util.Collections.<String>emptyList(),
                         element -> element instanceof String);
@@ -1667,20 +1598,7 @@ public final class RoadConfig {
 
     /**
      * Default tolerance before any configuration, per class.
-     *
-     * <h2>Why these are bigger than a road is wide</h2>
-     * A tolerance is not the width of the road, it is how far off the drawn line still counts as being
-     * on it -- and the drawn line is one polyline through the middle of a road the player built, not the
-     * road itself. Getting this too tight is the expensive mistake: a driver on the far carriageway of a
-     * divided highway, a walker on the pavement beside the street, a boat that has drifted off the
-     * centreline of a canal are all still travelling the road they were sent along, and being told they
-     * have left the route every few hundred blocks is a navigation that fights the player. Too wide is
-     * the cheaper mistake: the reading is a little vague about which road is underfoot, and the next
-     * re-plan sorts it out.
-     *
-     * <p>Water is the widest of all, deliberately: a boat is not tied to a line at all, and a canal is
-     * wider than any street. Footpaths stay the tightest because a footpath <em>is</em> narrow, and a
-     * walker who is eight blocks off it has genuinely left it.
+     * A tolerance is not the road's width but how far off the drawn line still counts as on it, and the drawn line is one polyline through the middle. Too tight is the expensive mistake -- a driver on the far carriageway, a walker on the pavement or a boat off the centreline are still on their road -- while too wide only makes the reading vague until the next re-plan. Water is widest because a boat is not tied to a line at all; footpaths are tightest because eight blocks off a footpath is genuinely off it.
      */
     private static double defaultTolerance(RoadClass roadClass) {
         return switch (roadClass) {
@@ -1707,38 +1625,24 @@ public final class RoadConfig {
     }
 
     /**
-     * The colour a class of road is drawn in, as {@code road_colors.<class>} says.
-     *
-     * <p>The class's own colour stands in when the entry is missing, has not been read yet, or is
-     * not a colour at all -- the last of those reported once per value rather than once per line
-     * drawn, because this is asked for every segment of every frame. See {@link ColorHex} for what
-     * counts as a colour.
+     * The colour a class of road is drawn in, as road_colors.<class> says.
+     * The class's own colour stands in when the entry is missing, has not been read or is not a colour; the last is reported once per value rather than once per drawn segment. See ColorHex.
      */
     public static int roadColor(RoadClass roadClass) {
         return ROAD_COLORS.get(roadClass);
     }
 
     /**
-     * The colour a kind of public transport line is drawn in, as {@code transit_line_colors} says.
-     *
-     * <p>By kind rather than per line: every rail line is the same colour, every water line another,
-     * and a player who wants two rail lines told apart has made a railway map rather than a
-     * transport map. The colour is the line's own and its stop markers'; the track underneath it is
-     * drawn in the road class's colour, so the pair reads as a service over a piece of ground. See
-     * {@link #roadColor} for the same fallback and warning rules.
+     * The colour a kind of public transport line is drawn in.
+     * By kind rather than per line: a player who wants two rail lines told apart has made a railway map rather than a transport map. The track underneath keeps the road class's colour, so the pair reads as a service over ground. Same fallback and warning rules as roadColor.
      */
     public static int transitLineColor(RoadClass kind) {
         return LINE_COLORS.get(kind);
     }
 
     /**
-     * The colour a transit line of a kind is drawn in when nothing has been configured.
-     *
-     * <p>Deliberately not the road class's colour. A line is not the road under it -- a rail line
-     * drawn in rail's orange would read as a piece of railway, and the map already draws the railway
-     * underneath it -- so the palette is bluer and quieter than the road the line runs on. It is the
-     * palette this mod used before line colours could be configured, so a player who touches nothing
-     * sees exactly the map they always saw.
+     * The colour a transit line of a kind is drawn in when nothing is configured.
+     * Deliberately not the road class's colour: a rail line in rail's orange would read as a piece of railway, and the map already draws the railway underneath. This is the palette used before line colours were configurable, so a player who touches nothing sees the map they always saw.
      */
     private static int defaultTransitLineColor(RoadClass kind) {
         if (kind == null) {
@@ -1752,7 +1656,6 @@ public final class RoadConfig {
         };
     }
 
-    /** Every class's drawn colour, read in one go. */
     public static Map<RoadClass, Integer> roadColors() {
         Map<RoadClass, Integer> colours = new EnumMap<>(RoadClass.class);
         for (RoadClass roadClass : RoadClass.values()) {
@@ -1762,11 +1665,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Configured starting travel mode, or null while the config has not been read yet.
-     *
-     * <p>Null rather than the default so the caller can tell "the file has not been read" apart
-     * from "the file says walk", and read it once the value genuinely exists instead of pinning
-     * the default for the rest of the session.
+     * Configured starting travel mode, or null while the config has not been read.
+     * Null rather than a default so the caller can tell "not read" from "says walk", and re-read once the value exists instead of pinning the default.
      */
     public static TravelMode defaultTravelMode() {
         try {
@@ -1776,7 +1676,6 @@ public final class RoadConfig {
         }
     }
 
-    /** Configured metric, falling back to the default before the config has been read. */
     public static RoutePreference routePreference() {
         try {
             return RoutePreference.byId(ROUTE_PREFERENCE.get());
@@ -1786,10 +1685,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Classes the player has asked to avoid, as an empty set before the config has been read.
-     *
-     * <p>Ids that name no class are dropped here rather than rejected by the config validator, so
-     * an out-of-date or misspelled entry costs the player that one entry and nothing else.
+     * Classes the player asked to avoid, empty before the config is read.
+     * Ids that name no class are dropped here, so an out-of-date or misspelled entry costs one entry and nothing else.
      */
     public static Set<RoadClass> avoidedRoadClasses() {
         List<? extends String> ids;
@@ -1811,7 +1708,7 @@ public final class RoadConfig {
         return avoided;
     }
 
-    /** Whether minor roads are penalised rather than left unmentioned, off before the config loads. */
+    /** Whether minor roads are penalised; off before the config loads. */
     public static boolean preferMajorRoads() {
         try {
             return PREFER_MAJOR_ROADS.get();
@@ -1820,7 +1717,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether a slower-than-walking trip is replanned on foot, on before the config loads. */
+    /** Whether a slower-than-walking trip is replanned on foot; on before the config loads. */
     public static boolean fallBackToWalkingWhenSlower() {
         try {
             return FALL_BACK_TO_WALKING_WHEN_SLOWER.get();
@@ -1829,7 +1726,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether public transport may mix walking and lines, on before the config loads. */
+    /** Whether public transport may mix walking and lines; on before the config loads. */
     public static boolean transitMixed() {
         try {
             return TRANSIT_MIXED.get();
@@ -1839,8 +1736,7 @@ public final class RoadConfig {
     }
 
     /**
-     * Seconds of waiting one boarding of a service costs, or the declared default before the config
-     * has been read.
+     * Seconds of waiting one boarding of a service costs, or the declared default before the config is read.
      */
     public static double transitWaitSeconds() {
         try {
@@ -1851,10 +1747,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether navigation events are spoken aloud, off before the config loads.
-     *
-     * <p>Only the declared default: the picker's switch writes its choice to the preference store,
-     * which re-seeds from here whenever there is no saved choice to read.
+     * Whether navigation events are spoken aloud; off before the config loads.
+     * Only the declared default: the picker's switch writes its choice to the preference store, which re-seeds from here when there is no saved choice.
      */
     public static boolean voiceAnnouncements() {
         try {
@@ -1865,14 +1759,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether a real junction the route carries straight through is called out, on before the config
-     * loads.
-     *
-     * <p>Only the declared default, like the voice switch above: the settings screen's toggle writes
-     * the player's answer to the preference store, which falls back to this whenever there is none.
-     * The manoeuvre list itself reads the store rather than this -- see
-     * {@code bili.dongsz.howtogo.route.Route#maneuvers} -- so a value written here is only the
-     * fallback for a player who has never touched the setting.
+     * Whether a real junction the route carries straight through is called out; on before the config loads.
+     * Only the declared default: the settings toggle writes to the preference store, which falls back here. Route#maneuvers reads the store, so this is only the fallback for a player who never touched the setting.
      */
     public static boolean straightAnnouncements() {
         try {
@@ -1883,12 +1771,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether a transit journey is guided by boarding and alighting only, on before the config loads.
-     *
-     * <p>Only the declared default, like the voice switch beside it: the picker's own switch keeps the
-     * player's answer in the preference store, which falls back to this whenever there is none. The
-     * value answered before the config has been read is the declared one, so nothing can act on the
-     * opposite of what the file says in the window before it is loaded.
+     * Whether a transit journey is guided by boarding and alighting only; on before the config loads.
+     * Only the declared default; the picker's switch keeps the answer in the preference store. The value answered before load is the declared one, so nothing acts on the opposite of what the file says.
      */
     public static boolean transitBoardOnly() {
         try {
@@ -1899,10 +1783,7 @@ public final class RoadConfig {
     }
 
     /**
-     * Whether this mod's own diagnostics are written to the log, off before the config loads.
-     *
-     * <p>Read by {@code HowToGo.diagnostic}, which is the one gate every diagnostic line goes through,
-     * so there is exactly one answer to "was that line meant to be printed" and it is this one.
+     * Whether diagnostics are written to the log, off before the config loads. Read by HowToGo.diagnostic, the one gate every diagnostic line goes through.
      */
     public static boolean debugLog() {
         try {
@@ -1914,11 +1795,7 @@ public final class RoadConfig {
 
     /**
      * How close to a stop of the journey counts as being at that stop, in blocks.
-     *
-     * <p>Read by the navigation when it decides whether the player has left the route: inside this
-     * radius of any stop the journey calls at -- a platform, a second platform at the same interchange,
-     * the forecourt -- the player is at the station and not off the route. See the class's own note on
-     * why a station is a place rather than a point.
+     * Inside this radius of any stop the journey calls at -- a platform, a second platform, the forecourt -- the player is at the station, not off the route.
      */
     public static double stationSnapBlocks() {
         try {
@@ -1928,7 +1805,7 @@ public final class RoadConfig {
         }
     }
 
-    // How far a walker may cross open country between two road ends, in blocks; the first and last hop of a walking trip is always walked.
+    // How far a walker may cross open country between two road ends, in blocks; the first and last
     public static double walkOffroadBlocks() {
         try {
             return WALK_OFFROAD_BLOCKS.get();
@@ -1938,16 +1815,8 @@ public final class RoadConfig {
     }
 
     /**
-     * The interface theme in force, or the declared default before the config has been read.
-     *
-     * <p>One read, in one place, so every screen asks the same question and gets the same answer:
-     * the alternative is each screen reading the spec for itself, and two screens disagreeing for
-     * the frame between them. Read through {@code UiTheme}, which turns this mode plus the world's
-     * sky brightness into the pair of palettes its colours come from.
-     *
-     * <p>The declared default is {@link UiTheme.Mode#AUTO} rather than the black style: white by
-     * day and black by night is what a player would design for themselves, and it is the only one
-     * of the three that never looks out of place.
+     * The interface theme in force, or the declared default before the config is read.
+     * One read in one place so every screen gets the same answer. UiTheme turns this mode plus the world's sky brightness into the palette pair. AUTO is the default: white by day and black by night is what a player would design, and it never looks out of place.
      */
     public static UiTheme.Mode uiTheme() {
         try {
@@ -1959,10 +1828,7 @@ public final class RoadConfig {
 
     /**
      * Whether this mod's interfaces animate, on before the config is read.
-     *
-     * <p>Read by {@code UiMotion} on every animation -- once per frame per animated thing -- so the
-     * body is the spec read and nothing else. The declared default is on, the same as the JSON arm's:
-     * an interface that animates has to be what a player who never opened the file gets.
+     * Read by UiMotion once per frame per animated thing, so the body is the spec read alone. Default on, same as the JSON arm.
      */
     public static boolean uiAnimations() {
         try {
@@ -1974,12 +1840,7 @@ public final class RoadConfig {
 
     /**
      * Where the map half of navigation is drawn, or the declared default before the config is read.
-     *
-     * <p>The declared default is {@link MapDisplayMode#HUD}: the panel that draws its own map is the
-     * behaviour every existing player has, and it is the one mode that cannot be defeated by another
-     * mod being missing. What the other answer means when it cannot be honoured is not decided here --
-     * this method reports what the player asked for, and {@code NavMapMode} decides what is possible
-     * and writes the fallback line when the two differ.
+     * HUD is the default: existing behaviour, and the one mode that cannot be defeated by another mod being missing. This reports what the player asked for; NavMapMode decides what is possible and writes the fallback line.
      */
     public static MapDisplayMode mapDisplayMode() {
         try {
@@ -1990,13 +1851,8 @@ public final class RoadConfig {
     }
 
     /**
-     * How a road's own label is drawn: its name, its sign, or both, or the declared default before
-     * the config is read.
-     *
-     * <p>{@link RoadLabelStyle#NAME} is the declared default, so an install that has never said
-     * anything about this draws the map it always drew. A road with no number is drawn the same way
-     * in every mode -- there is nothing to put in a sign -- which is why this default costs nothing
-     * until the player starts numbering roads.
+     * How a road's own label is drawn, or the declared default before the config is read.
+     * NAME is the default, so an untouched install draws the map it always drew; a road with no number draws the same in every mode.
      */
     public static RoadLabelStyle roadLabelStyle() {
         try {
@@ -2034,18 +1890,14 @@ public final class RoadConfig {
     }
 
     /**
-     * The routing policy in force, read in one go.
-     *
-     * <p>One read rather than three at each use, so a single plan cannot be costed half by the old
-     * policy and half by the new one after the config has been reloaded mid-session.
+     * The routing policy in force, read in one go so a single plan cannot be costed half by the old policy and half by the new after a reload.
      */
     public static RoutePreferences routePreferences() {
         return new RoutePreferences(routePreference(), avoidedRoadClasses(), preferMajorRoads());
     }
 
-    // ------------------------------------------------- Create's train tracks
 
-    /** Whether the track layer is on, on before the config loads since that is the declared default. */
+    /** Whether the track layer is on; on before the config loads. */
     public static boolean createTrainTracks() {
         try {
             return CREATE_TRAIN_TRACKS.get();
@@ -2092,9 +1944,8 @@ public final class RoadConfig {
         }
     }
 
-    // ------------------------------------------------------------------- MTR
 
-    /** Whether MTR's stations and lines are read out, on before the config loads. */
+    /** Whether MTR's stations and lines are read out; on before the config loads. */
     public static boolean mtrTransit() {
         try {
             return MTR_TRANSIT.get();
@@ -2112,7 +1963,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether the whole railway MTR Map Overlay fetched is read, on before the config loads. */
+    /** Whether the whole railway MTR Map Overlay fetched is read; on before the config loads. */
     public static boolean mtrMapOverlay() {
         try {
             return MTR_MAP_OVERLAY.get();
@@ -2123,12 +1974,7 @@ public final class RoadConfig {
 
     /**
      * Whether the server's own reading of MTR is asked for and used.
-     *
-     * <p>On, the client says hello when it joins and offers whatever the server sends as its own full
-     * reading -- preferred over MTR Map Overlay's snapshot, which is then not read at all. Off, the
-     * client asks for nothing and behaves exactly as it did before the sync existed. The server side
-     * has no switch: it only ever answers a client that asked, and a client that has not asked is sent
-     * nothing.
+     * On, the client says hello on join and prefers the server's full reading over MTR Map Overlay's snapshot, which is then not read. Off, it asks for nothing and behaves as before. The server only ever answers a client that asked.
      */
     public static boolean mtrServerSync() {
         try {
@@ -2139,11 +1985,8 @@ public final class RoadConfig {
     }
 
     /**
-     * How far apart two of MTR's stations may be and still be one place here, in blocks.
-     *
-     * <p>The declared default stands in wherever the config has not been read, including in the
-     * regression harness, which has no config file at all -- so a reading of MTR's own shapes is
-     * converted the same way there as it is in a running game.
+     * How far apart two MTR stations may be and still be one place here, in blocks.
+     * The declared default also stands in the regression harness, which has no config file, so a reading of MTR's shapes converts the same way there.
      */
     public static int mtrStationMergeBlocks() {
         try {
@@ -2153,7 +1996,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether a line read out of MTR brings its own rails with it, on before the config loads. */
+    /** Whether a line read out of MTR brings its own rails; on before the config loads. */
     public static boolean mtrAutoRouteMarks() {
         try {
             return MTR_AUTO_ROUTE_MARKS.get();
@@ -2162,9 +2005,8 @@ public final class RoadConfig {
         }
     }
 
-    // ------------------------------------------------------- RoadWeaver's generated roads
 
-    /** Whether RoadWeaver's roads are read, on before the config loads. */
+    /** Whether RoadWeaver's roads are read; on before the config loads. */
     public static boolean roadWeaverRoads() {
         try {
             return ROADWEAVER_ROADS.get();
@@ -2174,11 +2016,8 @@ public final class RoadConfig {
     }
 
     /**
-     * The class configured for RoadWeaver's roads, or {@code "auto"} before the config has been read.
-     *
-     * <p>The text rather than the parsed class, so the caller can tell "not configured" from a typo the
-     * parser could not name: both are answered by choosing a class per road, which is what {@code auto}
-     * asks for anyway.
+     * The class configured for RoadWeaver's roads, or "auto" before the config is read.
+     * Text rather than the parsed class, so "not configured" can be told from a typo; both make the caller choose a class per road, which auto asks for anyway.
      */
     public static String roadWeaverRoadClass() {
         try {
@@ -2198,7 +2037,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether RoadWeaver's structures are offered as destinations, on before the config loads. */
+    /** Whether RoadWeaver's structures are offered as destinations; on before the config loads. */
     public static boolean roadWeaverStructures() {
         try {
             return ROADWEAVER_STRUCTURES.get();
@@ -2207,7 +2046,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether trips may be planned over RoadWeaver's roads, on before the config loads. */
+    /** Whether trips may be planned over RoadWeaver's roads; on before the config loads. */
     public static boolean roadWeaverRouting() {
         try {
             return ROADWEAVER_ROUTING.get();
@@ -2216,14 +2055,10 @@ public final class RoadConfig {
         }
     }
 
-    // ------------------------------------------------------------ browser map
 
     /**
-     * The port the browser map asks for, or the declared default before the config has been read.
-     *
-     * <p>A default rather than a null: unlike the travel mode there is no answer that is wrong here,
-     * and the port is needed the instant a player types the command, which can be before the config
-     * file has ever been read.
+     * The port the browser map asks for, or the declared default before the config is read.
+     * A default rather than null: there is no wrong answer, and the port is needed the moment a player types the command, possibly before the file has ever been read.
      */
     public static int webMapPort() {
         try {
@@ -2233,7 +2068,7 @@ public final class RoadConfig {
         }
     }
 
-    /** Whether the browser map's server starts with the first world loaded, off before the config loads. */
+    /** Whether the browser map's server starts with the first world loaded; off before the config loads. */
     public static boolean webMapAutoStart() {
         try {
             return WEBMAP_AUTO_START.get();
@@ -2242,39 +2077,24 @@ public final class RoadConfig {
         }
     }
 
-    // --------------------------------------------------- writing (in-game settings)
-    //
     // The settings screen writes through these instead of through the spec: one named method per
-    // key keeps the two loader arms on one surface, and every range check the spec declares is
-    // repeated here because {@code ConfigValue#set} writes straight into the loaded config and does
-    // not run the value's predicate.
-    //
-    // A setter only writes the value. The screen calls {@link #save()} after it, which persists the
-    // file and -- through {@code ModConfigSpec#save()} -- fires {@code ModConfigEvent.Reloading}.
-    // That event is already handled in HowToGo: it re-reads the default travel mode and invalidates
-    // RoadWeaver's layer, which is what {@link #applyRuntimeChanges()} exists for on the JSON arm.
 
-// The interface theme.
     public static void setUiTheme(UiTheme.Mode mode) {
         write(UI_THEME, mode == null ? UiTheme.Mode.AUTO : mode);
     }
 
-// Whether the interface animates; see {@link #uiAnimations()} and {@code UiMotion}.
     public static void setUiAnimations(boolean on) {
         write(UI_ANIMATIONS, on);
     }
 
-// Where the map half of navigation is drawn.
     public static void setMapDisplayMode(MapDisplayMode mode) {
         write(MAP_DISPLAY_MODE, mode == null ? MapDisplayMode.defaultMode() : mode);
     }
 
-    /** How a road's own label is drawn; see {@link #roadLabelStyle()}. */
     public static void setRoadLabelStyle(RoadLabelStyle style) {
         write(ROAD_LABEL_STYLE, style == null ? RoadLabelStyle.defaultStyle() : style);
     }
 
-// The compact HUD card's corner, and how far inside that corner it sits.
     public static void setCompactHudAnchor(HudAnchor anchor) {
         write(COMPACT_HUD_ANCHOR, anchor == null ? HudAnchor.defaultAnchor() : anchor);
     }
@@ -2287,37 +2107,30 @@ public final class RoadConfig {
         write(COMPACT_HUD_OFFSET_Y, clamp(pixels, -200, 200));
     }
 
-// The travel mode navigation starts in, written as the id both arms agree on.
     public static void setDefaultTravelMode(TravelMode mode) {
         write(DEFAULT_TRAVEL_MODE, (mode == null ? TravelMode.WALK : mode).id());
     }
 
-// Whether a slower-than-walking trip is replanned on foot.
     public static void setFallBackToWalkingWhenSlower(boolean on) {
         write(FALL_BACK_TO_WALKING_WHEN_SLOWER, on);
     }
 
-// Whether public transport mixes walking and lines rather than choosing one or the other.
     public static void setTransitMixed(boolean on) {
         write(TRANSIT_MIXED, on);
     }
 
-// How far a walker may cross open country between two road ends, in blocks; the first and last hop of a walking trip is always walked.
     public static void setWalkOffroadBlocks(double blocks) {
         write(WALK_OFFROAD_BLOCKS, clamp(blocks, 0.0, 256.0));
     }
 
-// How close to a stop of the journey counts as being at that stop, in blocks.
     public static void setStationSnapBlocks(double blocks) {
         write(STATION_SNAP_BLOCKS, clamp(blocks, 1.0, 256.0));
     }
 
-// Seconds of waiting one boarding of a service costs.
     public static void setTransitWaitSeconds(double seconds) {
         write(TRANSIT_WAIT_SECONDS, clamp(seconds, 0.0, 3600.0));
     }
 
-// The read-only map layers and where the browser map's server starts.
     public static void setCreateTrainTracks(boolean on) {
         write(CREATE_TRAIN_TRACKS, on);
     }
@@ -2339,12 +2152,8 @@ public final class RoadConfig {
     }
 
     /**
-     * Writes one value, and does nothing at all before the file has been read.
-     *
-     * <p>{@code ConfigValue#set} assumes a loaded config and throws if there is none -- the same
-     * state {@link #save()} guards against -- so the guard lives here rather than in fifteen
-     * setters. Nothing in the mod can call these before client setup; the guard keeps that a
-     * property of this class rather than of every future caller.
+     * Writes one value, and does nothing before the file has been read.
+     * ConfigValue#set assumes a loaded config and throws otherwise, so the guard lives here rather than in fifteen setters.
      */
     private static <T> void write(ModConfigSpec.ConfigValue<T> entry, T value) {
         if (SPEC.isLoaded()) {
@@ -2361,10 +2170,7 @@ public final class RoadConfig {
 
     /**
      * Kept for the one call site both arms share.
-     *
-     * <p>On this arm {@link #save()} already fires {@code ModConfigEvent.Reloading}, whose listener
-     * re-reads the latched travel mode and invalidates RoadWeaver's layer -- the two things the
-     * JSON arm has no event to do for it.
+     * On this arm save() already fires ModConfigEvent.Reloading, whose listener re-reads the latched travel mode and invalidates RoadWeaver's layer -- the two things the JSON arm needs applyRuntimeChanges for.
      */
     public static void applyRuntimeChanges() {
     }

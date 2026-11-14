@@ -10,20 +10,8 @@ import java.util.List;
 
 /**
  * Destinations from Create's train stations.
- *
- * <h2>Where the names come from</h2>
- * Create's own graph carries them: a station is an edge point on the graph, its name is a field on
- * {@code GlobalStation}, and Create's map integration labels stations with it. So when the layer read
- * Create's graph, a station is offered under the name the player gave it.
- *
- * <p>When the layer came from the block scan instead there is no name to be had: a station's name is
- * not in the world's blocks, only in Create's railway data. Those stations are named from where they
- * are, with the coordinates the picker's search can be used on, and the source note beside them says
- * where they came from.
- *
- * <p>The positions come from {@link RailTrackStore}, which is the only thing that knows what the
- * layer currently holds. No Create class is involved on this side, so with Create absent this source
- * reports itself unavailable and the picker shows only the sources that do have something.
+ * Names come from Create's graph (GlobalStation name); stations found by the block scan have no name and are named by position, with a source note.
+ * Positions come from RailTrackStore. No Create class is touched here, so with Create absent this source reports itself unavailable.
  */
 public final class CreateStationSource implements DestinationSource {
 
@@ -35,11 +23,7 @@ public final class CreateStationSource implements DestinationSource {
     }
 
     /**
-     * Whether the layer has any station at all.
-     *
-     * <p>Asked of the layer rather than of {@link #destinations()}, which builds one destination per
-     * station to answer a question about an empty list: this is called by {@link Destinations#places()}
-     * on every frame a map is drawn, where a town's worth of stations made it worth asking directly.
+     * Whether the layer has any station at all. Asked of the layer rather than destinations(), which would build one destination per station -- this runs every frame a map is drawn.
      */
     @Override
     public boolean isAvailable() {
@@ -57,7 +41,7 @@ public final class CreateStationSource implements DestinationSource {
         return true;
     }
 
-    /** After the player's own places and before MTR's, which is where the two have always sat. */
+    /** After the player's own places and before MTR's. */
     @Override
     public int priority() {
         return 10;
@@ -68,8 +52,7 @@ public final class CreateStationSource implements DestinationSource {
         List<RailTrackStore.Station> stations = RailTrackStore.stations();
         List<Destination> result = new ArrayList<>(stations.size());
         for (RailTrackStore.Station station : stations) {
-            // Create gives the stations it reports no id this mod may use, so the column they stand
-            // on is the identity -- the station at a position is the one the player means.
+            // Create gives no usable id, so the block column is the identity: the station at a position is the one the player means.
             result.add(new Destination(nameOf(station), station.x(), station.y(), station.z(), ID,
                     Destination.NO_COLOR, PlaceKind.STATION,
                     PlaceKeys.createStationId(station.x(), station.z())));
@@ -78,15 +61,7 @@ public final class CreateStationSource implements DestinationSource {
     }
 
     /**
-     * What to call a station: Create's own name when the layer read it from Create's graph, and its
-     * position otherwise.
-     *
-     * <p>The fallback lives in {@link Destinations#stationName}, which the MTR source uses as well: a
-     * station with no name is nameless for the same reason in both cases, and one rule is what keeps
-     * the two sources from listing one station two different ways.
-     *
-     * <p>Public because the map draws the same label: a station's name on the map and its entry in
-     * the picker being two independently built strings is exactly how they drift apart.
+     * Create's own station name when the layer read it from Create's graph, and its position otherwise. One rule shared with Destinations stationName and the map label, so the picker and the map cannot drift apart.
      */
     public static String nameOf(RailTrackStore.Station station) {
         return Destinations.stationName(station.name(), station.x(), station.z());

@@ -8,22 +8,14 @@ import net.minecraft.client.Minecraft;
 import java.nio.file.Path;
 
 /**
- * Client-side holder for the road network currently in play, plus its persistence.
- *
- * <p>Data lives under {@code config/howtogo/<world>/<dimension>.json}. The config directory is
- * used rather than the world save folder so the same code path works on multiplayer servers, where
- * the client has no access to the save at all.
- *
- * <p>Writes are debounced: edits mark the network dirty and a tick handler flushes it once the
- * player stops changing things, which keeps a dragging or drawing session from hitting the disk on
- * every mouse event.
+ * Client-side holder for the road network in play, plus its persistence. Data lives under config/howtogo/<world>/<dimension>.json -- the config dir, not the world save, so the same path works on multiplayer servers. Writes are debounced: edits mark the network dirty and a tick handler flushes it once the player stops.
  */
 public final class RoadStore {
 
     /** How long the network must be untouched before it is written out. */
     private static final long AUTOSAVE_DELAY_MS = 3000L;
 
-    /** Generates the P0 test pattern instead of an empty network. Debug aid. */
+    /** Generates the P0 test pattern instead of an empty network; debug aid. */
     private static final boolean DEMO = Boolean.getBoolean("howtogo.demo");
 
     private static RoadNetwork network = new RoadNetwork();
@@ -68,13 +60,7 @@ public final class RoadStore {
     }
 
     /**
-     * Re-reads the current dimension's network from disk, after something replaced the file.
-     *
-     * <p>Called when a map archive is imported over this world's data. The in-memory network is the
-     * old file's, and the next autosave would write it back over the imported one -- so it is
-     * replaced here rather than left for the usual rebind, which only happens on a level change.
-     * Anything derived from the old network through {@link #get()} notices the new object on its own:
-     * they ask the store again, which is why the store is not handing out a network to be kept.
+     * Re-reads the current dimension's network from disk after an import replaced the file. The next autosave would otherwise write the old in-memory network over it.
      */
     public static void reload() {
         ensureBound();
@@ -85,9 +71,7 @@ public final class RoadStore {
         dirty = false;
     }
 
-    /**
-     * Rebinds to the current level's dimension, flushing and reloading when it changes.
-     */
+    /** Rebinds to the current level's dimension, flushing and reloading when it changes. */
     private static void ensureBound() {
         Minecraft mc = Minecraft.getInstance();
         Object level = mc.level;
@@ -99,11 +83,7 @@ public final class RoadStore {
                 boundLevel = null;
                 boundPath = null;
                 network = new RoadNetwork();
-                // The editing session outlives a world -- it is process-wide state -- so it has to be
-                // told the world it was editing is gone. Left alone, the next world opened in edit
-                // mode with a handle still held: the panel was already up, the first R turned editing
-                // off instead of on, and moving the mouse dragged whatever node now carried that id,
-                // marking the roads dirty as it went.
+                // The editing session is process-wide and outlives a world, so it must be told this world is gone; otherwise the next world opens with a handle still held.
                 RoadEditSession.setActive(false);
             }
             return;
@@ -119,9 +99,7 @@ public final class RoadStore {
 
         boundLevel = level;
         boundPath = WorldFiles.of("");
-        // Which file this world's roads are being read from, said once per bind: "the map is empty"
-        // and "the map is somewhere else" look the same on screen, and this is the line that tells
-        // them apart when a player reports that their roads are gone.
+        // Said once per bind so "empty map" and "map is elsewhere" can be told apart in a bug report.
         HowToGo.LOGGER.info("[HowToGo] world data: {} | {}/{}", WorldFiles.currentWorldKey(),
                 boundPath.getParent().getFileName(), boundPath.getFileName());
         network = RoadStorage.load(boundPath);

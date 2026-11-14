@@ -33,81 +33,11 @@ import java.util.function.Consumer;
 
 /**
  * The roads RoadWeaver generated, read out and offered as a read-only layer of this mod's roads.
- *
- * <h2>What is read, and why the roads are worth importing</h2>
- * RoadWeaver (阡陌交通, {@code roadweaver}) generates roads between structures -- villages, cabins,
- * bridges -- and keeps them as polylines of block positions. To a navigation mod that is a road
- * network already built: this class turns those polylines into {@link RoadNetwork} segments, so the
- * roads can be drawn on the map, planned over like any other road, and the structures they connect
- * offered as destinations. None of it is written to the player's own network and none of it is
- * editable -- RoadWeaver owns that geometry, and the next reading from it replaces this layer whole.
- *
- * <h2>Two sources, one layer</h2>
- * RoadWeaver only draws its map on request: a client is sent a snapshot of the roads around the view,
- * and the client cache ({@code MapSnapshotCache}) holds what has been fetched so far. That cache is
- * the reading that works on <em>any</em> server, including somebody else's, but it is only filled once
- * the player has opened RoadWeaver's own road map at least once in the session (its key is
- * {@code H}); afterwards the incremental patches RoadWeaver broadcasts keep it current.
- *
- * <p>While the player hosts the world -- single player, or a world opened to LAN -- there is a second
- * reading: RoadWeaver's road store is a plain object in this process, and {@code RoadShardStorage
- * .loadAll} hands back every road it holds. That reader is preferred because it is the whole road
- * network rather than the part of the map that has been looked at, and because it works without the
- * player ever opening RoadWeaver's map. It needs its own thread: the data belongs to the integrated
- * server, so the reading is taken on the server thread (and converted off it), exactly as
- * {@link MtrWholeMap} reads MTR's railway from the copy of it this process simulates.
- *
- * <p>Only one of the two is current at a time, as with Create's graph and block scan: while the
- * server-side reader answers, the client cache is not read as well, so no road can be counted twice.
- * On a remote server, or with {@code roadweaver_full_map} off, the cache is the layer.
- *
- * <h2>What is drawn, and what is not guessed</h2>
- * Every road RoadWeaver generates is offered as this mod's {@link RoadClass#PATH}: they are the
- * paths it lays between villages and cabins -- dirt, gravel, planks and biome materials -- and
- * treating a three-block-wide one as a highway because of its width coloured the map by a number
- * that says nothing about the road. So the class is one class, drawn in the footpath's colour and
- * usable on foot; {@code roadweaver_road_class} still forces another one for a player who wants
- * these roads to be drivable, at the cost of every one of them looking the same as their own roads
- * of that class.
- *
- * <p>The graph is the roads themselves: a node at every road endpoint, and a node wherever two roads
- * share a point exactly (which is how RoadWeaver joins a road it snapped onto another -- see its own
- * road-snap pass). A crossing without a shared point is <em>not</em> a junction, which is the same
- * rule this mod applies to hand-drawn roads, and the router's own coincident-node allowance joins
- * endpoints that end up a block or two apart. Nothing about a road's topology is invented here.
- *
- * <h2>The gap at each end, and the straight line that closes it</h2>
- * RoadWeaver deliberately trims a road short of the structure it serves -- sixty blocks for a
- * village, fifteen for anything else by default, and more if the pack configures it -- so its
- * paving does not cut into the village it was built to reach. On its own map that reads as a road
- * that stops just outside a village and is still understood as reaching it; to a router it reads as
- * two fragments, and a destination at the village cannot be reached by road. This layer therefore
- * closes the gap: for a completed connection it took from RoadWeaver, it finds the end of the road
- * that was built for it and joins that end to the structure with a straight two-point connector of
- * the same class. The connector is this mod's geometry and it is replaced whole with every reading;
- * nothing is written back. Reach is bounded ({@link #JOIN_REACH}), so a connection whose road is
- * missing or further away than any trim RoadWeaver can be configured for is left as it is rather
- * than joined to something else by guess.
- *
- * <p>The connector is <em>planned over but not drawn</em>: it is a link for the router, not a road,
- * and a straight stub up to 256 blocks long painted across the landscape reads as a road that does
- * not exist. So the reading keeps two views of itself -- {@link #network()} for trips and
- * {@link #drawnNetwork()} for the maps -- and the connector is in the first only. See
- * {@link Converted}.
- *
- * <h2>What RoadWeaver calls a structure</h2>
- * Its own map lets the player give a structure an alias; the destination list uses that alias in
- * place of the id-derived name whenever there is one, so a village the player named in RoadWeaver's
- * map is called the same thing here. The aliases are read reflectively and re-read once a second,
- * because RoadWeaver stores them client-side and no reading of its road data changes when one is
- * edited.
- *
- * <h2>Reflection, never a dependency</h2>
- * The same arrangement as {@link MtrClientData}, {@link RailTrackStore} and {@link MtrMapOverlay}:
- * RoadWeaver documents no API for this, it is not installed on every copy of this mod, and its shape
- * is free to move between releases. So no type of it appears in a signature, every handle is looked
- * up by name once and guarded, and a version whose shapes have moved reports itself unavailable --
- * at which point the mod behaves exactly as it did before this integration existed.
+ * RoadWeaver generates roads between structures as polylines; this converts them into RoadNetwork segments so they can be drawn, planned over and their structures offered as destinations. Nothing is written to the player's network and nothing is editable -- the next reading replaces this layer whole.
+ * Two sources: RoadWeaver's client map snapshot (MapSnapshotCache), filled only once the player opens its map; and, while hosting, its road store via RoadShardStorage loadAll, preferred because it is the whole network and needs no map. Only one is current at a time, so no road is counted twice.
+ * Graph: a node at every road endpoint and wherever two roads share a point exactly; a crossing without a shared point is not a junction, and no topology is invented.
+ * RoadWeaver trims roads short of the structures they serve, so for each completed connection this layer adds a straight two-point connector of the same class to the structure, bounded by JOIN_REACH. Connectors are routing links only: network() has them, drawnNetwork() does not.
+ * The class is always PATH (roadweaver_road_class can force another). Structure aliases are read reflectively and re-read once a second. No RoadWeaver type appears in a signature; an unavailable version reports itself and the mod behaves as before.
  */
 public final class RoadWeaverLayer {
 
@@ -115,23 +45,12 @@ public final class RoadWeaverLayer {
     static final String MOD_ID = "roadweaver";
 
     /**
-     * Node and segment ids of this layer start here.
-     *
-     * <p>Ids only ever mean something against the network they came from, so they do not have to be
-     * disjoint from the player's -- but they are made disjoint anyway, and from every other
-     * machine-read layer's as well, so a reading held by mistake against the wrong network gives
-     * nothing rather than somebody else's road. Create's rails use 1_000_000_000 and MTR's marks
-     * 1_500_000_000, so this layer has its own billion.
+     * Node and segment ids of this layer start here. Ids are made disjoint from every other network's (Create 1_000_000_000, MTR 1_500_000_000), so a reading held by mistake against the wrong network gives nothing rather than somebody else's road.
      */
     private static final int ID_BASE = 2_000_000_000;
 
     /**
-     * How often the whole road store is re-read on the integrated server, in client ticks.
-     *
-     * <p>Two hundred ticks, ten seconds. The read is a walk of RoadWeaver's in-memory roads, so it is
-     * cheap but not free, and what it looks for is a road RoadWeaver has just generated -- nobody needs
-     * to see that within the second. The first read of a session is not delayed: the counter starts
-     * at zero.
+     * How often the whole road store is re-read on the integrated server, in client ticks -- 200 ticks, ten seconds. The read is cheap but not free, and a newly generated road does not need to be seen within the second; the first read of a session is not delayed.
      */
     private static final int SERVER_POLL_TICKS = 200;
 
@@ -142,45 +61,24 @@ public final class RoadWeaverLayer {
     private static final int UNKNOWN_WIDTH = -1;
 
     /**
-     * How far from a structure a road end may stand and still be read as the road it was built for,
-     * in blocks.
-     *
-     * <p>RoadWeaver trims a road short of the structure at each end, and the trim is configurable:
-     * sixty blocks for a village and fifteen for another structure by default, up to 256. This is
-     * that maximum, so a gap it created on purpose is always closable, and a connection whose road
-     * is simply absent is not closed by joining it to some other road that happens to pass nearby.
+     * How far from a structure a road end may stand and still be read as the road it was built for, in blocks. That is RoadWeaver's maximum trim (sixty for a village, fifteen otherwise by default), so a gap it created on purpose is always closable, and a connection whose road is absent is not joined to a nearby road by guess.
      */
     private static final int JOIN_REACH = 256;
 
     /**
-     * How many ticks between re-readings of the structure aliases.
-     *
-     * <p>One second. They are the player's own notes in RoadWeaver's map, not part of the road data
-     * this layer is rebuilt from, so nothing else would ever notice one being edited. The read is a
-     * lookup per structure on the client thread, which is cheap enough for a second and far too
-     * frequent for a frame.
+     * How many ticks between re-readings of the structure aliases: one second. They are the player's own notes in RoadWeaver's map, not part of the road data, so nothing else notices one being edited; the read is a lookup per structure, cheap enough for a second and far too frequent for a frame.
      */
     private static final int ALIAS_POLL_TICKS = 20;
 
     /**
-     * Closed form of one connection RoadWeaver completed: the two structures it joined.
-     *
-     * <p>Only connections whose status is {@code COMPLETED} are read, because only those have a road
-     * behind them -- the others are still planned, being generated, or were given up.
+     * Closed form of one connection RoadWeaver completed: the two structures it joined. Only COMPLETED connections are read, because only those have a road behind them.
      */
     record Connection(Point from, Point to) {
     }
 
-    // ---------------------------------------------------------------- runtime state
 
     /**
-     * The conversion runs off both the client and the server thread.
-     *
-     * <p>A whole road network is a lot of geometry to copy: doing it on the client thread would be a
-     * frame hitch whenever RoadWeaver reports a new road, and doing it on the server thread would be a
-     * tick hitch. Both readings are immutable snapshots when they are handed over -- RoadWeaver's
-     * roads are frozen before they are stored, and its map snapshot is documented as immutable -- so
-     * the conversion is safe to do on a thread of this mod's own.
+     * The conversion runs off both the client and the server thread. A whole road network is a lot of geometry to copy: the client thread would hitch a frame, the server thread a tick. Both readings are immutable snapshots when handed over, so a thread of this mod's own is safe.
      */
     private static final ExecutorService CONVERTER = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "howtogo-roadweaver-import");
@@ -191,7 +89,7 @@ public final class RoadWeaverLayer {
     /** The reading in force. Replaced whole; never mutated. */
     private static volatile Reading reading = Reading.EMPTY;
 
-    /** Bumped whenever {@link #reading} is replaced, for anything caching a reading of it. */
+    /** Bumped whenever reading is replaced, for anything caching a reading of it. */
     private static volatile int revision;
 
     /** Bumped when the world, the dimension or the source changes, so stale conversions are dropped. */
@@ -221,17 +119,10 @@ public final class RoadWeaverLayer {
     private static Object lastCacheSnapshot;
 
     /**
-     * Whether a client-snapshot conversion is already running.
-     *
-     * <p>RoadWeaver's map can replace its snapshot far more often than one conversion takes -- a patch
-     * per road while it is generating one -- and submitting a conversion per snapshot would queue a
-     * backlog of work that is stale the moment it starts. So a new snapshot waits for the running
-     * conversion instead: the following tick sees it is different from the one converted last and
-     * submits it, which keeps at most one conversion queued and always converts the newest snapshot.
+     * Whether a client-snapshot conversion is already running. RoadWeaver's map can replace its snapshot far more often than one conversion takes, and submitting a conversion per snapshot would queue a backlog that is stale the moment it starts; a new snapshot waits, and the following tick converts the newest.
      */
     private static volatile boolean cacheConversionBusy;
 
-    // ---------------------------------------------------------------- reflection state
 
     private static boolean resolved;
     private static boolean available;
@@ -267,22 +158,16 @@ public final class RoadWeaverLayer {
     private static Method connectionToMethod;
     private static Method connectionStatusMethod;
 
-    /** {@code ClientMapNotes.getAlias(BlockPos)}, or null on a version that has no notes. */
+    /** ClientMapNotes.getAlias(BlockPos), or null on a version that has no notes. */
     private static Method aliasMethod;
 
-    // ------------------------------------------------------------------ aliases
 
     /**
-     * The aliases in force, keyed by structure position with the height flattened away.
-     *
-     * <p>Flattened because that is how RoadWeaver keys them: its map snapshot normalises a
-     * structure to y=0, and an alias is set from that snapshot, so the same village's real stored
-     * height would never match. Read on the client thread and replaced whole; emptying it is the
-     * same statement as replacing it with an empty one.
+     * The aliases in force, keyed by structure position with the height flattened away -- RoadWeaver's map normalises structures to y=0, so the stored height would never match. Read on the client thread and replaced whole.
      */
     private static volatile Map<Long, String> aliases = Map.of();
 
-    /** Bumped whenever {@link #aliases} is replaced, so a list cached against it can be rebuilt. */
+    /** Bumped whenever aliases is replaced, so a list cached against it can be rebuilt. */
     private static volatile int aliasRevision;
 
     /** The layer revision the aliases were last read for, and the ticks until the next read. */
@@ -292,7 +177,6 @@ public final class RoadWeaverLayer {
     private RoadWeaverLayer() {
     }
 
-    // ------------------------------------------------------------------- public API
 
     /** The segments to draw, for the dimension the player is in. Empty when there is no reading. */
     public static List<RoadSegment> segments() {
@@ -300,13 +184,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The roads the maps draw: every segment except the synthetic connectors.
-     *
-     * <p>The connectors are routing links this mod makes to close RoadWeaver's deliberate gap before a
-     * structure; they are straight stubs up to {@link #JOIN_REACH} blocks long and are not roads, so
-     * drawing them is what produced the long straight lines across the map. Every map -- the world
-     * map, the mod's own viewers, the browser map -- draws this list; routing, snapping and the
-     * "which road am I on" reads keep {@link #segments()}, which holds them.
+     * The roads the maps draw: every segment except the synthetic connectors. The connectors are straight stubs up to JOIN_REACH blocks long and are not roads, so drawing them produced the long straight lines across the map. Every map draws this list; routing, snapping and the "which road am I on" reads keep segments().
      */
     public static List<RoadSegment> drawnSegments() {
         return reading.drawnSegments();
@@ -318,11 +196,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The alias RoadWeaver's own map has for a structure, or null when it has none.
-     *
-     * <p>Looked up by position with the height flattened, which is the key RoadWeaver stores it
-     * under -- see {@link #aliases}. Safe to call from the client thread only, which is where every
-     * caller of it is: the destination list is built while drawing.
+     * The alias RoadWeaver's own map has for a structure, or null when it has none. Looked up by position with the height flattened, the key RoadWeaver stores it under. Client thread only, which is where every caller is.
      */
     public static String aliasOf(Structure structure) {
         if (structure == null) {
@@ -338,33 +212,21 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The reading as this mod's own network, for a caller that wants to snap to it rather than plan
-     * over it. Never written to; the layer replaces it whole.
-     *
-     * <p>This is the routing network, connectors included -- see {@link #drawnNetwork()} for the one
-     * the maps draw.
+     * The reading as this mod's own network, for a caller that wants to snap to it rather than plan over it. Never written to; the layer replaces it whole. This is the routing network, connectors included -- see drawnNetwork().
      */
     public static RoadNetwork network() {
         return reading.network();
     }
 
     /**
-     * The same reading with the synthetic connectors left out, for the maps.
-     *
-     * <p>See {@link #drawnSegments()}: the connectors are routing links and are not drawn, and a map
-     * that drew them showed straight lines across the landscape that no road was under.
+     * The same reading with the synthetic connectors left out, for the maps. See drawnSegments(): the connectors are routing links, and a map that drew them showed straight lines across the landscape that no road was under.
      */
     public static RoadNetwork drawnNetwork() {
         return reading.drawnNetwork();
     }
 
     /**
-     * Offers every segment whose bounding box overlaps the rectangle.
-     *
-     * <p>For the views that draw a small window of the map -- the navigation panel's mini-map, the
-     * main screen's viewer -- walking a whole road network's worth of vertices per frame is the cost
-     * that makes them slow, and most of that geometry is nowhere near the window. Bounds are worked
-     * out once when a reading is published, so the reject is four integer comparisons per segment.
+     * Offers every segment whose bounding box overlaps the rectangle. For the views that draw a small window of the map, walking a whole network's vertices per frame is the slow part; bounds are worked out once when a reading is published, so the reject is four integer comparisons per segment.
      */
     public static void forEachSegmentInBox(double minX, double minZ, double maxX, double maxZ,
                                            Consumer<RoadSegment> sink) {
@@ -382,13 +244,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The network a trip may be planned over, or null when this layer cannot take part.
-     *
-     * <p>This layer is read-only in the strong sense: the caller is expected to fold a copy of it into
-     * the network it plans on (see {@code RailTrackStore.forRouting}), which is what keeps the player's
-     * saved roads untouched and this layer un-editable. The same rule as the rail layers: a mode that
-     * cannot travel on these classes is given nothing, so a trip's routes cannot change because of a
-     * layer it could never use.
+     * The network a trip may be planned over, or null when this layer cannot take part. Read-only in the strong sense: the caller folds a copy into the network it plans on (see RailTrackStore forRouting), which keeps the player's roads untouched. A mode that cannot travel on these classes is given nothing.
      */
     public static RoadNetwork routingNetwork(TravelMode mode) {
         if (mode == null || !RoadConfig.roadWeaverRoads() || !RoadConfig.roadWeaverRouting()) {
@@ -413,11 +269,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * Forgets the reading, which is what switching the integration off does.
-     *
-     * <p>Also called when the class choice is edited, because which class a road was converted to is
-     * baked into the network this layer holds -- a config the conversion reads cannot take effect
-     * until the conversion runs again.
+     * Forgets the reading, which is what switching the integration off does. Also called when the class choice is edited, because the class is baked into the network this layer holds and the config cannot take effect until the conversion runs again.
      */
     public static void invalidate() {
         epoch++;
@@ -429,11 +281,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * One client tick: follows the world, and asks whichever reader is in force for its layer.
-     *
-     * <p>The steady-state cost is one mod-presence check, one {@code MapSnapshotCache.peek} call and --
-     * while the player hosts the world -- one counter. Nothing is copied or converted unless a reading
-     * changed, which is what makes this safe to call every tick.
+     * One client tick: follows the world, and asks whichever reader is in force for its layer. The steady-state cost is one mod-presence check, one MapSnapshotCache peek and -- while hosting -- one counter; nothing is copied unless a reading changed.
      */
     public static void tick() {
         if (!RoadConfig.roadWeaverRoads()) {
@@ -505,15 +353,9 @@ public final class RoadWeaverLayer {
         readCache(dimension, epoch);
     }
 
-    // --------------------------------------------------------------- source: the client cache
 
     /**
-     * Reads RoadWeaver's client-side map snapshot, if it has one for this dimension.
-     *
-     * <p>The snapshot is replaced whole whenever RoadWeaver's map fetches more or receives a patch, so
-     * identity is what says whether anything changed -- no deep comparison, and no conversion on the
-     * ticks where nothing did. The conversion itself is handed to the converter thread because a whole
-     * map's worth of roads is not something to copy in the middle of a frame.
+     * Reads RoadWeaver's client-side map snapshot, if it has one for this dimension. The snapshot is replaced whole whenever RoadWeaver's map fetches more or receives a patch, so identity says whether anything changed; the conversion itself is handed to the converter thread.
      */
     private static void readCache(ResourceLocation dimension, int expectedEpoch) {
         Object snapshot;
@@ -607,12 +449,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The completed connections of a reading, whatever shape the source hands them back in.
-     *
-     * <p>Only {@code COMPLETED} ones: a planned or generating connection has no road behind it yet,
-     * and a failed one never will, so there is nothing to close a gap to. A version whose connection
-     * shape this does not know reports itself unreadable once and contributes no connectors, which
-     * leaves the roads as they were -- the integration still works without the joins.
+     * The completed connections of a reading, whatever shape the source hands them back in. Only COMPLETED ones have a road behind them; a version whose connection shape this does not know reports itself unreadable once and contributes no connectors, leaving the roads as they were.
      */
     private static List<Connection> readConnections(Object connections) throws ReflectiveOperationException {
         List<Connection> out = new ArrayList<>();
@@ -639,20 +476,10 @@ public final class RoadWeaverLayer {
         return out;
     }
 
-    // ------------------------------------------------------- source: the integrated server
 
     /**
-     * Queues one read of RoadWeaver's whole road store, on the server thread.
-     *
-     * <p>The store is the integrated server's, so it is read where it lives rather than from the client
-     * thread that ticks this class. Only the copy of the road list is taken there: RoadWeaver's roads are
-     * frozen when they are stored, so the conversion below can walk them on the converter thread, and
-     * the signature that decides whether anything changed is cheap enough to compute where the store is.
-     *
-     * <p>One read is allowed to be in flight at a time. The task runs on the server thread, which does
-     * not tick while the game is paused, so asking again every second with the pause menu open would
-     * queue a task per second and run them all on the way back into the world -- the same hazard
-     * {@link MtrWholeMap} guards against, and the same guard.
+     * Queues one read of RoadWeaver's whole road store, on the server thread. Only the copy of the road list is taken there -- roads are frozen when stored, so the conversion can walk them on the converter thread, and the signature that decides whether anything changed is cheap enough to compute where the store is.
+     * One read is allowed in flight at a time: the server thread does not tick while paused, so asking every second with the pause menu open would queue a task per second and run them all on the way back into the world.
      */
     private static void pollServer(MinecraftServer server, int expectedEpoch) {
         if (serverPollPending) {
@@ -774,14 +601,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * A cheap fingerprint of one server-side reading, for telling whether a conversion is needed.
-     *
-     * <p>Roads are added to RoadWeaver's store over time and are rarely replaced, so the count of
-     * roads, of their segments and of the structures is what moves when the layer needs rebuilding.
-     * RoadWeaver's own owner keys are folded in as well because a road replaced by a corrected one
-     * keeps every count the same -- the pair of structures it joins is what changed. Completed
-     * connections are counted too, because a connection finishing is what adds a gap connector
-     * without changing any road's geometry.
+     * A cheap fingerprint of one server-side reading, for telling whether a conversion is needed. Road, segment and structure counts move when the layer needs rebuilding; owner keys catch a road replaced by a corrected one, and completed connections catch a join finishing without any road's geometry changing.
      */
     private static String signatureOf(Object roads, List<Structure> structures,
                                       List<Connection> connections) {
@@ -809,35 +629,18 @@ public final class RoadWeaverLayer {
                 + ":" + connections.size();
     }
 
-    // ------------------------------------------------------------------- the conversion
 
     /**
      * One reading as this mod's road network.
-     *
-     * <p>Not a copy of RoadWeaver's graph but a statement of what it says: a node at every endpoint,
-     * a node wherever two roads share a point exactly, and one segment per run of road between two of
-     * those nodes carrying the run's own vertices -- so a road with a hundred bends on it is still one
-     * piece of road on the map, and one edge to the router.
-     *
-     * <p>A shared point is the definition of a junction because it is the only join RoadWeaver states:
-     * when it snaps a road onto another it truncates the road and puts its end exactly on the other
-     * road's point (see its own road-snap pass). Two roads that merely cross on the map share no point
-     * and are not joined here -- whether a crossing is a crossroads or a bridge is not something either
-     * mod's data says, and this mod does not guess at it.
+     * Not a copy of RoadWeaver's graph but a statement of what it says: a node at every endpoint, a node wherever two roads share a point exactly, and one segment per run of road between those nodes -- so a road with a hundred bends is still one piece of road on the map and one edge to the router.
+     * A shared point is the definition of a junction because it is the only join RoadWeaver states: it snaps a road by truncating it and putting its end exactly on the other road's point. Two roads that merely cross share no point and are not joined -- whether a crossing is a crossroads or a bridge is not something either mod's data says.
      */
     static RoadNetwork build(List<Polyline> polylines, RoadClass forced) {
         return build(polylines, List.of(), forced);
     }
 
     /**
-     * The same, with the completed connections whose trimmed ends are then joined to their structures.
-     *
-     * <p>See the class comment: RoadWeaver deliberately stops a road short of the structure it serves,
-     * so the road network is missing the last stretch at each end unless it is put back. The connector
-     * polylines are built here and converted as ordinary roads, which means they are planned over like
-     * everything else -- they are not a special case downstream.
-     *
-     * <p>They are, however, a special case <em>for drawing</em>: see {@link Converted}.
+     * The same, with the completed connections whose trimmed ends are then joined to their structures. RoadWeaver deliberately stops a road short of the structure it serves, so the last stretch is put back here as ordinary polylines converted as ordinary roads, planned over like everything else. They are a special case only for drawing; see Converted.
      */
     static RoadNetwork build(List<Polyline> roads, List<Connection> connections, RoadClass forced) {
         return convert(roads, connections, forced).network();
@@ -845,25 +648,7 @@ public final class RoadWeaverLayer {
 
     /**
      * What one conversion produced: the network routing uses, and the network the maps draw.
-     *
-     * <h2>Why the two are not the same</h2>
-     * A connector is this mod's own geometry, not a road: RoadWeaver ended its road just short of the
-     * village it serves, and the straight two-point stub is what lets a trip reach the village at all.
-     * The router needs it, and the maps do not: drawn as a road it is a straight line up to 256 blocks
-     * long across whatever lies between the structure and the road end, which reads as a road that does
-     * not exist -- and at the zoom a whole region fits on screen, several of them read as a mess of
-     * long straight lines. The player's complaint was exactly that.
-     *
-     * <p>So the same reading carries both: {@link #network()} for routing, snapping and everything that
-     * asks "can I get there", and {@link #drawn()} for the layers that ask "what does this look like".
-     * The drawn network shares the real segments and nodes with the full one; only the connectors are
-     * left out, and the two are computed once per reading rather than filtered per frame.
-     *
-     * @param network       every segment, connectors included; what routing plans over
-     * @param drawn         the real roads only; what every map draws
-     * @param segments      the full segment list, in network order
-     * @param drawnSegments the drawn segment list, in the same order
-     * @param connectors    the ids of the synthetic connectors, for the self-checks and diagnostics
+     * A connector is this mod's own geometry, not a road: RoadWeaver ended its road short of the village it serves, and the straight stub is what lets a trip reach the village at all. The router needs it and the maps do not -- drawn as a road it is a straight line up to 256 blocks, which reads as a road that does not exist. So the reading carries both, sharing the real segments and nodes, computed once per reading rather than filtered per frame.
      */
     record Converted(RoadNetwork network, RoadNetwork drawn, List<RoadSegment> segments,
                      List<RoadSegment> drawnSegments, List<Integer> connectors) {
@@ -951,14 +736,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * One straight connector per structure at the end of a completed connection, when the road that
-     * connection was built for ends within {@link #JOIN_REACH} of it.
-     *
-     * <p>The pairing is the connection's own statement of which two structures one road joins, so the
-     * search is for the road whose two ends are near the two ends in either order; the same road may
-     * see several connections if it is a chain, and each one gets its own connector. A pair with no
-     * road near it -- a connection whose road has not been written yet, or one of another dimension --
-     * simply produces nothing.
+     * One straight connector per structure at the end of a completed connection, when the road that connection was built for ends within JOIN_REACH of it. The connection states which two structures one road joins, so the search is for the road whose two ends are near the two ends in either order; a pair with no road near it produces nothing.
      */
     private static List<Polyline> connectorPolylines(List<Polyline> roads,
                                                      List<Connection> connections) {
@@ -1060,14 +838,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * The class one of RoadWeaver's roads is drawn and planned as.
-     *
-     * <p>Always a footpath. RoadWeaver's roads are the paths it lays through the world -- dirt,
-     * gravel, planks, biome materials -- and its width is how many blocks it paved, not a statement
-     * that a three-block one is a road for vehicles. Reading the width as a class coloured the map by
-     * a number that says nothing about the road and put paths into drive routes; the client snapshot
-     * does not even carry the width. A player who wants them drivable sets {@code roadweaver_road_class}
-     * instead, which is a deliberate one-class choice rather than a guess.
+     * The class one of RoadWeaver's roads is drawn and planned as: always a footpath. Its roads are the paths it lays through the world, and the width is how many blocks it paved, not a statement about vehicles; the client snapshot does not even carry the width. roadweaver_road_class forces another class for a player who wants them drivable.
      */
     static RoadClass classOf(int width, int roadType) {
         return RoadClass.PATH;
@@ -1142,17 +913,9 @@ public final class RoadWeaverLayer {
         return roadClass;
     }
 
-    // ------------------------------------------------------------------- the reading
 
     /**
-     * One immutable reading: the roads, the places and which reader produced them.
-     *
-     * <p>The bounds are the same segments' bounding boxes, four ints each, worked out once here so a
-     * view can reject the geometry it is not looking at with four comparisons per segment.
-     *
-     * <p>{@code network} and {@code segments} are the routing view, connectors included;
-     * {@code drawnNetwork} and {@code drawnSegments} are the same reading with the synthetic
-     * connectors left out, which is what every map draws. See {@link Converted}.
+     * One immutable reading: the roads, the places and which reader produced them. The bounds are the same segments' bounding boxes, worked out once so a view can reject geometry with four comparisons per segment. network and segments are the routing view; drawnNetwork and drawnSegments are the maps' view. See Converted.
      */
     record Reading(RoadNetwork network, RoadNetwork drawnNetwork, List<RoadSegment> segments,
                    List<RoadSegment> drawnSegments, int[] bounds, List<Structure> structures,
@@ -1178,10 +941,7 @@ public final class RoadWeaverLayer {
     record Structure(int x, int y, int z, String id) {
 
         /**
-         * The height the marker is drawn at: the stored one, or sea level where the reading carries
-         * none. Separate from {@link #y} because that is also the height an alias was keyed under --
-         * RoadWeaver's map normalises structures to zero -- and replacing it would put the label
-         * somewhere the alias lookup cannot find.
+         * The height the marker is drawn at: the stored one, or sea level where the reading carries none. Separate from y because that is also the height an alias was keyed under, and replacing it would put the label where the alias lookup cannot find it.
          */
         int markerY() {
             return y == 0 ? FALLBACK_STRUCTURE_Y : y;
@@ -1251,15 +1011,9 @@ public final class RoadWeaverLayer {
         }
     }
 
-    // ------------------------------------------------------------------- aliases
 
     /**
-     * Re-reads the aliases RoadWeaver's map holds for this reading's structures, at most once a
-     * second and immediately after a rebuild.
-     *
-     * <p>Runs on the client thread, where {@code getAlias} is safe: it asks the game which dimension
-     * is open to key its notes. A version of RoadWeaver without the notes simply has no aliases, so
-     * the lookup is optional and its absence costs nothing.
+     * Re-reads the aliases RoadWeaver's map holds for this reading's structures, at most once a second and immediately after a rebuild. Runs on the client thread, where getAlias is safe. A version without the notes has no aliases, and the lookup is optional.
      */
     private static void pollAliases() {
         if (aliasSourceRevision != revision) {
@@ -1332,7 +1086,7 @@ public final class RoadWeaverLayer {
         return List.copyOf(sorted);
     }
 
-    /** Whether RoadWeaver has no id for a structure, which its own data spells as {@code unknown}. */
+    /** Whether RoadWeaver has no id for a structure, which its own data spells as unknown. */
     static boolean isUnknown(String id) {
         return id == null || id.isBlank() || "unknown".equalsIgnoreCase(id.trim());
     }
@@ -1357,28 +1111,12 @@ public final class RoadWeaverLayer {
                 + "map snapshot, if there is one, is used instead", cause.toString());
     }
 
-    /**
-     * Whether RoadWeaver's whole road store could be bound, which is what enables
-     * {@code roadweaver_full_map}.
-     *
-     * <p>Package-private for the regression harness: whether a release's storage classes are the ones
-     * this reads is otherwise only found out from a log line at the start of a session.
-     */
     static boolean fullMapReadable() {
         return fullMapAvailable;
     }
 
     // ------------------------------------------------------------------- reflection
 
-    /**
-     * Resolves the reading the first time it is needed, and remembers whether it worked.
-     *
-     * <p>Asked only as a shortcut, and without touching RoadWeaver's classes when it says no: the mod is
-     * not installed on every copy of this one, and a session without it should not load its classes at
-     * all. Whether the names below are still RoadWeaver's is a separate question, which {@link #bind()}
-     * answers on its own -- so the harness can check the whole handshake against a real jar with no game
-     * running.
-     */
     private static boolean resolve() {
         if (resolved) {
             return available;
@@ -1392,18 +1130,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * Looks up every class and method this reads, and remembers whether it worked.
-     *
-     * <p>Split out of {@link #resolve()} so that the same lookups can be made with no game running,
-     * which is what lets the regression harness check them against a real RoadWeaver jar. The client
-     * class names are RoadWeaver's published map data and are what this needs to work at all; the
-     * server-side store is an extra that is allowed to be missing (an older or newer release whose
-     * storage moved still gets the cache reading), so a failure there is reported at info and does not
-     * make the whole layer unavailable.
-     *
-     * <p>Classes are loaded without being initialised: this needs their shapes, not their state.
-     *
-     * @return whether RoadWeaver's client map shapes are the ones this reads
+     * Looks up every class and method this reads, and remembers whether it worked. Split from resolve() so the same lookups can be made with no game running, for the harness's checks against a real RoadWeaver jar. The client shapes are required; the server-side store is an extra allowed to be missing, so its failure is reported at info and does not make the layer unavailable. Classes are loaded without being initialised: this needs their shapes, not their state.
      */
     static boolean bind() {
         try {
@@ -1485,8 +1212,8 @@ public final class RoadWeaverLayer {
     /**
      * Whether RoadWeaver's client map classes are on the classpath at all.
      *
-     * <p>Asked by the harness before it checks the handshake, so that a machine which has never seen
-     * RoadWeaver skips the check rather than failing it -- the same arrangement {@link MtrClientData}
+     * Asked by the harness before it checks the handshake, so that a machine which has never seen
+     * RoadWeaver skips the check rather than failing it -- the same arrangement MtrClientData
      * uses for MTR.
      */
     static boolean classesPresent() {
@@ -1527,9 +1254,7 @@ public final class RoadWeaverLayer {
     }
 
     /**
-     * Resolves the shape of one structure connection, under either of the two spellings RoadWeaver
-     * has used for it: {@code core.model.StructureConnection} from 2.2 on, and
-     * {@code helpers.Records$StructureConnection} in 2.1.
+     * Resolves the shape of one structure connection, under either of the two spellings RoadWeaver has used: core.model.StructureConnection from 2.2 on, and helpers.Records StructureConnection in 2.1.
      */
     private static void bindConnectionShape() {
         Class<?> connection = loadOrNull("net.shiroha233.roadweaver.core.model.StructureConnection");
@@ -1579,7 +1304,6 @@ public final class RoadWeaverLayer {
 
     // ------------------------------------------------------------------- helpers
 
-    /** The elements of an iterable or an array, as reflection hands them back. */
     private static Iterable<?> elements(Object value) {
         if (value instanceof Iterable<?> iterable) {
             return iterable;

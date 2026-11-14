@@ -25,72 +25,32 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The browser map's little web server: a page, its assets, and two read-only JSON answers.
+ * The browser map's web server: a page, its assets and two read-only JSON answers.
  *
- * <h2>What it is</h2>
- * {@code com.sun.net.httpserver.HttpServer}, bound to the loopback interface on a port the player
- * can set, serving this mod's own files out of the jar and two API calls: {@code /api/roads}, which
- * answers with {@link RoadMapSnapshot}, and {@code /api/place}, which answers with one place's full
- * detail when the player opens its card. No servlet container, no dependency, no internet: the whole
- * feature is three hundred kilobytes of page and one HTTP port opened by the game the player is
- * already running, which is what makes it work on a train.
- *
- * <h2>Why the place endpoint exists at all</h2>
- * The map's payload carries a one-line summary per place, because a map with tens of places on it
- * has no reason to ship a description each. The full text is fetched by the one player who clicks a
- * marker, and fetched from the same hand-off as the roads: the game's thread reads its own stores and
- * the HTTP threads never touch them.
- *
- * <h2>Why loopback and only loopback</h2>
- * The page draws the world the player is standing in, and it is not behind a password. Binding
- * {@code 0.0.0.0} to be helpful would publish a player's map, place names and coordinates to every
- * machine on whatever network they happen to be joined to -- a hotel Wi-Fi, a school, a LAN party --
- * and there is no version of "just trust the local network" that is worth that. So the address is
- * {@code 127.0.0.1}, hard-coded, named in the chat message in full, and there is no configuration key
- * that widens it.
- *
- * <h2>Why the request paths are a fixed list</h2>
- * A static file server's classic bug is a path that walks out of its directory. There is no directory
- * to walk out of here: the table below maps request paths to resource names one for one, so anything
- * not in it -- {@code /../..}, a percent-encoded slash, a name that does not exist -- is a 404 by
- * construction rather than by a check that has to be right. It also means a page asking for an asset
- * that no longer exists fails loudly in the harness, because the harness fetches every entry.
- *
- * <h2>Threading</h2>
- * Handlers run on this server's own daemon threads, never on the game's. The reading they hand back
- * was taken on the game's thread by the {@link RoadMapSource} they were built with -- see
- * {@link MainThreadRoadMapSource} for why that matters -- and the two-thread executor exists so that
- * a handler waiting on a busy game cannot also block the page's other requests, which is exactly what
- * would happen with the default single dispatcher thread.
+ * com.sun.net.httpserver.HttpServer on the loopback interface, serving this mod's files from the jar plus /api/roads (RoadMapSnapshot) and /api/place (one place's full detail when its card opens). No servlet container and no dependency; the game the player already runs opens the port, which is what makes it work on a train.
+ * Loopback only, hard-coded to 127.0.0.1 with no config key: the page shows the player's world, place names and coordinates unprotected, so binding 0.0.0.0 would publish them to whatever network the machine joined.
+ * Request paths are a fixed table mapping path to resource name one for one: no path can walk out of a directory, and anything not listed is a 404 by construction rather than by a check.
+ * Handlers run on the server's daemon threads, never the game's; the snapshot they hand back was read on the game thread by the RoadMapSource they were built with (see MainThreadRoadMapSource). The two-thread executor keeps a handler waiting on a busy game from blocking the page's other requests.
  */
 public final class WebMapServer implements AutoCloseable {
 
-    /** Where this feature's files live in the jar. */
     private static final String RESOURCE_ROOT = "/assets/howtogo/webmap/";
 
-    /** How many connections may be waiting to be accepted. Small: this serves one browser. */
     private static final int BACKLOG = 16;
 
-    /** How many consecutive ports to try when the configured one is taken. */
     private static final int PORT_ATTEMPTS = 10;
 
     /**
-     * How long {@link #stop()} waits for a handler that is already running, in milliseconds.
+     * How long stop() waits for a running handler, in milliseconds.
      *
-     * <p>One second, and spent on the client's shutdown path: a request whose answer has not arrived by
-     * then is waiting on a game thread that is itself going away, so the honest choice is to drop it and
-     * let the daemon thread follow the JVM down.
+     * One second, spent on the client's shutdown path: a handler still waiting is waiting on a game thread that is itself going away, so drop the request and let the daemon follow the JVM down.
      */
     private static final long SHUTDOWN_WAIT_MILLIS = 1000L;
 
     /**
      * The longest a place query parameter may be, in characters, before the request is refused.
      *
-     * <p>Both parameters are ids the mod itself produced: a source id is a dozen characters at most,
-     * and a stable id is a node number or a hash. 256 is far above any real value and far below a
-     * length that could bloat a log line or a comparison, so a request over it is not a client of
-     * this page but something probing the port -- and it is answered with a 400 rather than by doing
-     * work on it.
+     * Real ids are a dozen characters at most, while 256 is far below a length that could bloat a log line, so a longer request is not a client of this page and is answered with a 400 rather than given work.
      */
     private static final int MAX_PLACE_PARAM_LENGTH = 256;
 
@@ -100,10 +60,7 @@ public final class WebMapServer implements AutoCloseable {
     private static final String JS = "text/javascript; charset=utf-8";
 
     /**
-     * Request path to resource name, exactly.
-     *
-     * <p>An ordered map rather than a {@code Map.of}, so that the list a reader sees is the list the
-     * server serves and the harness reports missing entries in a stable order.
+     * Request path to resource name, exactly. Ordered so the served list and the harness's missing-entry report are stable.
      */
     private static final Map<String, String> ASSETS = new LinkedHashMap<>();
 
@@ -138,29 +95,10 @@ public final class WebMapServer implements AutoCloseable {
     }
 
     /**
-     * Starts the server on the first free port at or after {@code preferredPort}.
+     * Starts the server on the first free port at or after preferredPort.
      *
-     * <p>The port is tried and then the nine above it, because the configured one being taken is
-     * ordinary -- a previous session that has not let go of the socket, or another mod's own little
-     * server -- and answering "could not start" to a player who never chose the port is a worse
-     * failure than running one port along. Which port it actually got is reported: the chat message
-     * and {@link #url()} both name it, so a bookmark can be right even after the fallback.
-     *
-     * <h2>Why two sockets and not one address</h2>
-     * A player who is told {@code http://127.0.0.1:7573/} will sometimes type
-     * {@code http://localhost:7573/} instead, and on a dual-stack machine -- Windows resolves
-     * localhost to {@code ::1} first and {@code 127.0.0.1} second, which is the default -- that means
-     * the browser tries an address nothing is listening on and only reaches the map after its
-     * IPv6-to-IPv4 fallback delay. Every new connection, so every page load, starts with a few hundred
-     * milliseconds of nothing. So both loopback addresses are bound on the same port: the one the chat
-     * message names, and the other spelling of it. Both are still loopback -- this is not a widening of
-     * who can reach the page, and there is no key that widens it.
-     *
-     * <p>The IPv6 socket is the optional one: a machine with IPv6 switched off has no {@code ::1} to
-     * bind, which is not a reason to refuse to serve the map, so a failure there is logged and the
-     * server runs on the IPv4 address alone. A failure to bind the IPv4 one means the port is taken.
-     *
-     * @throws IOException if no port in that range could be bound on the loopback address
+     * The configured port being taken is ordinary -- a previous session still holding the socket, another mod's server -- so the next nine are tried too; the port actually bound is named by the chat message and url(). Both loopback addresses are bound on the same port because a browser told 127.0.0.1:port will sometimes try localhost, which on dual-stack Windows resolves to ::1 first and otherwise stalls every connection a few hundred ms. This widens no access.
+     * The IPv6 socket is optional: a machine without IPv6 has no ::1 to bind, which is not a reason to refuse serving, so the failure is logged. Failing to bind the IPv4 address means the port is taken.
      */
     public static WebMapServer start(RoadMapSource source, int preferredPort) throws IOException {
         int first = Math.max(1024, Math.min(65535, preferredPort));
@@ -199,10 +137,7 @@ public final class WebMapServer implements AutoCloseable {
     /**
      * One listening socket on one named loopback address.
      *
-     * <p>The address is named rather than taken from {@code InetAddress.getLoopbackAddress()}, which
-     * on a dual-stack machine hands back whichever of the two the JVM prefers: a page opened at the
-     * other spelling would then not connect, and "localhost" would work on some machines and not
-     * others. Both are bound deliberately instead; see {@link #start}.
+     * Named deliberately: InetAddress.getLoopbackAddress() returns whichever address the JVM prefers on a dual-stack machine, so the other spelling would not connect. Both are bound deliberately; see start.
      */
     private static HttpServer bind(String loopback, int port) throws IOException {
         return HttpServer.create(
@@ -222,19 +157,15 @@ public final class WebMapServer implements AutoCloseable {
         return running;
     }
 
-    /** The exact request paths this server answers; for the harness, and for documentation. */
+    /** The exact request paths this server answers; for the harness and for documentation. */
     public static Set<String> servedPaths() {
         return ASSETS.keySet();
     }
 
     /**
-     * The API paths, which are not files; kept apart so the asset check does not look for them.
+     * The API paths, kept apart so the asset check does not look for them.
      *
-     * <p>The place path is listed without its query string: a request for {@code /api/place} is
-     * routed by path and then reads {@code ?source=...&id=...} from the query, so the path --
-     * the thing this set is about -- has no parameters. A caller comparing a URL against this set
-     * strips the query first; {@code WebMapHttpCheck} does exactly that, which is what keeps the
-     * check honest for a parameterised path.
+     * /api/place is listed without its query string: a request is routed by path and then reads ?source=...&id=... from the query. A caller comparing a URL must strip the query first, which WebMapHttpCheck does.
      */
     public static Set<String> apiPaths() {
         return Set.of("/api/roads", "/api/status", "/api/place");
@@ -255,12 +186,10 @@ public final class WebMapServer implements AutoCloseable {
                         failed.toString());
             }
         }
-        // The sockets are closed, so nothing new can arrive; what is left is a handler already running,
-        // and the only thing it can be waiting on is the game's thread. The wait here is deliberately
-        // short rather than generous: this runs on the client's shutdown path, and a mod that makes the
-        // game take longer to close is a worse bug than a request dropped on the floor. The threads are
-        // daemons for the same reason -- a bound of zero is what a shutdown that must not block looks
-        // like, and this is close to it.
+        // The sockets are closed, so nothing new can arrive; what is left is a handler waiting on the game's
+        // thread. The wait is deliberately short because this runs on the client's shutdown path -- a mod
+        // that slows the game's exit is worse than a dropped request. The threads are daemons for the same
+        // reason.
         workers.shutdown();
         try {
             if (!workers.awaitTermination(SHUTDOWN_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -282,7 +211,6 @@ public final class WebMapServer implements AutoCloseable {
         stop();
     }
 
-    // ------------------------------------------------------------------ requests
 
     private void handle(HttpExchange exchange) throws IOException {
         try {
@@ -294,8 +222,8 @@ public final class WebMapServer implements AutoCloseable {
                 return;
             }
             if (path == null || path.indexOf("..") >= 0) {
-                // Not reachable through the table below either way -- an exact-match miss is a 404 --
-                // but a request that tries is worth a line in the log.
+                // Not reachable through the table below either way -- an exact-match miss is a 404 -- but a request
+                // that tries is worth a log line.
                 HowToGo.LOGGER.warn("[HowToGo] webmap | refused a suspicious path: {}", path);
                 respond(exchange, 404, JSON, error("no such path"));
                 return;
@@ -307,8 +235,8 @@ public final class WebMapServer implements AutoCloseable {
                 default -> serveAsset(exchange, path);
             }
         } catch (Throwable failed) {
-            // A handler that throws leaves the browser with no response at all, which reads as the
-            // server being dead. Say 500 and log the rest.
+            // A handler that throws leaves the browser with no response, which reads as a dead server. Say 500
+            // and log the rest.
             HowToGo.LOGGER.error("[HowToGo] webmap | a request failed", failed);
             quietly(exchange, 500, error("the mod could not answer this request"));
         } finally {
@@ -316,14 +244,13 @@ public final class WebMapServer implements AutoCloseable {
         }
     }
 
-    /** The one call the page really needs: the roads, straight from the game's thread. */
     private void serveRoads(HttpExchange exchange) throws IOException {
         RoadMapSnapshot snapshot;
         try {
             snapshot = source.snapshot();
         } catch (RoadMapUnavailableException unavailable) {
-            // 503 rather than an empty map: "there is nothing to draw yet" and "there is nothing to
-            // draw at all" are different answers, and only one of them is worth retrying.
+            // 503 rather than an empty map: "there is nothing to draw yet" and "there is nothing to draw at all"
+            // are different answers, and only one is worth retrying.
             HowToGo.diagnostic("[HowToGo] webmap | roads unavailable: {}", unavailable.getMessage());
             respond(exchange, 503, JSON, error(unavailable.getMessage()));
             return;
@@ -332,7 +259,6 @@ public final class WebMapServer implements AutoCloseable {
         respond(exchange, 200, JSON, body);
     }
 
-    /** A tiny liveness answer, so a page can tell "server down" from "no world loaded". */
     private void serveStatus(HttpExchange exchange) throws IOException {
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("ok", true);
@@ -345,11 +271,7 @@ public final class WebMapServer implements AutoCloseable {
     /**
      * The full detail of one place, read on the game's thread, for a card the player just opened.
      *
-     * <p>Three failures the page has to tell apart, and so three statuses: a malformed request is a
-     * 400, a place this dimension does not have is a 404 (the id may be one an edit has since
-     * removed), and no world loaded is the same 503 {@code /api/roads} gives. A 200 is always the
-     * body the source built; nothing here formats JSON itself, so a name with a quote or a newline
-     * cannot be the reason a response stops parsing.
+     * A malformed request is a 400, a place this dimension does not have is a 404 (the id may be one an edit has removed), and no world loaded is the 503 /api/roads gives. A 200 is whatever body the source built; nothing here formats JSON itself, so a name with a quote cannot break parsing.
      */
     private void servePlace(HttpExchange exchange) throws IOException {
         Map<String, String> query;
@@ -372,15 +294,15 @@ public final class WebMapServer implements AutoCloseable {
         try {
             body = source.placeJson(placeSource, placeId);
         } catch (RoadMapUnavailableException unavailable) {
-            // The same answer as a roads request with no world loaded, because it is the same
-            // situation: there is nothing to read yet, and retrying once the game is ready works.
+            // The same answer as a roads request with no world loaded, because it is the same situation: there
+            // is nothing to read yet, and retrying once the game is ready works.
             HowToGo.diagnostic("[HowToGo] webmap | place unavailable: {}", unavailable.getMessage());
             respond(exchange, 503, JSON, error(unavailable.getMessage()));
             return;
         }
         if (body == null) {
-            // Not an error in the page: a marker in an older reading, or a place deleted behind the
-            // open tab. The card shows the message and stops asking.
+            // Not an error in the page: a marker from an older reading, or a place deleted behind the open tab.
+            // The card shows the message and stops asking.
             respond(exchange, 404, JSON,
                     error("no place " + placeSource + "/" + placeId + " in this dimension"));
             return;
@@ -388,7 +310,6 @@ public final class WebMapServer implements AutoCloseable {
         respond(exchange, 200, JSON, body.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** Whether one place query parameter is something the endpoint is willing to look up. */
     private static boolean acceptablePlaceParam(String value) {
         return value != null && !value.isBlank() && value.length() <= MAX_PLACE_PARAM_LENGTH;
     }
@@ -396,13 +317,7 @@ public final class WebMapServer implements AutoCloseable {
     /**
      * A query string as a map of decoded values.
      *
-     * <p>Both parameters are ids the mod produced and the page URL-encodes, so the only decoding
-     * needed is the standard form encoding a browser applies ({@code %2B} for a plus, and so on).
-     * First value wins on a duplicate: guessing which of two ids a caller meant is worse than
-     * looking up the first and answering honestly.
-     *
-     * @throws IllegalArgumentException when a percent escape is malformed, which the caller answers
-     *                                  with a 400 rather than by looking up a mangled id
+     * Only the standard form encoding a browser applies is needed: both parameters are mod-produced ids the page URL-encodes. First value wins on a duplicate.
      */
     private static Map<String, String> queryOf(String rawQuery) {
         Map<String, String> values = new LinkedHashMap<>();
@@ -437,7 +352,6 @@ public final class WebMapServer implements AutoCloseable {
         respond(exchange, 200, contentType(resource), body);
     }
 
-    /** Reads a bundled file, or null when this build does not have it. */
     private static byte[] readResource(String name) throws IOException {
         try (InputStream stream = WebMapServer.class.getResourceAsStream(RESOURCE_ROOT + name)) {
             if (stream == null) {
@@ -462,12 +376,10 @@ public final class WebMapServer implements AutoCloseable {
         return "application/octet-stream";
     }
 
-    /** Writes a response, replacing a body that has already been sent rather than throwing. */
     private static void respond(HttpExchange exchange, int status, String contentType, byte[] body)
             throws IOException {
-        // No caching anywhere: the jar the page came from changes when the game restarts, and a
-        // stale app.js next to a fresh payload is a bug report about a version the player is not
-        // running.
+        // No caching anywhere: the jar the page came from changes when the game restarts, and a stale app.js
+        // next to a fresh payload is a bug report about a version the player is not running.
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
         exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
         exchange.getResponseHeaders().set("Content-Type", contentType);
@@ -475,17 +387,15 @@ public final class WebMapServer implements AutoCloseable {
         exchange.getResponseBody().write(body);
     }
 
-    /** A response for a path that failed for a reason we only want to log, not to send. */
     private static void quietly(HttpExchange exchange, int status, byte[] body) {
         try {
             respond(exchange, status, JSON, body);
         } catch (IOException alreadyGone) {
-            // The browser closed the tab, or the socket went away while the handler was failing. There
-            // is nobody left to tell and nothing to clean up.
+            // The browser closed the tab, or the socket went away while the handler was failing; nobody is left
+            // to tell.
         }
     }
 
-    /** An error body in the documented shape: {@code {"error": "..."}}. */
     private static byte[] error(String message) {
         return GSON.toJson(Map.of("error", message == null ? "unknown error" : message))
                 .getBytes(StandardCharsets.UTF_8);
@@ -495,9 +405,8 @@ public final class WebMapServer implements AutoCloseable {
         AtomicInteger counter = new AtomicInteger();
         return task -> {
             Thread thread = new Thread(task, prefix + counter.incrementAndGet());
-            // Daemon: the server must never be the reason the game will not exit. Its socket is
-            // closed explicitly when the client shuts down, and this is the belt to that pair of
-            // braces -- a launcher that kills the client rather than closing it still gets to exit.
+            // Daemon: the server must never be the reason the game will not exit. Its socket is closed
+            // explicitly when the client shuts down, and this is the belt to that pair of braces.
             thread.setDaemon(true);
             return thread;
         };

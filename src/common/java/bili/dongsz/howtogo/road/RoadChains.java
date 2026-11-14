@@ -10,23 +10,8 @@ import java.util.Set;
 
 /**
  * Groups segments into whole roads.
- *
- * <p>A road drawn with bends is stored as several segments meeting at pass-through nodes. Those
- * nodes are not junctions -- nothing branches there -- so treating each segment as its own road
- * would mean a name covering only one straight piece of it, and a label repeated at every corner.
- *
- * <p>A node only joins two segments if it has exactly two connections <em>and</em> both sides have
- * the same road class. A highway flowing into a footpath is a change of road, not one road with a
- * kink in it.
- *
- * <h2>The index</h2>
- * Finding the segment that continues through a node used to mean scanning every segment of the
- * network, and copying them all into a fresh list at every step of the walk. A route build asks the
- * same question once per segment of the route, so a hundred-segment route over a five-thousand
- * segment network cost hundreds of thousands of comparisons and a hundred list allocations of five
- * thousand entries -- and this ran on the client thread behind a button press. The walk is now
- * driven by an adjacency index built in one pass, which makes both a single chain walk and
- * {@link #group(RoadNetwork) the whole-network grouping} linear in the network.
+ * A road drawn with bends is stored as several segments meeting at pass-through nodes; treating each as its own road would name only one straight piece and repeat the label at every corner. A node joins two segments only when it has exactly two connections and both sides have the same road class -- a highway flowing into a footpath is a change of road.
+ * An adjacency index built in one pass drives the walk, so a chain walk and whole-network grouping are linear; scanning per step was quadratic and allocated lists at every step, on the client thread behind a button press.
  */
 public final class RoadChains {
 
@@ -37,10 +22,7 @@ public final class RoadChains {
     }
 
     /**
-     * All segments joined to the seed through pass-through nodes, ordered end to end.
-     *
-     * <p>The walk is done in both directions from the seed and then stitched, because nothing
-     * guarantees that consecutive segments were stored pointing the same way.
+     * All segments joined to the seed through pass-through nodes, ordered end to end. Walked in both directions and then stitched, because consecutive segments are not guaranteed to be stored pointing the same way.
      */
     public static List<Integer> chainContaining(RoadNetwork network, int seedSegmentId) {
         RoadSegment seed = network.segment(seedSegmentId);
@@ -52,20 +34,8 @@ public final class RoadChains {
 
     /**
      * Every segment's road, in one pass over the network.
-     *
-     * <p>Asking for the chain of each segment in turn is the obvious way to label a route, and it
-     * walks every road once per segment of it. This walks each road exactly once and hands back what
-     * the labelling needs: the key a whole road is identified by, the name it carries, the junction
-     * degrees that say where it forks, the segments each road is made of, and which one of them
-     * carries the road's label.
-     *
-     * <p>The last two are here rather than in the three views that draw a map -- the world map, the
-     * navigation panel and the picker -- because all three need them every frame, and every one of
-     * them used to ask {@link #chainContaining} once per named road to get them. That call builds a
-     * whole adjacency index before it answers, so a map pass cost the size of the network times the
-     * number of names on it per frame, and about a megabyte of short-lived garbage per frame on a
-     * network of a few hundred segments. Asking once per network revision instead is the whole point
-     * of this shape.
+     * chainContaining per segment is the obvious way to label a route and walks every road once per segment of it; this walks each road once and hands back what labelling needs -- the road key, name, junction degrees, member segments, and which one carries the label.
+     * The last two are here because all three map views need them every frame; chainContaining built a whole adjacency index per named road, costing network size times names per frame.
      */
     public static Grouping group(RoadNetwork network) {
         Index index = new Index(network);
@@ -92,8 +62,7 @@ public final class RoadChains {
                 names.put(id, name);
             }
             chains.put(key, members(chain, segment));
-            // One label per road, at the middle of its chain. The same rule the label pass used to
-            // work out for itself, by walking the chain of every named segment it was about to draw.
+            // One label per road, at the middle of its chain.
             int middle = middleSegment(chain);
             if (middle != RoadSegment.NO_SEGMENT) {
                 carriers.add(middle);
@@ -131,11 +100,7 @@ public final class RoadChains {
         return chain;
     }
 
-    /**
-     * Segments reachable from {@code startNode}, walking away from {@code from}.
-     *
-     * @return the segments in the order they are met
-     */
+    /** Segments reachable from startNode, walking away from from, in the order they are met. */
     private static List<Integer> walk(RoadNetwork network, Index index, RoadSegment from, int startNode,
                                       RoadClass roadClass) {
         List<Integer> result = new ArrayList<>();
@@ -165,25 +130,14 @@ public final class RoadChains {
     }
 
     /**
-     * How many segment endpoints each node carries.
-     *
-     * <p>Cached against the network's revision, because of who asks: the navigation panel's wrong-way
-     * call walks from the road underfoot to the first junction that can be turned round at, and it
-     * asks this once per tick while the player is travelling the wrong way -- which is exactly when the
-     * panel must stay responsive. Built fresh each time, that was two hash maps and a list per node,
-     * twenty times a second, for an answer that only changes when the roads do.
+     * How many segment endpoints each node carries. Cached against the network revision: the navigation panel's wrong-way call asks once per tick exactly when it must stay responsive, and building it fresh was two hash maps and a list per node twenty times a second.
      */
     public static Map<Integer, Integer> degrees(RoadNetwork network) {
         return indexFor(network).degrees();
     }
 
     /**
-     * The segments meeting a node, which is what a walk along a road asks at every step it takes.
-     *
-     * <p>Out of the same cached reading as {@link #degrees}: the walk asks both, once per step, and
-     * building the reading twice would be building it for nothing. Answering "which other segment
-     * continues here" from this is a handful of lookups, where scanning every segment of the network
-     * per step was the same answer at a cost that grows with the map.
+     * The segments meeting a node, which is what a walk asks at every step. Out of the same cached reading as degrees, since the walk asks both once per step.
      */
     public static List<Integer> segmentsAt(RoadNetwork network, int nodeId) {
         return indexFor(network).segmentsAt(nodeId);
@@ -205,8 +159,7 @@ public final class RoadChains {
     private static Index cachedIndex;
 
     /**
-     * The segment at the middle of a chain, used to place one label per road rather than one per
-     * straight piece.
+     * The segment at the middle of a chain, used to place one label per road rather than one per straight piece.
      */
     public static int middleSegment(List<Integer> chain) {
         if (chain.isEmpty()) {
@@ -221,11 +174,7 @@ public final class RoadChains {
     }
 
     /**
-     * The network read once into the two shapes the chain walk asks questions of: how many segment
-     * ends a node carries, and which segments touch it.
-     *
-     * <p>Built from one snapshot, so a walk through it neither allocates a list per step nor sees the
-     * network change under it.
+     * The network read once into the two shapes the chain walk asks about: how many segment ends a node carries, and which segments touch it. Built from one snapshot, so it neither allocates per step nor sees the network change under it.
      */
     private static final class Index {
 
@@ -254,11 +203,7 @@ public final class RoadChains {
         }
 
         /**
-         * The segments meeting a node, in the order the network keeps them, or none.
-         *
-         * <p>The order is the network's own, which is what makes an answer taken from here the same
-         * answer a scan of every segment would have given: the first stored against the node that is
-         * not the one arrived on. A caller that walks a road may rely on that.
+         * The segments meeting a node, in the order the network keeps them, or none. The order is the network's own, so an answer here is the same a full scan would give; a caller that walks a road may rely on that.
          */
         List<Integer> segmentsAt(int nodeId) {
             List<Integer> found = byNode.get(nodeId);
@@ -266,11 +211,7 @@ public final class RoadChains {
         }
 
         /**
-         * The single other segment continuing through a pass-through node, or -1 when the node is a
-         * junction, an endpoint, or a change of road class.
-         *
-         * <p>Answers in the same order the old full scan did -- the first segment stored against the
-         * node that is not the one arrived on -- so the chain a segment is placed in is unchanged.
+         * The single other segment continuing through a pass-through node, or -1 for a junction, an endpoint, or a change of road class. Answers in the same order the old full scan did, so the chain a segment is placed in is unchanged.
          */
         int passThroughNeighbour(int nodeId, int excludeSegmentId, RoadClass roadClass) {
             if (nodeId == RoadSegment.NO_NODE || degrees.getOrDefault(nodeId, 0) != 2) {
@@ -291,10 +232,7 @@ public final class RoadChains {
     }
 
     /**
-     * One road per segment, as the things a route and a map both need to know about it.
-     *
-     * <p>A plain value computed once per network revision, so labelling a route -- or drawing a map
-     * -- is a map lookup rather than a walk of the road for every piece of it.
+     * One road per segment, as the things a route and a map both need to know about it. A plain value computed once per network revision, so labelling a route or drawing a map is a map lookup rather than a walk.
      */
     public static final class Grouping {
 
@@ -315,10 +253,7 @@ public final class RoadChains {
         }
 
         /**
-         * Identifies which road a segment belongs to.
-         *
-         * <p>The first segment of the chain, which is the same value for every segment of that road
-         * because the chain walk always runs end to end. Manoeuvres are announced where this changes.
+         * Identifies which road a segment belongs to: the first segment of the chain, the same value for every segment because the walk always runs end to end. Manoeuvres are announced where this changes.
          */
         public int keyOf(RoadSegment segment) {
             return keys.getOrDefault(segment.id(), segment.id());
@@ -330,38 +265,24 @@ public final class RoadChains {
         }
 
         /**
-         * Every segment of the road this one belongs to, in the order the chain walk gives them.
-         *
-         * <p>Handed out as an array rather than a list so a caller drawing a map can measure the road
-         * without allocating anything, and without walking its chain again -- which is what
-         * {@link #group(RoadNetwork)} exists to make unnecessary.
-         *
-         * <p>The array belongs to the grouping and must not be modified or kept across a rebuild of
-         * the network; both are why this is only ever read during the pass that asked for it.
+         * Every segment of the road this one belongs to, in chain order.
+         * Handed out as an array rather than a list so a caller drawing a map can measure the road without allocating or walking its chain again, which is what group() exists to make unnecessary. The array belongs to the grouping: do not modify it or keep it across a rebuild.
          */
         public int[] chainOf(RoadSegment segment) {
             int[] members = chains.get(keys.getOrDefault(segment.id(), segment.id()));
-            // Only reachable for a segment added since the grouping was built. Answering with the
-            // segment on its own is what the walk would have said about a road that is one piece.
+            // Only reachable for a segment added since the grouping was built; answering with the segment alone is what the walk would have said.
             return members == null ? new int[] {segment.id()} : members;
         }
 
         /**
-         * Whether this segment is the one that draws its road's label.
-         *
-         * <p>The middle of the chain, so a road drawn with bends is named once rather than at every
-         * corner. A property of the geometry, so a rename or a re-class does not move it.
+         * Whether this segment is the one that draws its road's label: the middle of the chain, so a bent road is named once. A property of the geometry, so a rename or a re-class does not move it.
          */
         public boolean carriesLabel(RoadSegment segment) {
             return carriers.contains(segment.id());
         }
 
         /**
-         * Whether the vertex at this index is a junction the road forks at.
-         *
-         * <p>Only the two ends of a segment are nodes at all -- everything between is the polyline of
-         * one piece of road -- and a node counts as a junction only when three or more segment ends
-         * meet there. Two is a road carrying on, and one is a road stopping.
+         * Whether the vertex at this index is a junction the road forks at. Only segment ends are nodes at all, and a node is a junction only when three or more segment ends meet there.
          */
         public boolean isBranch(RoadSegment segment, int vertexIndex) {
             int nodeId;
@@ -377,12 +298,8 @@ public final class RoadChains {
     }
 
     /**
-     * How many networks {@link #cachedGrouping} keeps a reading of.
-     *
-     * <p>More than one because a single frame of the world map labels three layers: the player's own
-     * roads, Create's rails and MTR's rails. One slot would rebuild a reading of the layer it is not
-     * currently holding on every pass, which on a large rail layer is the cost this cache exists to
-     * avoid. Four is every layer a frame can ask about at once, with room to spare.
+     * How many networks cachedGrouping keeps a reading of.
+     * A single world-map frame labels three layers -- the player's roads, Create's rails and MTR's rails -- and one slot would rebuild a reading of the layer it is not holding every pass, which on a large rail layer is the cost this cache exists to avoid. Four is every layer a frame can ask about, with room to spare.
      */
     private static final int CACHE_SLOTS = 4;
 
@@ -393,36 +310,10 @@ public final class RoadChains {
 
     /**
      * The grouping of a network, rebuilt only when the network it describes has changed.
-     *
-     * <h2>What this is for</h2>
-     * The three maps this mod draws ask the same questions of the same networks every frame -- which
-     * road does this segment belong to, is it the piece that carries the name, how long is that road.
-     * Answering them by walking a chain per segment is quadratic in the size of the network and, worse,
-     * every one of those walks built a fresh adjacency index of the whole network: on a network of a
-     * few hundred segments that was megabytes of garbage per frame, and on a larger one it was the
-     * frame budget itself. The reading is a property of the geometry, so it is kept until the geometry
-     * changes.
-     *
-     * <h2>Why the revision and not just the reference</h2>
-     * The editor mutates one network in place for a whole session, so the same object is a different
-     * network after an edit. {@link RoadNetwork#revision()} is what says so, and it is deliberately
-     * left alone by the changes that cannot move anything -- a rename, a re-class, a one-way flag --
-     * which is exactly the set of changes this reading does not depend on.
-     *
-     * <p>Held on to until displaced, which is why the callers are the long-lived networks a session
-     * has: the player's roads and the two rail layers. A per-plan copy of a network is not asked for
-     * here and would only cost a rebuild.
-     *
-     * <h2>Why the rotation and not an LRU</h2>
-     * The callers are the long-lived networks a session has -- the player's roads and the two rail
-     * layers -- so a slot is lost to eviction only when a fourth network is asked about at all, and a
-     * hit never needs to be moved to keep it. That makes the rotation close enough to an LRU here, and
-     * it keeps the hit path to four reference comparisons: lifting an entry to the front on every hit
-     * would cost three array copies on the one path this class exists to make cheap.
-     *
-     * <h2>Threads</h2>
-     * The render thread, where every caller draws. Not synchronized on purpose: taking a lock on a
-     * per-frame path to guard a value recomputed once per edit is the wrong trade.
+     * The three maps ask the same questions every frame -- which road does this segment belong to, does it carry the name, how long is it. Walking a chain per segment is quadratic and built a fresh index of the whole network each time: megabytes of garbage per frame, and on larger networks the frame budget. The reading is a property of the geometry, so it is kept until the geometry changes.
+     * Keyed on revision, not reference: the editor mutates one network in place, and RoadNetwork revision() ignores changes that cannot move anything (a rename, a re-class, a one-way flag), which is exactly what this reading does not depend on.
+     * Rotation rather than an LRU: the callers are the long-lived networks a session has, a slot is lost only when a fourth network is asked about, and a hit never needs moving -- four reference comparisons on the hit path instead of three array copies.
+     * Render thread, where every caller draws. Not synchronized on purpose: a lock on a per-frame path to guard a value recomputed once per edit is the wrong trade.
      */
     public static Grouping cachedGrouping(RoadNetwork network) {
         for (int i = 0; i < CACHE_SLOTS; i++) {

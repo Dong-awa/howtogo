@@ -9,126 +9,69 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * A computed route from the player to a destination.
- *
- * <p>Three parts: an off-road connector from the player to the first road node, the road polyline
- * itself, and a connector from the last road node to the destination. The connectors are kept
- * separate rather than folded into one number so the UI can warn that part of the trip is off-road.
- *
- * <p>Each polyline point also carries the on-road tolerance of the road it belongs to, so
- * "am I still on route?" can be judged against the width of the road the player is meant to be on
- * rather than one global number.
+ * A computed route from the player to a destination: an off-road connector to the first road node,
+ * the road polyline, and a connector to the destination. Connectors are kept separate so the UI can
+ * warn that part of the trip is off-road. Each point carries the tolerance of the road it is on.
  */
 public final class Route {
 
-    /** Ordered world points (x, z) forming the drawn line, connectors included. */
     private final List<double[]> points;
-    /** On-road tolerance in blocks, parallel to {@link #points}. */
     private final double[] tolerances;
     /**
-     * Which road each point belongs to, parallel to {@link #points}.
-     *
-     * <p>A manoeuvre is only announced where this changes: a bend inside one road is not a turn,
-     * however sharp the angle looks geometrically.
+     * Road each point belongs to, parallel to points. A manoeuvre is announced only where this changes:
+     * a bend inside one road is not a turn.
      */
     private final int[] roadKeys;
 
-    /** Name of the road each point belongs to, parallel to {@link #points}. May be null. */
     private final String[] roadNames;
     /**
-     * Whether each point is a real junction, parallel to {@link #points}.
-     *
-     * <p>A junction here means a node the road actually forks at -- three or more segment ends. The
-     * road data is stored as segments joined at pass-through nodes, and a class or name change also
-     * breaks the sequence without anything branching, so "the road key changed" on its own says only
-     * that the road data changed, not that the player has a decision to make. Telling a player to
-     * turn onto the road they are already on comes from treating the second as the first.
+     * Whether each point is a real junction (three or more segment ends), parallel to points. A class or
+     * name change breaks the road sequence without branching, so a road-key change alone is not a
+     * decision.
      */
     private final boolean[] branchAt;
     private final double startConnector;
     private final double goalConnector;
-    /** The pieces of road the route is made of, in the order they are travelled. */
     private final List<Leg> legs;
     private final String destinationName;
-    /** Off-road speed as a fraction of the mode's pace, applied to the connectors. */
     private final double offRoadSpeedFactor;
     /**
-     * Time on this route that is not distance: waiting for a service, in seconds.
-     *
-     * <p>Everything else a route is timed by comes from its legs -- a length at a pace -- which is the
-     * right shape for anything travelled and cannot express standing still. A public transport leg
-     * begins with a wait for the vehicle, and without a term for it the estimate of a journey that
-     * changes lines was short by exactly the waiting it was asking the player to do, while the search
-     * that chose the journey had paid for that waiting all along. The two now agree, which is what
-     * makes the reported estimate the number the route was actually chosen by.
-     *
-     * <p>Deliberately outside {@link #totalLength()} and outside {@link #secondsPerBlock()}: waiting
-     * covers no ground, and the pace underfoot that the readout projects onto the distance left is
-     * about the ground.
+     * Time on this route that is not distance: waiting for a service, in seconds. Kept outside
+     * totalLength and secondsPerBlock because waiting covers no ground.
      */
     private final double fixedSeconds;
     /**
-     * The mode this route is travelled and timed in.
-     *
-     * <p>Kept on the route rather than only on the navigation session, because the ETA is a
-     * property of the route: the same polyline walked and driven does not take the same time, and
-     * an estimate that outlives the mode it was made for is simply wrong. For a route that has been
-     * re-timed for another mode -- see {@link #timedFor} -- this is the mode it is now timed in,
-     * which is the one the panel's estimate and the countdown are made in.
+     * The mode this route is travelled and timed in. Kept on the route because the estimate is a property
+     * of it; timedFor changes it.
      */
     private final TravelMode travelMode;
 
     /**
-     * Cached turn points, and the straight-through switch they were built for.
-     *
-     * <p>The switch is part of the cache rather than read per manoeuvre because it decides which
-     * manoeuvres exist at all -- see {@link #computeManeuvers} -- and a list built for the other
-     * answer would otherwise be served after the player changed the setting. Toggling it therefore
-     * costs one rebuild of this list and no re-plan: the road under the player has not changed, only
-     * what the guidance is allowed to say about it.
-     *
-     * <p>The switch is read through {@link RoutePreferenceStore}, the same place the voice switch is
-     * read from, because it is a guidance preference rather than a property of the geometry: the
-     * same road driven with the calls on and off is the same road. Reading it here rather than in the
-     * readouts is deliberate -- the readout, the voice and {@code TurnCursor} all index this one
-     * list, so a separate filtered copy at each of them would be three chances for the junction
-     * being announced not to be the junction being drawn.
+     * Cached turn points, and the straight-through switch they were built for. The switch decides which
+     * manoeuvres exist, so it is part of the cache: toggling it costs a rebuild, no re-plan. Read through
+     * RoutePreferenceStore because it is a guidance preference; every readout indexes this one list.
      */
     private List<Maneuver> maneuvers;
-    /** Whether that list was built with straight-through junctions called; null before any build. */
     private Boolean maneuversWithStraight;
 
     /**
-     * Drawn distance from the first point to each point, parallel to {@link #points}.
-     *
-     * <p>Computed once, at construction, because "how far along the line is this position" is asked
-     * several times per frame by the readouts and the answer cannot change: the polyline is never
-     * written to after it is built. Walking it each time was the same numbers added up again, on the
-     * render path, for every frame of a trip.
+     * Drawn distance from the first point to each point, parallel to points. Computed once because the
+     * polyline never changes and the readouts ask every frame.
      */
     private final double[] cumulative;
 
-    /** Total drawn length, connectors included. The last entry of {@link #cumulative}. */
     private final double polylineLength;
 
-    /** Where the cached projection was measured from, and what it found. See {@link #closest}. */
     private double projectionX = Double.NaN;
     private double projectionZ = Double.NaN;
     private Projection projectionCache;
     private boolean projectionCached;
 
-    /** A turn sharper than this counts as a manoeuvre worth announcing. */
     private static final double TURN_THRESHOLD_DEG = 25.0;
 
     /**
-     * How close two straight-through manoeuvres may be before the second is taken for the first.
-     *
-     * <p>A junction is one place, but the road data may draw it as two nodes a few blocks apart --
-     * the quad of a crossroads, or a short connector joining the two carriageways of a divided road
-     * -- and each of those nodes is a branch of its own. Without this, one junction the player
-     * carries straight through could be called twice within a couple of steps. Three blocks is
-     * wider than that pair and narrower than the gap between two junctions a driver would think of
-     * as separate decisions.
+     * How close two straight-through manoeuvres may be before the second is taken for the first. A
+     * junction drawn as two nodes a few blocks apart would otherwise be called twice.
      */
     private static final double STRAIGHT_DUPLICATE_DISTANCE = 3.0;
 
@@ -165,40 +108,17 @@ public final class Route {
     }
 
     /**
-     * One piece of the route, as the estimate needs it: how long it is, the pace it is travelled at,
-     * and which class of road it is on.
-     *
-     * <p>The class is carried beside the pace because the pace is a property of the pair rather than
-     * of either half -- the same road walked and driven does not cost the same -- so a route that is
-     * to be timed for another mode needs to know what each piece of it is. It is null for a piece of
-     * the journey with no road under it at all: a connector, which is walked whatever the mode, and
-     * which is timed at the pace it was built with rather than at a table's.
+     * One piece of the route for the estimate: length, pace, and the road class it is on. The class is
+     * null for a connector, which is walked whatever the mode.
      */
     private record Leg(double length, double pace, RoadClass roadClass) {
     }
 
     /**
-     * The same line, timed as the given mode would travel it.
-     *
-     * <h2>What this is for</h2>
-     * A route is planned in one mode and is normally timed in that same one. The exception is a
-     * drive to a destination the drivable network does not reach: the walker is the only one who can
-     * leave the network, so the walker's line is the only plan there is -- and the trip the player
-     * then makes along it is the car's up to the last road and the walker's from there. Timing that
-     * line at walking pace throughout is what reported a destination with a short walk at the end as
-     * a much longer trip than it is, and worse, as a trip in which the road under the car was walked.
-     *
-     * <h2>What changes and what does not</h2>
-     * Each piece of road the given mode may travel is re-timed at that mode's own pace for its class;
-     * every other piece keeps the pace it was planned at, which is the walker's. Nothing else moves:
-     * the geometry, the connectors, the tolerances and the waiting are the route's own, so the line
-     * drawn and guided along is exactly the line that was planned, and only the time it is expected
-     * to take is that of the trip the player would really make.
-     *
-     * <p>Deliberately not offered to public transport: a journey is not a ride where one can and a
-     * walk where one cannot. When no line can carry a journey the answer is the walk, and re-timing
-     * it as a ride would invent a vehicle nobody boarded.
-     *
+     * The same line, timed as the given mode would travel it. Used for a drive to a destination the
+     * drivable network does not reach: the line is the walker's, but the car takes it up to the last
+     * road. Each piece the mode may travel is re-timed at that mode's pace for its class; geometry,
+     * connectors, tolerances and waiting are unchanged. Not offered to public transport.
      * @param mode the mode to time the route for, or null to leave it as it is
      */
     public Route timedFor(TravelMode mode) {
@@ -219,13 +139,7 @@ public final class Route {
                 goalConnector, retimed, destinationName, offRoadSpeedFactor, wanted, fixedSeconds);
     }
 
-    /**
-     * The same route, plus time that is not distance.
-     *
-     * <p>For the waiting a public transport leg begins with: the geometry, the legs and the pace are
-     * all unchanged, and only the estimate grows. The arrays are shared rather than copied -- a route
-     * is never written to after it is built.
-     */
+    /** The same route plus time that is not distance; arrays are shared, since a route is immutable. */
     Route plusFixedSeconds(double seconds) {
         if (seconds <= 0) {
             return this;
@@ -236,27 +150,10 @@ public final class Route {
     }
 
     /**
-     * Joins several routes end to end into one, keeping each part's own pace.
-     *
-     * <h2>Why this lives here and not in the planner</h2>
-     * Every field of a route is private and five of them are parallel arrays. A merge written outside
-     * this class would have to expose all five to be able to do anything, and the first time one of
-     * them was concatenated a line out of step with the others the damage would be silent and
-     * strange: a tolerance read from the wrong point makes a player "off route" while standing on it,
-     * and a road key read from the wrong point invents a turn where there is none. Keeping the merge
-     * inside the class that owns the invariant is what makes it possible to state the invariant at
-     * all: every parallel array is appended in the same loop, from the same index, or not at all.
-     *
-     * <h2>What is kept from which part</h2>
-     * The two connectors of the whole journey are the first part's start and the last part's goal:
-     * those, and only those, describe getting on and off the network at the ends. Every connector
-     * between them is travelled too, so it is recorded as a piece of the whole route at the pace it is
-     * walked -- see the comment in the loop for what dropping them used to cost. The off-road speed
-     * factor comes from the first part, which is the one whose connector it is timing. The pace of
-     * each ridden stretch is not taken from anywhere: each part already recorded it in its own
-     * {@code legs}, and those are appended as they are, so a walked stretch keeps the walking pace and
-     * a ridden one keeps the line's.
-     *
+     * Joins routes end to end, keeping each part's own pace. It lives here because five parallel arrays
+     * must stay in step; a merge outside would silently misalign them. The whole journey's connectors are
+     * the first part's start and the last part's goal -- every connector between is travelled too and is
+     * recorded as a walked piece.
      * @param parts routes in the order they are travelled; a part that is not present is skipped
      */
     static Route concat(List<Route> parts, TravelMode travelMode, String destinationName) {
@@ -281,9 +178,8 @@ public final class Route {
             Route part = present.get(p);
             for (int i = 0; i < part.points.size(); i++) {
                 double[] point = part.points.get(i);
-                // The join is one coordinate written twice: a leg ends at the station and the next
-                // begins there. Its second copy is dropped from every array at once, in this same
-                // index-guarded step, which is the only way the arrays stay parallel.
+                // The join is one coordinate written twice: its second copy is dropped from every array at once,
+                // keeping them parallel.
                 if (i == 0 && !points.isEmpty() && samePoint(points.get(points.size() - 1), point)) {
                     continue;
                 }
@@ -294,11 +190,8 @@ public final class Route {
                 branchAt.add(part.branchAt[i]);
             }
             legs.addAll(part.legs);
-            // Only the first part's start and the last part's goal describe getting on and off the
-            // whole journey; every other connector belongs to the middle of it and is travelled all
-            // the same. Leaving them out -- which is what taking only the two ends did -- made a
-            // public transport journey's time and length short by every station-side hop in it, and
-            // the walking comparison was then made against that short number.
+            // Only the first part's start and the last part's goal are the whole journey's connectors; the middle
+            // ones are travelled all the same and must not be left out.
             if (p > 0) {
                 legs.add(new Leg(part.startConnector, part.connectorPace(), null));
             }
@@ -314,9 +207,8 @@ public final class Route {
             startConnector = first.startConnector;
             goalConnector = last.goalConnector;
             offRoadSpeedFactor = first.offRoadSpeedFactor;
-            // Waiting does not cover ground, so it is carried as itself rather than folded into the
-            // legs: every leg's time is its length over its pace, and a zero-length leg would add
-            // nothing however long the wait was.
+            // Waiting is carried as itself: every leg's time is length over pace, and a zero-length leg would add
+            // nothing.
             for (Route part : present) {
                 waitingSeconds += part.fixedSeconds;
             }
@@ -342,30 +234,18 @@ public final class Route {
     }
 
     /**
-     * One announced manoeuvre.
-     *
      * @param distanceFromStart how far along the route the junction is
-     * @param turnDegrees       signed angle, positive being a right turn; exactly zero for a
-     *                          straight-through call, which is a junction the route carries on
-     *                          through rather than a turn the player has to make
+     * @param turnDegrees       signed angle, positive being a right turn; zero for a straight-through call
      * @param roadName          the road being turned onto, or null when it has no name
-     * @param junctionX         world x of the junction itself
-     * @param junctionZ         world z of the junction itself
-     * @param bearingAfter      direction of the route leaving the junction, in degrees from +X
-     *                          towards +Z, which is what a player's heading has to match for the
-     *                          turn to count as taken rather than passed. For a straight-through call
-     *                          this is the direction the route runs, which is the direction a player
-     *                          carrying straight on is already facing -- see {@code TurnCursor}
-     * @param namesTheRoad      whether the road being entered is worth naming: it has a name, and not
-     *                          the one the route was already on
-     * @param continuesNamedRoad whether the road entered carries the same name as the one left, which
-     *                          is a road worth naming but worded as carrying on along it rather than
-     *                          as turning into it. False for an unnamed road and for a straight-through
-     *                          call, neither of which names anything
-     * @param straight          whether this is a junction the route carries straight through rather
-     *                          than a turn. A flag rather than a test on {@code turnDegrees}, because a
-     *                          small angle and a straight-through call look the same in that number
-     *                          and are worded completely differently
+     * @param junctionX         world x of the junction
+     * @param junctionZ         world z of the junction
+     * @param bearingAfter      direction leaving the junction, in degrees from +X towards +Z; a player's
+     * heading must match for the turn to count as taken rather than passed
+     * @param namesTheRoad      whether the road entered is worth naming
+     * @param continuesNamedRoad whether the road entered carries the same name as the one left, worded as
+     * carrying on along it
+     * @param straight          whether the route carries straight through; a flag because a small angle
+     * and a straight-through call look the same in turnDegrees
      */
     public record Maneuver(double distanceFromStart, double turnDegrees, String roadName,
                            double junctionX, double junctionZ, double bearingAfter,
@@ -381,17 +261,9 @@ public final class Route {
     }
 
     /**
-     * How many times the drawn line changes direction by a turn's worth, in degrees.
-     *
-     * <h2>Why this is not {@link #maneuvers()}</h2>
-     * A maneuver is a turn the guidance announces, and the guidance only announces a change of
-     * <em>road</em>: a corner inside one road, or a grid whose unnamed streets are chained into one
-     * road, is a bend the player takes but nothing is said about -- correctly, because telling
-     * somebody to turn onto the road they are already on is worse than saying nothing. The picker
-     * compares plans by what the player will actually do at the controls, so it asks the polyline
-     * instead, and this is that count: the same twenty-five degrees the guidance uses, read off the
-     * drawn line. The two are not interchangeable and neither is wrong; they answer different
-     * questions about the same journey.
+     * How many times the drawn line changes direction by a turn's worth. Not maneuvers(): the guidance
+     * announces only road changes, while a corner inside one road is a bend the player still takes. The
+     * picker compares plans by what the player will do at the controls.
      */
     public int bends() {
         int bends = 0;
@@ -416,16 +288,9 @@ public final class Route {
     }
 
     /**
-     * The road under each point of the route, as {@code RoadChains.Grouping#keyOf} named it.
-     *
-     * <p>One entry per point, and {@code 0} means "no road here" -- a connector off the network. It
-     * exists for the second plan: a genuinely different route is produced by handing the roads the
-     * first plan travels back to the router as a toll, and this array is what those roads are. The
-     * keys are the same chain keys the route already uses to name a turn ("turn onto such-and-such"),
-     * so a plan cannot be compared against roads that were grouped differently.
-     *
-     * @return the keys, as a copy: a route is immutable and a caller sorting or trimming the array
-     *         must not be able to change where the route says it goes
+     * The road under each point, as RoadChains.Grouping.keyOf named it; 0 means off-road. Used to toll the
+     * first plan's roads when building the second, and the keys match the ones used to name a turn.
+     * @return the keys as a copy, so a caller cannot change where the route says it goes
      */
     public int[] roadKeys() {
         return roadKeys.clone();
@@ -435,12 +300,10 @@ public final class Route {
         return destinationName;
     }
 
-    /** The mode this route was planned for. */
     public TravelMode travelMode() {
         return travelMode;
     }
 
-    /** Length of the road part only, in blocks. */
     public double roadLength() {
         double roadDistance = 0;
         for (Leg leg : legs) {
@@ -457,14 +320,10 @@ public final class Route {
         return goalConnector;
     }
 
-    // ---------------------------------------------------------------- distance
 
     /**
-     * Where the guidance has something to say along this route, in the order it is travelled.
-     *
-     * <p>Built for the straight-through switch the player has set, and rebuilt when that switch is
-     * changed: the cache field above says why that belongs here rather than in a readout, and
-     * {@link #computeManeuvers} says what the switch decides.
+     * Where the guidance has something to say, in the order it is travelled. Built for the
+     * straight-through switch and rebuilt when it changes; see computeManeuvers.
      */
     public List<Maneuver> maneuvers() {
         boolean straightThroughJunctions = RoutePreferenceStore.straightAnnouncements();
@@ -478,30 +337,12 @@ public final class Route {
 
     /**
      * Works out where the guidance has something to say, once per list of manoeuvres.
-     *
-     * <h2>What is a manoeuvre</h2>
-     * A change of road is not enough on its own. A sharp corner inside one road is a bend, and
-     * announcing it would tell the player to turn when they are already on the right road; a class
-     * or name change at a pass-through node is a change of road data on one continuous piece of
-     * ground, and announcing that is what told players to turn onto the road they were already on.
-     *
-     * <h2>The junction carried straight through</h2>
-     * A real fork the route carries on through is the one decision a turn-based list used to drop:
-     * there is no angle to report, and the route is not entering a differently named road, so the
-     * point was skipped and the readout went back to "continue straight" with no idea where. That is
-     * exactly where a player has to be told to stay on the road they are on -- the crossing road is
-     * right there -- so the point is called, as a straight-through manoeuvre with no angle. What it
-     * must not be is a small-angle turn: the shape test that gives the angle also gives an almost
-     * zero angle here, and a "keep left" for a junction that goes straight on is worse than silence.
-     * See {@link Maneuver#straight()}.
-     *
-     * <p>{@code straightThroughJunctions} is the player's switch. Off, the list is exactly what it
-     * was before straight-through calls existed: those points are skipped, and the one case the old
-     * rule kept -- a straight fork onto a road with a name of its own, where the name is the news --
-     * still produces its ordinary sharp-or-slight turn.
-     *
-     * <p>A junction the road data draws as two adjacent nodes is one junction to the player, so
-     * straight-through calls within {@link #STRAIGHT_DUPLICATE_DISTANCE} of each other are one call.
+     * A road change alone is not enough: a bend inside one road must not be announced, and a class or
+     * name change at a pass-through node is one continuous piece of ground.
+     * A real fork the route carries straight through is the decision the old list dropped: there is no
+     * angle to report and no differently named road, so it is called with no angle. It must not be a
+     * small-angle turn; see Maneuver.straight(). Off, the old rules apply. Adjacent straight-through calls
+     * within STRAIGHT_DUPLICATE_DISTANCE are one junction.
      */
     private List<Maneuver> computeManeuvers(boolean straightThroughJunctions) {
         List<Maneuver> result = new ArrayList<>();
@@ -509,8 +350,7 @@ public final class Route {
             return result;
         }
         double travelled = 0;
-        // Where the previous straight-through call was placed, or NaN when there is none yet; see
-        // STRAIGHT_DUPLICATE_DISTANCE.
+        // Where the previous straight-through call was placed, or NaN when there is none yet.
         double lastStraightAt = Double.NaN;
         for (int i = 1; i < points.size() - 1; i++) {
             double[] a = points.get(i - 1);
@@ -526,25 +366,16 @@ public final class Route {
             if (inLength < 1.0E-6 || Math.hypot(outX, outZ) < 1.0E-6) {
                 continue;
             }
-            // Only a change of road is a turn. A sharp corner inside one road is just a bend, and
-            // announcing it would tell the player to turn when they are already on the right road.
             if (i + 1 >= roadKeys.length || roadKeys[i] == roadKeys[i + 1]) {
                 continue;
             }
-            // Signed so that positive is a right turn, following Minecraft's axes (X east, Z south).
             double delta = Math.toDegrees(wrapRadians(
                     Math.atan2(outZ, outX) - Math.atan2(inZ, inX)));
             double bearingAfter = Math.toDegrees(Math.atan2(outZ, outX));
             boolean turns = Math.abs(delta) >= TURN_THRESHOLD_DEG;
             if (!turns) {
-                // ... and it has to be a decision. Either the route genuinely bends here, or it
-                // carries on into a road with a name of its own at a real fork. A class or name
-                // change that does neither is the same piece of ground continuing, and calling that
-                // a turn is what told players to turn onto the road they were already on.
-                //
-                // A real fork is where the two halves differ: the road data really does branch
-                // here, so the player has a choice to get wrong even though the route's own line
-                // does not bend. That is the junction the straight-through call exists for.
+                // A decision is required: the route really bends here, or it enters a differently named road at a
+                // real fork.
                 if (!isBranch(i)) {
                     continue;
                 }
@@ -554,22 +385,19 @@ public final class Route {
                         continue;
                     }
                     lastStraightAt = travelled;
-                    // Zero degrees on purpose: the arrow and the wording are both "straight on",
-                    // and it is the flag -- not the number -- that says which wording to use.
-                    // Nothing is named: a player carrying straight on has not entered a road.
+                    // Zero degrees on purpose: the wording comes from the straight flag, not the number. Nothing is
+                    // named: a player carrying straight on has not entered a road.
                     result.add(new Maneuver(travelled, 0.0, nameAt(i + 1), b[0], b[1], bearingAfter,
                             false, false, true));
                     continue;
                 }
-                // Switched off: the rule that existed before straight-through calls. The one case
-                // kept here is the straight fork onto a differently named road, where the name is
-                // what the player needs to know.
+                // Switched off: the old rule, whose one kept case is the straight fork onto a differently named road.
                 if (!entersADifferentRoad(i)) {
                     continue;
                 }
             }
-            // The junction's position and the bearing leaving it, both already in hand here, so
-            // the caller can tell a turn the player took from one they walked straight past.
+            // The junction position and the bearing leaving it, so a caller can tell a taken turn from one walked
+            // straight past.
             result.add(new Maneuver(travelled, delta, nameAt(i + 1),
                     b[0], b[1], bearingAfter, namesTheRoad(i), continuesNamedRoad(i), false));
         }
@@ -577,16 +405,8 @@ public final class Route {
     }
 
     /**
-     * Whether naming the road this turn enters tells the player anything.
-     *
-     * <p>Naming the road they are already on does not: "turn right onto unnamed road" while standing
-     * on an unnamed road, or onto the same road's name at a fork where the name carries on, reads as
-     * the tool having lost track of where they are. The turn is still a turn and is still announced;
-     * it is only the name that is dropped.
-     *
-     * <p>"Nothing to name" and "the same road's name" are different answers, so they are not
-     * collapsed into this one flag: {@link #continuesNamedRoad} is the second of them, and the two
-     * are worded differently -- dropping the name for the first, "continue on X" for the second.
+     * Whether naming the road this turn enters tells the player anything. The turn is still announced;
+     * only the name is dropped. Different from continuesNamedRoad, which is worded differently.
      */
     private boolean namesTheRoad(int pointIndex) {
         String before = nameAt(pointIndex);
@@ -595,13 +415,8 @@ public final class Route {
     }
 
     /**
-     * Whether the turn enters a road that carries on the name of the one being left.
-     *
-     * <p>Two roads whose ends meet and whose names agree are one road to the player, whatever the
-     * data made of them -- a name edited on one piece, a junction point placed in the middle, a
-     * class change along the way. Calling that "turn right" and then dropping the name reads as the
-     * tool having lost the road; calling it "turn right, continue on X" says the thing that is true:
-     * the road goes on, the line bends.
+     * Whether the road entered carries on the name of the one left: two roads whose ends meet and names
+     * agree are one road to the player. Worded as "turn right, continue on X".
      */
     private boolean continuesNamedRoad(int pointIndex) {
         String before = nameAt(pointIndex);
@@ -609,7 +424,6 @@ public final class Route {
         return after != null && !after.isBlank() && after.equals(before);
     }
 
-    /** Whether the polyline point is a real junction: a node with three or more segment ends. */
     private boolean isBranch(int pointIndex) {
         if (branchAt.length == 0) {
             return false;
@@ -620,12 +434,8 @@ public final class Route {
     }
 
     /**
-     * Whether the road the route enters at this point has a name of its own, different from the one
-     * it leaves.
-     *
-     * <p>A name is what makes the fork worth announcing when the route does not bend: the player has
-     * to know which of the two roads carrying on is theirs. Where the new road has no name there is
-     * nothing to say that the map's road does not already say.
+     * Whether the road entered at this point has a name of its own, different from the one left. A name is
+     * what makes a straight fork worth announcing.
      */
     private boolean entersADifferentRoad(int pointIndex) {
         String before = nameAt(pointIndex);
@@ -633,7 +443,6 @@ public final class Route {
         return after != null && !after.isBlank() && !after.equals(before);
     }
 
-    /** Name of the road at a polyline point, or null when the point is off-road or unnamed. */
     private String nameAt(int pointIndex) {
         if (roadNames.length == 0) {
             return null;
@@ -641,19 +450,14 @@ public final class Route {
         return roadNames[Math.max(0, Math.min(pointIndex, roadNames.length - 1))];
     }
 
-    /**
-     * Name of the road the player is currently on, or null when off-road or on an unnamed road.
-     */
     public String currentRoadName(double x, double z) {
         Projection projection = closest(x, z);
         return projection == null ? null : nameAt(projection.segmentIndex());
     }
 
     /**
-     * Whether the given position is close enough to the route to count as being on it.
-     *
-     * <p>Lets a caller tell "on an unnamed road" apart from "out in a field", which are different
-     * things to tell the player.
+     * Whether the position is close enough to count as on the route; lets a caller tell an unnamed road
+     * from open country.
      */
     public boolean isOnRoute(double x, double z) {
         if (!isPresent()) {
@@ -674,10 +478,8 @@ public final class Route {
     }
 
     /**
-     * Perpendicular distance from a point to the route polyline, in blocks.
-     *
-     * <p>Measuring to the nearest vertex would jump as the player passes between vertices, so every
-     * segment is tested.
+     * Perpendicular distance to the polyline, in blocks. Every segment is tested, or the value would jump
+     * as the player passes between vertices.
      */
     public double distanceTo(double x, double z) {
         Projection projection = closest(x, z);
@@ -685,10 +487,8 @@ public final class Route {
     }
 
     /**
-     * On-road tolerance at the closest point of the route, in blocks.
-     *
-     * <p>This is what makes off-route detection road-aware: the player is judged against the width
-     * of the road they are supposed to be on, not a single global number.
+     * On-road tolerance at the closest point, in blocks: the player is judged against the width of the road
+     * they should be on, not one global number.
      */
     public double toleranceNear(double x, double z) {
         Projection projection = closest(x, z);
@@ -702,26 +502,10 @@ public final class Route {
     }
 
     /**
-     * Every direction the route runs within {@code radius} blocks of {@code (x, z)}.
-     *
-     * <h2>Why one direction is not enough to judge a player by</h2>
-     * {@link #bearingAt} answers with the nearest segment, and a route that passes over the same
-     * ground twice makes that answer ambiguous: a road that loops back, a divided highway whose two
-     * carriageways are a lane apart, a destination on the piece of road the trip set off along, and
-     * every case where the connector from the player onto the road happens to lie against the road
-     * it joins. At such a place the two passes are the same distance away, the scan takes the earlier
-     * one, and the direction it reports is the direction of the pass the player has already made --
-     * exactly reversed. A caller comparing a player's heading against that one number then reads a
-     * player travelling correctly as going the wrong way.
-     *
-     * <p>Handing back all of them lets the caller ask the question it actually means: is this player
-     * travelling against the route <em>wherever the route is</em>, which is true only when they
-     * disagree with every pass, not merely with the one that happened to be nearest.
-     *
-     * <p>Only segments whose nearest point is within {@code radius} blocks are offered, so a route
-     * that comes back within a tolerance but not within the caller's own idea of "here" does not
-     * vote. At most a handful of directions come back, and duplicates are dropped.
-     *
+     * Every direction the route runs within radius blocks of (x, z).
+     * One direction is not enough where the route passes over the same ground twice: bearingAt takes the
+     * earlier pass and can report exactly reversed. A caller judging travel direction asks whether the
+     * player disagrees with every pass.
      * @return the bearings, in degrees from +X towards +Z; empty when nothing of the route is near
      */
     public double[] bearingsNear(double x, double z, double radius) {
@@ -758,8 +542,6 @@ public final class Route {
                 continue;
             }
             if (count == found.length) {
-                // More distinct directions than a route can plausibly offer at one place; the ones in
-                // hand already answer the question, and growing the array is not worth the copy.
                 break;
             }
             found[count++] = bearing;
@@ -769,24 +551,16 @@ public final class Route {
         return result;
     }
 
-    /** The smaller angle between two bearings, in degrees. */
     private static double gapDegrees(double from, double to) {
         double difference = Math.abs(from - to) % 360.0;
         return difference > 180.0 ? 360.0 - difference : difference;
     }
 
     /**
-     * Direction the route runs at the point nearest to {@code (x, z)}, in degrees from +X towards +Z.
-     *
-     * <p>The convention the manoeuvre angles and the player's heading already use, so a heading can
-     * be compared against the route without either being converted. Taken from the segment the
-     * projection landed on, which is the direction the route is going where the player is -- what a
-     * player travelling the other way is travelling against.
-     *
-     * <p>Where the route passes over the same ground twice this is only one of the answers it has
-     * there; a caller deciding whether a player is going the wrong way wants {@link #bearingsNear}.
-     *
-     * @return the bearing, or NaN when there is no route to take a direction from
+     * Direction the route runs at the nearest point, in degrees from +X towards +Z. Where the route passes
+     * over the same ground twice this is only one answer; a caller deciding direction of travel wants
+     * bearingsNear.
+     * @return the bearing, or NaN when there is no route
      */
     public double bearingAt(double x, double z) {
         Projection projection = closest(x, z);
@@ -804,12 +578,9 @@ public final class Route {
 
     /** Closest point on the polyline, as a projection onto a segment. */
     private Projection closest(double x, double z) {
-        // One slot of memo, because the whole of one frame asks the same question: the panel, the map
-        // readout, the progress bar and the voice all measure from the player's position, which does
-        // not move between them. Each of them used to walk every segment of the route to answer it,
-        // and a public transport journey's polyline is thousands of points long. Keyed on the exact
-        // coordinates rather than on a distance, so a player who has moved recomputes -- which is the
-        // one case where the answer is different.
+        // One slot of memo: the panel, readout, progress bar and voice all ask the same question in one frame,
+        // and a transit polyline is thousands of points long. Keyed on exact coordinates, so a moved player
+        // recomputes.
         if (projectionCached && x == projectionX && z == projectionZ) {
             return projectionCache;
         }
@@ -846,11 +617,9 @@ public final class Route {
         return best;
     }
 
-    /** A point on the polyline: which segment, how far along it, and where. */
     private record Projection(int segmentIndex, double t, double x, double z) {
     }
 
-    // ---------------------------------------------------------------- trimming
 
     private double toleranceAt(int pointIndex) {
         if (tolerances.length == 0) {
@@ -859,26 +628,20 @@ public final class Route {
         return tolerances[Math.max(0, Math.min(pointIndex, tolerances.length - 1))];
     }
 
-    // ---------------------------------------------------------------- estimates
 
     public double totalLength() {
         return startConnector + roadLength() + goalConnector;
     }
 
     /**
-     * Seconds of travel per block on the road part of this route.
-     *
-     * <p>This is the length-weighted mean of the pieces' paces, and a mean is all it is: it is right
-     * only for a route whose pieces are all the same pace. It survives as the one number the map's
-     * coarse per-block reading uses, and is deliberately <em>not</em> what the countdown is made of --
-     * see {@link #remainingSeconds}. A public transport route is the counter-example the mean cannot
-     * express: walk, ride, walk again, at paces that differ by a factor of ten.
+     * Seconds per block on the road part: the length-weighted mean of the pieces' paces. Right only when
+     * every piece has the same pace, so it is used for the map's coarse reading, not the countdown; see
+     * remainingSeconds.
      */
     public double secondsPerBlock() {
         double length = roadLength();
         if (length <= 1.0E-6) {
-            // A connector-only trip is off-road from end to end, so its pace is the pace of the
-            // first and last hop; one second per block would be a number from nowhere.
+            // A connector-only trip is off-road end to end; one second per block would be a number from nowhere.
             return 1.0 / connectorPace();
         }
         double cost = 0;
@@ -888,9 +651,7 @@ public final class Route {
         return cost / length;
     }
 
-    /**
-     * Distance still to travel from the given position, following the drawn polyline.
-     */
+    /** Distance still to travel from the position, following the drawn polyline. */
     public double remainingLength(double fromX, double fromZ) {
         Projection projection = closest(fromX, fromZ);
         if (projection == null) {
@@ -899,7 +660,6 @@ public final class Route {
         return Math.max(0, polylineLength - distanceAlong(projection));
     }
 
-    /** Drawn distance from the route's start to a projection, in blocks. */
     private double distanceAlong(Projection projection) {
         int i = projection.segmentIndex();
         double[] a = points.get(i - 1);
@@ -909,33 +669,19 @@ public final class Route {
     }
 
     /**
-     * Seconds still to travel from the given position, at the pace of the part of the route that is
-     * still ahead.
-     *
-     * <h2>Why this is not the distance left times one pace</h2>
-     * A route is three stretches in a fixed order -- the walk onto the network, the road, the walk off
-     * it again -- and a public transport journey is a fourth shape again: walk, ride, walk, ride. Each
-     * stretch has its own pace, and the places where they meet are not evenly spaced, so multiplying
-     * what is left by a single average pace answers with a number that belongs to no part of the trip.
-     * Measured on a journey that rides ice at forty blocks a second and then walks two kilometres, the
-     * countdown was five to ten times short, and a transit journey's waiting was missing from it
-     * altogether: the picker showed three minutes and the panel said two the moment the trip began.
-     *
-     * <p>So what is left is read from the part of the route the player is actually on: the stretches
-     * still ahead are added up at their own paces, and the wait is apportioned over the road. Both
-     * ends come out exact -- the whole trip at the start, nothing at the destination -- which is the
-     * property that keeps the picker's preview and the panel's countdown the same number.
+     * Seconds still to travel, at the pace of the part still ahead. A route is stretches with different
+     * paces in a fixed order, so distance left times one pace belongs to no part of the trip; each
+     * remaining stretch is added at its own pace and the wait is apportioned over the road. Read from the
+     * part the player is on, so both ends come out exact.
      */
     public double remainingSeconds(double fromX, double fromZ) {
         Projection projection = closest(fromX, fromZ);
         if (projection == null) {
-            // Nothing on this route to measure from, so the whole of it is still ahead.
             return estimatedSeconds();
         }
         double along = distanceAlong(projection);
         double road = roadLength();
         if (along <= startConnector) {
-            // Still walking onto the network: the road and the walk off it are both ahead.
             return (startConnector - along + goalConnector) / connectorPace()
                     + roadSeconds(road) + fixedSeconds;
         }
@@ -945,16 +691,12 @@ public final class Route {
             return roadSeconds(road - intoRoad) + goalConnector / connectorPace()
                     + fixedSeconds * fractionLeft;
         }
-        // Past the last road node: only the walk to the destination is left, and the waiting is behind.
         return Math.max(0, polylineLength - along) / connectorPace();
     }
 
     /**
-     * Seconds to cover a distance of road, taken from the end of the route backwards.
-     *
-     * <p>Backwards because what is asked for is always the part that is still ahead, and the road ends
-     * at the destination: the pieces to count are the last ones. Within a piece the pace is constant,
-     * so a piece half covered costs half its time.
+     * Seconds to cover a distance of road, counted from the end of the route backwards, because what is
+     * asked for is always what is still ahead.
      */
     private double roadSeconds(double distance) {
         double left = distance;
@@ -969,12 +711,8 @@ public final class Route {
     }
 
     /**
-     * Wall-clock estimate in seconds, at the pace of the mode this route was planned for.
-     *
-     * <p>Each road piece is timed at the pace its own class allows that mode, so a highway really
-     * does come out faster than a footpath over the same distance, and a boat on ice comes out
-     * faster still. The off-road connectors are walked, whatever the mode. Waiting is added as
-     * itself, because it is time nobody spends moving.
+     * Wall-clock estimate at the pace of the planned mode: each road piece at its own class's pace, the
+     * connectors walked, and waiting added as itself.
      */
     public double estimatedSeconds() {
         double seconds = fixedSeconds + (startConnector + goalConnector) / connectorPace();
@@ -984,23 +722,14 @@ public final class Route {
         return seconds;
     }
 
-    /** Off-road pace of the two connectors, which are walked in every mode. */
     private double connectorPace() {
         return Math.max(0.05, travelMode.connectorSpeed() * offRoadSpeedFactor);
     }
 
     /**
-     * Human-readable distance, switching to kilometres once it is long enough to matter.
-     *
-     * <p>The unit is translated and the number is not: 49 blocks is 49 blocks in every language, and
-     * only the way it is written down changes. The unit cannot simply be appended here -- a bare "m"
-     * stays the Latin letter on a Chinese client, where it should read 米 -- so the whole
-     * number-and-unit pattern is the translated string and the number is passed into it.
-     *
-     * <p>The number is formatted before it gets there, and exactly as it always was: an integer below
-     * a kilometre and two decimals above it. That keeps the precision, the rounding and the
-     * thresholds identical, and it keeps the decimal separator following the machine's locale rather
-     * than the game's language, which is what it did before.
+     * Human-readable distance, switching to kilometres once long enough. The number-and-unit pattern is
+     * the translated string, because a bare "m" should read 米 on a Chinese client; the number keeps its
+     * old formatting and locale.
      */
     public static String formatDistance(double blocks) {
         if (blocks >= 1000) {
@@ -1011,7 +740,6 @@ public final class Route {
                 String.valueOf(Math.round(blocks))).getString();
     }
 
-    /** Human-readable duration. */
     public static String formatDuration(double seconds) {
         long total = Math.max(0, Math.round(seconds));
         long hours = total / 3600;
@@ -1026,7 +754,6 @@ public final class Route {
         return secs + "s";
     }
 
-    /** Builder used by {@link RoadRouter}. */
     static final class Builder {
         private final List<double[]> points = new ArrayList<>();
         private final List<Double> tolerances = new ArrayList<>();
@@ -1064,16 +791,9 @@ public final class Route {
         }
 
         /**
-         * Records one road piece at the pace it will actually be travelled, and on the class of road
-         * it was planned over.
-         *
-         * <p>The class is handed in rather than read back out of the pace, which is what this used to
-         * do. That reading assumed two classes of one mode never share a pace unless the mode travels
-         * them identically -- true of walking's highway and road, and true of driving's two classes
-         * only while they were both 9 blocks a second. Giving a highway its own pace made the reading
-         * ambiguous in exactly the case it was relied on: a walking piece on an ordinary road was
-         * labelled a highway, and re-timing that line as a drive then timed it at the highway's pace.
-         * The router knows the class it just costed; it says so.
+         * Records one road piece at the pace it will be travelled and the class it was planned over. The class
+         * is passed in rather than reverse-read from the pace, which became ambiguous once classes had
+         * distinct paces.
          */
         void addRoadLeg(double length, double blocksPerSecond, RoadClass roadClass) {
             legs.add(new Leg(length, blocksPerSecond, roadClass));

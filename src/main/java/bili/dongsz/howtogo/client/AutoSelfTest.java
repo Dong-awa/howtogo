@@ -10,46 +10,20 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Runs the in-game self-test by itself, for a launcher that asked for it.
- *
- * <h2>Why a launcher switch and not only the command</h2>
- * {@code /howtogo selftest} is how a player checks their own world. A test rig needs to check a world
- * without anybody typing: it starts the client, the client loads a world by itself (Minecraft's own
- * {@code --quickPlaySingleplayer} argument), and the report has to land in the log for the rig to read
- * and grade. That is what this is, and {@code tools/user-test/run-user-test.ps1 -Auto} is the rig that
- * sets it up.
- *
- * <h2>And one screen, for a picture</h2>
- * The same rig cannot photograph a screen the way a player would: synthetic key presses never reach
- * the game, so nothing on the keyboard can open the K screen for it. A launcher may therefore ask for
- * one of the mod's screens by name ({@code -PhtgScreen}), and this opens it once the world is up and
- * leaves the client running -- the picture is taken from outside the game. With a screen asked for,
- * the self-test itself is not run: a picture is a different job from a report, and a client that quit
- * after the report could not have its picture taken.
- *
- * <h2>What it will not do</h2>
- * Nothing at all unless the property is set, and then exactly once per run: a switch that ran the
- * self-test in an ordinary session would move the player's destination and switch their travel mode
- * without being asked. It waits for a world to be loaded, because every check is about the world and
- * half of them need the player standing in it.
+ * Runs the in-game self-test by itself when a launcher asks for it. A test rig loads a world with Minecraft's own --quickPlaySingleplayer and grades the report from the log. A launcher may also name one of the mod's screens (howtogo.selftest.screen) for a screenshot rig; with a screen asked for, the checks are not run. Does nothing unless the property is set, and then only once: an ordinary session must not move the player's destination or travel mode. Waits for a world because every check is about it.
  */
 public final class AutoSelfTest {
 
     /** Seconds to wait in the world before checking, or empty for off. */
     private static final String DELAY_PROPERTY = "howtogo.selftest";
 
-    /** Whether to stop the client once the report is written, which is what a rig wants. */
+    /** Whether to stop the client once the report is written. */
     private static final String QUIT_PROPERTY = "howtogo.selftest.quit";
 
-    /**
-     * Which of the mod's screens to open instead of running the checks, for a screenshot rig.
-     *
-     * <p>Named rather than handed a screen: a property is a string, and a switch that named a class
-     * would let a launcher open anything at all on the classpath.
-     */
+    /** A screen name, not a class: a property is a string and must not open arbitrary classes. */
     private static final String SCREEN_PROPERTY = "howtogo.selftest.screen";
 
-    /** How long to wait when the property is set to something that is not a number. */
+    /** Delay used when the property is not a number. */
     private static final double DEFAULT_DELAY_SECONDS = 15.0;
 
     private static boolean ran;
@@ -58,7 +32,7 @@ public final class AutoSelfTest {
     private AutoSelfTest() {
     }
 
-    /** One client tick: starts the clock when a world loads, and runs the checks when it is due. */
+    /** One client tick: starts the clock when a world loads and runs the checks when due. */
     public static void tick() {
         double delay = configuredDelaySeconds();
         if (ran || delay < 0) {
@@ -79,8 +53,7 @@ public final class AutoSelfTest {
         ran = true;
         Screen screen = requestedScreen();
         if (screen != null) {
-            // Leave the client up: the rig is going to photograph this screen from outside it, and a
-            // report line followed by a quit would close the window before the picture is taken.
+            // Leave the client up: the rig photographs this screen from outside and a quit would close the window first.
             HowToGo.LOGGER.info("[HowToGo] rig | opening {} for a screenshot",
                     System.getProperty(SCREEN_PROPERTY, "").trim());
             //? if >=26.2 {
@@ -97,10 +70,7 @@ public final class AutoSelfTest {
         }
     }
 
-    /**
-     * The mod's screen the launcher asked to see, or null when it asked for none (or for a name this
-     * build does not know, which is logged rather than guessed at).
-     */
+    /** The mod's screen the launcher asked to see, or null for none or an unknown name. */
     private static Screen requestedScreen() {
         String raw = System.getProperty(SCREEN_PROPERTY, "").trim().toLowerCase(Locale.ROOT);
         return switch (raw) {
@@ -109,8 +79,7 @@ public final class AutoSelfTest {
             case "destination" -> new DestinationScreen(null);
             case "settings" -> new SettingsScreen(null);
             case "categories" -> new RoadCategoryScreen(null);
-            // The road editor over a real road of the loaded world: the row a screenshot cannot
-            // otherwise reach, because opening it needs an editor selection and a key press.
+            // The road editor over a real road: the row a screenshot cannot reach otherwise, since it needs an editor selection and a key press.
             case "roadpanel" -> roadPanel();
             default -> {
                 HowToGo.LOGGER.warn("[HowToGo] rig | no screen called '{}'; the picture will be of"
@@ -121,16 +90,10 @@ public final class AutoSelfTest {
     }
 
     /**
-     * The road panel on the first road of the loaded world, or the main screen when there is none.
-     *
-     * <p>The panel is opened exactly as the map opens it -- current name, storey, category, number and
-     * the chain's direction -- so a picture of it is a picture of the real thing rather than of a
-     * panel built with placeholder values. The apply callback writes nothing: this is a screenshot,
-     * not an edit, and a click on Done must not change the world under the player.
+     * The road panel on the first road of the loaded world, or the main screen when there is none. Opened exactly as the map opens it; the apply callback writes nothing, so a click on Done cannot change the world.
      */
     private static Screen roadPanel() {
-        // A one-way road when the world has one: the direction row is the reason this screen exists in
-        // the rig, and a picture of it saying "双向" would not show what the row can say.
+        // A one-way road when the world has one, so the direction row is shown with its real value.
         RoadSegment segment = null;
         for (RoadSegment candidate : RoadStore.get().segmentsSnapshot()) {
             if (segment == null || candidate.oneWay()) {
@@ -151,18 +114,14 @@ public final class AutoSelfTest {
     }
 
     /**
-     * Whether the launcher asked the client to close once the report was written.
-     *
-     * <p>Read as "1" as well as "true": the rig passes 1, and {@link Boolean#getBoolean} answers false
-     * for it -- which is how the first automated run wrote its report and then sat there instead of
-     * ending, leaving the rig waiting on a client that had nothing left to do.
+     * Whether the launcher asked the client to quit once the report was written. Accepts "1" as well as "true": Boolean.getBoolean answers false for 1, which once left the rig waiting on a finished client.
      */
     private static boolean quitAsked() {
         String raw = System.getProperty(QUIT_PROPERTY, "").trim();
         return raw.equals("1") || raw.equalsIgnoreCase("true") || raw.equalsIgnoreCase("yes");
     }
 
-    /** Runs the checks and writes the report the rig reads, in the same shape the command logs. */
+    /** Runs the checks and writes the report in the same shape the command logs. */
     private static void report() {
         try {
             List<SelfTest.Result> results = SelfTest.run();
@@ -177,14 +136,13 @@ public final class AutoSelfTest {
             HowToGo.LOGGER.info("[HowToGo] selftest summary | failed={} total={}", failed,
                     results.size());
         } catch (RuntimeException | LinkageError broke) {
-            // A run that threw is a failed run, and the summary line has to exist either way: it is
-            // what the rig blocks on, and a missing one would look like a client that never started.
+            // A run that threw is a failed run, but the summary line must exist either way: the rig blocks on it.
             HowToGo.LOGGER.error("[HowToGo] selftest could not run", broke);
             HowToGo.LOGGER.info("[HowToGo] selftest summary | failed=1 total=0");
         }
     }
 
-    /** How long the launcher asked to wait, or -1 when it did not ask for a self-test at all. */
+    /** Seconds the launcher asked to wait, or -1 when it did not ask for a self-test. */
     private static double configuredDelaySeconds() {
         String raw = System.getProperty(DELAY_PROPERTY, "").trim();
         if (raw.isEmpty()) {

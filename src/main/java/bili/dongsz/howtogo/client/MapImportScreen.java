@@ -18,28 +18,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The warning shown before an archive is laid over a world's map.
- *
- * <h2>Why an import gets a screen of its own</h2>
- * Importing replaces the roads, places, rail names and transit lines of the world being played, and
- * the game offers no undo for that. The one thing a player must not be able to do by accident is press
- * a button on a list twice; so the list's rows open this, and this is the only place
- * {@link MapDataTransfer#importNow} is called from. That call happens on the button press, after the
- * screen has said -- in the player's own language, above the button -- exactly what is about to be
- * replaced and where the copy of it is going.
- *
- * <h2>What it says about the archive</h2>
- * Where the archive says it came from, when it was made, how much is in it, and which world and
- * directory it is about to be written into. The last two are the pair the whole feature turns on: the
- * archive is named after somebody else's world (and a folder zipped by hand repeats that name inside
- * it), but the import goes into the world the player is currently in. Saying that here is what keeps
- * "I imported my friend's map and my world is gone" from being a surprise: the map is replaced, and
- * the previous one is in the backups folder with the file name on this screen.
- *
- * <h2>Why the confirmation does not close on failure</h2>
- * An import can fail for reasons that are worth reading (the archive vanished, the disk filled, the
- * directory is locked). The screen stays up with the reason on it and the button usable again, so a
- * player can plug the drive back in rather than being dropped back to a list with nothing said.
+ * The warning shown before an archive replaces a world's map.
+ * Importing is destructive and has no undo, so the only entry to MapDataTransfer.importNow is a button here, after the text says what will be replaced and where the backup goes. It names the archive's origin and the world it will be written into, since a folder zipped by hand repeats another world's name. On failure it stays open with the reason and a usable button, so the player can retry.
  */
 public final class MapImportScreen extends Screen {
 
@@ -50,10 +30,10 @@ public final class MapImportScreen extends Screen {
     private static final int LINE_HEIGHT = 11;
     private static final int BUTTON_HEIGHT = 20;
 
-    /** How many file names the "includes" line shows before saying there are more. */
+    /** File names shown on the includes line before saying there are more. */
     private static final int NAMES_SHOWN = 4;
 
-    /** Where the cancel button goes back to, and where a finished import returns to. */
+    /** Where cancel returns to, and where a finished import returns to. */
     private final Screen cancelTo;
     private final Screen nextParent;
     private final Path archive;
@@ -61,7 +41,7 @@ public final class MapImportScreen extends Screen {
 
     private Component error;
 
-    /** The confirm and cancel buttons, built in {@link #init()} and drawn and hit-tested by hand. */
+    /** Confirm and cancel buttons, built in init() and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
 
     private int panelX;
@@ -70,24 +50,18 @@ public final class MapImportScreen extends Screen {
     private int panelH;
 
     /**
-     * This frame's entrance and exit opacity, 0 to 1.
-     *
-     * <p>A field rather than a local in {@link #render} because the sheet is drawn from
-     * {@link #renderBackground}, which the parent calls from inside its own render: the background
-     * has to fade on the same number the rest of the frame does, and it runs first.
+     * Entrance and exit opacity for this frame, 0 to 1; a field because renderBackground runs first and must fade on the same number.
      */
     private float open = 1.0F;
 
     /**
-     * This frame's opacity for the warning sheet and its edge, as against the lines on top of them.
-     *
-     * <p>The same number as {@link #open} except during a hand-off to another page, where the sheet
-     * is held at full while the content cross-fades -- see {@link UiMotion.ScreenState#surface()}.
-     * A field for the same reason as {@code open}: the sheet is drawn before the rest of the frame.
+     * Opacity for the warning sheet and edge; same as open except during a page hand-off, when the sheet stays full and content cross-fades (see UiMotion.ScreenState.surface()).
      */
     private float surface = 1.0F;
 
-    /** @param nextParent the screen the transfer screen should return to once the import is done */
+    /**
+     * @param nextParent the screen the transfer screen returns to once the import is done
+     */
     public MapImportScreen(Screen cancelTo, Screen nextParent, Path archive,
                            WorldArchive.Contents contents) {
         super(Component.translatable(TITLE));
@@ -115,9 +89,7 @@ public final class MapImportScreen extends Screen {
         int total = confirmWidth + GAP + cancelWidth;
         int startX = panelX + (panelW - total) / 2;
 
-        // The same two slots, now drawn by this screen rather than handed to the widget list: see
-        // drawButtons. The confirm carries the danger colour instead of the red label the vanilla
-        // button had, because the meaning is the face of a drawn button rather than the text on it.
+        // The two buttons, now drawn here rather than routed through the widget list; confirm
         buttons = List.of(
                 new PanelButton(startX, buttonY, confirmWidth, BUTTON_HEIGHT,
                         Component.translatable("screen.howtogo.import_confirm.confirm"),
@@ -128,12 +100,8 @@ public final class MapImportScreen extends Screen {
     }
 
     /**
-     * Does the import, and reports what it replaced where.
-     *
-     * <p>Runs on the game thread inside a button press: the files are a few hundred kilobytes, and
-     * moving them to another thread would mean a screen that has to say "working" and a player who
-     * can press the button again while it does. The one button that is already the confirmation is
-     * the honest place to do the work.
+     * Performs the import and reports what it replaced.
+     * Runs on the game thread inside the button press: the files are small, and another thread would need a working state and allow a second press.
      */
     private void confirm() {
         try {
@@ -154,7 +122,6 @@ public final class MapImportScreen extends Screen {
         }
     }
 
-    // ------------------------------------------------------------------- input
 
     @Override
     //? if >=1.21.9 {
@@ -165,9 +132,7 @@ public final class MapImportScreen extends Screen {
     *///?} else {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
-        // The buttons are drawn, not widgets, so nothing else will route a click to them: this is
-        // their only chance to see one. It comes first because there is nothing else on this screen
-        // that a press could be about -- everything above the buttons is a line to read.
+        // The buttons are drawn, not widgets, so this is their only click route.
         if (button == MouseButton.LEFT) {
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
@@ -190,8 +155,7 @@ public final class MapImportScreen extends Screen {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
 
-        // Both at the frame's opacity: the warning sheet is the first thing to arrive and the last
-        // thing to leave, so every line drawn over it goes with it rather than outliving it.
+        // Both at the frame's opacity: the sheet arrives first and leaves last, so every line over
         graphics.fill(panelX - 1, panelY - 1, panelX + panelW + 1, panelY + panelH + 1,
                 UiMotion.fade(UiTheme.windowEdge(), surface));
         graphics.fill(panelX, panelY, panelX + panelW, panelY + panelH,
@@ -200,21 +164,14 @@ public final class MapImportScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // One call for this frame, before a pixel is drawn: it advances the entrance and the exit and
-        // drives the deferred swap the exit is holding up. Everything below is drawn at the opacity
-        // it answers with, so the warning arrives as one sheet.
+        // One call per frame before drawing: advances entrance and exit and drives the deferred
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
         surface = motion.surface();
-        // The whole frame is displaced, not only faded: a warning sheet that appears where it stays
-        // reads as a cut. Pushed before any pixel -- the sheet 1.20.1 asks for by hand below included --
-        // so the panel, the warning and the buttons travel together as one surface. The pose is rebuilt
-        // by the game for every frame, so the pop at the end of this method is the whole of the
-        // bookkeeping; nothing here can outlive the screen's own drawing.
+        // Displaces the whole frame as well as fading it; a sheet that appears where it stays
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
 
-        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
-        // 1.20.1 has no such call, so a screen that wants the sheet asks for it here.
+        // Before 1.20.2 a screen must ask for its background; Screen.render does it from 1.20.2 on.
         //? if <1.20.2 {
         /*renderBackground(graphics);
         *///?}
@@ -227,14 +184,13 @@ public final class MapImportScreen extends Screen {
         graphics.drawString(this.font, this.title, x, y, UiMotion.fade(UiTheme.title(), open), false);
         y += LINE_HEIGHT + 5;
 
-        // The one line that must not be missed: red, on its own, above everything else.
+        // The one line that must not be missed: red, alone, above everything else.
         drawLine(graphics, x, y, room,
                 Component.translatable("screen.howtogo.mapdata.overwrite_loud"),
                 UiMotion.fade(UiTheme.error(), open));
         y += LINE_HEIGHT + 3;
 
-        // A backup is the undo for an earlier import, and importing one rolls the map back. Saying
-        // so before the button is what keeps it from being mistaken for a fresh map to bring in.
+        // A backup is the undo for an earlier import; saying so keeps it from being mistaken
         if (isBackup()) {
             drawLine(graphics, x, y, room,
                     Component.translatable("screen.howtogo.import_confirm.backup"),
@@ -272,26 +228,18 @@ public final class MapImportScreen extends Screen {
                 UiMotion.fade(UiTheme.accentSoft(), open));
 
         if (error != null) {
-            // Just above the buttons rather than after the last line of context: on a short window
-            // the context can reach the bottom of the panel, and a reason printed over the button
-            // that has to be pressed again is a reason nobody can read.
+            // Above the buttons rather than after the context: on a short window the context can
             int errorY = panelY + panelH - PAD - BUTTON_HEIGHT - LINE_HEIGHT - 4;
             drawLine(graphics, x, errorY, room, error, UiMotion.fade(UiTheme.error(), open));
         }
-        // Last in the frame: the context above can reach the bottom of the panel on a short window,
-        // and a button drawn before it would have a line of it across its own label.
+        // Last, so a context line on a short window cannot cross the button labels.
         drawButtons(graphics, mouseX, mouseY);
-        // Last statement of the frame: the displacement covered every pass above and stops here.
+        // Last statement of the frame; the displacement covers every pass above.
         UiMotion.popFrame(graphics);
     }
 
     /**
-     * The confirm and cancel buttons.
-     *
-     * <p>Drawn rather than handed to the widget list, which is why {@link #render} has to draw them
-     * itself and {@link #mouseClicked} has to route the click to them: see {@link PanelButton} for the
-     * trade that comes with that. The panel under them is drawn in {@code renderBackground}, so they
-     * land on the sheet rather than under it.
+     * The confirm and cancel buttons, drawn here rather than added as widgets -- hence render draws them and mouseClicked routes clicks. The sheet behind them is drawn in renderBackground.
      */
     private void drawButtons(GuiGraphics graphics, int mouseX, int mouseY) {
         for (PanelButton button : buttons) {
@@ -299,7 +247,7 @@ public final class MapImportScreen extends Screen {
         }
     }
 
-    /** Whether this archive came out of the automatic backups folder. */
+    /** Whether this archive came from the automatic backups folder. */
     private boolean isBackup() {
         try {
             return archive.toAbsolutePath().normalize()
@@ -322,7 +270,7 @@ public final class MapImportScreen extends Screen {
                 manifest.exportedAt);
     }
 
-    /** How much is in it, and how many entries were left out as not being map data. */
+    /** How much is in it, and how many entries were left out as not map data. */
     private Component contentsLine() {
         String size = MapDataTransfer.humanSize(contents.bytes).getString();
         if (contents.ignored == 0) {
@@ -333,7 +281,7 @@ public final class MapImportScreen extends Screen {
                 contents.files(), size, contents.ignored);
     }
 
-    /** The first few file names, since that is what tells a player which map this is. */
+    /** The first few file names, which is what tells a player which map this is. */
     private Component fileNamesLine() {
         List<String> names = new ArrayList<>();
         for (WorldArchive.Item item : contents.items) {

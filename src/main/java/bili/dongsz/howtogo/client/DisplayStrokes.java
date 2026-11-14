@@ -14,46 +14,13 @@ import java.util.Set;
 
 /**
  * Groups a network into the strokes the maps draw, one stroke per road.
- *
- * <h2>What a stroke is, and why it is not the editor's chain</h2>
- * {@code RoadChains} answers "which pieces does a click select" and stops at every junction,
- * because a junction is a real decision point. Drawing wants the other question: "which pieces
- * look like one line". A road that merely passes through a junction is still one line, and stroking
- * it as two strokes makes their ends overlap at the junction -- with a translucent stroke that
- * overlap is painted twice and reads as a lighter blob exactly where two pieces of the same road
- * meet. So a stroke walks on through a junction, taking the straightest continuation of the same
- * class and name.
- *
- * <h2>Each piece carries the way it is drawn</h2>
- * A network stores every segment in whatever direction it was built in, and a stroke can traverse
- * one either way. The old builder recorded only the order of the segment ids and left the drawing
- * pass to work out which end of each segment was nearer the last point it had written. That is
- * right for the pieces appended at the far end of the stroke and <em>wrong for the pieces prepended
- * at the near end</em>: a prepended piece has to end at the joint, and "nearest to the previous
- * point" cannot see a previous point that comes <em>after</em> it. When the prepended piece was
- * stored pointing away from the joint, the stroke was drawn joint-to-far-end and the next piece
- * then started at the joint again, so the pass painted a straight line from the far end back to the
- * joint -- a line no road follows, which a route can never use, and which a player reports as a
- * ghost line across the map.
- *
- * <p>So a stroke is a list of {@link Piece}s, each saying whether it is drawn in its stored order
- * or backwards, and the builder walks both directions with an explicit "which node am I extending
- * from" instead of re-reading the first piece's {@code fromNode} (which is only the near end when
- * that piece happens to be stored that way round). The drawing pass then has nothing to infer.
- *
- * <h2>Display only</h2>
- * Nothing here decides what connects: a piece is only ever added at a node the network says both
- * pieces touch. Nothing is written back, and routing never sees a stroke.
+ * A stroke differs from the editor's chain: it walks on through a junction, taking the straightest continuation of the same class and name, so a translucent stroke is not painted twice where two pieces of one road meet.
+ * Each Piece records whether it is drawn in stored order or reversed, because a prepended piece must end at the joint; the old nearest-point inference drew a ghost line from a far end back to the joint.
+ * Display only: routing never sees a stroke and nothing is written back.
  */
 public final class DisplayStrokes {
 
-    /**
-     * The straightest a road may turn at a junction and still be read as the same road going on.
-     *
-     * <p>A turn past this is not a continuation: the stroke ends there and the piece beyond is a
-     * stroke of its own, because merging a sharp elbow into one stroke would be a claim about the
-     * road that the data does not make.
-     */
+    /** The straightest a road may turn at a junction and still be read as the same road going on. */
     static final double TURN_LIMIT_RADIANS = Math.toRadians(120.0);
 
     /** How many drawn networks keep a reading; a frame asks about the player's roads and the layers. */
@@ -80,11 +47,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * Where one stroke jumps between two of its own pieces.
-     *
-     * <p>The two points are joined by a node the stroke walked through, so the honest distance is
-     * zero. Anything longer is the drawing pass painting a straight line the network never had; the
-     * coordinates are what makes such a line possible to find in the world it was reported in.
+     * Where one stroke jumps between two of its own pieces. The points should share a node, so the honest distance is zero; anything longer is a straight line the drawing pass invented.
      */
     public record Jump(int fromSegmentId, int toSegmentId,
                        double fromX, double fromZ, double toX, double toZ) {
@@ -103,7 +66,7 @@ public final class DisplayStrokes {
     private DisplayStrokes() {
     }
 
-    /** The strokes for a network, as they stand, rebuilt only when its geometry or look changed. */
+    /** The strokes for a network, rebuilt only when its geometry or look changed. */
     public static List<Stroke> cached(RoadNetwork network) {
         if (network == null || network.segmentCount() == 0) {
             return List.of();
@@ -132,8 +95,7 @@ public final class DisplayStrokes {
             if (!used.add(seed.id())) {
                 continue;
             }
-            // A segment with no node at one end cannot be walked on from that end; the stroke is
-            // whatever can be reached from the end that does exist.
+            // A segment with no node at one end cannot be walked from that end; the stroke is what is reachable from the other end.
             List<Piece> forward = new ArrayList<>();
             forward.add(new Piece(seed.id(), false));
             int endNode = seed.toNode();
@@ -175,10 +137,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * Every world point of a stroke in the order the maps paint them, as {@code {x, z}}.
-     *
-     * <p>The joint between two pieces is written once: the two pieces share the node, and painting
-     * it twice would lay a translucent stroke twice on the same pixel at every junction.
+     * Every world point of a stroke in paint order, as {x, z}. The joint between two pieces is written once, so a translucent stroke is not laid twice at a junction.
      */
     public static List<double[]> points(RoadNetwork network, Stroke stroke) {
         List<double[]> points = new ArrayList<>();
@@ -213,12 +172,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * Every place a stroke jumps from one piece to the next without a shared point, in blocks.
-     *
-     * <p>Empty for a healthy network. Non-empty means the drawing pass is about to paint a straight
-     * line between two places the network does not join -- the display bug this class exists to make
-     * impossible, kept as a measurement so a regression is visible rather than inferred from a
-     * screenshot. See {@link #points}.
+     * Every place a stroke jumps from one piece to the next without a shared point, in blocks. Empty for a healthy network; non-empty means the drawing pass would paint a line the network does not join, kept as a measurement so a regression is visible.
      */
     public static List<Jump> jumps(RoadNetwork network, Stroke stroke) {
         List<Jump> jumps = new ArrayList<>();
@@ -264,11 +218,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * Slack when two pieces of one stroke are compared, in blocks.
-     *
-     * <p>The joint is a node the stroke walked through, so the drawn ends are the same point. One
-     * block of slack covers a display curve that was rounded to a slightly different coordinate
-     * without hiding a stroke that genuinely jumps.
+     * Slack when two pieces of one stroke are compared, in blocks. One block covers a display curve rounded to a slightly different coordinate without hiding a genuine jump.
      */
     static final double JOIN_TOLERANCE = 1.5;
 
@@ -295,11 +245,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * The unused segment that carries the same road on from one end of a stroke, or null.
-     *
-     * <p>{@code direction} points away from the node into the stroke (along the stroke for an end,
-     * against it for a start), so the continuation is the candidate whose own direction away from
-     * the node differs least from it. A turn past {@link #TURN_LIMIT_RADIANS} ends the stroke.
+     * The unused segment that carries the same road on from one end of a stroke, or null. direction points away from the node into the stroke, so the continuation is the candidate whose direction differs least; a turn past TURN_LIMIT_RADIANS ends the stroke.
      */
     private static Integer continuation(RoadNetwork network, Map<Integer, List<Integer>> atNode,
                                         Set<Integer> used, RoadSegment piece, int nodeId,
@@ -340,10 +286,7 @@ public final class DisplayStrokes {
     }
 
     /**
-     * The direction a piece runs away from one of its nodes, in the piece's own stored order.
-     *
-     * <p>Null when the node is not one of the piece's ends -- which is what a loop's single shared
-     * node looks like from here, and a loop has no direction away from itself.
+     * The direction a piece runs away from one of its nodes, in stored order. Null when the node is not an end, which is what a loop's single shared node looks like.
      */
     private static double[] awayFrom(RoadSegment segment, int nodeId) {
         int last = segment.vertexCount() - 1;
@@ -357,7 +300,7 @@ public final class DisplayStrokes {
         return null;
     }
 
-    /** The direction a drawn piece is travelling as it leaves its first drawn point. */
+    /** The direction a drawn piece travels as it leaves its first drawn point. */
     private static double[] startDirection(RoadSegment segment, boolean reversed) {
         RoadCurve curve = segment.curve();
         int count = curve != null ? curve.size() : segment.vertexCount();
@@ -373,7 +316,7 @@ public final class DisplayStrokes {
         return new double[]{toX - fromX, toZ - fromZ};
     }
 
-    /** The direction a drawn piece is travelling as it reaches its last drawn point. */
+    /** The direction a drawn piece travels as it reaches its last drawn point. */
     private static double[] endDirection(RoadSegment segment, boolean reversed) {
         RoadCurve curve = segment.curve();
         int count = curve != null ? curve.size() : segment.vertexCount();
@@ -389,7 +332,7 @@ public final class DisplayStrokes {
         return new double[]{toX - fromX, toZ - fromZ};
     }
 
-    /** The node at the far end of a piece entered at {@code nodeId}. */
+    /** The node at the far end of a piece entered at nodeId. */
     private static int otherEnd(RoadSegment segment, int nodeId) {
         if (segment.fromNode() == nodeId && segment.toNode() != nodeId) {
             return segment.toNode();

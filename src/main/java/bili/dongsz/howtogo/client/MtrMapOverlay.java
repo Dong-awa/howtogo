@@ -16,79 +16,12 @@ import java.util.Map;
 /**
  * The whole railway, read out of the copy MTR Map Overlay fetched from the server.
  *
- * <h2>Why this reading exists when the client's own does</h2>
- * MTR sends a client the stations and lines within a couple of hundred blocks of it. That window is
- * what {@link MtrClientData} reads and {@link MtrKnown} keeps, and on a server somebody else is
- * running there is nothing else to read: {@link MtrWholeMap} reaches the copy of the network this
- * process simulates, and on a remote server this process simulates none of it. So a railway the
- * player has not walked is a railway this mod does not know, and a journey to a station they have
- * never been near cannot be planned.
- *
- * <p>MTR Map Overlay answers exactly that. It asks the server -- which must have it installed too --
- * for a snapshot of every line, station and rail of MTR's network, and keeps it on the client. That
- * snapshot is the whole railway, on any server, and this class reads it.
- *
- * <h2>Where it is, and what is in it</h2>
- * <pre>
- * com.lx862.mtrmap.mapdata.MapDataCache
- *   .hasServerData(String dimension)     // static: is there a fetched snapshot for this dimension?
- *   .get(String dimension)               // static: the fetched snapshot, or the radius-limited one
- *     .dimensionId                       // "minecraft/overworld" -- MTR's own spelling
- *     .version                           // the snapshot's own content hash
- *     .routes                            // List&lt;MapRoute&gt;  -- every line
- *     .tracks                            // List&lt;MapTrack&gt;  -- every rail
- *     .landmarks                         // List&lt;MapLandmark&gt; -- every station, platform, depot
- * MapRoute    .id .name .color .circular .stops    ; MapRoute.Stop  .x .z .stationName .destination
- * MapTrack    .id .points (List&lt;double[]{x, z}&gt;)
- * MapLandmark .id() .type() .x() .y() .z() .name() .symbol()      // a record
- * </pre>
- *
- * <h2>Only the fetched snapshot, never the fallback</h2>
- * With the mod installed on the client alone, or on a server that does not have it, that cache holds
- * MTR's own radius-limited data -- the very window {@link MtrClientData} already reads. Reading it
- * here as well would offer the same stations twice, through two readers that could disagree. So the
- * snapshot is only read when {@code hasServerData} says the server answered, and nothing at all is
- * read otherwise.
- *
- * <h2>Why the reading is cached</h2>
- * A whole railway is a lot of geometry: every rail of it arrives as a list of points that has to be
- * copied into this mod's own arrays. So the conversion is done once per snapshot -- keyed by the
- * snapshot's own content hash, which changes only when the server's railway does -- and every tick
- * between those changes reads the same reading.
- *
- * <h2>Why the rails are taken whole, and why that is not a cost</h2>
- * An earlier version of this class took only the rails within a radius of the player, because the
- * rails are what a line's marks are cut from and cutting them meant planning a ride between every
- * pair of neighbouring stops over the whole network. That is no longer what happens, and the radius
- * was actively harmful: it left most of the railway without geometry, so a line whose rails it had
- * taken away was drawn as straight hops between its stations -- which is the one thing the fetched
- * snapshot exists to fix. See {@link MtrMapOverlay} on {@code MapRoute.trackIds} and
- * {@code MtrLineTracks.stated}: the snapshot says which rails each route runs along, so a line's
- * track is a lookup rather than a plan, and there is nothing left for a radius to bound.
- *
- * <h2>What the snapshot does not say</h2>
- * Two things, and both are answered from what it does say rather than guessed at:
- * <ul>
- *   <li><b>the lines' kind</b> -- there is no transport mode anywhere in it. It does not need one:
- *       the overlay samples a rail only when its transport mode is {@code TRAIN}, so a snapshot's
- *       track is train track, and a route whose track could not be sampled is left out of it
- *       entirely. What arrives is therefore the train network, and that is what it is read as. A boat
- *       line is reached the way it always was: through MTR's own client data, whose stations carry a
- *       mode.</li>
- *   <li><b>the rails' height</b> -- the geometry is sampled into X and Z alone, so a rail stands at
- *       the height of the nearest station or platform of the snapshot, and at
- *       {@link #FALLBACK_TRACK_Y} where there is none near. It is a hint and is documented as one:
- *       {@link MtrClientData#merge} lets MTR's own copy of a rail -- which carries its real height --
- *       win over this one wherever MTR has sent it, so only a rail MTR never sent stands on the
- *       hint.</li>
- * </ul>
- *
- * <h2>Why nothing here is a dependency</h2>
- * The same arrangement {@link MtrClientData} and {@link MtrWholeMap} use, for the same reasons: the
- * mod is not installed on every copy of this one, it documents no API of its own for this, and its
- * shape is free to move. So no type of it appears in a signature, every handle is looked up by name
- * once and guarded, and a version whose shapes have moved reports itself unavailable -- at which
- * point the windowed reading above is what the mod offers, exactly as before.
+ * MTR sends a client only the stations and lines within a couple hundred blocks (what MtrClientData reads), and on a remote server this process simulates nothing, so the overlay's server-fetched snapshot of every line, station and rail is the only whole-railway source. Only the fetched snapshot is read, never its radius-limited fallback, which MtrClientData already covers.
+ * Chain, all read reflectively: MapDataCache.hasServerData(dimension)/get(dimension), then .dimensionId ("minecraft/overworld"), .version (content hash), .routes (id, name, color, circular, stops: x, z, stationName, destination, trackIds), .tracks (id, points), .landmarks (record: id(), type(), x(), y(), z(), name()).
+ * The conversion runs once per snapshot, keyed by its version hash, because every rail arrives as a list of points that has to be copied.
+ * Rails are taken whole, with no player radius: the snapshot says which rails each route runs along, so a line's track is a lookup (MtrLineTracks.stated) rather than a plan, and a radius only stripped geometry and left straight hops between stations.
+ * The snapshot carries no transport mode -- the overlay samples only TRAIN rails, so this is the train network -- and no rail height: a rail takes the height of the nearest landmark within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y, and MtrClientData#merge lets MTR's own copy win wherever MTR sent it.
+ * Reflective like MtrClientData and MtrWholeMap: no overlay type appears in a signature, every handle is looked up by name and guarded, and a version whose shapes moved reports itself unavailable.
  */
 final class MtrMapOverlay {
 
@@ -102,21 +35,12 @@ final class MtrMapOverlay {
     private static final String LANDMARK = "com.lx862.mtrmap.mapdata.MapLandmark";
 
     /**
-     * The kind of a line or a rail read out of the snapshot.
-     *
-     * <p>The snapshot only ever carries train data -- see the class comment -- so this is the one
-     * answer it can give. Giving it is what lets the reading go through the same conversion as MTR's
-     * own without a second rule for where a line's kind comes from.
+     * The kind of a line or rail read out of the snapshot: it only carries train data, and naming that lets the reading go through the same conversion as MTR's own.
      */
     private static final String TRAIN = "TRAIN";
 
     /**
-     * The height a rail of the snapshot stands at when no station or platform of it is near.
-     *
-     * <p>The snapshot's geometry is flat and a rail's own height is not in it, so a rail is placed at
-     * the height of the nearest landmark it has, and here when it has none near. Sea level is what the
-     * game itself calls the middle of the world, and it is a better answer than nothing for the rails
-     * of a line laid across open country.
+     * The height a rail of the snapshot stands at when no landmark is near. The snapshot's geometry is flat, and sea level beats nothing for a line across open country.
      */
     private static final int FALLBACK_TRACK_Y = 64;
 
@@ -158,7 +82,7 @@ final class MtrMapOverlay {
     private static Method landmarkNameMethod;
     private static Method landmarkSymbolMethod;
 
-    /** The snapshot the conversion below was last run for, and the reading it produced. */
+    /** The snapshot the conversion was last run for, and the reading it produced. */
     private static String convertedKey;
     private static MtrClientData.Snapshot converted = MtrClientData.Snapshot.EMPTY;
 
@@ -186,15 +110,9 @@ final class MtrMapOverlay {
     }
 
     /**
-     * The whole railway the overlay fetched for the dimension the player is in, or an empty reading.
+     * The whole railway fetched for the dimension the player is in, or an empty reading.
      *
-     * <p>An empty reading covers every case in which this has nothing to say and the other two
-     * readings stand alone: the mod absent or moved, the reading switched off, no world, no player, no
-     * server that answered, a snapshot for another dimension, and a snapshot whose shapes are not the
-     * ones read here.
-     *
-     * <p>Never throws: this runs on a client tick beside {@link MtrClientData#read()}, so anything
-     * unexpected has to come back as "nothing to read" rather than as a crash.
+     * An empty reading covers every case where this has nothing to say: mod absent or moved, reading switched off, no world or player, no server that answered, another dimension, unreadable shapes. Never throws -- this runs on a client tick beside MtrClientData#read.
      */
     static MtrClientData.Snapshot read() {
         resolve();
@@ -202,8 +120,8 @@ final class MtrMapOverlay {
             return MtrClientData.Snapshot.EMPTY;
         }
         if (!enabled()) {
-            // Switched off means forgotten rather than merely not read again: a whole railway left
-            // lying about would go on being offered after the player asked for it not to.
+            // Switched off means forgotten rather than merely not read again: a whole railway left about would
+            // go on being offered.
             reset();
             return MtrClientData.Snapshot.EMPTY;
         }
@@ -211,19 +129,19 @@ final class MtrMapOverlay {
         if (player == null) {
             return MtrClientData.Snapshot.EMPTY;
         }
-        // MTR names its world "minecraft/overworld" and the snapshot is keyed the same way, which is
-        // the spelling MtrWholeMap matches its own simulators by.
+        // MTR names its world "minecraft/overworld" and the snapshot is keyed the same way, which is the
+        // spelling MtrWholeMap matches its simulators by.
         String dimension = player.level().dimension().location().toString().replace(':', '/');
         try {
             if (!Boolean.TRUE.equals(hasServerDataMethod.invoke(null, dimension))) {
-                // Either the server does not run the overlay, or it has not answered yet. What the
-                // client holds in that case is MTR's own window, which MtrClientData already reads.
+                // Either the server does not run the overlay or it has not answered yet; what the client holds then
+                // is MTR's own window, which MtrClientData already reads.
                 return MtrClientData.Snapshot.EMPTY;
             }
             Object data = getMethod.invoke(null, dimension);
             if (data == null || !dimension.equals(dimensionIdField.get(data))) {
-                // The snapshot was dropped between the two calls, and what came back is the
-                // radius-limited fallback -- which is not what this class is for.
+                // The snapshot was dropped between the two calls and the radius-limited fallback came back, which is
+                // not what this class is for.
                 return MtrClientData.Snapshot.EMPTY;
             }
             String key = dimension + '@' + (versionField == null
@@ -244,24 +162,11 @@ final class MtrMapOverlay {
         }
     }
 
-    // ---------------------------------------------------------------- the reading
 
     /**
      * One snapshot as this mod's own reading.
      *
-     * <p>Everything is placed from the landmarks rather than from the routes' own stop coordinates,
-     * because that is what MTR's own reading does: a stop stands at the middle of its station's
-     * platforms, and a station built a platform at a time reaches either reader as several stations
-     * that {@link MtrTransit} then groups into one place. Offering the overlay's stops at the
-     * coordinates the overlay computed for them instead would place the same journey at two points
-     * depending on which reader answered.
-     *
-     * <p>The links the snapshot does not carry are rebuilt by name and distance, which is the only
-     * join it supports: a landmark's id says it is a station or a platform but never which station a
-     * platform is in, and a route's stop names its station but does not identify it. A name found
-     * twice is settled by which of the two the stop or platform stands nearest, which is the same
-     * rule the grouping uses and the right answer for the case the grouping exists for -- one station
-     * of MTR's drawn as several areas a few blocks apart.
+     * Everything is placed from the landmarks, as MTR's own reading does: a stop stands at the middle of its station's platforms, and a station built a platform at a time arrives as several stations that MtrTransit then groups. Links the snapshot does not carry are rebuilt by name then nearest distance: a landmark's id says station or platform but not which station, and a route's stop names its station without identifying it.
      */
     private static MtrClientData.Snapshot convert(Object data) throws ReflectiveOperationException {
         List<Object> stationsRaw = new ArrayList<>();
@@ -289,10 +194,8 @@ final class MtrMapOverlay {
             }
         }
 
-        // Platforms, each hung on the nearest station of its own name. A platform whose station the
-        // snapshot does not hold at all is left out, which is the same answer MTR's own reading gives
-        // for a platform whose station is out of its window: nothing is a better answer than a
-        // boarding point on a station nobody built.
+        // Platforms, each hung on the nearest station of its own name. A platform whose station the snapshot
+        // does not hold is left out: nothing beats a boarding point on a station nobody built.
         List<MtrClientData.Platform> platforms = new ArrayList<>(platformsRaw.size());
         Map<Long, List<Hint>> hints = new HashMap<>();
         for (Object landmark : platformsRaw) {
@@ -320,12 +223,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * One station of the snapshot.
-     *
-     * <p>The extent MTR gives a station -- the box the player dragged -- is not in the snapshot, so a
-     * station stands at a point and its extent is that point. Nothing downstream reads the extent of
-     * an imported station: what a stop is placed on is the middle of the station's platforms, which
-     * the platforms supply.
+     * One station of the snapshot. The extent the player dragged is not in the snapshot, so the extent is the point; nothing downstream reads it.
      */
     private static MtrClientData.Station station(Object landmark) {
         try {
@@ -346,12 +244,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * One platform of the snapshot, on the nearest station of its own name.
-     *
-     * <p>The station is looked up by name because that is the only link the snapshot has between the
-     * two, and by distance within that name because a name is not unique -- a station built as
-     * several areas arrives as several stations that share one, which is exactly the case the
-     * distance settles.
+     * One platform, on the nearest station of its own name -- the only link the snapshot has, and distance settles a name shared by several areas of one station.
      */
     private static MtrClientData.Platform platform(Object landmark,
                                                    Map<String, List<MtrClientData.Station>> byName) {
@@ -378,12 +271,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * One route of the snapshot, with the stops whose station the snapshot holds.
-     *
-     * <p>A stop's station is found the same way a platform's is: by name, then by whichever station
-     * of that name the stop stands nearest. A stop whose station is not in the snapshot is left out,
-     * which is what {@link MtrClientData.Snapshot#stopPosition} answers for MTR's own reading when a
-     * station is out of the client's window -- a stop that cannot be placed is not placed.
+     * One route, with the stops whose station the snapshot holds. A stop's station is found by name, then nearest of that name; a stop whose station is absent is left out, as MTR's own reading does for out-of-window stations.
      */
     private static MtrClientData.Line line(Object route,
                                            Map<String, List<MtrClientData.Station>> byName) {
@@ -397,8 +285,7 @@ final class MtrMapOverlay {
                 if (station == null) {
                     continue;
                 }
-                // The platform id is left at zero: a route's stop does not name the platform it calls
-                // at, and nothing downstream asks for one -- what a stop is placed on is its station.
+                // The platform id stays zero: a route's stop names no platform and nothing downstream asks for one.
                 stops.add(new MtrClientData.Stop(0, station.id(), name,
                         string(stopDestinationField.get(stop))));
             }
@@ -417,12 +304,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * Whether the snapshot says this route is a loop ridden one way round.
-     *
-     * <p>A public field rather than an accessor, because that is the shape the overlay gives it --
-     * {@code MapRoute.circular}. Optional for the same reason every other addition to this reading is:
-     * a version without it loses the direction, never the line, and reads two-way, which is what every
-     * line was before directions existed.
+     * Whether the snapshot says this route is a loop ridden one way round. A public field, and optional like every addition: a version without it loses the direction, never the line.
      */
     private static boolean circular(Object route) {
         if (routeCircularField == null) {
@@ -436,13 +318,9 @@ final class MtrMapOverlay {
     }
 
     /**
-     * The rails one route of the snapshot runs along, in the order it runs along them.
+     * The rails one route runs along, in path order.
      *
-     * <p>The overlay's own answer to the question MTR never answers -- MTR's client data joins a route
-     * to its platforms and to nothing else -- and it is an exact one: the ids are the rails its own
-     * collector walked, in path order, so a line drawn from them follows the railway instead of
-     * joining its stations with straight hops. Handed to {@code MtrLineTracks}, which turns them into
-     * the line's track without working anything out.
+     * The overlay's exact answer to a question MTR never answers; handed to MtrLineTracks, so a line is drawn along its railway instead of joining stations with straight hops.
      */
     private static List<String> railsOf(Object route) {
         if (routeTrackIdsField == null) {
@@ -454,9 +332,8 @@ final class MtrMapOverlay {
             }
             List<String> rails = new ArrayList<>(ids.size());
             for (Object id : ids) {
-                // An id is a rail's hex id, which is what the snapshot's tracks are keyed by. An
-                // element that is not one cannot be looked up and is left out rather than hashed into
-                // something that would never match a rail and would silently shorten the track.
+                // An id is a rail's hex id, which is how the snapshot's tracks are keyed. Anything else cannot be
+                // looked up and is left out rather than hashed into an id that would never match.
                 if (id instanceof String text && !text.isEmpty()) {
                     rails.add(text);
                 }
@@ -468,11 +345,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * The rails of the snapshot, as this mod's own track.
-     *
-     * <p>The height is the one thing the snapshot does not carry, so it is taken from the nearest
-     * station or platform of the snapshot within {@link #HEIGHT_HINT_RADIUS}, and left at
-     * {@link #FALLBACK_TRACK_Y} when there is none.
+     * The rails of the snapshot as this mod's own track. Height is the one thing not carried: nearest station or platform within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y.
      */
     private static List<MtrClientData.Track> tracks(Object data, Map<Long, List<Hint>> hints)
             throws ReflectiveOperationException {
@@ -497,9 +370,8 @@ final class MtrMapOverlay {
                     zs[i] = point[1];
                 }
                 if (!usable) {
-                    // The overlay's own codec refuses a non-finite point on the way in, so this is a
-                    // shape this mod has not seen rather than data it has: the rail is left out and
-                    // counted, like every other unreadable element.
+                    // The overlay's own codec refuses a non-finite point on the way in, so this is a shape this mod has
+                    // not seen: the rail is left out and counted.
                     noteUnreadable("rail", null);
                     continue;
                 }
@@ -513,7 +385,6 @@ final class MtrMapOverlay {
         return List.copyOf(tracks);
     }
 
-    // ------------------------------------------------------------------ the joins
 
     /** One station's name as the joins compare it: without case, and without surrounding spaces. */
     private static String placeKey(String name) {
@@ -569,9 +440,7 @@ final class MtrMapOverlay {
     /**
      * The height of the nearest landmark within reach of a point, or the fallback.
      *
-     * <p>Searched cell by cell rather than landmark by landmark, because the landmarks of a whole
-     * railway outnumber nothing here and the rails outnumber them: a rail asks this once, and asking
-     * every landmark each time would be the square of the network for a number that is a hint.
+     * Searched cell by cell because rails outnumber landmarks and each rail asks once; asking every landmark each time would be the square of the network for a hint.
      */
     private static int heightNear(Map<Long, List<Hint>> hints, double x, double z) {
         if (hints.isEmpty()) {
@@ -607,7 +476,6 @@ final class MtrMapOverlay {
         return best;
     }
 
-    // ------------------------------------------------------------------- reading
 
     /** A string field or accessor's value, or null when it is not a string. */
     private static String string(Object value) {
@@ -631,22 +499,7 @@ final class MtrMapOverlay {
 
     /**
      * MTR's own id out of one of the overlay's id strings, or null when there is none.
-     *
-     * <p>The overlay writes every id it carries as {@code Long.toHexString} of MTR's own, behind a
-     * kind -- {@code "station:1a2b"}, {@code "platform:..."}, a route's bare hex, and
-     * {@code "depot:..."} for a stretch of depot path no route could be resolved for. Parsing the hex
-     * back is what lets a station or a line read here be the same station or line MTR's own reading
-     * calls it, which is what makes {@link MtrClientData#merge} able to tell that it has heard about
-     * one thing twice rather than about two things.
-     *
-     * <p>A string that is not hex is a string this mod has not seen. Rather than throw the element
-     * away it is keyed by a hash of itself, which is stable from one reading to the next and so
-     * behaves exactly as an id should -- it simply cannot be matched against MTR's own, which is the
-     * honest answer for an id that is not MTR's.
-     *
-     * <p>Package-private because the harness checks it: this is the join every merge across the three
-     * readings rests on, and it is the one part of the conversion that nothing in the game can show
-     * going wrong -- a station keyed wrongly is simply two stations, and looks like a station.
+     * The overlay writes Long.toHexString of MTR's own id behind a kind ("station:1a2b", "platform:...", a route's bare hex, "depot:..." for depot path). Parsing the hex back is what lets a station or line here be the same one MTR's reading calls it, so MtrClientData#merge can tell it has heard about one thing twice. A string that is not hex is keyed by a stable hash of itself: it behaves as an id but can never match MTR's. Package-private because the harness checks it -- this join is the one part of the conversion nothing in the game can show going wrong.
      */
     static Long idOf(String id) {
         if (id == null || id.isEmpty()) {
@@ -676,10 +529,7 @@ final class MtrMapOverlay {
     /**
      * Reports an element that could not be read, and how many have been reported.
      *
-     * <p>One unreadable element must not cost the reading every other one, so each is read in its own
-     * guard and a failure returns nothing for that element. Returning nothing <em>quietly</em> is what
-     * once made this mod's MTR reader look like it was working while it threw away every line MTR
-     * offered -- so the first few failures are named and the rest counted.
+     * Each element is read in its own guard so one failure cannot cost the rest; the first few are named and the rest counted, because returning nothing quietly once made this reader look like it worked while discarding every line.
      */
     private static void noteUnreadable(String what, Throwable cause) {
         unreadable++;
@@ -692,18 +542,15 @@ final class MtrMapOverlay {
         }
     }
 
-    // ---------------------------------------------------------------- resolving
 
     private static synchronized void resolve() {
         if (resolved) {
             return;
         }
         resolved = true;
-        // Asked only as a shortcut, and without touching another mod's classes when it says no: this
-        // mod is not installed on every copy of this one, and a session without it should not load
-        // its classes at all. Whether the names below are still the overlay's is a separate question,
-        // which bind() answers on its own -- so the harness can check the whole handshake against a
-        // real jar with no game running.
+        // Asked only as a shortcut, and without touching another mod's classes when it says no. Whether the
+        // names below are still the overlay's is bind()'s question, so the harness can check the whole
+        // handshake against a real jar.
         if (!overlayLoaded()) {
             return;
         }
@@ -711,15 +558,9 @@ final class MtrMapOverlay {
     }
 
     /**
-     * Looks up every class, field and method this reads, and remembers whether it worked.
+     * Looks every class, field and method this reads up, and remembers whether it worked.
      *
-     * <p>Every one of them is public API of the overlay, so no privileged access is asked for. A
-     * version that has moved any of them simply reports itself unavailable, which is the honest
-     * answer and leaves the rest of the mod untouched.
-     *
-     * <p>The classes are loaded without being initialised: this needs their shapes, not their state.
-     *
-     * @return whether the overlay's shapes are the ones this class reads
+     * Every one is public API of the overlay, so no privileged access is asked for; a version that moved any of them reports itself unavailable. Classes are loaded without being initialised -- this needs their shapes, not their state.
      */
     static boolean bind() {
         try {
@@ -736,21 +577,20 @@ final class MtrMapOverlay {
             tracksField = dimensionData.getField("tracks");
             landmarksField = dimensionData.getField("landmarks");
             dimensionIdField = dimensionData.getField("dimensionId");
-            // Not required: it is what says whether the snapshot has changed at all, and without it
-            // the reading is converted again on every tick, which is slower but not wrong.
+            // Not required: it says whether the snapshot changed at all; without it the reading converts again
+            // every tick, slower but not wrong.
             versionField = optionalField(dimensionData, "version");
 
             routeIdField = route.getField("id");
             routeNameField = route.getField("name");
             routeColorField = route.getField("color");
-            // The route's loop state, as the overlay's own public boolean. Not required: a version
-            // without it reads every line two-way, and the lines themselves are unaffected.
+            // The route's loop state, as the overlay's own public boolean. Not required: without it every line
+            // reads two-way and the lines themselves are unaffected.
             routeCircularField = optionalField(route, "circular");
             routeStopsField = route.getField("stops");
-            // The rails the route runs along, in the order it runs along them. The one thing MTR's
-            // own data never says about a line, and the reason a line read out of the overlay is drawn
-            // along its railway rather than between its stations. Not required: a version without it
-            // falls back to working the track out, which is what this mod did before.
+            // The rails the route runs along, in order -- the one thing MTR's own data never says about a line,
+            // and why a line is drawn along its railway. Not required: without it the track is worked out, as
+            // before.
             routeTrackIdsField = optionalField(route, "trackIds");
             stopXField = routeStop.getField("x");
             stopZField = routeStop.getField("z");
@@ -795,10 +635,7 @@ final class MtrMapOverlay {
     /**
      * Whether the overlay's classes are on the classpath at all.
      *
-     * <p>Asked by the harness before it checks the handshake, so that a machine which has never seen
-     * the mod skips the check rather than failing it -- the same arrangement {@link MtrClientData}
-     * uses for MTR. Answered by loading the one class, and never by {@link #overlayLoaded()}, which
-     * needs a loader that has been started and a harness has not.
+     * Asked by the harness so a machine that has never seen the mod skips the handshake check; answered by loading the one class, never by overlayLoaded(), which needs a loader that has been started.
      */
     static boolean classesPresent() {
         try {
@@ -810,12 +647,7 @@ final class MtrMapOverlay {
     }
 
     /**
-     * Whether MTR Map Overlay is installed.
-     *
-     * <p>Answered without assuming the loader has been asked anything yet: a class of this mod can
-     * reach here from the harness or a tool that never started the game, where the loader's own state
-     * is absent. "Not installed" and "no loader to ask" are the same answer to everything that
-     * follows, so they are made the same answer here rather than each caller guarding separately.
+     * Whether MTR Map Overlay is installed, answered without assuming the loader has been asked anything yet (a harness or tool that never started the game). "Not installed" and "no loader to ask" are the same answer here.
      */
     private static boolean overlayLoaded() {
         try {

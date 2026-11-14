@@ -6,10 +6,7 @@ import xaero.map.element.render.ElementReader;
 import xaero.map.element.render.ElementRenderLocation;
 
 /**
- * Describes road elements to Xaero's element pipeline.
- *
- * <p>Culling is handled by {@link #isOnScreen} rather than the interaction boxes, because a
- * polyline's bounding box cannot be expressed from its anchor point alone.
+ * Describes road elements to Xaero's element pipeline. Culling is left to isOnScreen because a polyline's bounding box cannot be expressed from its anchor point alone.
  */
 public final class RoadElementReader extends ElementReader<RoadElement, RoadRenderContext, RoadElementRenderer> {
 
@@ -28,10 +25,7 @@ public final class RoadElementReader extends ElementReader<RoadElement, RoadRend
         return element.anchorZ();
     }
 
-    /**
-     * Always true for now: the default implementation culls using the interaction box, which we
-     * deliberately keep tight around the anchor. Worse for performance, correct for P0.
-     */
+    /** Always true: our anchor-tight interaction box makes the default culling wrong. */
     @Override
     public boolean isOnScreen(RoadElement element, double cameraX, double cameraZ, int screenW, int screenH,
                               double scale, double screenSizeBasedScale, double dimScale, RoadRenderContext context,

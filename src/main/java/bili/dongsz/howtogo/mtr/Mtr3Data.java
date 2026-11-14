@@ -14,74 +14,17 @@ import java.util.Map;
 
 /**
  * MTR 3.x's data, read reflectively.
- *
- * <h2>Why this is a second reader rather than a branch of the first</h2>
- * MTR 4.x reorganised its whole data model: {@code org.mtr.core.data} holds loader-neutral objects,
- * the client is sent {@code SimplifiedRoute}s and {@code RailWrapper}s, and the server simulates a
- * {@code Main} of per-dimension {@code Simulator}s. MTR 3.x -- the line the YMTR fork is built on and
- * the line the 1.20.1 era of MTR belongs to -- keeps its objects on the client and in the world's
- * saved data instead: {@code ClientData}'s static sets for the window, {@code RailwayData} for a
- * world, with every field public and no getters at all. The two readers share no single class name,
- * so {@link MtrClientData} keeps its 4.x shapes untouched and falls back to this one when they are
- * not there.
- *
- * <h2>The two readings, and what they come from</h2>
- * <ul>
- *   <li><b>the window</b> -- {@code mtr.client.ClientData}'s {@code STATIONS}, {@code PLATFORMS},
- *       {@code ROUTES} and {@code RAILS}: what MTR has sent this client, which is the part of the
- *       railway around the player, exactly as 4.x's client reading is;</li>
- *   <li><b>a whole dimension</b> -- {@code mtr.data.RailwayData.getInstance(world)} and its
- *       {@code stations}, {@code platforms}, {@code routes} and {@code rails}: the same reading 4.x's
- *       {@code MtrWholeMap} takes from a {@code Simulator}. Unlike 4.x's whole-map read, which
- *       leaves rails out because the window already carries the rails around the player, this one
- *       reads them too: on 1.20.1 the server-to-client sync has no transport yet (see
- *       {@code docs/mtr-versions.md}), so the window is the only other reading and it only holds the
- *       rails near where the player has been. Without the whole dimension's rails, a network the
- *       player has not walked end to end draws as disconnected pieces.</li>
- * </ul>
- *
- * <h2>Names: two families, one shape</h2>
- * YMTR ships the 3.x model under {@code mtr.*}; the same model under the official MTR 3.x spellings is
- * looked for at {@code org.mtr.mod.*} and {@code org.mtr.*}. The candidates are pairs of a client data
- * class and the package its data classes live in, so a reader for one family is a reader for the
- * other as long as the shapes agree -- which they do, because the fork did not change them.
- *
- * <h2>The fields are public, and what that costs</h2>
- * Every element is read through a {@link Getter}: a public field when the class has one and a getter
- * when it does not, so a version that adds accessors still reads. The two Minecraft types that
- * appear in the shapes -- {@code BlockPos} and {@code Vec3d} -- are resolved late and by trying both
- * of Minecraft's name families, because a mod built on Fabric sees {@code method_10263} where one
- * built on Mojang's mappings sees {@code getX}. Nothing is resolved at bind time that only a running
- * game can answer.
- *
- * <h2>Rail ids</h2>
- * 3.x rails have no id: they are values in a map keyed by their two endpoints. The merge between
- * readings matches rails by id, so one is made up out of the endpoints
- * ({@code "m3:x,y,z|x,y,z:MODE"}), which is stable across readings -- and would be the same id a
- * server-side reading of the same rail produced -- and cannot collide with an id MTR itself hands out.
- *
- * <h2>Why the whole map's rails are cached</h2>
- * Sampling a rail's curve is the one expensive part of a whole-map read: one reflective call per
- * vertex, up to {@link #WINDOW_MAX_VERTICES} of them per rail, for every rail in the dimension -- and
- * {@code MtrWholeMap} asks for a whole read every few seconds. So the converted rail list is kept,
- * together with a cheap content signature of the rail map: a walk over the endpoints and the rail
- * objects' identities, with no geometry sampled at all. A poll that finds the signature unchanged
- * reuses the list; one that finds it changed converts the map again. The signature is internal to the
- * cache -- it is not an id, it never reaches a track, and matching across readings still happens on
- * {@link #railId}, so caching cannot make two readings disagree about which rail is which. Keeping
- * the list and the signature rather than MTR's own rail objects means a read still holds nothing of
- * MTR's after it returns, so nothing of a world outlives the world through this cache.
+ * MTR 4.x keeps loader-neutral objects in org.mtr.core.data and sends SimplifiedRoutes; 3.x -- the YMTR fork line and the 1.20.1 era -- keeps objects on the client (ClientData's static sets) and in a world's RailwayData, all fields public and no getters. The two readers share no class name, so MtrClientData keeps its 4.x shapes and falls back to this one.
+ * Readings: the window (ClientData's STATIONS, PLATFORMS, ROUTES and RAILS -- what was sent near the player) and a whole dimension (RailwayData.getInstance(world)). The whole read also takes rails: on 1.20.1 the server-to-client sync has no transport, so a network the player has not walked would otherwise draw as disconnected pieces.
+ * Names: YMTR ships mtr.*; the official 3.x spellings org.mtr.mod.* and org.mtr.* are tried as candidates paired with the data package.
+ * Every element is read through a Getter (public field when present, getter otherwise); BlockPos and Vec3d are resolved late, trying both of Minecraft's naming families.
+ * 3.x rails have no id, so one is made from the endpoint blocks and mode (m3:x,y,z|x,y,z:MODE): stable across readings and unable to collide with MTR's own ids.
+ * The converted rail list is cached with a cheap signature (endpoints, rail identities and lengths), because sampling a curve costs one reflective call per vertex; the cache holds nothing of MTR's and its owner is weak.
  */
 public final class Mtr3Data {
 
     /**
-     * The client data class and the package its data classes live in, newest plausible spelling first.
-     *
-     * <p>{@code mtr.*} is YMTR's. The two {@code org.mtr} spellings are the official 3.x packaging the
-     * fork's names were derived from; they are tried rather than assumed, and a family that does not
-     * have the classes is passed over without a word -- which is what makes this reader harmless on a
-     * 4.x install, where the client data class is called {@code MinecraftClientData} and lives beside
-     * a different data model entirely.
+     * The client data class and the package its data classes live in, newest plausible spelling first. mtr.* is YMTR's; the org.mtr spellings are tried and passed over silently, which keeps this reader harmless on a 4.x install.
      */
     private static final String[][] CLIENT_CANDIDATES = {
             {"mtr.client.ClientData", "mtr"},
@@ -89,7 +32,7 @@ public final class Mtr3Data {
             {"org.mtr.client.ClientData", "org.mtr"},
     };
 
-    /** The packages {@code RailwayData} is looked for in, the same families as above. */
+    /** The packages RailwayData is looked for in, the same families as above. */
     private static final String[] SERVER_BASES = {"mtr", "org.mtr.mod", "org.mtr"};
 
     /** How far apart a rail's geometry is sampled, in metres, as the 4.x readers do. */
@@ -110,7 +53,7 @@ public final class Mtr3Data {
     private static Class<?> railClass;
     private static Class<?> routePlatformClass;
 
-    /** The four name-and-colour accessors, declared once on {@code NameColorDataBase}. */
+    /** The four name-and-colour accessors, declared once on NameColorDataBase. */
     private static Getter idGetter;
     private static Getter nameGetter;
     private static Getter colourGetter;
@@ -129,12 +72,7 @@ public final class Mtr3Data {
     private static Method routeDestinationByIndexMethod;
     private static Getter routeHiddenGetter;
     /**
-     * The circular state of a route, as MTR 3.x might name it.
-     *
-     * <p>Unverified: there is no 3.x jar on this machine, and this member has never been checked
-     * against one -- see the class comment on the two name families. It is therefore optional and
-     * outside {@link #shapesAvailable}: a family without it is still a family this reads, whose lines
-     * simply stay two-way, which is the answer that cannot invent a restriction.
+     * The circular state of a route, as MTR 3.x might name it. Unverified against a 3.x jar, so it is optional and outside shapesAvailable; without it routes read as two-way, which cannot invent a restriction.
      */
     private static Getter routeCircularGetter;
 
@@ -186,12 +124,7 @@ public final class Mtr3Data {
     // ------------------------------------------------------------------ the rail cache
 
     /**
-     * The rail list last converted for a whole-map read, and the signature of the map it came from.
-     *
-     * <p>Guarded by the class lock. The owner is held weakly and compared by identity, so this cache
-     * cannot keep a rail map -- and with it a world -- alive after the world is gone; the list itself
-     * holds nothing of MTR's. A stale entry is simply never matched again, and the next whole-map read
-     * replaces it.
+     * The rail list last converted for a whole-map read, with the signature of its map, guarded by the class lock. The owner is held weakly and compared by identity, so the cache cannot keep a world alive; the list itself holds nothing of MTR's.
      */
     private static java.lang.ref.WeakReference<Object> railsCacheOwner;
     private static long railsCacheSignature;
@@ -206,12 +139,7 @@ public final class Mtr3Data {
     // ---------------------------------------------------------------- the readings
 
     /**
-     * What MTR 3.x is offering this client, in the shape the rest of the mod reads.
-     *
-     * <p>Built on the caller's thread from MTR's static client sets. A client that has not synced yet
-     * has empty sets, which is the same answer "nothing to read" always is; a shape that cannot be read
-     * at all comes back as an empty dimension rather than an exception, because this is asked from a
-     * client tick.
+     * What MTR 3.x is offering this client, in the shape the rest of the mod reads. Built on the caller's thread from the static sets; an unsynced client has empty sets and an unreadable shape comes back empty rather than throwing.
      */
     public static MtrSnapshotData.Dimension windowDimension() {
         if (!bindClient()) {
@@ -234,18 +162,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * Every station, platform, line and rail of one simulated dimension.
-     *
-     * <p>This is the whole-map read, and the rails in it are the point: MTR 3.x sends a client only
-     * the rails around the player, so the windowed reading alone leaves the rest of the network
-     * undrawn -- which is the "tracks are broken, some are missing" a player sees. A single-player or
-     * LAN host has the whole network in this process, so this reader takes it from there. The
-     * conversion is cached -- see the class comment -- so only a changed network costs a sampling
-     * pass, and the returned reading still holds nothing of MTR's.
-     *
-     * <p>When this version's rail map cannot be read at all, the reading is the stations, platforms
-     * and lines exactly as before and no track is offered: rails are an addition to this reading, not
-     * a requirement of it.
+     * Every station, platform, line and rail of one simulated dimension. The rails are the point: the windowed reading alone leaves the rest of the network undrawn. The conversion is cached, and rails are an addition -- when the rail map cannot be read, the stations, platforms and lines still are.
      */
     public static MtrSnapshotData.Dimension whole(Object railwayData) {
         if (railwayData == null || !bindServer()) {
@@ -283,15 +200,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * The rail map a whole dimension's data holds, or null when this version keeps none where a
-     * reader can reach it.
-     *
-     * <p>{@code getRailsMap()} is preferred because asking a public accessor for the map needs no
-     * privileged access at all; the {@code rails} field is the fallback for the builds that have no
-     * getter -- YMTR 3.6.4.2's map is a private final field, and a reader that only knew the getter
-     * would read no rail on the build this is checked against. The field is made accessible once, at
-     * bind time, and a JVM that refuses that is a version this reports unavailable rather than a
-     * failure: the whole-map read then keeps its stations, platforms and lines.
+     * The rail map a whole dimension's data holds, or null. getRailsMap() is preferred; the private rails field is the fallback for builds without a getter (YMTR 3.6.4.2), made accessible once at bind time.
      */
     static Object railsOf(Object railwayData) {
         if (railwayData == null || !bindServer()) {
@@ -316,7 +225,7 @@ public final class Mtr3Data {
     /**
      * The data a world is simulating, or null when there is none.
      *
-     * <p>{@code RailwayData.getInstance(World)} is persistent-state backed, so it must be handed a
+     * RailwayData.getInstance(World) is persistent-state backed, so it must be handed a
      * server world and asked on the server thread; the caller is responsible for both.
      */
     public static Object railwayData(Object world) {
@@ -334,15 +243,7 @@ public final class Mtr3Data {
     // --------------------------------------------------------------- the conversion
 
     /**
-     * One reading's collections as this mod's own records.
-     *
-     * <p>Package-visible rather than private so that the same conversion can be driven from a test
-     * with no game running: everything it touches arrives as arguments, and the only state it uses is
-     * the bound shapes.
-     *
-     * @param platformStations MTR's own map from platform id to station object, or null when the
-     *                         version does not keep one -- in which case a platform's station is found
-     *                         geometrically among the stations of the same reading
+     * One reading's collections as this mod's own records. Package-visible so a test can drive it with no game running: everything it touches arrives as arguments. The platform-to-station map may be null, in which case a platform's station is found geometrically.
      */
     static MtrSnapshotData.Dimension build(String dimensionId, Object stationsRaw, Object platformsRaw,
                                            Object routesRaw, Map<?, ?> platformStations,
@@ -369,10 +270,7 @@ public final class Mtr3Data {
                 platforms.add(platform);
             }
         }
-        // 3.x's station area is a rectangle in X and Z only, and its centre carries no height at all.
-        // The platforms do know one -- they are where a vehicle stops -- so a station without a height
-        // is lifted to its platforms', which is what the map puts a marker at and what a destination
-        // is offered at.
+        // 3.x's station area is a rectangle in X and Z with no height, so a station without one is lifted to its platforms', which is where a marker is drawn.
         stations = withPlatformHeights(stations, platforms);
 
         List<MtrSnapshotData.Line> lines = new ArrayList<>();
@@ -437,8 +335,7 @@ public final class Mtr3Data {
                 return null;
             }
             if (stationId == 0 && !platformStationsKnown) {
-                // No map to ask: the station whose rectangle the platform stands in is the answer, and
-                // the smallest such rectangle wins when stations overlap.
+                // No map to ask: the smallest station rectangle containing the platform wins.
                 stationId = stationContaining(stations, mid[0], mid[2]);
             }
             return new MtrSnapshotData.Platform(id, stationId, text(raw, nameGetter),
@@ -458,8 +355,7 @@ public final class Mtr3Data {
                 return null;
             }
             List<MtrSnapshotData.Stop> stops = new ArrayList<>();
-            // A 3.x route carries its own transport mode, unlike 4.x's SimplifiedRoute -- which is why
-            // the windowed 4.x reader has to infer one from the stations a line calls at.
+            // A 3.x route carries its own transport mode, unlike 4.x's SimplifiedRoute.
             String mode = modeName(value(raw, modeGetter));
             int index = 0;
             for (Object routePlatform : elements(routePlatformsGetter.get(raw))) {
@@ -506,14 +402,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * Whether a 3.x route says it is circular, or false when the answer cannot be read.
-     *
-     * <p>MTR 3.x has no simulation core and no {@code CircularState} of the 4.x kind, so what its route
-     * calls a loop is a guess: a boolean field or accessor, or a state enum whose {@code NONE} is a
-     * normal route. Nothing here has been checked against a 3.x jar, which is why every other answer --
-     * including the name not existing at all -- is two-way: that is what every 3.x line was before
-     * directions existed, and the answer that cannot invent a restriction. When a 3.x jar is available,
-     * {@code tools/mtr3-probe} is where these names get confirmed.
+     * Whether a 3.x route says it is circular, or false when the answer cannot be read. Unverified against a 3.x jar, so every other answer is two-way, which cannot invent a restriction.
      */
     private static boolean circular(Object route) {
         Object value = value(route, routeCircularGetter);
@@ -527,17 +416,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * A whole dimension's rails as tracks, sampling only when the network has changed since the last
-     * whole-map read.
-     *
-     * <p>Package-visible rather than private so that the conversion can be driven from the probe with
-     * real MTR rail objects but no game running, the same as {@link #build}: {@code whole} itself
-     * needs a live {@code RailwayData}.
-     *
-     * <p>The cached list is returned as it is rather than copied. Tracks are immutable records over
-     * arrays nothing in this mod writes to -- see {@code MtrClientData}, which reads them into its own
-     * records without touching the arrays -- so a second reader of an unchanged network is handed the
-     * same value the last one got, which is also what makes it cheap.
+     * A whole dimension's rails as tracks, sampling only when the network changed since the last whole-map read. Package-visible so the probe can drive it with real rails; the cached list is returned as-is because Tracks are immutable records.
      */
     static List<MtrSnapshotData.Track> wholeTracks(Object railsRaw) {
         if (!(railsRaw instanceof Map<?, ?> outer) || !ensureVectorAccessors()) {
@@ -562,18 +441,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * A cheap content signature of a rail map, for deciding whether a cached conversion is current.
-     *
-     * <p>It walks the map's keys and the rail objects' identities, and asks each rail only for its
-     * length -- one cheap call, against the four per sampled vertex that converting the geometry
-     * costs. Replacing a rail, adding one and removing one all change it, and the length is what
-     * catches a rail whose curve was edited in place, which identity alone would miss. A dimension's
-     * map is identified by the map object itself, so two dimensions read one after the other do not
-     * reuse each other's list.
-     *
-     * <p>This is not an id and never becomes one: matching across readings is still {@link #railId}'s
-     * job, which is built from endpoints and mode only. The signature only ever decides whether the
-     * previous conversion can be reused.
+     * A cheap content signature of a rail map: keys, rail identities and each rail's length, so an in-place curve edit is caught. It is not an id -- railId still does matching -- it only decides whether the cached conversion is reusable.
      */
     private static long railsSignature(Map<?, ?> outer) {
         long signature = System.identityHashCode(outer);
@@ -608,9 +476,7 @@ public final class Mtr3Data {
             return List.of();
         }
         List<MtrSnapshotData.Track> tracks = new ArrayList<>();
-        // A rail's made-up id is the same whichever direction the map happens to hold it in, so a map
-        // that keeps both directions (removing a connection removes both, and nothing guarantees the
-        // adding side is the only one) does not send one rail twice.
+        // A rail's made-up id is the same whichever direction the map holds it, so a map holding both directions does not send one rail twice.
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (Map.Entry<?, ?> byStart : outer.entrySet()) {
             if (!(byStart.getValue() instanceof Map<?, ?> byEnd)) {
@@ -635,12 +501,7 @@ public final class Mtr3Data {
         return tracks;
     }
 
-    /**
-     * One rail, sampled along its own curve.
-     *
-     * <p>The same sampling 4.x's readers use, and for the same reason: the mark is a polyline, and the
-     * coarser it is sampled the more it looks like a chord between the ends rather than the track.
-     */
+    /** One rail, sampled along its own curve at the same spacing the 4.x readers use. */
     private static MtrSnapshotData.Track track(Object rail, String hexId, String mode,
                                                int maxVertices) {
         try {
@@ -765,8 +626,7 @@ public final class Mtr3Data {
                 clientStationsField = requiredField(type, "STATIONS", "stations");
                 clientPlatformsField = requiredField(type, "PLATFORMS", "platforms");
                 clientRoutesField = requiredField(type, "ROUTES", "routes");
-                // Optional: the two other readings do not go through them, and a version without
-                // rails on the client is a reading with no track rather than no reading.
+                // Optional: the other readings do not go through the client rails.
                 clientRailsField = optionalField(type, "RAILS", "rails");
                 clientCacheField = optionalField(type, "DATA_CACHE", "dataCache", "cache");
                 clientAvailable = true;
@@ -808,9 +668,7 @@ public final class Mtr3Data {
                 if (railwayGetInstanceMethod == null) {
                     throw new NoSuchMethodException(type.getName() + ".getInstance");
                 }
-                // Rails are optional: a whole-map reading without them is the reading this reader
-                // used to give, which is still useful. The getter is preferred and the field is the
-                // fallback, so this works both before and after the accessor was added.
+                // Rails are optional; the getter is preferred and the field is the fallback, so this works before and after the accessor was added.
                 railwayRailsMethod = methodObject(type, "getRailsMap");
                 railwayRailsField = accessibleField(type, "rails");
                 if (railwayRailsMethod == null && railwayRailsField == null) {
@@ -835,8 +693,7 @@ public final class Mtr3Data {
         for (String[] candidate : CLIENT_CANDIDATES) {
             try {
                 load(candidate[0]);
-                // The data model is part of the answer: a class that happens to be called ClientData
-                // is not MTR 3.x unless the classes it is a window onto are beside it.
+                // The data model is part of the answer: a class called ClientData is not MTR 3.x on its own.
                 load(candidate[1] + ".data.Station");
                 load(candidate[1] + ".data.Platform");
                 return true;
@@ -861,22 +718,18 @@ public final class Mtr3Data {
         return false;
     }
 
-    /** Whether {@link #bindClient()} succeeded. */
+    /** Whether bindClient() succeeded. */
     public static boolean clientAvailable() {
         return clientAvailable;
     }
 
-    /** Whether {@link #bindServer()} succeeded. */
+    /** Whether bindServer() succeeded. */
     public static boolean serverAvailable() {
         return serverAvailable;
     }
 
     /**
-     * Looks up the element shapes of one package family, and remembers whether it worked.
-     *
-     * <p>Everything here is a public member of the data model, so nothing privileged is asked for and a
-     * family whose fields have moved simply reports itself unavailable. The two Minecraft types that
-     * appear in the shapes are not resolved here at all -- see {@link #ensureBlockAccessors()}.
+     * Looks up the element shapes of one package family and remembers whether it worked; nothing privileged is asked for and Minecraft's types are resolved later.
      */
     private static synchronized boolean bindShapes(String base) {
         if (shapesResolved) {
@@ -915,8 +768,7 @@ public final class Mtr3Data {
             routeDestinationByIndexMethod = methodObject(routeClass, "getDestination", int.class);
             routeHiddenGetter = fieldOrMethod(routeClass, new String[]{"isHidden", "hidden"},
                     "getHidden", "isHidden");
-            // The loop state of the route: optional, unverified and outside shapesAvailable, so a
-            // family that does not have any of these names still reads -- its lines just stay two-way.
+            // The loop state of the route: optional and unverified, so a family without these names still reads, with two-way lines.
             routeCircularGetter = fieldOrMethod(routeClass,
                     new String[]{"circular", "isCircular", "circularState"},
                     "isCircular", "getCircularState", "getCircular");
@@ -975,11 +827,7 @@ public final class Mtr3Data {
     // --------------------------------------------------- Minecraft's two name families
 
     /**
-     * BlockPos's coordinate accessors, found on the type the shapes say they return.
-     *
-     * <p>Resolved here rather than in {@link #bindShapes} because a bind is also made with no game
-     * running, where the Minecraft class is not there to be loaded; and both of Minecraft's naming
-     * families are tried because the same 3.x model can be handed to us remapped either way.
+     * BlockPos's coordinate accessors, resolved late because a bind can happen with no game running, trying both of Minecraft's naming families.
      */
     private static boolean ensureBlockAccessors() {
         if (blockAccessorsBound) {
@@ -997,7 +845,7 @@ public final class Mtr3Data {
         return blockXGetter != null && blockYGetter != null && blockZGetter != null;
     }
 
-    /** Vec3d's coordinates, the same way and for the same reason as {@link #ensureBlockAccessors()}. */
+    /** Vec3d's coordinates, the same way and for the same reason as ensureBlockAccessors(). */
     private static boolean ensureVectorAccessors() {
         if (vectorAccessorsBound) {
             return vectorXGetter != null && vectorYGetter != null && vectorZGetter != null;
@@ -1049,8 +897,7 @@ public final class Mtr3Data {
 
     /** The two accessors of the tuple a station's corners are kept in. */
     private static boolean bindPairAccessors(Class<?> pairClass) {
-        // mojmap calls the two halves of a Minecraft tuple getA/getB, the Fabric runtime calls them
-        // method_15442/method_15441; both are tried so a dev and a production session read alike.
+        // mojmap calls a tuple's halves getA/getB, the Fabric runtime calls them method_15442/method_15441; both are tried.
         pairFirstGetter = noArgMethod(pairClass, "getA", "getFirst", "getLeft", "method_15442");
         pairSecondGetter = noArgMethod(pairClass, "getB", "getSecond", "getRight", "method_15441");
         return pairFirstGetter != null && pairSecondGetter != null;
@@ -1059,11 +906,7 @@ public final class Mtr3Data {
     // ------------------------------------------------------------------ the cache
 
     /**
-     * The platform-to-station map, or null when this version has none to offer.
-     *
-     * <p>It is the only exact link between the two in 3.x: a platform's own object carries no station
-     * reference, and MTR resolves the pair into its cache when it syncs. The field is looked for on
-     * whatever type the cache object is, so a version that renames the cache class still reads.
+     * The platform-to-station map, or null when this version has none. The only exact link between the two in 3.x; the field is looked for on whatever type the cache object is.
      */
     private static Map<?, ?> platformStationsOf(Object cache) {
         if (cache == null) {
@@ -1207,12 +1050,7 @@ public final class Mtr3Data {
     }
 
     /**
-     * A field anywhere up a class chain, made accessible, or null when there is none to read.
-     *
-     * <p>For the members MTR keeps private -- the rails map is one -- {@code getField} cannot find
-     * them, and a reader that gave up at that would read a whole dimension with no track at all. A
-     * JVM or a named module that refuses {@code setAccessible} is answered by null: the caller treats
-     * that field as absent rather than as an error.
+     * A field anywhere up a class chain, made accessible, or null when there is none. getField cannot see MTR's private rails map, and a JVM that refuses setAccessible is answered by null.
      */
     private static Field accessibleField(Class<?> owner, String... names) {
         for (String name : names) {

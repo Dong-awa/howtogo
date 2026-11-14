@@ -8,79 +8,24 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * The one place this mod's interfaces get their motion from: the durations, the curves, and the
- * two primitives every animation in the mod is built out of.
- *
- * <h2>Why a motion vocabulary rather than a number at each call site</h2>
- * The same problem {@link UiTheme} solves for colour, solved for time. A screen that fades its own
- * panel over 180 ms, another that slides over 90 ms and a button that changes face the instant the
- * cursor arrives do not read as three animations; they read as three interfaces. So every duration
- * and every curve lives here as a named token -- {@link #ENTER}, {@link #HOVER}, {@link #EXPAND} and
- * the rest -- and every screen asks for one instead of writing milliseconds down. Adding a surface
- * means choosing from this list, and no surface can drift out of step, because no surface owns a
- * duration any more. The same holds for the values each token is paired with: {@link Easing} is a
- * closed set, so "silky, never linear" is a property of the class rather than of the care taken at
- * each call site.
- *
- * <h2>Two primitives, not an animation framework</h2>
- * Everything this mod animates is a number between 0 and 1 moving towards a target:
- *
- * <ul>
- *   <li>{@link Slide} -- a value that travels towards a target over a fixed duration, in either
- *       direction, and can be reversed mid-flight. Reversal is what makes it feel like an interface
- *       rather than a slideshow: the cursor leaving a button halfway through its hover-in turns the
- *       same value around from wherever it got to, instead of restarting the animation.</li>
- *   <li>{@link Easing} -- the curve read off that value. Out-curves for anything arriving (fast at
- *       first, long settle: this is what "silky" means in practice), in-out for anything that both
- *       starts and stops on screen, in-curves for anything leaving.</li>
- * </ul>
- *
- * There is deliberately no spring solver, no keyframe timeline and no scheduler: a slide is advanced
- * by the frame that reads it, which means an animation that nothing is looking at costs nothing at
- * all, and there is no state to keep in step with the render loop.
- *
- * <h2>Frame-rate independence, without asking the game what frame it is</h2>
- * A slide advances by the wall-clock time between the frames that read it, clamped to
- * {@link #MAX_STEP_SECONDS}. The clock is {@link System#nanoTime()} rather than the game's partial
- * tick because the mod's screens are not pause screens -- the world keeps running behind them -- and
- * because the delta the game reports has changed type three times across the versions this tree
- * builds for. Two calls in the same millisecond share one delta, so a screen and the HUD drawn in
- * one frame advance by one frame's worth of time rather than by two.
- *
- * <h2>Switched off</h2>
- * {@code ui_animations} is a config entry, on by default, read on every call rather than cached --
- * the same rule {@link UiTheme} follows for the palette, and for the same reason: a change takes
- * effect on the next frame with no listener and no invalidation. With it off, {@link Slide#to}
- * lands on the target in the same call and {@link #stagger} answers 1: every animation in the mod
- * becomes the instantaneous state change it replaced, and no slide is left half way through.
+ * The one place this mod's interfaces get their motion: the durations, the curves, and the two primitives every animation is built from.
+ * Every duration and curve is a named token here (ENTER, HOVER, EXPAND and the rest) rather than milliseconds at each call site, so screens cannot drift out of step; Easing is a closed set, so "never linear" is a property of this class rather than of the care taken at each call site.
+ * Two primitives, not a framework: Slide is a 0..1 value travelling to a target over a fixed duration and reversible mid-flight; Easing is the curve read off it (out for arriving, in-out for both, in for leaving). No spring, keyframe timeline or scheduler -- a slide advances only in the frame that reads it, so an unobserved animation costs nothing.
+ * Frame-rate independence: a slide advances by wall-clock time since the last read, clamped to MAX_STEP_SECONDS. The clock is System.nanoTime() because mod screens are not pause screens and the game's delta type has changed three times across the supported versions. Reads in the same millisecond share one delta, so a screen and the HUD in one frame advance once.
+ * ui_animations is read on every call rather than cached, so a change applies next frame. Off, Slide#to lands on the target immediately and stagger answers 1, collapsing every animation to the state change it replaced.
  */
 public final class UiMotion {
 
     private UiMotion() {
     }
 
-    // ------------------------------------------------------------------ tokens
 
     /*
-     * The duration table. Read it as the mod's motion style guide rather than as six numbers: every
-     * duration below is a decision about how the interface should feel, taken once, here.
-     *
-     * A screen arriving is 200 ms: long enough to be seen as motion rather than as a flicker, short
-     * enough that a player opening a screen and clicking at once never waits for it. It is the
-     * longest value in the table because it is the one thing the player did not ask to happen.
-     * Leaving is faster (140 ms) -- an interface that lingers on its way out feels reluctant.
-     *
-     * A hover is 130 ms: the shortest span that still reads as a fade rather than a switch, and
-     * short enough that sweeping the cursor across a row of buttons does not leave a trail.
-     *
-     * A press is 90 ms, because it has to be over before the release.
-     *
-     * An expand is the slowest thing the interface does (240 ms) -- a box unfolding is a change of
-     * layout, and a layout that arrives too fast reads as a glitch. Its collapse is quicker
-     * (190 ms) for the same reason leaving is: hiding is not something to be savoured.
+     * The duration table, read as the mod's motion style guide rather than as six numbers: each duration is a decision about how the interface should feel, taken once here.
+     * ENTER is 200 ms -- long enough to read as motion, short enough that a player opening a screen and clicking at once never waits; EXIT is faster (140 ms) because lingering feels reluctant. HOVER is 130 ms, PRESS 90 ms (over before the release), EXPAND 240 ms (a layout change that arrives too fast reads as a glitch) and COLLAPSE 190 ms.
      */
 
-    /** A screen arriving: how long its sheet and its dimming take to reach full strength. */
+    /** A screen arriving: how long its sheet and dimming take to reach full strength. */
     public static final long ENTER = 200L;
     /** A screen leaving, before the game swaps it for the next one. */
     public static final long EXIT = 140L;
@@ -88,31 +33,23 @@ public final class UiMotion {
     public static final long HOVER = 130L;
     /** The momentary shrink a control takes while it is held down. */
     public static final long PRESS = 90L;
-    /** A panel unfolding: 240 ms, the longest motion in the table. */
+    /** A panel unfolding, the longest motion in the table. */
     public static final long EXPAND = 240L;
-    /** A panel rolling back up: quicker than {@link #EXPAND}, because hiding is not the show. */
+    /** A panel rolling back up: quicker than EXPAND. */
     public static final long COLLAPSE = 190L;
     /** A list travelling to its new scroll position. */
     public static final long SCROLL = 200L;
-    /** One band of a HUD card appearing or disappearing (navigation starting, a trip ending). */
+    /** One band of a HUD card appearing or disappearing. */
     public static final long HUD = 220L;
     /** How much later each successive row of a list starts arriving. */
     public static final long STAGGER = 16L;
-    /** Rows past this one share the last row's delay, so a long list never trickles in for a second. */
+    /** Rows past this share the last row's delay, so a long list never trickles in for a second. */
     public static final int STAGGER_LIMIT = 8;
 
     /**
-     * How faint one page's content gets while another page takes over from it, as an opacity.
-     *
-     * <p>Three tenths, and the number is the whole transition: at zero the two pages are two
-     * separate fades with a blank surface between them (which reads as the interface blinking), and
-     * at one there is no transition at all. At three tenths the outgoing page has visibly left, the
-     * incoming one has visibly not arrived, and neither of them ever stopped being part of the same
-     * surface -- which is what "one page became the next" looks like.
-     *
-     * <p>It applies to content only. The sheet and the dimming behind it are held at full for the
-     * whole hand-off (see {@link ScreenState#surface()}), because they are the surface the two pages
-     * have in common rather than part of either one.
+     * How faint one page's content gets while another takes over, as an opacity.
+     * Three tenths is the whole transition: at zero the pages fade through a blank surface (the interface blinking), at one there is no transition; at 0.3 the outgoing page has visibly left and the incoming has visibly not arrived.
+     * Content only: the sheet and the dimming stay at full (see ScreenState#surface()), because they are the surface the two pages share.
      */
     public static final float HANDOFF_FLOOR = 0.3F;
 
@@ -124,30 +61,19 @@ public final class UiMotion {
     private static long frameNanos;
     private static float frameSeconds = 0.016F;
 
-    // -------------------------------------------------------------- the switch
 
     /**
-     * Whether the interface is allowed to animate right now.
-     *
-     * <p>Read on every slide, once per frame per slide, so it is left as cheap as the config read it
-     * wraps: a field on the config's values object. The default is on; a player who turns it off gets
-     * every animation collapsed to its end state on the next frame.
+     * Whether the interface may animate right now.
+     * Read per slide per frame, so it is as cheap as the config read it wraps; off collapses every animation to its end state on the next frame.
      */
     public static boolean on() {
         return RoadConfig.uiAnimations();
     }
 
-    // ------------------------------------------------------------ frame timing
 
     /**
-     * The time the current frame is worth, in seconds, clamped to
-     * {@value #MAX_STEP_SECONDS}.
-     *
-     * <p>Two callers in the same millisecond get the same answer, which is what keeps a screen and
-     * the HUD drawn one after the other in one frame from advancing by two frames' worth of motion.
-     * The first frame after a long stall -- a world load, an alt-tab -- is worth the maximum rather
-     * than the real gap: an animation that jumps to its end is less wrong than one that flickers
-     * through every step at once.
+     * The time the current frame is worth, in seconds, clamped to MAX_STEP_SECONDS.
+     * Two callers in the same millisecond get the same answer, so a screen and the HUD in one frame do not advance two frames. The first frame after a stall is worth the maximum rather than the real gap: a jump to the end is less wrong than a flicker through every step.
      */
     public static float frameDelta() {
         long now = System.nanoTime();
@@ -161,38 +87,27 @@ public final class UiMotion {
         return frameSeconds;
     }
 
-    /** Seconds since an arbitrary point, for the few effects that are periodic rather than a slide. */
+    /** Seconds since an arbitrary point, for effects that are periodic rather than slides. */
     public static float seconds() {
         return System.nanoTime() / 1.0E9F;
     }
 
     /**
-     * How quickly a value that has no fixed destination catches up with one, in seconds.
-     *
-     * <p>For a scroll position: a scroll is not a journey from A to B, it is a value chasing a
-     * target that the wheel keeps moving, so it wants a follow rather than a fixed duration. Fifty-
-     * five milliseconds is about {@link #SCROLL} once a wheel notch has been and gone, which is what
-     * makes a wheel that is spun fast trail smoothly instead of restarting an animation per notch.
+     * How quickly a value with no fixed destination catches up, in seconds.
+     * For a scroll position: the wheel keeps moving the target, so the value follows rather than travels. Fifty-five milliseconds is about SCROLL once a notch has gone, which makes a fast spin trail smoothly instead of restarting per notch.
      */
     public static final float FOLLOW_SECONDS = 0.055F;
 
     /**
      * A value chasing a target, frame-rate independently.
-     *
-     * <p>Exponential rather than linear, so there is no speed to hit and no overshoot to design
-     * around: the further behind, the faster it closes, which is exactly the shape a scroll wants.
-     * With the animations switched off it returns the target outright, so a caller's own logic never
-     * has to ask whether it was allowed to smooth.
+     * Exponential, so there is no speed to hit and no overshoot to design around. With animations off it returns the target, so a caller never has to ask whether smoothing was allowed.
      */
     public static float follow(float current, float target, float seconds) {
         if (!on()) {
             return target;
         }
         float remaining = target - current;
-        // Under half a pixel the chase is invisible and only exists to keep rounding the same number
-        // for the next dozen frames, which is what a scroll that creeps its last pixel looks like.
-        // Snapping here is what keeps a wheel notch feeling like one motion instead of a slide with a
-        // tail.
+        // Under half a pixel the chase is invisible and only keeps rounding the same number
         if (Math.abs(remaining) < 0.5F) {
             return target;
         }
@@ -201,13 +116,8 @@ public final class UiMotion {
     }
 
     /**
-     * A value chasing a target with a time constant of its own, for a unit that is not a 0..1 fade.
-     *
-     * <p>{@link #follow} is the same exponential chase sized for a scroll, with a half-pixel snap;
-     * a map camera moves in world blocks and zooms on a logarithmic scale, so it needs the same
-     * shape with its own constant and its own idea of "close enough". Kept here rather than written
-     * out in each screen so the shape -- exponential, frame-rate independent, snapping rather than
-     * creeping its last fraction of a pixel -- is the same one in both maps.
+     * A value chasing a target with its own time constant, for a unit that is not a 0..1 fade.
+     * follow is the same chase sized for a scroll; a map camera moves in world blocks and zooms logarithmically, so it needs its own constant and its own idea of close enough.
      */
     public static double chase(double current, double target, float seconds, double snap) {
         if (!on()) {
@@ -221,20 +131,14 @@ public final class UiMotion {
         return current + remaining * (1.0 - Math.exp(-frameDelta() / mine));
     }
 
-    // ----------------------------------------------------------------- curves
 
     /**
      * The curves the mod animates on.
-     *
-     * <p>Every one of them is non-linear on purpose -- a linear ramp is the single most common reason
-     * an interface feels mechanical, because nothing in the world starts and stops at a constant
-     * speed. The names are the shapes, not the use: a caller picks the shape that matches what the
-     * thing is doing, and the {@code OUT_} prefixes are the ones worth reaching for by default,
-     * because almost everything in a GUI is arriving and settling.
+     * Every one is non-linear on purpose: a linear ramp is the commonest reason an interface feels mechanical. OUT_ curves are the default, because almost everything in a GUI is arriving and settling.
      */
     public enum Easing {
 
-        /** Only for a value that is already being shaped by something else. */
+        /** Only for a value already being shaped by something else. */
         LINEAR {
             @Override
             public float of(float t) {
@@ -262,10 +166,7 @@ public final class UiMotion {
 
         /**
          * Decelerating much harder: most of the distance in the first third, then a long settle.
-         *
-         * <p>This is the curve a screen's own entrance uses, and the reason it reads as expensive:
-         * the sheet is essentially in place within 80 ms and the rest of the 200 ms is a barely
-         * visible drift, which is what makes an abrupt window feel like it was always there.
+         * This is the curve a screen's entrance uses -- essentially in place within 80 ms, with the rest a barely visible drift.
          */
         OUT_QUINT {
             @Override
@@ -298,11 +199,7 @@ public final class UiMotion {
         },
 
         /**
-         * Overshoots the target by about a tenth, then settles.
-         *
-         * <p>For a control that is answering a press -- the tiny pop of a button released -- and
-         * nowhere else: an overshoot on a panel or a screen is the one thing that makes a clean
-         * interface look cheap.
+         * Overshoots the target by about a tenth, then settles. Only for a control answering a press; an overshoot on a panel looks cheap.
          */
         OUT_BACK {
             @Override
@@ -317,29 +214,12 @@ public final class UiMotion {
         public abstract float of(float t);
     }
 
-    // --------------------------------------------------------------- the value
 
     /**
      * One animated number, travelling towards a target over a fixed duration.
-     *
-     * <h2>Why a slider rather than a spring</h2>
-     * A spring is a better model of a physical thing; a slide is a better model of an interface,
-     * because the player has a budget of about 200 ms for any one motion and a spring cannot be told
-     * that. A slide can, and the one property a slide needs beyond a duration -- being interruptible
-     * from wherever it currently is -- falls out of storing the value rather than the time: setting
-     * the target to the other end mid-flight turns the same value around, so the motion is always
-     * continuous and never restarts.
-     *
-     * <h2>Idempotent within a frame</h2>
-     * {@link #raw()} and {@link #eased()} both advance the value, and a caller is free to ask for
-     * both in one frame (drawing a panel's opacity and its offset, say) without the animation running
-     * at double speed: a slide that has already stepped within {@link #FRAME_NANOS} returns the
-     * value it has.
-     *
-     * <h2>Not thread safe, and not meant to be</h2>
-     * Every slide is owned by the screen or widget that draws it and read only from the render
-     * thread. There is no synchronisation here on purpose: a lock per slide per frame would cost
-     * more than the animations are worth.
+     * A slide rather than a spring: the player has a budget of about 200 ms for any one motion and a spring cannot be told that. Being interruptible falls out of storing the value rather than the time -- a new target mid-flight turns the same value around, so motion is continuous and never restarts.
+     * Idempotent within a frame: raw() and eased() both advance, but a slide that already stepped within FRAME_NANOS returns the value it has, so asking twice in one frame does not double the speed.
+     * Not thread safe: every slide is owned by the screen or widget that draws it and read from the render thread only.
      */
     public static final class Slide {
 
@@ -349,7 +229,7 @@ public final class UiMotion {
         private long durationMillis;
         private long steppedNanos;
 
-        /** A slide at rest at {@code start}, for {@code duration} milliseconds, on {@code easing}. */
+        /** A slide at rest at start, for duration milliseconds, on easing. */
         public Slide(Easing easing, float start, long durationMillis) {
             this.easing = easing;
             this.value = clamp01(start);
@@ -362,7 +242,7 @@ public final class UiMotion {
             return new Slide(easing, 0.0F, durationMillis);
         }
 
-        /** The same slide with a new duration, for a reuse that has to be quicker or slower. */
+        /** The same slide with a new duration, for a reuse that must be quicker or slower. */
         public Slide duration(long millis) {
             this.durationMillis = Math.max(1L, millis);
             return this;
@@ -374,12 +254,8 @@ public final class UiMotion {
         }
 
         /**
-         * Sends the value to {@code to}, from wherever it currently is.
-         *
-         * <p>The target is clamped, so a caller that passes a value from a computation cannot send a
-         * slide out of range and leave the easing curve reading nonsense. With the interface's
-         * animations switched off this is a jump rather than a start: the state the player asked for
-         * is the state they see, in the frame they asked for it.
+         * Sends the value to to, from wherever it currently is.
+         * The target is clamped, so a computed argument cannot send the curve out of range. With the interface's animations off this is a jump, so the state asked for is the state seen, in the same frame.
          */
         public Slide to(float to) {
             this.target = clamp01(to);
@@ -389,17 +265,17 @@ public final class UiMotion {
             return this;
         }
 
-        /** The far end: {@code to(1)} in a form that reads as what it means at a call site. */
+        /** The far end: to(1), in a form that reads as what it means at a call site. */
         public void open() {
             to(1.0F);
         }
 
-        /** The near end: {@code to(0)}. */
+        /** The near end: to(0). */
         public void close() {
             to(0.0F);
         }
 
-        /** Puts the value and the target both at {@code at}, with no motion at all. */
+        /** Puts the value and the target both at at, with no motion. */
         public Slide jump(float at) {
             this.value = clamp01(at);
             this.target = this.value;
@@ -411,7 +287,7 @@ public final class UiMotion {
             return Math.abs(target - value) < 0.01F;
         }
 
-        /** Where the value is now, as a number between 0 and 1, before the curve. */
+        /** Where the value is now, 0 to 1, before the curve. */
         public float raw() {
             advance();
             return value;
@@ -423,7 +299,7 @@ public final class UiMotion {
             return easing.of(value);
         }
 
-        /** The linear travel this slide has made in the last frame; for a caller doing its own curve. */
+        /** The linear travel this slide made in the last frame; for a caller doing its own curve. */
         public float step(float amount) {
             advance();
             return easing.of(value) * amount;
@@ -452,25 +328,19 @@ public final class UiMotion {
     }
 
     /**
-     * A pool of slides owned by index, for a list whose rows are redrawn from a loop rather than
-     * held as objects.
-     *
-     * <p>Indexed rather than keyed by the row's identity on purpose: what these animate is a hover
-     * highlight, and a highlight that lands on the row now in that position after a list re-sorts is
-     * a highlight the cursor is under. A pool that outlives the list is also the thing that keeps
-     * this allocation-free after the first pass over a list, which matters because it is read once
-     * per row per frame.
+     * A pool of slides owned by index, for a list whose rows are redrawn from a loop.
+     * Indexed rather than keyed by row identity because what these animate is a hover highlight, and a highlight must land on the row now in that position after a re-sort. The pool also keeps the list allocation-free after the first pass, which matters because it is read once per row per frame.
      */
     public static final class Slides {
 
         private Slide[] slides = new Slide[0];
 
-        /** The slide at {@code index}, made at rest on first use. */
+        /** The slide at index, made at rest on first use. */
         public Slide get(int index) {
             return get(index, Easing.OUT_CUBIC, HOVER);
         }
 
-        /** The slide at {@code index}, made on first use with the given shape. */
+        /** The slide at index, made on first use with the given shape. */
         public Slide get(int index, Easing easing, long durationMillis) {
             if (index < 0) {
                 return new Slide(easing, 0.0F, durationMillis);
@@ -498,30 +368,16 @@ public final class UiMotion {
         }
     }
 
-    // --------------------------------------------------------------- the screen
 
     /*
-     * Screens animate in and out through a state kept per screen instance. The map is what lets
-     * Screens defer a swap by a hundred and forty milliseconds without every screen having to hold a
-     * field for it: a screen registers itself the first time it draws, and Screens asks the same map
-     * whether the screen on screen is one of the mod's own.
-     *
-     * Weakly keyed, because a screen's animation state should live exactly as long as the screen
-     * does. Two of the mod's screens draw their parent underneath them, so a state that was dropped
-     * when a child was installed would make the parent fade in again behind its own child; and a
-     * state that was never dropped would keep every picker the player had opened for the whole
-     * session. Letting the garbage collector decide is the only rule that is right in both cases.
-     * Screens do not override equals, so this behaves as the identity map it reads like.
+     * Screens animate in and out through a state kept per screen instance. The map lets Screens defer a swap by a hundred and forty milliseconds without every screen holding a field: a screen registers itself the first time it draws, and Screens asks the same map whether the screen on screen is one of the mod's own.
+     * Weakly keyed, because state should live exactly as long as its screen: two of the mod's screens draw their parent underneath, so dropping a child's state early would make the parent fade in again behind it, while never dropping it would keep every picker opened for the session. Screens do not override equals, so this behaves as an identity map.
      */
     private static final Map<Screen, ScreenState> STATES = new WeakHashMap<>();
 
     /**
      * The animation state of one screen: opening, open, closing.
-     *
-     * <p>Two slides rather than one, because the two motions have different curves: arriving is an
-     * {@link Easing#OUT_QUINT} that is nearly done in a third of its time, leaving is an
-     * {@link Easing#IN_CUBIC} that starts slowly and is over quickly. A single slide turned around
-     * would have to pick one of the two curves for both directions.
+     * Two slides rather than one because the motions have different curves -- OUT_QUINT arriving, IN_CUBIC leaving; a single turned-around slide would have to pick one for both directions.
      */
     public static final class ScreenState {
 
@@ -530,11 +386,7 @@ public final class UiMotion {
         private boolean leaving;
         /**
          * Whether the transition in flight is a hand-off to or from another of this mod's pages.
-         *
-         * <p>Set by the two entry points below, never inferred from the slides: it is a statement
-         * about <em>what kind of swap</em> is happening, which the durations cannot express. See
-         * {@link #surface()} and {@link #opacity()} for what it changes, and {@link Screens} for when
-         * a swap is one of these.
+         * Set by the entry points, never inferred from the slides: it is a statement about the swap that durations cannot express. See surface(), opacity() and Screens.
          */
         private boolean handoff;
 
@@ -550,15 +402,8 @@ public final class UiMotion {
 
         /**
          * How far this screen's whole frame is displaced this frame, in pixels, downwards positive.
-         *
-         * <p>Two separate travels rather than one number: arriving rises into place from below at
-         * {@code rise}, and leaving lifts away by {@code fall}. A single value would have to pick one
-         * direction for both, and an exit that sank downwards reads as the panel being dropped.
-         *
-         * <p>A hand-off does not travel at all. Both pages keep their sheet where it is and only the
-         * content changes, so the sheet of the page arriving is drawn exactly over the sheet of the
-         * page leaving; moving either would put a visible step in the middle of a transition whose
-         * whole point is that nothing moves.
+         * Two travels rather than one: arriving rises into place, leaving lifts away. A single value would have to pick one direction for both, and an exit that sank downwards reads as the panel being dropped.
+         * A hand-off does not travel at all: both pages keep their sheet and only the content changes, so moving either would put a visible step in a transition whose point is that nothing moves.
          */
         public float offsetY(float rise, float fall) {
             if (handoff) {
@@ -568,13 +413,8 @@ public final class UiMotion {
         }
 
         /**
-         * The opacity everything on this screen is drawn at: the entrance and the exit multiplied
-         * together, so a screen that is opened and then immediately closed fades from wherever the
-         * opening got to rather than flickering back to full.
-         *
-         * <p>In a hand-off the content does not go all the way to nothing: it leaves off at
-         * {@link #HANDOFF_FLOOR} and the page arriving picks the fade up from there, so the two
-         * halves read as one cross-fade rather than as one page fading out and another fading in.
+         * The opacity everything on this screen is drawn at: entrance and exit multiplied, so a screen opened and immediately closed fades from wherever the opening got to.
+         * In a hand-off the content stops at HANDOFF_FLOOR and the arriving page picks the fade up, so the halves read as one cross-fade.
          */
         public float opacity() {
             float entered = enter.eased();
@@ -588,19 +428,9 @@ public final class UiMotion {
         }
 
         /**
-         * How opaque the screen's own <em>surface</em> is: the dimming over the world and the sheet
-         * the interface is drawn on.
-         *
-         * <p>The same number as {@link #opacity()} everywhere except during a hand-off, where the
-         * surface does not fade at all. Fading it is what shows the world between two pages -- the
-         * old page going transparent, the world for a frame or two, the new page coming back -- and
-         * holding it is what makes the two pages share one surface instead of one replacing the
-         * other. The content still cross-fades on top of it, so there is still motion; what is gone
-         * is the hole in the middle of it.
-         *
-         * <p>An arriving page holds it from its first frame rather than from its own entrance: the
-         * page it is replacing left the surface standing at full, and a sheet that restarted from
-         * nothing would be the same flash one page later.
+         * How opaque the screen's own surface is: the dimming over the world and the sheet.
+         * Same as opacity() except during a hand-off, where the surface does not fade at all -- fading it would show the world between two pages. Content still cross-fades on top, so there is motion without a hole in the middle.
+         * An arriving hand-off page holds it from its first frame, because the page it replaces left the surface standing at full.
          */
         public float surface() {
             if (!handoff) {
@@ -623,11 +453,8 @@ public final class UiMotion {
         }
 
         /**
-         * Starts the exit of a page that another of this mod's pages is taking over from.
-         *
-         * <p>The same slide as {@link #leave()}, read differently: the content drops to
-         * {@link #HANDOFF_FLOOR} while the surface stays, and the frame does not travel. See
-         * {@link Screens#defer} for which swaps are these.
+         * Starts the exit of a page that another of this mod's pages is taking over.
+         * The same slide as leave(), read differently: content drops to HANDOFF_FLOOR, the surface stays and the frame does not travel. See Screens#defer.
          */
         void handOffOut() {
             handoff = true;
@@ -637,11 +464,8 @@ public final class UiMotion {
         }
 
         /**
-         * Starts the entrance of a page that is taking over from another one.
-         *
-         * <p>From the content floor rather than from nothing, with the surface already up: the page
-         * arriving finishes a fade the page leaving started. The exit slide is put back at rest so
-         * that the state left by this screen's last departure cannot bleed into this arrival.
+         * Starts the entrance of a page taking over from another.
+         * From the content floor rather than from nothing, with the surface already up, so the arriving page finishes a fade the leaving page started. The exit slide is reset so a previous departure cannot bleed into this arrival.
          */
         void handOffIn() {
             handoff = true;
@@ -651,7 +475,7 @@ public final class UiMotion {
             exit.jump(0.0F);
         }
 
-        /** Whether the transition in flight is a hand-off; read once by {@link Screens#pump()}. */
+        /** Whether the transition in flight is a hand-off; read once by Screens#pump(). */
         boolean handoff() {
             return handoff;
         }
@@ -672,10 +496,7 @@ public final class UiMotion {
 
     /**
      * The animation state of a screen, made on first use.
-     *
-     * <p>Also the per-frame pump the deferred swap needs: a screen that is still drawing is still
-     * animating out, and the frame in which its exit finishes is the frame in which {@link Screens}
-     * is allowed to install the screen it was asked for.
+     * Also the per-frame pump the deferred swap needs: a screen still drawing is still animating out, and the frame its exit finishes is the frame Screens may install the screen it was asked for.
      */
     public static ScreenState of(Screen screen) {
         if (screen == null) {
@@ -687,10 +508,7 @@ public final class UiMotion {
             state.enter.to(1.0F);
             STATES.put(screen, state);
         }
-        // Only the screen the game is actually showing may set the ambient opacity. Two of the mod's
-        // screens draw their parent underneath themselves, and a parent that published its own
-        // opacity over its child's would leave the child's buttons at full strength while the rest of
-        // it faded out.
+        // Only the screen the game is actually showing may set the ambient opacity.
         if (screen == Screens.current()) {
             activeOpacity = state.opacity();
         }
@@ -700,12 +518,7 @@ public final class UiMotion {
 
     /*
      * The opacity of the screen that is drawing, kept here rather than passed down to every helper.
-     *
-     * A button does not know which screen it is on and should not have to be told: it is drawn from
-     * inside that screen's render pass, one frame after {@link #of} was read for it. Making it read
-     * this instead of taking a parameter is what lets the mod's buttons fade with their sheets
-     * without a new argument on the one method nine screens call. Reading it costs a field read, and
-     * the answer is 1 when nothing is animating, which is the state the interface spends its life in.
+     * A button does not know which screen it is on and is drawn from inside that screen's render pass a frame after of() was read; reading this instead of taking a parameter lets buttons fade with their sheets without a new argument on the one method nine screens call. It costs a field read and is 1 when nothing is animating.
      */
     private static float activeOpacity = 1.0F;
 
@@ -714,49 +527,30 @@ public final class UiMotion {
         return activeOpacity;
     }
 
-    // ------------------------------------------------------------- displacement
 
     /*
      * Where the interface moves, and why it moves rather than only fading.
-     *
-     * A fade alone is not motion: the eye reads a sheet that appears in place as a cut, and a cut is
-     * what makes an interface feel assembled rather than designed. Ten pixels of travel over the same
-     * two hundred milliseconds is enough to read as movement and small enough that nothing inside the
-     * panel has to be clipped or re-laid-out -- which matters, because the game's scissors cannot be
-     * nested and every clip added here is a clip some other drawing pass would have to unwind.
-     *
-     * The travel is a whole-frame translation of the screen's own drawing: the sheet, its text, its
-     * map and its buttons move together, which is the one form of displacement that needs no clip at
-     * all. Arriving rises into place from below; leaving lifts away.
+     * A fade alone is not motion: a sheet that appears in place reads as a cut, which makes an interface feel assembled rather than designed. Ten pixels of travel over two hundred milliseconds reads as movement and is small enough that nothing has to be clipped or re-laid-out -- and the game's scissors cannot nest.
+     * The travel is a whole-frame translation of the screen's own drawing -- sheet, text, map and buttons move together -- the one form of displacement that needs no clip at all. Arriving rises from below; leaving lifts away.
      */
 
     /** How far a screen travels into place, in pixels. */
     public static final float RISE = 10.0F;
     /** How far a screen travels away again, in pixels. */
     public static final float FALL = 6.0F;
-    /** How far a HUD card travels into its corner. Smaller, because it is a card, not a window. */
+    /** How far a HUD card travels into its corner; smaller because it is a card, not a window. */
     public static final float HUD_RISE = 6.0F;
 
     /**
      * How far past each screen edge a scrim has to reach, in pixels.
-     *
-     * <p>A scrim is drawn from the frame's own corner, and the frame is translated by up to
-     * {@link #RISE} while it arrives -- so without a margin the dimming would come with an undimmed
-     * strip along one edge for the length of the entrance. Thirty-two is comfortably more than the
-     * largest travel in this class and costs nothing: the pixels are outside the screen.
+     * A scrim is drawn from the frame's own corner and the frame is translated by up to RISE, so without a margin an undimmed strip shows along one edge during the entrance. Thirty-two comfortably exceeds the largest travel and costs nothing outside the screen.
      */
     public static final int SCRIM_MARGIN = 32;
 
     /**
      * Pushes the frame's displacement onto the game's own matrix.
-     *
-     * <p>One fenced helper instead of nine: 1.21.6 replaced the {@code PoseStack} a GUI drew on with
-     * a {@code Matrix3x2fStack}, so the two eras push, translate and pop with different names. The
-     * rest of the mod's drawing code asks this and never sees the difference.
-     *
-     * <p>Every caller must pair this with {@link #popFrame} on the same frame. An unbalanced push
-     * cannot outlive the frame -- the game builds a fresh graphics object for each one -- but it would
-     * still misplace everything drawn after the screen, so the pairing is not optional.
+     * One fenced helper instead of nine: 1.21.6 replaced the PoseStack a GUI drew on with Matrix3x2fStack, so the two eras push, translate and pop with different names.
+     * Every caller must pair this with popFrame on the same frame; an unbalanced push would misplace everything drawn after the screen.
      */
     public static void pushFrame(GuiGraphics graphics, float dx, float dy) {
         //? if >=1.21.6 {
@@ -771,7 +565,7 @@ public final class UiMotion {
         frameDepth = next;
     }
 
-    /** Pops a displacement pushed by {@link #pushFrame}. */
+    /** Pops a displacement pushed by pushFrame. */
     public static void popFrame(GuiGraphics graphics) {
         //? if >=1.21.6 {
         /*graphics.pose().popMatrix();
@@ -783,12 +577,7 @@ public final class UiMotion {
 
     /*
      * The displacement in force, mirrored outside the game's matrix so that a scissor can follow it.
-     *
-     * The two are not the same thing: a pose translation moves what a fill or a string lands on, while
-     * the game's scissor is set in screen pixels and ignores the pose entirely. A list clipped to its
-     * own rectangle and then translated by a frame would slide out from under its clip -- the bottom
-     * row sheared off and a gap at the top -- which is exactly the seam this bookkeeping removes. A
-     * stack, because the frame, a card drawn into it and a HUD pass can each add their own.
+     * A pose translation moves what a fill or a string lands on, while the game's scissor is set in screen pixels and ignores the pose; a clipped list in a rising panel would slide out from under its clip. A stack, because the frame, a card drawn into it and a HUD pass can each add their own.
      */
     private static final float[] FRAME_OFFSETS = new float[8];
     private static int frameDepth;
@@ -800,11 +589,7 @@ public final class UiMotion {
 
     /**
      * Clips to a rectangle in the coordinates the caller is drawing in, displaced like the frame.
-     *
-     * <p>The replacement for {@code graphics.enableScissor} inside a displaced frame, and the reason
-     * it exists: the game's scissor takes screen pixels and knows nothing about a translated pose, so
-     * a clipped list inside a rising panel would be clipped in the wrong place for as long as the
-     * panel is moving. Every caller still pairs it with {@code graphics.disableScissor()}.
+     * Replaces graphics.enableScissor inside a displaced frame: the game's scissor takes screen pixels and knows nothing about a translated pose, so a clipped list in a moving panel would clip in the wrong place. Pair it with graphics.disableScissor().
      */
     public static void clip(GuiGraphics graphics, int x1, int y1, int x2, int y2) {
         int dy = Math.round(frameOffsetY());
@@ -824,10 +609,8 @@ public final class UiMotion {
     }
 
     /**
-     * Starts {@code screen} leaving, and answers whether it was a screen the mod could animate.
-     *
-     * @param handoff whether another of this mod's pages is taking over from it -- see
-     *                {@link ScreenState#handOffOut()} and {@link Screens#defer}
+     * Starts screen leaving, and answers whether it was a screen the mod could animate.
+     * @param handoff whether another of this mod's pages is taking over from it -- see ScreenState#handOffOut() and Screens#defer
      */
     static boolean beginLeave(Screen screen, boolean handoff) {
         if (!tracked(screen)) {
@@ -849,9 +632,7 @@ public final class UiMotion {
     }
 
     /**
-     * Whether the screen's exit in flight is a hand-off, which is what the page replacing it must be
-     * told when it is installed -- the two halves have to be the same transition or neither half
-     * looks like anything.
+     * Whether the exit in flight is a hand-off, which the page replacing it must be told; the two halves have to be the same transition.
      */
     static boolean leavingAsHandoff(Screen screen) {
         ScreenState state = screen == null ? null : STATES.get(screen);
@@ -859,28 +640,10 @@ public final class UiMotion {
     }
 
     /**
-     * Takes over a screen that is about to be shown: as a hand-off from the page leaving, as a reveal
-     * of a page the player is coming back to, or as a page being opened.
-     *
-     * <h2>The three cases</h2>
-     * <ul>
-     *   <li><b>A hand-off</b> ({@code handoff}) is one of this mod's pages replacing another. The
-     *       outgoing page stopped short of nothing and the incoming one starts from the same floor
-     *       with the surface already up: one cross-fade between two pages that share a surface. See
-     *       {@link ScreenState#handOffIn()}.</li>
-     *   <li><b>A reveal</b> is a screen that already has a state and is being installed at once -- a
-     *       dialog being dismissed over the page it was drawn over. That page never left, so playing
-     *       its entrance again would flash the whole interface open behind a dialog that is merely
-     *       going away. It is settled instead.</li>
-     *   <li><b>An opening</b> is a screen with no state at all: it has never been drawn, so its first
-     *       {@link #of} starts it from nothing, which is the entrance a page opened from a menu
-     *       should have. Nothing is created here, because a screen whose state is created before it
-     *       is ever drawn is a screen {@link Screens#defer} would be willing to wait for an exit from
-     *       -- and one nothing would ever draw (see the class note in {@link Screens}).</li>
-     * </ul>
-     *
-     * <p>An instance that is thrown away and built again is a new instance and gets its entrance, so
-     * every page that is opened from a menu still arrives with one.
+     * Takes over a screen that is about to be shown: a hand-off from the page leaving, a reveal of a page the player is coming back to, or a page being opened.
+     * A hand-off is one of this mod's pages replacing another: the outgoing page stopped short of nothing and the incoming one starts from the same floor with the surface already up -- one cross-fade over a shared surface. See ScreenState#handOffIn().
+     * A reveal is a screen that already has a state and is installed at once, such as a dialog being dismissed over the page it was drawn over. That page never left, so playing its entrance again would flash the interface open; it is settled instead.
+     * An opening is a screen with no state that has never been drawn, so its first of() starts it from nothing. Nothing is created here, because a state created before a first draw is one Screens#defer would wait for an exit from that nothing would ever draw. A thrown-away and rebuilt instance is new and gets its entrance.
      */
     static void adopt(Screen screen, boolean handoff) {
         if (screen == null) {
@@ -901,9 +664,8 @@ public final class UiMotion {
         }
     }
 
-    // -------------------------------------------------------------- the colours
 
-    /** A colour with its own alpha multiplied by {@code factor}, for a surface fading in or out. */
+    /** A colour with its own alpha multiplied by factor, for a surface fading in or out. */
     public static int fade(int argb, float factor) {
         if (factor >= 0.999F) {
             return argb;
@@ -920,11 +682,7 @@ public final class UiMotion {
 
     /**
      * Two colours mixed, including their alphas.
-     *
-     * <p>This is how a control changes state over time rather than in a step: the hover colour is
-     * mixed into the resting colour by the hover slide, so the face is at every value between the two
-     * on the way. Mixing alpha as well as RGB is deliberate -- a tint laid over a panel is a colour
-     * with a low alpha, and interpolating only its RGB would fade it through fully opaque greys.
+     * This is how a control changes state over time: the hover colour is mixed into the resting colour by the hover slide. Mixing alpha too is deliberate -- a tint laid over a panel is a low-alpha colour, and interpolating only its RGB would fade it through fully opaque greys.
      */
     public static int mix(int from, int to, float amount) {
         float t = clamp01(amount);
@@ -949,45 +707,24 @@ public final class UiMotion {
 
     /**
      * The share of the way from a resting state to its hovered one, for a mixed colour.
-     *
-     * <p>Small on purpose: {@link #mix} is applied to whole surfaces here, and a hover that changed a
-     * panel's face by a fifth would read as a different surface rather than the same surface under
-     * the cursor. A button's own two faces are already only a shade apart; this is the hand that moves
-     * between them.
+     * Small on purpose: mix is applied to whole surfaces here, and a hover that changed a panel's face by a fifth would read as a different surface. A button's two faces are already a shade apart; this is the hand that moves between them.
      */
     public static int hovered(int resting, int target, float amount) {
         return mix(resting, target, amount);
     }
 
-    // ----------------------------------------------------------------- the time
 
     /**
      * How long one row takes to arrive, whatever its place in the queue.
-     *
-     * <p>Constant on purpose. The obvious stagger -- subtract a delay from the elapsed time and
-     * divide by the whole entrance -- gives the later rows less and less time to arrive, so with
-     * {@link #ENTER} at 200 ms and eight delays of {@link #STAGGER}, the ninth row would finish the
-     * entrance at three quarters of its opacity and stay there: a list whose bottom half is
-     * permanently dimmed. Keeping the per-row span fixed and squeezing the delays into what is left
-     * means every row arrives fully, and the last one still arrives when the screen does.
+     * Constant on purpose. The obvious stagger -- subtract a delay from the elapsed time and divide by the whole entrance -- gives later rows less time, so with ENTER at 200 ms and eight delays the ninth row would finish at three quarters opacity and stay there. A fixed per-row span with the delays squeezed into what is left means every row arrives fully and the last arrives when the screen does.
      */
     private static final long ROW_FADE = 120L;
 
     /**
      * The progress of one row of a list that is arriving, given how far the whole list has got.
-     *
-     * <p>A stagger is what turns a list appearing into a list being revealed: each row starts a
-     * little after the one above it, so the eye is led down the panel instead of being shown a wall.
-     * Past {@link #STAGGER_LIMIT} rows the delay stops growing, which keeps a forty-row picker from
-     * trickling in for the better part of a second; the rows past the limit arrive together, which
-     * nobody notices because they are the ones furthest down.
-     *
-     * <p>The delay between rows is {@link #STAGGER} squeezed to fit: the rows have to be spread over
-     * what the entrance has left after {@link #ROW_FADE}, so a shorter entrance tightens the spacing
-     * rather than leaving the last rows half arrived. At the tokens above that is 10 ms a row over
-     * eight rows, 120 ms each, everything in place at {@link #ENTER}.
-     *
-     * @param index   the row's position in the list
+     * Each row starts a little after the one above, leading the eye down the panel. Past STAGGER_LIMIT the delay stops growing, so a forty-row picker does not trickle in for the better part of a second; the rows past the limit arrive together, which nobody notices furthest down.
+     * The delay is STAGGER squeezed to fit what the entrance has left after ROW_FADE, so a shorter entrance tightens the spacing rather than leaving the last rows half arrived. At the tokens above that is 10 ms a row over eight rows, everything in place at ENTER.
+     * @param index the row's position in the list
      * @param overall how far the screen's own entrance has got, 0 to 1
      */
     public static float stagger(int index, float overall) {

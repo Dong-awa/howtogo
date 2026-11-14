@@ -5,57 +5,26 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A path as the map draws it: the stretches it is known along, the box each fits in, and the points
- * each of them needs at the zoom it is being drawn at.
- *
- * <h2>Why a drawn path is thinned at all</h2>
- * A railway read out of another mod is sampled along its own curve -- a point every few blocks, tens of
- * thousands of points for one network -- and the map draws every one of those lines every frame, at
- * whatever zoom the player has chosen. Emitting a stroke per step of that sampling is a cost that grows
- * with the railway and not with what is on the screen, and at any zoom where a map is readable most of
- * those steps are a fraction of a pixel: the quads are paid for and nobody sees them. So each stretch
- * is thinned to the zoom: a point is kept only where dropping it would move the drawn line by more than
- * a fraction of a pixel, which is the most a line may be wrong by and still be the same line to look at.
- *
- * <h2>What is guaranteed</h2>
- * The thinning keeps the first and last point of a stretch -- a path that stopped short of its own end
- * would leave a line that does not reach the place it is known to -- and every point it drops is within
- * the tolerance of the line that is drawn instead. Both are checked by the harness, because both are
- * invisible: a line drawn a pixel away from its track looks like a line.
- *
- * <h2>Why the box</h2>
- * A whole railway's worth of stretches is mostly off the screen, and a stretch that is off it costs
- * nothing to draw but still costs a walk of its points to find that out. The box each stretch fits in
- * is worked out once, when the stretch is built, so the question "is any of this on the screen" is four
- * comparisons rather than a walk of thousands of points.
+ * A path as the map draws it: the stretches it is known along, the box each fits in, and the points each needs at the zoom it is drawn at.
+ * Thinning: a railway sampled every few blocks is tens of thousands of points drawn every frame, and at any readable zoom most steps are a fraction of a pixel -- the quads are paid for and nobody sees them. A point is kept only where dropping it would move the drawn line by more than a fraction of a pixel.
+ * The first and last point of a stretch always survive, and every dropped point is within tolerance of the line drawn instead; the harness checks both, because a line drawn a pixel off its track still looks like a line.
+ * The box is worked out once when the stretch is built, so "is any of this on the screen" is four comparisons, not a walk of thousands of points.
  */
 public final class PathRuns {
 
     /**
-     * The most a drawn line may be moved off the track it is drawn from, in screen pixels.
-     *
-     * <p>Three quarters of a pixel, which is narrower than the line's own stroke: at that distance the
-     * drawn line and the track are the same line to look at, and the points that were dropped are the
-     * ones that were paying for nothing.
+     * The most a drawn line may be moved off the track it is drawn from, in screen pixels. Narrower than the line's own stroke, so the dropped points were paying for nothing.
      */
     public static final double THIN_PX = 0.75;
 
     /**
-     * The ends of the zoom range a thinning is worked out for, as powers of two pixels per block.
-     *
-     * <p>Below the lowest, the whole world is less than a pixel across and one point per line is the
-     * honest answer; above the highest, a block covers thousands of pixels and nothing may be dropped.
-     * They bound the tolerance the arithmetic produces at either end rather than being zoom levels
-     * anyone reaches.
+     * The ends of the zoom range a thinning is worked out for, as powers of two pixels per block. Below the lowest, one point per line is the honest answer; above the highest, nothing may be dropped. They bound the arithmetic rather than being zoom levels anyone reaches.
      */
     public static final int LOWEST_BAND = -12;
     public static final int HIGHEST_BAND = 14;
 
     /**
-     * Pre-computed tolerances for each zoom band to avoid repeated Math.pow() calls.
-     * 
-     * <p>Index by (band - LOWEST_BAND) to get the tolerance for that band. This table covers all
-     * 27 bands from -12 to +14, computed once at class load time.
+     * Tolerances per zoom band, indexed by (band - LOWEST_BAND); pre-computed so a per-call Math.pow() is avoided.
      */
     private static final double[] TOLERANCE_TABLE = new double[HIGHEST_BAND - LOWEST_BAND + 1];
     static {
@@ -68,11 +37,7 @@ public final class PathRuns {
     }
 
     /**
-     * The band of zoom a pixels-per-block figure is in.
-     *
-     * <p>A power of two, so that one tolerance serves a whole band and the same band is asked for again
-     * and again while the map is panned: <em>exponent</em> rather than a logarithm because the exponent
-     * of a double is exactly this number and a logarithm is an approximation of it.
+     * The band of zoom a pixels-per-block figure is in. A power of two, so one tolerance serves a whole band and the same band recurs while panning; the exponent of a double is exact where a logarithm is an approximation.
      */
     public static int bandOf(double pixelsPerBlock) {
         if (!(pixelsPerBlock > 0.0) || !Double.isFinite(pixelsPerBlock)) {
@@ -83,21 +48,12 @@ public final class PathRuns {
 
     /**
      * How far a drawn line may be moved off the track at a zoom, in blocks.
-     *
-     * <p>The top of the band rather than the zoom itself: every zoom in the band covers at most that
-     * many pixels per block, so a tolerance worked out from it is never coarser than the fraction of a
-     * pixel the drawing allows -- which is the direction the error has to be wrong in, since the drawn
-     * line is what the player reads the position of the track off. Worked out from the bottom of the
-     * band instead, one band of zoom would be drawn up to twice as far off its track as the one below
-     * it, which is a line that visibly changes shape as the map is zoomed.
-     *
-     * <p>Now uses a pre-computed lookup table instead of Math.pow() for each call, reducing per-call
-     * overhead from ~50ns to ~2ns.
+     * Worked out from the top of the band so the tolerance is never coarser than the fraction of a pixel allowed; from the bottom, one band would be drawn up to twice as far off as the one below it and visibly change shape while zooming.
      */
     public static double toleranceFor(double pixelsPerBlock) {
         int band = bandOf(pixelsPerBlock);
         int index = band - LOWEST_BAND;
-        // Bounds check: should never fail due to bandOf clamping, but guard against edge cases
+        // Bounds check; bandOf clamps, but guard the table index.
         if (index < 0 || index >= TOLERANCE_TABLE.length) {
             return THIN_PX / Math.pow(2.0, band + 1);  // Fallback to calculation
         }
@@ -113,7 +69,6 @@ public final class PathRuns {
         }
     }
 
-    /** A stretch of a path, with the box it fits in worked out. */
     public static Run of(List<double[]> points) {
         double minX = Double.POSITIVE_INFINITY;
         double minZ = Double.POSITIVE_INFINITY;
@@ -129,20 +84,15 @@ public final class PathRuns {
     }
 
     /**
-     * Whether any part of a stretch can be on a screen showing this box of the world.
-     *
-     * <p>True for a box that grazes the view without the line entering it, which is the cheap
-     * direction to be wrong in: one stroke wasted rather than a line missing.
+     * Whether any part of a stretch can be on a screen showing this box of the world. True for a box that grazes the view without the line entering it -- the cheap direction to be wrong in.
      */
     public static boolean onScreen(Run run, double minX, double minZ, double maxX, double maxZ) {
         return run.maxX() >= minX && run.minX() <= maxX && run.maxZ() >= minZ && run.minZ() <= maxZ;
     }
 
     /**
-     * The same stretch with the points this zoom needs, and no more.
-     *
-     * @param tolerance how far the drawn line may be moved off the track, in blocks -- which is the
-     *                  thinning allowance in pixels divided by the pixels one block covers
+     * The same stretch with the points this zoom needs.
+     * @param tolerance how far the drawn line may be moved off the track, in blocks -- the pixel allowance divided by the pixels one block covers
      */
     public static Run thinned(Run run, double tolerance) {
         List<double[]> thinned = thin(run.points(), tolerance);
@@ -150,16 +100,9 @@ public final class PathRuns {
     }
 
     /**
-     * The points a line needs to stay within {@code tolerance} of the path they came from.
-     *
-     * <p>Douglas and Peucker's: the point furthest from the line joining the ends of a stretch is kept
-     * whenever it is further off than the tolerance, and the two halves either side of it are then the
-     * same question, which is what makes the answer keep a corner and drop a straight run of any length.
-     * Iterative rather than recursive because the stretch is a read of another mod's data and its length
-     * is not something this may assume.
-     *
-     * <p>Returns the list it was given when nothing can be dropped, so a line drawn in its entirety
-     * costs no copy.
+     * The points a line needs to stay within tolerance of the path they came from.
+     * Douglas-Peucker: the point furthest from the chord is kept when it is further off than the tolerance, and the two halves either side are the same question, so a corner survives and a straight run of any length goes. Iterative because the stretch is another mod's data and its length may not be assumed.
+     * Returns the given list when nothing can be dropped, so a fully drawn line costs no copy.
      */
     public static List<double[]> thin(List<double[]> points, double tolerance) {
         int count = points.size();

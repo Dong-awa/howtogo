@@ -19,57 +19,31 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * What the mod currently knows about the world the player is in: roads, lines, stations and the
- * machine-read rail layers.
- *
- * <h2>Snapshots, not live objects</h2>
- * Every accessor here copies. That is not caution for its own sake -- the two stores replace what they
- * hold when the player changes dimension or server, so a reference kept across a level change points
- * at the previous world's data, and a caller that mutates what it holds changes state the mod is
- * about to write to disk. Both are bugs that arrive much later than the line that caused them, so the
- * only object this API hands out is one nobody else is holding.
- *
- * <p>The cost is a copy per call, which is why these are queries and not per-frame drawing paths: the
- * mod's own renderers walk its live structures directly and are not expected to go through here.
- *
- * <h2>Threading</h2>
- * Client thread only. The machine-read layers are rebuilt on their own schedule and the MTR reader
- * keeps a worker of its own; calling from elsewhere would read a half-built layer. Every method here
- * is meant to be called from a tick, a screen or a renderer.
- *
- * <h2>Read-only is a fact, not a policy in this file</h2>
- * Create's and MTR's rails and lines belong to those mods; this mod reads them and never writes them
- * back. {@link #railLayers()} therefore reports them as not editable, and the write API (a later
- * addition) refuses them. The player's own roads are the only editable thing in this class, and they
- * are {@link #roadsSnapshot()}.
+ * What the mod currently knows about the world the player is in: roads, lines, stations and the machine-read rail layers.
+ * Snapshots, not live objects: every accessor copies, because the stores replace what they hold on a dimension or server change, and a caller mutating what it holds would change state about to be written to disk. The cost is a copy per call, so these are queries, not per-frame drawing paths.
+ * Client thread only: the machine-read layers rebuild on their own schedule and the MTR reader keeps a worker, so calling elsewhere could read a half-built layer.
+ * Read-only is a fact: Create's and MTR's rails and lines belong to those mods, so railLayers() reports them not editable; roadsSnapshot() is the only editable thing here.
  */
 public final class WorldDataApi {
 
-    /** Id of Create's rail layer in {@link #railLayers()} and {@link #railLayerSegments(String)}. */
+    /** Id of Create's rail layer in railLayers() and railLayerSegments(String). */
     public static final String LAYER_CREATE = "create";
 
-    /** Id of MTR's marked-tracks layer in {@link #railLayers()} and {@link #railLayerSegments(String)}. */
+    /** Id of MTR's marked-tracks layer in railLayers() and railLayerSegments(String). */
     public static final String LAYER_MTR = "mtr";
 
     private WorldDataApi() {
     }
 
     /**
-     * The player's road network for the dimension in play, as a copy.
-     *
-     * <p>Editable in principle -- it is the player's own data -- but editing the copy changes nothing:
-     * the write path for it is the mod's own editor and, for addons, the write API.
+     * The player's road network for the dimension in play, as a copy. Editing the copy changes nothing; the write path is the mod's editor or the write API.
      */
     public static RoadNetwork roadsSnapshot() {
         return RoadStore.get().deepCopy();
     }
 
     /**
-     * The road network's revision, which changes whenever it does.
-     *
-     * <p>For a caller that keeps something derived from the roads -- a cache, an overlay, a picture --
-     * and wants to know whether it is still current. Compare it with the value read beside the data,
-     * not across a level change: a new world starts a fresh network whose revision starts over too.
+     * The road network's revision, which changes whenever it does -- for a caller that keeps something derived and wants to know whether it is still current. Compare it with the value read beside the data, not across a level change.
      */
     public static int roadRevision() {
         return RoadStore.get().revision();
@@ -77,10 +51,8 @@ public final class WorldDataApi {
 
     /**
      * The player's public transport lines for the dimension in play, as copies.
-     *
-     * <p>The lines read out of MTR are not here: they are MTR's, they are rebuilt from what MTR sends,
-     * and they are offered as destinations and for planning without ever being saved with the player's
-     * own. This is the list the mod's line editor edits.
+     * Lines read out of MTR are not here: they are MTR's, rebuilt from what MTR sends, and offered as destinations and for planning without ever being saved with the player's own.
+     * This is the list the mod's line editor edits.
      */
     public static List<TransitLine> linesSnapshot() {
         List<TransitLine> live = TransitLineStore.get();
@@ -92,15 +64,7 @@ public final class WorldDataApi {
     }
 
     /**
-     * Every station the player could board at, from all three sources.
-     *
-     * <p>This is the one call that answers "where can I travel from", which is otherwise three
-     * different questions asked of three different objects with three different names for the same
-     * thing. Unnamed places are left out: a station with no name cannot be selected, searched for or
-     * announced, so listing it would be listing something that does not work.
-     *
-     * <p>Order is stable and is the mod's own listing order: the player's stations, then Create's,
-     * then MTR's.
+     * Every station the player could board at, from all three sources. Unnamed places are left out -- a station with no name cannot be selected, searched for or announced. Order is stable: the player's stations, then Create's, then MTR's.
      */
     public static List<StationRef> stations() {
         List<StationRef> result = new ArrayList<>();
@@ -127,33 +91,21 @@ public final class WorldDataApi {
     }
 
     /**
-     * The revision of the addon layers: bumped whenever one of them is re-read.
-     *
-     * <p>For a caller that keeps something derived from those layers and wants to know whether it is
-     * still current -- the same contract as {@link #roadRevision()}, and it moves for the same reason:
-     * a source said its data had changed and the layer was stated again. A world change moves it too,
-     * because a layer belongs to one dimension.
+     * The revision of the addon layers, bumped whenever one of them is re-read -- the same contract as roadRevision(), and a world change moves it because a layer belongs to one dimension.
      */
     public static int addonRevision() {
         return AddonRoadStore.revision();
     }
 
     /**
-     * The ids of the addon layers registered with this mod, in registration order.
-     *
-     * <p>An id here is a layer some mod states, not a promise that it has anything to say in the
-     * dimension the player is in: a source that draws nothing in the Nether is still registered.
+     * The ids of the addon layers registered with this mod, in registration order. An id is a layer some mod states, not a promise that it has anything in the current dimension.
      */
     public static List<String> addonLayerIds() {
         return RoadDataSources.ids();
     }
 
     /**
-     * The machine-read rail layers, described.
-     *
-     * <p>Entries are present whether or not the mod that owns them is installed; a layer with nothing
-     * in it has a segment count of zero. An addon that draws its own layer's contents wants
-     * {@link #railLayerSegments(String)} instead.
+     * The machine-read rail layers, described. Entries are present whether or not the owning mod is installed; a layer with nothing in it has a segment count of zero.
      */
     public static List<RailLayerRef> railLayers() {
         return List.of(
@@ -165,19 +117,8 @@ public final class WorldDataApi {
 
     /**
      * The segments of one machine-read rail layer, as a copy of the list.
-     *
-     * <p>The list is this call's own; the segments in it are not. They are the layer's current
-     * geometry, rebuilt whenever the layer is, and they belong to the mod that read them: a caller
-     * draws them and nothing else. Writing to one would corrupt the layer for every view that draws
-     * it, which is why the layers are reported as not editable by {@link #railLayers()} and why the
-     * mod's own write path refuses them. A caller that wants geometry it may change wants its own
-     * roads, and the way to add one is the mod's editor or the write API.
-     *
-     * <p>A caller drawing them should ask again each pass rather than caching: Create's graph and
-     * MTR's marks both rebuild on their own schedule, and a cached copy is a picture of where the
-     * rails used to be.
-     *
-     * @param layerId one of {@link #LAYER_CREATE} or {@link #LAYER_MTR}; anything else is empty
+     * The list is this call's own; the segments are not -- they are the layer's current geometry and belong to the mod that read them. A caller draws them and nothing else, since writing would corrupt the layer for every view; the layers are reported not editable.
+     * A caller should ask again each pass rather than caching: Create's graph and MTR's marks rebuild on their own schedule. layerId is one of LAYER_CREATE or LAYER_MTR; anything else is empty.
      */
     public static List<RoadSegment> railLayerSegments(String layerId) {
         if (LAYER_CREATE.equals(layerId)) {

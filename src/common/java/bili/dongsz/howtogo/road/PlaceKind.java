@@ -3,23 +3,13 @@ package bili.dongsz.howtogo.road;
 import java.util.Locale;
 
 /**
- * What kind of place a {@link RoadNode.Type#POI} node is.
- *
- * <h2>Why this is not a {@link RoadNode.Type}</h2>
- * The node type answers "what does this vertex do in the graph" -- junction, endpoint, or a place
- * that belongs to no road at all. This answers a different question, "what is this place", and the
- * two are independent: a station is a place <em>and</em> sits on a road, so it needs to be a
- * {@code POI} node that also has segments. Making these new node types would have forced a choice
- * between the two meanings and broken {@link RoadEditor#reclassifyNodes}, which deliberately leaves
- * places alone when it recomputes junction and endpoint from degree.
- *
- * <p>{@link #PLACE} is the default, and that is what makes the storage change backward compatible:
- * a file written before this existed has no field for it, reads back as {@code PLACE}, and every
- * place a player had already put down keeps meaning exactly what it meant.
+ * What kind of place a RoadNode.Type POI node is.
+ * Independent of the node type, which answers what the vertex does in the graph -- a station is a place and sits on a road. Separate so RoadEditor reclassifyNodes leaves places alone.
+ * PLACE is the default, so files written before this field existed read back as PLACE.
  */
 public enum PlaceKind {
 
-    /** An ordinary landmark, and the default: a node that is not a place is one whose type is not POI. */
+    /** An ordinary landmark, the default. */
     PLACE,
 
     /** Somewhere resources are gathered. */
@@ -29,11 +19,7 @@ public enum PlaceKind {
     SHOP,
 
     /**
-     * A boarding point for public transit.
-     *
-     * <p>Not a free choice of position: a station has to stand on a road, because a boarding point
-     * that no route passes through is a boarding point nothing can reach. See
-     * {@link RoadEditor#stationAllowed}.
+     * A boarding point for public transit. Must stand on a road -- a boarding point no route passes through cannot be reached; see RoadEditor stationAllowed.
      */
     STATION;
 
@@ -43,12 +29,7 @@ public enum PlaceKind {
     }
 
     /**
-     * Parses an id, falling back to {@link #PLACE} for anything unrecognised.
-     *
-     * <p>{@code PLACE} is the right fallback because a file written before place kinds existed has
-     * exactly one kind of node carrying this field -- a {@code POI}, which was a place and must still
-     * be one. A node that is not a place does not need a value here at all: its
-     * {@link RoadNode.Type} already says so.
+     * Parses an id, falling back to PLACE for anything unrecognised. PLACE is the pre-field default for POIs; a node that is not a place carries no value here.
      */
     public static PlaceKind byId(String raw) {
         if (raw == null) {

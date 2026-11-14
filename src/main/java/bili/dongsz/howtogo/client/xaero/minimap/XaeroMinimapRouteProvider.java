@@ -20,44 +20,15 @@ import java.util.List;
 /**
  * Builds the navigation overlay's element list for one frame.
  *
- * <p>The buffer is rebuilt in {@link #begin} and handed over through {@link #hasNext}/{@link #getNext}
- * until it runs out; Xaero walks that same list in order. The order is not incidental: the probe
- * elements come first so the renderer has measured the frame's projection by the time the first
- * layer element arrives -- the pipeline gives a renderer no way to read a future element, so the
- * transform has to be sampled from elements that are themselves in the list.
- *
- * <h2>The order, and why it is that order</h2>
- * The centre probe first, because it carries the parent pose's linear part and the anchor's screen
- * position; then the six axis probes; then the four edge probes; then the layers, wide to narrow
- * (roads, rails, MTR, RoadWeaver, the transit line strokes, then the two halves of the route); then
- * the markers. Xaero gives each drawn element a slightly larger depth than the one before it, so
- * that order is also the paint order -- road network under rails under the route under the markers --
- * which is what the navigation panel draws.
- *
- * <p>The transit lines are drawn as strokes and are not named here. A line's name plate is a
- * fixed-size capsule, and this map is a few dozen blocks across at most: a plate that fits at all
- * covers a large share of the map it is naming, which is what the player reported after seeing it in
- * game. The two big maps keep their plates -- there is room for them there -- and the minimap draws
- * the line itself.
- *
- * <h2>What needs a trip and what does not</h2>
- * The road network is a property of the world, so it is in the list whenever the overlay draws at
- * all; a player who has never set a destination still sees their roads on the minimap. The route and
- * the destination need a trip, the origin needs a trip that has started, and each is simply absent
- * from the list when it does not apply. Xaero skips an element the reader reports as hidden and an
- * empty list is an empty frame, so there is no "overlay active but nothing to show" state to manage.
- *
- * <h2>The layer payloads</h2>
- * A layer element carries the network or route it draws rather than the renderer reaching into the
- * stores again. The reference was read at the start of the frame, which is when the layer snapshot
- * belongs to; a store replaced wholesale between then and the renderer (a layer re-read, a route
- * re-planned) would make the renderer draw something different from what the rest of the frame
- * saw. The lists are read-only views or replaced whole, never mutated under the element.
+ * begin rebuilds the buffer and hasNext/getNext hand it over in order; Xaero walks the same list. The order is load-bearing: probes first so the renderer has measured the frame's projection before layers arrive (the API cannot read a future element), then layers wide to narrow (roads, rails, MTR, RoadWeaver, transit strokes, route halves), then markers. That is also the paint order -- each element gets a slightly larger depth than the one before.
+ * The minimap draws transit lines as strokes with no name plates: a fixed-size plate would cover much of a map only a few dozen blocks across. The larger maps keep their plates.
+ * Roads are world properties and always listed; route and destination need a trip, origin needs a started trip, and Xaero skips hidden elements, so there is no "active but empty" state.
+ * Layers carry the network or route read at frame start, so a store replaced mid-frame cannot make the renderer draw something the rest of the frame did not see. Lists are read-only views or replaced whole.
  */
 public final class XaeroMinimapRouteProvider
         extends MinimapElementRenderProvider<XaeroMinimapRouteElement, RoadRenderContext> {
 
-    /** The elements of the current pass, in drawing order. */
+    /** The current pass's elements, in drawing order. */
     private final List<XaeroMinimapRouteElement> buffer = new ArrayList<>();
 
     private int index;
@@ -70,14 +41,14 @@ public final class XaeroMinimapRouteProvider
         Minecraft minecraft = Minecraft.getInstance();
         LocalPlayer player = minecraft.player;
         if (player == null) {
-            // No player means no anchor and no minimap to draw on. Xaero should not call the
-            // renderer in that state either, but the provider must not depend on ordering.
+            // No player means no anchor and no minimap to draw on; Xaero should not call the renderer then, but
+            // do not depend on ordering.
             return;
         }
         double anchorX = player.getX();
         double anchorZ = player.getZ();
-        // Snapshot the anchor before anything else: every world coordinate in this frame is
-        // expressed relative to it, so it has to be the same number for the probes and the layers.
+        // Snapshot the anchor first: every world coordinate in this frame is relative to it, so probes and
+        // layers must see the same number.
         XaeroMinimapProjection.beginFrame(anchorX, anchorZ);
 
         appendProbes(anchorX, anchorZ);
@@ -99,10 +70,7 @@ public final class XaeroMinimapRouteProvider
     }
 
     /**
-     * Ends the pass.
-     *
-     * <p>Only the cursor is reset. The list is cleared where it is filled, in {@link #begin}, so a
-     * frame that threw before {@code end} cannot hand the next frame a list it did not build.
+     * Ends the pass. Only the cursor is reset; the list is cleared in begin, so a frame that threw before end cannot hand the next frame a list it did not build.
      */
     @Override
     public void end(MinimapElementRenderLocation location, RoadRenderContext context) {
@@ -110,13 +78,9 @@ public final class XaeroMinimapRouteProvider
     }
 
     /**
-     * The probes: one centre, six calibration and four edge elements.
+     * One centre, six calibration and four edge elements, all invisible.
      *
-     * <p>All of these are invisible. They are the only way to learn the projection from inside the
-     * element API -- see {@link XaeroMinimapProjection} for what is measured from them and why. The
-     * six calibration probes are two per distance (X and Z), largest distance first, and the four
-     * edge probes are a hundred thousand blocks out in each world direction so Xaero has to clamp
-     * them to the minimap's edge.
+     * They are the only way to learn the projection from inside the element API (see XaeroMinimapProjection). Calibration probes are two per distance (X and Z), largest distance first; edge probes sit a hundred thousand blocks out so Xaero clamps them to the minimap's edge.
      */
     private void appendProbes(double anchorX, double anchorZ) {
         buffer.add(XaeroMinimapRouteElement.probe(
@@ -139,14 +103,9 @@ public final class XaeroMinimapRouteProvider
     }
 
     /**
-     * The road network and the machine-read layers, whether or not a trip is active.
+     * The road network and machine-read layers, whether or not a trip is active.
      *
-     * <p>The same four layers in the same order as {@code NavHudRenderer.drawMiniMap}: the player's
-     * own roads, Create's tracks, MTR's track, then the roads read out of RoadWeaver. They are
-     * separate elements rather than one because each is one drawing block and the pipeline draws
-     * one element at a time; a single element that drew four networks would work, but then the
-     * RoadWeaver layer's world-space cull box would be in a different place from the code that
-     * reads the same four layers for the panel, and the two maps would drift.
+     * The same four layers in the same order as NavHudRenderer.drawMiniMap: player's roads, Create's tracks, MTR's track, Roads read out of RoadWeaver. Separate elements rather than one because each is one drawing block; merging them would put the cull box in different code from the panel that reads the same layers, and the two maps would drift.
      */
     private void appendLayers(double anchorX, double anchorZ) {
         buffer.add(XaeroMinimapRouteElement.networkLayer(
@@ -163,20 +122,9 @@ public final class XaeroMinimapRouteProvider
     }
 
     /**
-     * The route, split where the player is into the travelled and still-ahead halves.
+     * The route, split at the player into the covered and still-ahead halves.
      *
-     * <p>The split is no longer worked out here. It used to be: this provider walked the polyline,
-     * built two lists and handed them over, which made the minimap the third place in the mod that
-     * knew how a route is cut in two -- and, once a route could be several colours, the wrong shape
-     * of thing entirely: the ahead half could no longer be one list in one colour. The two elements
-     * now carry the route's ink and the distance covered, and the renderer asks {@code HudDraw} for
-     * the half it is drawing, which is the same table the navigation panel and the two viewers use.
-     * The frame therefore builds no lists for the route at all.
-     *
-     * <p>The conditions for adding each element are the same as the old lists' sizes were: there is
-     * a covered half once anything has been travelled, and an ahead half while there is line left.
-     * An element that would draw nothing is not added, because a drawing block that emits no
-     * vertices still costs the frame a block.
+     * The split is no longer worked out here: the elements carry the route's ink and the distance covered, and the renderer asks HudDraw for the half it draws -- the same table the panel and the two viewers use. A half is added only when it would draw something, since an empty drawing block still costs the frame a block.
      */
     private void appendRoute(double anchorX, double anchorZ) {
         HudDraw.RouteInk ink = Navigation.routeInk();
@@ -200,10 +148,7 @@ public final class XaeroMinimapRouteProvider
     /**
      * The public transport lines, one element per stretch, in each line's own colour.
      *
-     * <p>Between the road layers and the route, because a line is part of the map rather than part of
-     * the trip: the route the player is following has to stay readable over it. The shapes are the
-     * same ones the two larger self-drawn maps use -- see RoadElementRenderer.transitStrokesFor --
-     * so a line bends where the line bends, even on a map this small.
+     * Between the road layers and the route because a line is part of the map rather than the trip; the route must stay readable over it. Same shapes as the two larger self-drawn maps (RoadElementRenderer.transitStrokesFor).
      */
     private void appendTransitLines(double anchorX, double anchorZ) {
         for (bili.dongsz.howtogo.client.RoadElementRenderer.TransitStroke stroke :
@@ -218,17 +163,7 @@ public final class XaeroMinimapRouteProvider
     /**
      * The destination and the trip origin.
      *
-     * <p>These are the only elements anchored at their own place rather than at the frame anchor,
-     * because a marker is a dot where it is and Xaero has already projected it. The destination is
-     * drawn whenever one is set, with or without a route, so a failed plan still shows where the
-     * player is heading. The origin is dropped when it is NaN, which is how an unset trip origin is
-     * spelled.
-     *
-     * <p>The next turn used to be drawn here as one more dot. It is not any more: the turn is where
-     * the route line already draws attention, and a solid accent dot on top of the line at exactly
-     * the junction the driver is looking for read as a blip that hid the corner of the route rather
-     * than as a marker -- reported from a real session, removed at the player's request. The compact
-     * HUD's arrow is the next-turn reading; the minimap's job is the geometry.
+     * The only elements anchored at their own place rather than the frame anchor, because a marker is a dot where it is and Xaero has already projected it. The destination is drawn whenever set, with or without a route, so a failed plan still shows where the player is heading; the origin is dropped when NaN, which is how an unset origin is spelled.
      */
     private void appendMarkers() {
         Destination destination = Navigation.target();

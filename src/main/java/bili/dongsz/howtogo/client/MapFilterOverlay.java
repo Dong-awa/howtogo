@@ -9,50 +9,20 @@ import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 *///?} else {
 import net.neoforged.neoforge.client.event.ScreenEvent;
 //?}
-// The left button is asked for through MouseButton: the number behind it changed at 26.3, and a
-// literal 0 there meant "no button at all". See that class for the whole story.
+// The left button comes from MouseButton: the number changed at 26.3, and a literal 0 meant no
 
 /**
- * The map's switches, drawn as part of the map screen rather than inside the map.
- *
- * <h2>Why this is a screen overlay and not a map element</h2>
- * It was drawn from the map's element renderer, at the end of the last element, and it came out under
- * the map anyway: the lines, the markers and the names are written through the element renderer's own
- * vertex buffers, which the game flushes when it flushes them, and no amount of drawing the panel later
- * inside that pass changes which buffer reaches the screen first. The panel belongs to the screen, so it
- * is drawn from the screen's own render event -- after the map has finished, whatever the map did -- and
- * its clicks come from the screen's mouse events, where the coordinates are the screen's own rather than
- * something recomputed from the window.
- *
- * <h2>When it is offered</h2>
- * With the world map open and the editor closed: hiding a kind of road is a way of reading the map, not a
- * way of changing it. See {@link MapFilter} for what the switches mean.
- *
- * <h2>How the two loaders differ, and where</h2>
- * Only in the plumbing, and it is confined to the four entry points below plus {@link #register()}:
- *
- * <ul>
- *   <li>NeoForge's screen events are global and carry everything in an event object; Fabric's are
- *       per-screen, obtained from the screen as it is initialised, and hand the coordinates and the
- *       screen in as arguments. So each entry point is a two-line adapter over a shared body.</li>
- *   <li>NeoForge says "the panel took this click" by cancelling the event; Fabric says it by
- *       refusing the callback, which is a {@code false} return. The adapters translate.</li>
- *   <li>NeoForge has a drag event of its own. Fabric does not, so the drag is stepped from the render
- *       callback instead -- which is why the Fabric render entry point does one thing more than the
- *       NeoForge one.</li>
- * </ul>
+ * The map's switches, drawn from the screen rather than inside the map.
+ * The map's element renderer cannot keep the panel on top because vertex buffers flush in submission order; screen render events draw after the map finishes, and screen mouse events give screen coordinates.
+ * Offered only with the world map open and the editor closed -- filtering is reading, not editing.
+ * Loader differences live in the four entry points and register(): NeoForge events are global and cancel to claim a click; Fabric events are per-screen and return false to claim, and have no drag event, so the drag is stepped from render.
  */
 public final class MapFilterOverlay {
 
-    /**
-     * The left mouse button.
-     *
-     * <p>Read from {@link MouseButton} rather than spelled out. The two tests below are the only uses,
-     * so this is the one place in this file that had to move with it -- and on 26.3 it is 1, not 0.
-     */
+    /** Left mouse button, read from MouseButton because 26.3 changed its number (0 now means no button). */
     private static final int MOUSE_LEFT = MouseButton.LEFT;
 
-    /** Where the panel was grabbed, as an offset from its corner, while its title is held. */
+    /** Panel grab point, as an offset from the panel corner, while the title is held. */
     private static double grabX;
     private static double grabY;
     private static boolean held;
@@ -61,14 +31,7 @@ public final class MapFilterOverlay {
     private MapFilterOverlay() {
     }
 
-    // Attaches the panel to each map screen as it is initialised.
-    //
-    // Called once, from the client initialiser. The map test here is a screen test and nothing more:
-    // whether the panel is actually being offered is asked again by offered(Screen) in every callback,
-    // because the editor can be opened and closed while the map screen stays up.
-    //
-    // NeoForge has no equivalent and needs none: its screen events are global, so the handlers are
-    // subscribed once at construction and filter by screen themselves.
+    // Attaches the panel to each map screen as it is initialised; called once from the client
     //? if fabric && <1.21.9 {
     /*public static void register() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
@@ -81,10 +44,7 @@ public final class MapFilterOverlay {
         });
     }
     *///?}
-    // The same registration from 1.21.9 on, where the mouse callbacks stopped taking the
-    // coordinates and the button as separate arguments and started taking a MouseButtonEvent.
-    // Two whole methods rather than a condition inside one: the anchor node compiles src/ verbatim,
-    // so an inner terminator inside this fence would close it early there and leave the rest live.
+    // The same registration from 1.21.9 on, where mouse callbacks take a MouseButtonEvent instead
     //? if fabric && >=1.21.9 {
     /*public static void register() {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
@@ -100,12 +60,12 @@ public final class MapFilterOverlay {
     }
     *///?}
 
-    /** Whether the panel is being offered at all: the world map, without the editor. */
+    /** Whether the panel is offered: the world map without the editor. */
     private static boolean offered(Screen screen) {
         return screen != null && !RoadEditSession.isActive() && RoadEditHandler.isMapScreen(screen);
     }
 
-    /** Draws the panel over the finished screen, so nothing the map drew can be on top of it. */
+    /** Draws the panel over the finished screen, so nothing the map drew can cover it. */
     //? if fabric {
     /*public static void onScreenRender(Screen screen, GuiGraphics graphics, int mouseX, int mouseY,
                                       float tickDelta) {
@@ -127,10 +87,7 @@ public final class MapFilterOverlay {
     //?}
 
     private static void drawPanel(GuiGraphics graphics, int mouseX, int mouseY) {
-        // The panel is drawn in plain screen coordinates, so the GUI matrix starts from identity.
-        // Before 1.21.6 that meant clearing the pose and the normal of the top PoseStack entry; from
-        // 1.21.6 on the GUI stack is JOML's Matrix3x2fStack, where the same intent is one call --
-        // there is no separate normal matrix once the stack is 2D.
+        // The panel draws in plain screen coordinates, so the GUI matrix starts from identity
         //? if >=1.21.6 {
         /*graphics.pose().pushMatrix();
         graphics.pose().identity();
@@ -146,10 +103,7 @@ public final class MapFilterOverlay {
     }
 
     /**
-     * Takes a press on the panel, whether it is a switch or the title.
-     *
-     * <p>Consumed, so the map does not also act on it: a press that fell through the panel would place a
-     * road or start a drag under the thing the player was aiming at.
+     * Takes and consumes a press on the panel, switch or title, so the map does not also act: a fallen-through press would place a road or start a drag under the panel.
      */
     //? if fabric {
     /*public static boolean onMousePressed(Screen screen, double mouseX, double mouseY, int button) {
@@ -175,9 +129,7 @@ public final class MapFilterOverlay {
         }
         MapFilterPanel.Toggle title = MapFilterPanel.titleToggle(font, mouseX, mouseY);
         if (title != null) {
-            // The title both rolls the panel up and moves it, and which one a press means is decided
-            // when it is let go: a press and release without moving rolls it up, a press that moves
-            // drags it. Deciding on the press would make one of the two impossible.
+            // The title rolls the panel up and moves it; which a press means is decided on release.
             grabX = MapFilter.panelX() - mouseX;
             grabY = MapFilter.panelY() - mouseY;
             held = true;
@@ -191,7 +143,7 @@ public final class MapFilterOverlay {
         return true;
     }
 
-    /** A drag with the title held moves the panel, and the map is told nothing about it. */
+    /** A drag with the title held moves the panel; the map is told nothing. */
     private static void stepDrag(Screen screen, double mouseX, double mouseY) {
         if (!held || !offered(screen)) {
             return;
@@ -207,8 +159,7 @@ public final class MapFilterOverlay {
                 window.getGuiScaledWidth(), window.getGuiScaledHeight(), bounds[2], bounds[3]);
     }
 
-    // NeoForge's own drag entry point. Fabric has no counterpart to declare: it steps the drag from the
-    // render callback, which is why that one does an extra thing.
+    // NeoForge's drag entry point; Fabric steps the drag from the render callback instead.
     //? if neoforge {
     public static void onMouseDragged(ScreenEvent.MouseDragged.Pre event) {
         if (!held || !offered(event.getScreen())) {
@@ -219,7 +170,7 @@ public final class MapFilterOverlay {
     }
     //?}
 
-    /** Letting the title go either finishes a move or rolls the panel up. */
+    /** Releasing the title either finishes a move or rolls the panel up. */
     //? if fabric {
     /*public static boolean onMouseReleased(Screen screen, double mouseX, double mouseY, int button) {
         return !releasePanel(mouseX, mouseY, button);
@@ -238,7 +189,7 @@ public final class MapFilterOverlay {
         }
         held = false;
         if (moved) {
-            // Written when the drag ends rather than on every pixel of it.
+            // Written when a drag ends, not on every pixel of it.
             MapFilter.keepPanelPosition();
             return true;
         }

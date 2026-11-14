@@ -3,26 +3,9 @@ package bili.dongsz.howtogo.road;
 import java.util.Objects;
 
 /**
- * One classification of a road: which kind of highway or street it is, one level below its
- * {@link RoadClass}.
- *
- * <h2>What this is now: a reference, not the definition</h2>
- * A category used to be a fixed entry in this class. It is not any more: every class has exactly one
- * built-in category -- {@link #none(RoadClass) "not classified"}, which cannot be renamed, recoloured
- * or removed -- and everything else is the player's to define. A definition (a name and a colour)
- * lives in {@code RoadCategoryStore}; a road only carries <em>which</em> of its class's categories it
- * is, which is what this type is: the pair (class, id).
- *
- * <p>That split is what lets a category be renamed without touching a single road, added without a
- * code change, and deleted while the roads that carried it fall back to "not classified": the id is
- * stable and opaque, the name and colour are looked up when the map is drawn.
- *
- * <h2>Ids</h2>
- * {@code none} is reserved for the built-in category of every class. A player-made category gets an
- * opaque id from the store ({@code c1}, {@code c2}, ...) which is never reused, so a deleted category
- * cannot come back to life on an old road. Nothing outside the store should parse or construct one
- * from the id: {@link #id()} is for the save file, and {@link #of(RoadClass, String)} is what reads
- * it back.
+ * One classification of a road, one level below its RoadClass, carried as the pair (class, id).
+ * Every class has one built-in, non-removable not-classified category (NONE_ID); player-made ones carry an opaque id from RoadCategoryStore (c1, c2, ...) that is never reused. The definition -- name and colour -- lives in the store and is looked up when the map is drawn, so renaming a category does not touch roads.
+ * An unknown id is not an error: the store draws and edits it as not classified.
  */
 public final class RoadCategory {
 
@@ -38,23 +21,14 @@ public final class RoadCategory {
     }
 
     /**
-     * The "not classified" category of a class.
-     *
-     * <p>Not null for a real class, and the answer to every question about a road nobody has
-     * classified: it is where a new road starts, where an edit that cannot be applied lands, and
-     * where a road whose category has been deleted ends up.
+     * The built-in not-classified category of a class; never null for a real class. New roads start here and unknown categories land here.
      */
     public static RoadCategory none(RoadClass roadClass) {
         return new RoadCategory(roadClass, NONE_ID);
     }
 
     /**
-     * The category of one class whose id is {@code id}.
-     *
-     * <p>An absent, blank or {@code none} id is the class's built-in category; anything else is a
-     * reference to a player-made one. The reference is returned even when the store has never heard of
-     * it -- a road may outlive its category, and what an unknown reference looks like is the store's
-     * decision (it is drawn, and edited, as "not classified"), not this value's.
+     * The category of one class with the given id. A blank or none id is the built-in category; an unknown player-made id is still returned, and the store decides how it looks.
      */
     public static RoadCategory of(RoadClass roadClass, String id) {
         RoadClass resolvedClass = roadClass == null ? RoadClass.ROAD : roadClass;
@@ -66,11 +40,7 @@ public final class RoadCategory {
     }
 
     /**
-     * The category a save file's {@code category} field names.
-     *
-     * <p>The same answer as {@link #of} and kept as its own name because the storage's callers read
-     * differently: a value that is missing or unreadable is not an error, it is a road nobody has
-     * classified, which is exactly what an old file means.
+     * The category a save file's field names; same as of(), but a missing or unreadable value is not an error.
      */
     public static RoadCategory resolve(RoadClass roadClass, String stored) {
         return of(roadClass, stored);

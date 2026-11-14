@@ -11,134 +11,69 @@ import static bili.dongsz.howtogo.client.HudDraw.fillRounded;
 import static bili.dongsz.howtogo.client.HudDraw.outlineRounded;
 
 /**
- * The readout-only card drawn in {@code xaero_minimap} mode: the same trip readout as the panel,
- * without the map half of it.
- *
- * <h2>Why this card exists</h2>
- * The navigation panel has always been two cards in one: a rotating mini-map of the roads, the route
- * and the places, and the trip readout under it. On an install with Xaero's Minimap the map half is a
- * second map beside the first -- same world, same corner of the screen, same scale the player expects
- * -- so the mode this card belongs to lets Xaero draw the map and keeps only the half that a map
- * cannot state: the turn, the distance to it, what is left of the trip, the progress bar. The mini-map
- * is not hidden here, it is simply not this card's job; nothing that belongs to the map is drawn on
- * it -- no map, no map labels, no north marker, no player arrow, no place markers.
- *
- * <h2>What it draws, and in what order</h2>
- * The rows are the panel's own, in the panel's own order, and at the panel's own offsets: the title
- * row carries the destination and the travel mode (the panel puts that pair on its header row), then
- * the turn arrow, the distance in the strong colour, the instruction on one line, the progress bar,
- * the remaining line, and -- when they apply -- the walking-fallback note and the text-to-speech
- * note. The offsets are the panel's constants on purpose: a player switching display mode should see
- * the same readout in a smaller card, not a readout that has been redesigned, and keeping the row
- * rhythm identical is what makes the two layouts read as one feature.
- *
- * <p>The arrow, the stop marker and the progress bar are not drawn here. They are in
- * {@link NavHudShapes}, shared with the panel, so the iconography cannot differ between modes.
- *
- * <h2>Size and placement</h2>
- * The card is as wide as its content, with a hard cap: past about 200 px a HUD card is not a HUD card
- * any more, so the instruction -- the one line that can be arbitrarily long, because it names the road
- * being entered -- is truncated to what fits. Height is likewise what the content needs, which is why
- * the narrator note adds rows rather than being clipped: it only appears when speech is unavailable,
- * and a note about a feature being broken must not be the thing that is silently cut off.
- *
- * <p>The corner comes from the config ({@link NavMapMode#compactAnchor()} and the two offsets), with
- * the default bottom-left chosen against Xaero's top-left default. A corner plus an offset rather
- * than absolute coordinates keeps the card the same distance from the edge at any window size and any
- * GUI scale, which is what a HUD element has to do.
- *
- * <h2>Motion</h2>
- * Like the panel this card is not a screen, so its presence is one static {@link UiMotion.Slide} on
- * the card's own corner -- the two layouts are never on screen at the same time, and the panel's
- * slide is not this one's. The card fades and travels {@link UiMotion#HUD_RISE} pixels up into its
- * corner, vertically only: it hangs beside Xaero's own map, and a card that slid sideways would be
- * fighting that overlay's layout every time a trip started. Below {@link NavHudRenderer#VANISHED} it
- * draws nothing at all -- and takes no matrix push -- which is what keeps it from sitting invisibly
- * on top of the map underneath it.
+ * The readout-only card drawn in xaero_minimap mode: the panel's trip readout without the map.
+ * On an install with Xaero's Minimap the panel's map half is a second map beside the first, so this
+ * mode leaves the map to Xaero and keeps only what a map cannot state: the turn, distance, what is
+ * left, the progress bar.
+ * The rows, order and offsets are the panel's own, so switching mode shows the same readout in a
+ * smaller card; the arrow and bar come from NavHudShapes, shared with the panel. Width is capped and
+ * the instruction truncated; height grows with content so the narrator note is never clipped.
  */
 final class NavCompactHud {
 
-    // ------------------------------------------------------------------- layout
 
-    /** Distance from the screen edge; the full panel keeps the same margin. */
     private static final int MARGIN = 6;
-    /** Padding between the card's edge and its content, the same as the panel's. */
     private static final int PADDING = 6;
-    /** Corner rounding, the same as the panel's. */
     private static final int CORNER_RADIUS = 4;
-    /** The title row: the font's nine pixels plus the panel's three-pixel gap under its header. */
     private static final int TITLE_HEIGHT = 12;
-    /** Gap kept between the destination and the mode label on the title row, as on the panel's header. */
     private static final int TITLE_GAP = 6;
-    /** Left gutter of the text column, left clear for the turn arrow -- the panel's READOUT_TEXT_X. */
     private static final int READOUT_TEXT_X = 26;
-    /** Centre of the arrow inside that gutter, the panel's own x + 11. */
     private static final int ARROW_CENTRE_X = 11;
-    /** Centre of the arrow down the body, the panel's own y + 12. */
     private static final int ARROW_CENTRE_Y = 12;
-    /** Bottom of the arrow's cell, measured from the top of the body: the centre row plus its shaft. */
     private static final int ARROW_BOTTOM = 20;
-    /** Top of the distance row, in the panel's readout block. */
     private static final int DISTANCE_Y = 2;
-    /** Top of the instruction row, in the panel's readout block. */
     private static final int INSTRUCTION_Y = 14;
-    /** Top of the arrival / no-route line, which the panel draws six pixels into its readout block. */
     private static final int STATUS_Y = 6;
-    /** Top of the progress bar, in the panel's readout block. */
     private static final int BAR_Y = 30;
     private static final int BAR_HEIGHT = 5;
-    /** Top of the remaining line: the panel's bar top plus nine. */
     private static final int REMAINING_Y = 39;
-    /** Top of the walking-fallback note: the panel's bar top plus twenty. */
     private static final int FALLBACK_Y = 50;
-    /** Height of the font's line, used for the content bottom of every row. */
     private static final int LINE_HEIGHT = 9;
-    /** Gap between the last row of the body and the narrator note, as in the panel. */
     private static final int HINT_GAP = 2;
     private static final int HINT_LINE_HEIGHT = 11;
-    /** The panel gives the narrator note two lines; so does this card. */
     private static final int HINT_LINES = 2;
     /**
-     * Widest the whole card may get. A HUD element shares the screen with the game and with whatever
-     * map is being drawn beside it, and the one row that can run long -- the instruction, which names
-     * the road -- is truncated rather than allowed to grow the card without bound.
+     * Widest the whole card may get: a HUD element shares the screen with the game and with the map
+     * beside it, and the instruction is truncated rather than allowed to grow the card without bound.
      */
     private static final int MAX_WIDTH = 200;
-    /** Widest the text column may be: the cap less the padding either side of it and the arrow gutter. */
+    /** Widest the text column may be: the cap less the padding either side and the arrow gutter. */
     private static final int MAX_TEXT_WIDTH = MAX_WIDTH - PADDING * 2 - READOUT_TEXT_X;
 
-    // ------------------------------------------------------------------- motion
 
     /**
      * Whether the card is on screen, as a value travelling between 0 and 1.
-     *
-     * <p>The card's own slide rather than the panel's: the two layouts are alternatives -- one frame
-     * draws one of them -- so the far corner has its own fade, and a player switching display mode
-     * gets the card arriving rather than appearing at whatever the panel had reached.
+     * Its own slide, not the panel's: the two layouts are alternatives, so switching mode makes the
+     * card arrive rather than appear at whatever the panel had reached.
      */
     private static final UiMotion.Slide presence =
             new UiMotion.Slide(UiMotion.Easing.OUT_CUBIC, 0.0F, UiMotion.HUD);
 
     /**
      * How far the card has come this frame, 0 to 1.
-     *
-     * <p>A field for the same reason the panel has one: the fade reaches the sheet, the edge, five
-     * rows of text and the arrow, and passing it down four private methods would change four
-     * signatures to say one thing.
+     * A field because the fade reaches the sheet, the edge, five rows of text and the arrow, and
+     * passing it down four private methods would change four signatures to say one thing.
      */
     private static float open = 1.0F;
 
     private NavCompactHud() {
     }
 
-    // --------------------------------------------------------------------- draw
 
     /**
      * One frame of the compact card.
-     *
-     * <p>Positioning is the anchor resolved from the screen edge with {@link #MARGIN}, then the
-     * configured offsets. A positive offset moves the card further into the screen, away from the edge
-     * it hangs from -- the meaning the config documents -- so it is applied toward the middle on every
+     * Positioning is the anchor resolved from the screen edge with MARGIN, then the configured
+     * offsets, which move the card further into the screen -- applied toward the middle on every
      * side rather than as a raw addition that would mean a different thing in each corner.
      */
     static void draw(GuiGraphics graphics, Minecraft mc, NavHudReadout readout) {
@@ -146,21 +81,18 @@ final class NavCompactHud {
             return;
         }
         // Driven from the live question rather than from the readout it was handed: the readout is
-        // kept for the frames of a fade-out, when there is no longer a trip to ask about, so it can
-        // say what to draw but not whether anything should be drawn.
+        // kept for the frames of a fade-out, when there is no longer a trip to ask about.
         open = presence.to(Navigation.target() != null ? 1.0F : 0.0F).eased();
         if (open < NavHudRenderer.VANISHED) {
-            // Nothing left to see: no rows are measured, no bar is drawn, and the bar's own value is
-            // reset so the next trip starts from empty rather than running back down from this one's
-            // finish. The card is then genuinely absent from the frame, not merely transparent.
+            // Nothing left to see: no rows measured, no bar drawn, and its value reset so the next trip
+            // starts from empty rather than running back down from this one's finish.
             NavHudRenderer.forgetProgress();
             return;
         }
         Font font = mc.font;
 
-        // Width first, because the narrator note is wrapped to it and the height then follows from the
-        // rows that exist. The cap applies to the card, so the text room is the cap less the padding
-        // and the arrow gutter.
+        // Width first, because the narrator note is wrapped to it and the height follows from the rows
+        // that exist: the cap applies to the card, so the text room is the cap less padding and gutter.
         int modeWidth = font.width(readout.modeLabel());
         int titleWidth = font.width(readout.headerLabel()) + TITLE_GAP + modeWidth;
         int textWidth = Math.min(naturalTextWidth(font, readout), MAX_TEXT_WIDTH);
@@ -172,12 +104,10 @@ final class NavCompactHud {
                 : font.split(readout.narratorHint(), innerWidth);
         int hintCount = Math.min(HINT_LINES, hintLines.size());
 
-        // The two states that are not a live reading say one line beside the marker and no trip rows:
-        // there is no progress to show when there is no route, and none left to show once arrived.
+        // The two states that are not a live reading say one line beside the marker and no trip rows.
         boolean status = readout.arrived() || !readout.hasRoute();
         int contentBottom;
         if (status) {
-            // The arrow reaches further down than the line of text beside it.
             contentBottom = ARROW_BOTTOM;
         } else if (readout.fallbackHint() != null) {
             contentBottom = FALLBACK_Y + LINE_HEIGHT;
@@ -200,21 +130,17 @@ final class NavCompactHud {
         int cardY = anchor.isBottom()
                 ? screenHeight - MARGIN - cardHeight - NavMapMode.compactOffsetY()
                 : MARGIN + NavMapMode.compactOffsetY();
-        // Floored at the margin the way the panel's own x is: an offset large enough to push the card
-        // past the opposite edge must still leave it on the screen rather than off it.
+        // Floored at the margin as the panel's own x is: an offset pushing the card past the opposite
+        // edge must still leave it on screen.
         cardX = Math.max(MARGIN, cardX);
         cardY = Math.max(MARGIN, cardY);
 
         // The card slides up into its corner as it arrives, taken here rather than at the top of the
-        // method: the two early exits above are the paths that draw nothing, and a push taken before
-        // them would have to be unwound on both. Vertical only -- the card hangs beside Xaero's own
-        // map, and a horizontal slide would fight that overlay's layout every time a trip started.
+        // method: the early exits above draw nothing and a push before them would need unwinding on both.
+        // Vertical only -- a horizontal slide would fight Xaero's layout.
         UiMotion.pushFrame(graphics, 0.0F, (1.0F - open) * UiMotion.HUD_RISE);
 
-        // The theme's sheet with its soft edge, rounded the same way the panel is. Translucent in both
-        // styles, because a HUD card sits over the world rather than in a window. Faded through the
-        // theme's own colour, so a card that has finished arriving is drawn in exactly the ink it was
-        // drawn in before there was any motion.
+        // The theme's sheet with its soft edge, translucent in both styles because a HUD card sits over the world; faded through the theme colour.
         fillRounded(graphics, cardX, cardY, cardX + cardWidth, cardY + cardHeight,
                 CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), open));
         outlineRounded(graphics, cardX, cardY, cardX + cardWidth, cardY + cardHeight,
@@ -223,9 +149,8 @@ final class NavCompactHud {
         int innerX = cardX + PADDING;
         int innerY = cardY + PADDING;
 
-        // Title row: the destination on the left and the travel mode hard right in the accent colour.
-        // The same pairing the panel puts on its header row -- the mode belongs beside the heading,
-        // not at the end of a sentence that may not fit.
+        // Title row: the destination on the left and the travel mode hard right in the accent colour --
+        // the pairing the panel puts on its header row.
         int titleRoom = Math.max(0, innerWidth - modeWidth - TITLE_GAP);
         graphics.drawString(font, font.plainSubstrByWidth(readout.headerLabel(), titleRoom),
                 innerX, innerY, UiMotion.fade(UiTheme.header(), open), false);
@@ -246,14 +171,14 @@ final class NavCompactHud {
                     false);
         }
 
-        // Last, and unconditional once the card is being drawn: the matrix has to come back
-        // unshifted or the next overlay in this frame is drawn six pixels low.
+        // Last, and unconditional once the card is drawn: the matrix must come back unshifted or the
+        // next overlay in this frame is drawn six pixels low.
         UiMotion.popFrame(graphics);
     }
 
     /**
-     * The arrival or no-route reading: a straight arrow, and the one line that says which of the two
-     * it is, in the same colour as the arrow -- the marker and the words are one statement.
+     * The arrival or no-route reading: a straight arrow and the one line saying which of the two it
+     * is, in the arrow's colour -- marker and words are one statement.
      */
     private static void drawStatus(GuiGraphics graphics, Font font, NavHudReadout readout,
                                    int innerX, int innerWidth, int bodyTop) {
@@ -267,8 +192,8 @@ final class NavCompactHud {
     }
 
     /**
-     * The live reading: the turn (or the stop marker while a transit cue is up), the distance to it,
-     * the instruction, the progress bar and what is left of the trip.
+     * The live reading: the turn (or stop marker while a transit cue is up), the distance, the
+     * instruction, the progress bar and what is left.
      */
     private static void drawTrip(GuiGraphics graphics, Font font, NavHudReadout readout,
                                  int innerX, int innerWidth, int bodyTop) {
@@ -280,20 +205,16 @@ final class NavCompactHud {
                     readout.arrowDegrees(), UiMotion.fade(readout.arrowColor(), open));
         }
 
-        // Distance to the turn is the number that matters, so it gets the strong colour. "Now" has
-        // already been decided by the readout, at the distance the spoken announcement uses.
+        // Distance to the turn is the number that matters, so it gets the strong colour; "Now" was
+        // decided by the readout at the distance the spoken announcement uses.
         graphics.drawString(font, readout.distance(), innerX + READOUT_TEXT_X, bodyTop + DISTANCE_Y,
                 UiMotion.fade(UiTheme.textStrong(), open), false);
-        // One line only: the instruction names the road, so it is the row that can run long, and the
-        // card is width-capped. Truncating it is the same compromise the panel makes at its own width.
         graphics.drawString(font,
                 font.plainSubstrByWidth(readout.instruction(),
                         Math.max(0, innerWidth - READOUT_TEXT_X - 2)),
                 innerX + READOUT_TEXT_X, bodyTop + INSTRUCTION_Y,
                 UiMotion.fade(UiTheme.textSecondary(), open), false);
 
-        // The same eased fraction the panel draws, from the same field: the bar is one bar seen in two
-        // layouts, and a card that steered its own would step whenever the display mode was switched.
         NavHudShapes.drawProgressBar(graphics, innerX, bodyTop + BAR_Y, innerWidth, BAR_HEIGHT,
                 NavHudRenderer.smoothProgress(readout.progress()));
 
@@ -301,9 +222,8 @@ final class NavCompactHud {
         graphics.drawString(font, readout.remaining(), innerX, bodyTop + REMAINING_Y,
                 UiMotion.fade(remainingColor, open), false);
 
-        // Why this is a walking route when another mode is selected. Kept even though it is not one of
-        // the four trip rows: in this mode the card is the only readout left, so dropping the note
-        // would hide the explanation entirely rather than move it into the panel.
+        // Why this is a walking route when another mode is selected. Kept even though it is not a trip
+        // row: in this mode the card is the only readout left, so dropping it hides the explanation.
         String fallback = readout.fallbackHint();
         if (fallback != null) {
             graphics.drawString(font, font.plainSubstrByWidth(fallback, innerWidth), innerX,
@@ -312,11 +232,9 @@ final class NavCompactHud {
     }
 
     /**
-     * Width of the widest line the body will draw, before the card's cap is applied.
-     *
-     * <p>The instruction is measured in full on purpose: a short instruction should make a short card,
-     * and only one that runs past the cap is truncated. The title row is measured separately by the
-     * caller, because it is one row of its own rather than part of the arrow's text column.
+     * Width of the widest line the body will draw, before the cap.
+     * The instruction is measured in full on purpose: a short instruction makes a short card, and only
+     * one past the cap is truncated.
      */
     private static int naturalTextWidth(Font font, NavHudReadout readout) {
         int width = 0;

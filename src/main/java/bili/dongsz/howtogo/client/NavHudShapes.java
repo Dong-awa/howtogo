@@ -5,41 +5,22 @@ import net.minecraft.client.gui.GuiGraphics;
 import static bili.dongsz.howtogo.client.HudDraw.*;
 
 /**
- * The few drawing primitives every navigation readout shares: the turn arrow with its U-turn form,
- * the stop marker a transit cue uses in the arrow's place, and the trip progress bar.
- *
- * <h2>Why they are here and not in either renderer</h2>
- * There are two readout layouts now -- the full panel, which also carries the mini-map, and the
- * compact card that is drawn when Xaero's Minimap carries the map half. The number, the instruction,
- * the bar and the arrow mean exactly the same thing in both, and a second copy of the arrow geometry
- * in the compact card is precisely the kind of copy that drifts: the U-turn shape exists because a
- * single bend cannot express a U-turn, and a second implementation would sooner or later draw the
- * retracing line that shape was written to replace. Kept in one class, the iconography cannot change
- * between display modes, and the full panel's appearance is preserved by construction rather than by
- * a careful second transcription.
- *
- * <p>Everything here takes plain numbers: no readout, no navigation state, no layout. That is the
- * point of the split -- the caller owns the rows and the words, this class owns the ink.
+ * Drawing primitives shared by both navigation readouts: turn arrow, U-turn arrow, transit marker,
+ * progress bar.
+ * Two layouts draw the same iconography; one copy keeps them from drifting. Takes plain numbers --
+ * the caller owns rows and words.
  */
 final class NavHudShapes {
 
     private NavHudShapes() {
     }
 
-    // ---------------------------------------------------------------- turn arrow
 
     /**
-     * A navigation arrow: a shaft that bends toward the turn, ending in a solid triangular head.
-     *
-     * <p>Drawn from geometry rather than shipped as a texture, so it needs no asset and scales with
-     * the UI. The head is a filled triangle rather than two swept barbs -- barbs read as a fork.
-     *
-     * <p>A U-turn is not drawn by this shape at all: it has its own, because a single bend cannot
-     * express one. Pointing the head straight down sent the returning leg back along the shaft it had
-     * just come up, so the icon was one line drawn twice over itself with the head buried in the
-     * middle. See {@link #drawUturnArrow}.
-     *
-     * @param degrees signed turn angle, or NaN for "no turn ahead" (drawn as straight on)
+     * A navigation arrow: a shaft bending toward the turn, ending in a solid triangular head.
+     * Geometry, not a texture: no asset and scales with the UI. A U-turn has its own shape (see
+     * drawUturnArrow).
+     * @param degrees signed turn angle, or NaN for no turn ahead
      */
     static void drawTurnArrow(GuiGraphics graphics, double cx, double cy,
                               double degrees, int color) {
@@ -57,12 +38,12 @@ final class NavHudShapes {
         double dirX = Math.cos(bend);
         double dirY = Math.sin(bend);
 
-        // The shaft always runs vertically up from the bottom, then bends into the turn.
+        // The shaft runs vertically up from the bottom, then bends into the turn.
         double cornerX = cx;
         double cornerY = cy - 1;
         double shaftBottomY = cy + 8;
 
-        // Kept short so a left arrow still fits between the readout's edge and the text column.
+        // Kept short so a left arrow fits between the readout edge and the text column.
         double legLength = 4.0;
         double headLength = 5.5;
         double headHalf = 4.0;
@@ -87,17 +68,9 @@ final class NavHudShapes {
     }
 
     /**
-     * A U-turn arrow: up one side, over the top, down the other side, head at the bottom.
-     *
-     * <h2>Why a U-turn cannot use the bend shape</h2>
-     * The bend draws a shaft up from the bottom and then a leg out toward the turn. At 180 degrees
-     * that leg runs straight back down along the shaft, so the two lines coincide exactly and the icon
-     * becomes a line drawn over itself. Which way the arrow points is the whole content of the icon,
-     * and a shape that retraces itself cannot show a direction at all.
-     *
-     * <p>Sized to the same cell as the bend arrow -- about fifteen pixels tall and seven wide -- so
-     * swapping between the two does not shift the readout beside them. The two shoulders stand in for
-     * the curve, because every primitive here is a straight line.
+     * A U-turn arrow: up one side, over the top, down the other, head at the bottom.
+     * The bend shape cannot express a U-turn: at 180 degrees the leg retraces the shaft. Sized to the
+     * same cell as the bend arrow so the readout does not shift.
      */
     private static void drawUturnArrow(HudDraw.VertexSink out,
                                        double cx, double cy, double thickness, int color) {
@@ -113,9 +86,7 @@ final class NavHudShapes {
         emitLine(out, cx, topY, cx - half, shoulderY, thickness, color, 0xFF);
         emitLine(out, cx - half, shoulderY, cx - half, headBaseY, thickness, color, 0xFF);
         emitDisc(out, cx + half, rightBottomY, thickness, color, 0xFF);
-        // Round joins at every corner. Without them the three shoulders meet at sharp wedges with a
-        // notch on the outside, which is the same artefact roads would have without joints -- see the
-        // round caps in the road renderer's stroke.
+        // Round joins at every corner; without them the shoulders meet in sharp wedges.
         emitDisc(out, cx + half, shoulderY, thickness, color, 0xFF);
         emitDisc(out, cx, topY, thickness, color, 0xFF);
         emitDisc(out, cx - half, shoulderY, thickness, color, 0xFF);
@@ -127,11 +98,7 @@ final class NavHudShapes {
                 cx, headBaseY, color);
     }
 
-    /**
-     * Screen-space direction the arrow head points, in radians, for a signed turn angle.
-     *
-     * <p>Straight on is up; positive angles are right turns, following Minecraft's axes.
-     */
+    /** Screen-space direction the arrow head points, in radians. Straight on is up; positive is right. */
     private static double arrowDirection(double degrees) {
         if (Double.isNaN(degrees)) {
             return -Math.PI / 2;
@@ -140,9 +107,8 @@ final class NavHudShapes {
         if (magnitude <= 25) {
             return -Math.PI / 2;
         }
-        // Nothing above 135 degrees arrives here: a U-turn is drawn by drawUturnArrow, which is the
-        // only shape that can express one. It used to answer "straight down" for that case, and the
-        // caller then drew a leg back along the shaft it had just come up.
+        // Nothing above 135 degrees arrives here; a U-turn uses drawUturnArrow, the only shape that can
+        // express one.
         boolean right = degrees > 0;
         if (magnitude > 50) {
             return right ? 0 : Math.PI;
@@ -150,27 +116,18 @@ final class NavHudShapes {
         return right ? -Math.PI / 4 : -Math.PI * 3 / 4;
     }
 
-    // ------------------------------------------------------------------- transit
 
     /**
-     * The square that stands in for the turn arrow while a transit cue is being shown.
-     *
-     * <p>An arrow would be a claim about a junction, and a stop is not one: the marker says "a stop"
-     * and nothing more. Drawn as an accent square with the readout's backdrop colour inside it, which
-     * leaves a ring of accent around a dark centre and keeps the marker legible on either sheet.
+     * The square that stands in for the turn arrow while a transit cue is shown; a stop is not a
+     * junction. Accent ring around a dark centre stays legible on either sheet.
      */
     static void drawTransitMarker(GuiGraphics graphics, int cx, int cy) {
         drawTransitMarker(graphics, cx, cy, 1.0F);
     }
 
     /**
-     * The same marker, faded with the card it stands on.
-     *
-     * <p>An overload rather than a change of the plain one: the two colours here are read from
-     * {@link UiTheme} and are fully opaque, so a HUD card that fades in or out would otherwise carry
-     * one square that stays at full strength while everything around it disappears. The alpha is
-     * applied through {@link UiMotion#fade}, which returns the colour unchanged at full opacity, so
-     * the card at rest is drawn by exactly the same numbers as before.
+     * The same marker faded with its card; the theme colours are opaque, so alpha goes through
+     * UiMotion#fade to avoid one square staying at full strength.
      */
     static void drawTransitMarker(GuiGraphics graphics, int cx, int cy, float alpha) {
         graphics.fill(cx - 4, cy - 4, cx + 4, cy + 4, UiMotion.fade(UiTheme.accent(), alpha));
@@ -178,15 +135,11 @@ final class NavHudShapes {
                 UiMotion.fade(UiTheme.markerBackdrop(), alpha));
     }
 
-    // ------------------------------------------------------------------ progress
 
     /**
-     * Thin trip progress bar: filled by the fraction of the route already walked.
-     *
-     * <p>The fraction is passed in rather than read here, because the readout is the one place that
-     * asks the navigation what has been travelled -- two reads of it would be two answers if the trip
-     * were replaced between them, which is exactly the kind of disagreement the readout value exists
-     * to prevent.
+     * Thin trip progress bar filled by the fraction of the route already walked.
+     * The fraction is passed in, not read here: one read per frame avoids two answers if the trip is
+     * replaced between them.
      */
     static void drawProgressBar(GuiGraphics graphics, int x, int y, int width, int height,
                                 double fraction) {

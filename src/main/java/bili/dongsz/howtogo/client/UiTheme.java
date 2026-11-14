@@ -11,97 +11,29 @@ import net.minecraft.world.phys.Vec3;
 *///?}
 
 /**
- * The colours this mod's interfaces are drawn in, in one of two styles.
+ * The colours this mod's interfaces are drawn in, in one of two palettes.
  *
- * <h2>Two palettes, one set of roles</h2>
- * Every surface this mod draws -- the main screen, the destination picker, the line and map-data
- * windows, the road-name editor, the navigation panel in the corner of the screen, the map filter
- * box and the destination page inside MCphone -- asks this class for its colours instead of writing
- * a number down. {@link #light()} decides which of the two palettes answers, and every method here
- * returns a dark value or a light one accordingly. There is no third thing to keep in step: adding
- * a colour means adding one role with its two values, and no screen can be left behind because no
- * screen owns a colour any more.
+ * Every screen asks this class rather than writing a number; light() decides which palette answers,
+ * so adding a colour means one role with two values. The dark palette is the existing design
+ * unchanged; the light one follows Google Maps (white sheets, pale grey map, near-black text, one
+ * blue accent, green/orange/red meanings).
  *
- * <h2>The dark palette is the design that was already there</h2>
- * The dark values below are the literals the screens used to carry, moved here unchanged, because
- * the black style is the one that exists and this class exists to add a second one, not to
- * restyle the first. Four pairs of literals were the same colour under two names and are now one
- * definition: the two full-screen scrims ({@code #000000} and {@code #101010} at the same alpha),
- * the two route blues ({@code #2FD0FF} on the navigation side, {@code #4FA3FF} on the viewer), the
- * three shades the list windows used for the same panel {@code #181818}, and the two dark rings
- * around the player dot. Nothing else about the dark style moved.
- *
- * <h2>Where the light palette comes from</h2>
- * Google Maps' light interface, because that is the reading a map should take: white sheets over a
- * pale grey map, near-black text, one blue for anything that can be acted on, and a green/orange/red
- * trio for the traffic-like meanings this mod already had. Translating the dark roles into it is a
- * role-by-role job rather than an inversion -- inverting {@code #2FD0FF} would give a muddy red, and
- * a light theme is not a dark theme with the numbers flipped:
- *
- * <ul>
- *   <li><b>Sheets</b> are white ({@code #FFFFFF}) with a {@code #DADCE0} hairline, not pure black
- *       with a hard edge. The screen behind them is dimmed with a pale wash rather than blacked out,
- *       because a light interface over a darkened world reads as a hole in the screen.</li>
- *   <li><b>The map</b> is Google's land grey {@code #F1F3F4}; road and place labels are the greys
- *       Google uses on it ({@code #5F6368} for a road, {@code #3C4043} for a place).</li>
- *   <li><b>Text</b> is {@code #202124} -- Google's primary grey, 16.1:1 on white -- and the three
- *       ranks under it are {@code #5F6368}, {@code #70757A} and {@code #80868B}. The dark palette
- *       had five ranks of near-white grey; the light one keeps the ranks because the screens use
- *       them to mean different things, but the steps are Google's.</li>
- *   <li><b>A screen's name</b> is the ordinary text colour, as it is in Google's own sheets: white
- *       surfaces, near-black titles, and colour kept for what can be acted on.</li>
- *   <li><b>The accent</b> is Google blue {@code #1967D2}: 5.5:1 on white, so it can be text as well
- *       as a line, which the cyan it replaces could never be on a white sheet. It is the darker of
- *       Google's two blues because most of its uses here are eight-pixel text -- a button's face
- *       takes the lighter {@code #1A73E8} through {@link #selection()}, which is read as white on
- *       blue. The accent's hover is the darker still {@code #174EA6}.</li>
- *   <li><b>Selection</b> is {@code #1A73E8} as a filled row with white text, and hover is the pale
- *       grey {@code #F1F3F4} -- the two states Google's own lists have.</li>
- *   <li><b>Meaning colours</b> get the contrast a light background demands: red {@code #D93025},
- *       green {@code #188038}, amber {@code #B06000}. Neon {@code #44FF88} and {@code #FFB454} were
- *       legible on near-black and are not on white.</li>
- * </ul>
- *
- * <h2>Auto: day white, night black, and never white underground</h2>
- * {@link Mode#AUTO} asks the world rather than the clock: a dimension with no sky -- the Nether, the
- * End, and anything else that declares {@code has_skylight: false} -- is always dark, and a
- * dimension with a sky goes light while the sky is bright. "Bright" is the game's own sky-light
- * reading, so the interface turns over when the world does and needs no table of sunrise times; the
- * reading carries rain and thunder as well, so a storm dims it the way it dims the world.
- *
- * <p>Read <em>live</em>, from the shape the game exposes it in. The obvious reading,
- * {@code level.getSkyDarken()}, is an int the server refreshes every tick and the client writes once,
- * when the level is built: a session that logged in at noon kept a noon reading all night, so the
- * automatic style never turned over. That is why this class asks for a brightness float instead --
- * the client's sky-light calculation up to 1.21.8, the environment attribute it feeds from 1.21.9 on
- * -- and turns over where that reading crosses half, which is where vanilla's own "bright outside"
- * line falls (see {@link #TURNOVER_SKY_BRIGHTNESS}).
- *
- * <h2>Why methods and not constants</h2>
- * A {@code static final int} is decided when the class is loaded, and this answer is not: it changes
- * with the config, with the dimension, and with the sky. Methods also mean a reload of the config
- * takes effect on the next frame drawn, with no listener and no cache to invalidate -- the read
- * behind them is a field on a config value and the level's sky reading, which is cheap enough to do
- * once per colour per frame, and is done in a draw loop rather than a simulation hot path.
+ * Mode#AUTO asks the world, not the clock: no sky is dark, otherwise light while the sky is bright.
+ * Brightness is read live (client sky-light, or the 1.21.9+ attribute), never stale getSkyDarken.
+ * Methods, not constants: the answer changes with config, dimension and sky, at frame cost.
  */
 public final class UiTheme {
 
     /**
-     * The three answers the {@code ui_theme} config entry offers.
-     *
-     * <p>Ids are the on-disk spellings for the Fabric arm, which writes a string; the NeoForge arm
-     * declares this enum directly, so its config file holds the constant name. Both files mean the
-     * same thing and both are read back through {@link #byId}, case-insensitively.
+     * The three answers the ui_theme config entry offers.
+     * Ids are the Fabric file's lowercase spellings; NeoForge stores the constant name. byId reads both.
      */
     public enum Mode {
 
-        /** Always the black style. */
         DARK("dark"),
 
-        /** Always the white style. */
         LIGHT("light"),
 
-        /** The white style in daylight, the black style at night and in the Nether and the End. */
         AUTO("auto");
 
         private final String id;
@@ -110,18 +42,11 @@ public final class UiTheme {
             this.id = id;
         }
 
-        /** The spelling this mode is written as in a config file. */
         public String id() {
             return id;
         }
 
-        /**
-         * The mode an id names, or {@code null} when it names none.
-         *
-         * <p>Case-insensitive because the two config arms disagree about case -- the Fabric file is
-         * written in lower case, the NeoForge one in constant names -- and a player who edits either
-         * by hand should not have to remember which file they are in.
-         */
+        /** The mode an id names, or null; case-insensitive because the two config arms disagree. */
         public static Mode byId(String id) {
             if (id == null) {
                 return null;
@@ -136,28 +61,18 @@ public final class UiTheme {
     }
 
     /**
-     * The sky brightness at which the interface turns over, from a dark night to a bright day.
-     *
-     * <p>Half, because that is where vanilla's own "bright outside" line falls in the reading this
-     * class asks for: the client's sky-light value runs from 1.0 at noon to 0.2 at midnight and crosses
-     * 0.5 about thirty ticks from the moment vanilla's {@code isBrightOutside()} calls the world dark,
-     * so the interface turns over when the world does rather than at a threshold invented here. The
-     * environment attribute that replaced this reading on 1.21.9+ runs from 1.0 by day to 0.24 at night
-     * and crosses the same line at the same time of day.
+     * The sky brightness at which the interface turns over: half, where vanilla's own
+     * bright-outside line falls in the reading this class asks for.
      */
     private static final float TURNOVER_SKY_BRIGHTNESS = 0.5F;
 
     private UiTheme() {
     }
 
-    // ------------------------------------------------------------- resolution
 
     /**
-     * Whether the light palette is in force right now.
-     *
-     * <p>Read on every colour, so it must stay cheap: a config value, a dimension test and the level's
-     * own sky reading, with no allocation and no state of its own to go stale. The one thing it can do
-     * that a cached answer could not is follow the world into the Nether, and the sun down, mid-session.
+     * Whether the light palette is in force right now. Read on every colour, so it stays cheap: a
+     * config value, a dimension test and the level's sky reading.
      */
     public static boolean light() {
         return switch (RoadConfig.uiTheme()) {
@@ -169,15 +84,8 @@ public final class UiTheme {
 
     /**
      * The auto rule applied to the world on screen.
-     *
-     * <p>No world to ask -- the config screens are not our clients and this mod's own screens only
-     * exist over a world -- so the dark style is the answer that cannot surprise anybody: it is what a
-     * player who has never seen the setting has.
-     *
-     * <p>The client itself may be absent, not merely its world. This method is also reached from the
-     * offline routing harness, which loads the drawing code with no game behind it, and a theme that
-     * could only be asked from inside a running client could not be checked there. A missing client
-     * is the same answer as a missing world: the dark style.
+     * No world (or no client, as in the offline routing harness) answers dark, the style that cannot
+     * surprise.
      */
     private static boolean autoLight() {
         Minecraft minecraft = Minecraft.getInstance();
@@ -189,14 +97,10 @@ public final class UiTheme {
     }
 
     /**
-     * The sky's brightness right now, from 0 under a dark night to 1 under a bright day.
-     *
-     * <p>The two shapes the game has had for this reading, fenced rather than reflected: up to 1.21.8
-     * the client's own sky-light calculation, which is named {@code getSkyDarken} but is in fact the
-     * brightness multiplier the light texture uses (one at noon, a fifth at midnight); from 1.21.9 on
-     * the environment attribute that calculation feeds, read at the world's origin because the value
-     * is time-based rather than a fact about a place. Both carry rain and thunder as well, so a storm
-     * is already in the number.
+     * The sky's brightness right now, 0 under a dark night to 1 under a bright day.
+     * Two fenced shapes: the client's sky-light calculation up to 1.21.8 (getSkyDarken is a
+     * brightness multiplier, not darkness), and the 1.21.9+ environment attribute at the world origin.
+     * Both carry rain and thunder.
      */
     //? if <1.21.9 {
     private static float skyBrightness(Level level) {
@@ -210,11 +114,8 @@ public final class UiTheme {
     *///?}
 
     /**
-     * The sky's brightness in the world on screen right now, or -1 when no world is loaded.
-     *
-     * <p>For the self-test's report rather than for drawing: it is the number the auto rule decides
-     * on, so a player reporting that the white style did not turn over can say what the game thought
-     * the sky was at the time.
+     * The sky's brightness in the world on screen, or -1 when no world is loaded. For the
+     * self-test's report, not for drawing.
      */
     static float liveSkyBrightness() {
         var level = Minecraft.getInstance().level;
@@ -223,24 +124,17 @@ public final class UiTheme {
 
     /**
      * The auto rule itself, as a pure function, so it can be checked without a world.
-     *
-     * <p>Split out of {@link #light()} for the self-test: the rule is the only part of this class
-     * that has an opinion rather than a constant, and an opinion that only runs while a world is
-     * loaded is one nobody can test.
-     *
-     * @param hasSkyLight   whether the dimension declares a sky at all
-     * @param skyBrightness the sky's brightness, from 0 under a dark night to 1 under a bright day
+     * @param hasSkyLight whether the dimension declares a sky at all
+     * @param skyBrightness the sky's brightness, 0 to 1
      */
     static boolean autoIsLight(boolean hasSkyLight, float skyBrightness) {
         return hasSkyLight && skyBrightness > TURNOVER_SKY_BRIGHTNESS;
     }
 
-    /** The dark or light value, which is the whole of every role below. */
     private static int pick(int dark, int light) {
         return light() ? light : dark;
     }
 
-    // ----------------------------------------------------------------- surfaces
 
     /** The wash drawn over the whole screen behind a panel. */
     public static int dim() {
@@ -272,18 +166,14 @@ public final class UiTheme {
         return pick(0xA0000000, 0xC9FFFFFF);
     }
 
-    /** The hairline around {@link #overlayPanel()}. */
+    /** The hairline around overlayPanel(). */
     public static int overlayEdge() {
         return pick(0x60FFFFFF, 0x33000000);
     }
 
     /**
-     * A ring drawn around something in the overlay under the cursor.
-     *
-     * <p>Stronger than {@link #overlayEdge()} in both styles: the edge is a hairline that only has to
-     * be seen, while a ring has to say "this is the box your click will hit". In the white style the
-     * edge's 20 % black would read as a shadow rather than as an answer, so the ring is the same
-     * weight the black style has always used, mirrored into black.
+     * A ring around something in the overlay under the cursor; stronger than overlayEdge in both
+     * styles, because it must say the click will hit here.
      */
     public static int overlayHoverEdge() {
         return pick(0x60FFFFFF, 0x61000000);
@@ -314,9 +204,8 @@ public final class UiTheme {
         return pick(0xFF161B22, 0xFFF1F3F4);
     }
 
-    // --------------------------------------------------------------------- text
 
-    /** A screen's own name, which is the one piece of text meant to be looked at first. */
+    /** A screen's own name, the one piece of text meant to be looked at first. */
     public static int title() {
         return pick(0xFFFFE070, 0xFF202124);
     }
@@ -331,12 +220,12 @@ public final class UiTheme {
         return pick(0xFFD0D8E0, 0xFF202124);
     }
 
-    /** Body text that has to win against {@link #text()} beside it, such as a value in a list row. */
+    /** Body text that has to win against text() beside it, such as a value in a list row. */
     public static int textStrong() {
         return pick(0xFFF2F6FA, 0xFF202124);
     }
 
-    /** The rank under {@link #text()}: a note, a count, a unit. */
+    /** The rank under text(): a note, a count, a unit. */
     public static int textSecondary() {
         return pick(0xFFA8B4C0, 0xFF5F6368);
     }
@@ -351,7 +240,7 @@ public final class UiTheme {
         return pick(0xFF808A96, 0xFF70757A);
     }
 
-    /** The same rank as {@link #textFaint()}, for the colours that were written a shade lighter. */
+    /** The same rank as textFaint(), for the colours written a shade lighter. */
     public static int textDim() {
         return pick(0xFF909AA4, 0xFF70757A);
     }
@@ -362,64 +251,32 @@ public final class UiTheme {
     }
 
     /**
-     * Text drawn on top of a filled selection.
-     *
-     * <p>White in both palettes, which is the one colour that is not re-mapped: the selection is the
-     * same blue in both, and white on it is the pair a reader expects. A light theme that turned
-     * this dark would put dark text on blue.
+     * Text on a filled selection. White in both palettes: the selection is the same blue in both,
+     * and white on it is the pair a reader expects.
      */
     public static int onSelection() {
         return 0xFFFFFFFF;
     }
 
-    /**
-     * The rank under {@link #onSelection()}: a detail written on a filled selection.
-     *
-     * <p>A pale blue rather than a grey, because a grey on the selection blue is a smudge: it has to
-     * be lighter than the fill and darker than the white beside it, which on a blue face means a blue.
-     * The black style has always used a pale blue here; the white style keeps the idea and takes
-     * Google's own pale blue for text on its blue.
-     */
     public static int onSelectionDetail() {
         return pick(0xFFD0E0FF, 0xFFD2E3FC);
     }
 
     /**
-     * The fill of a chosen *control* -- a chip, a toggle, a segmented button -- as opposed to a
-     * chosen list row, which is {@link #selection()}.
-     *
-     * <p>A row is a large area and can carry the full accent colour with white text on it; a row of
-     * four chips cannot, because four solid blue blocks in a panel read as four primary actions and
-     * the one that is simply "the current choice" shouts as loudly as the button that commits. So the
-     * white style fills a chosen chip with Google's pale blue and writes the label in the darker blue
-     * of a link, which is the pair that style uses for exactly this state; the black style keeps the
-     * solid blue it has always used here.
+     * The fill of a chosen control (chip, toggle), unlike a chosen row: a row can carry the full
+     * accent, but four solid blue chips would read as four primary actions, so the light style
+     * uses pale blue with a link-blue label.
      */
     public static int selectionSoft() {
         return pick(0xFF1F6FEB, 0xFFE8F0FE);
     }
 
-    /** Text on {@link #selectionSoft()}, and only there. */
+    /** Text on selectionSoft(), and only there. */
     public static int onSelectionSoft() {
         return pick(0xFFFFFFFF, 0xFF174EA6);
     }
 
-    // -------------------------------------------------------------------- chips
 
-    /*
-     * The chip fills below are the same value in both styles, which is the one place in this class
-     * where that is true on purpose. Every other role here asks {@link #pick} because a colour read
-     * against a dark panel is wrong read against a light one -- a grey that separates two chips on
-     * black disappears on white. These three do not have that problem, because the user named the
-     * colours themselves: the tags are grey, the source blue and the type orange, and a theme that
-     * re-mapped them would be a theme disobeying the request. The chips also sit on top of the card
-     * rather than being the card, and each carries its own text colour ({@link #onChip} or
-     * {@link #onChipFor}), so contrast is decided per chip rather than per style.
-     *
-     * They are also deliberately not {@link #selection()} / {@link #accent()}: those are the theme's
-     * own two colours and change with it, while a source chip has to be the same blue in both
-     * styles for the three kinds of chip to stay visually distinct from each other.
-     */
 
     /** The fill of an ordinary tag chip: grey, with white text. */
     public static int chipTag() {
@@ -431,34 +288,21 @@ public final class UiTheme {
         return 0xFF1A73E8;
     }
 
-    /**
-     * The fill of a type / resource-type chip: orange, with white text.
-     *
-     * <p>The same hue as {@link #place()}, which is what a place marker is drawn in: a type chip is
-     * the place's own classification, so the two reading as one colour is the point.
-     */
+    /** The fill of a type chip: orange, the same hue as place(), the thing it classifies. */
     public static int chipType() {
         return 0xFFE8710A;
     }
 
-    /** Text on a chip whose fill is one of the three fixed chip colours above. */
+    /** Text on a chip whose fill is one of the three fixed chip colours. */
     public static int onChip() {
         return 0xFFFFFFFF;
     }
 
     /**
      * Text on a chip filled with an arbitrary colour, white or near-black by brightness.
-     *
-     * <p>Needed because a line chip is filled with the line's own colour, and lines are chosen by
-     * players from a palette of bright colours: white text on the pale blue a rail line defaults to
-     * is unreadable, and black text on a dark purple line is the same failure the other way round.
-     * The threshold is on perceived brightness ({@value #CHIP_DARK_TEXT_FROM}) rather than on
-     * lightness in HSL, because what the eye reads is the weighted mix of the three channels and
-     * because the values are all fully opaque -- the alpha is masked off, so a colour with an odd
-     * alpha cannot flip the decision.
-     *
-     * <p>Not a per-theme {@link #pick}: the fill is the line's colour in either style, so the text on
-     * it has to follow that fill, not the interface around it.
+     * A line chip takes the line's own bright colour, so white on pale blue or black on dark purple
+     * fails. Threshold on perceived brightness (alpha masked off), not HSL lightness. Not per theme:
+     * the fill is the line's colour in either style.
      */
     public static int onChipFor(int argb) {
         int rgb = argb & 0xFFFFFF;
@@ -468,20 +312,17 @@ public final class UiTheme {
         return brightness >= CHIP_DARK_TEXT_FROM ? CHIP_DARK_TEXT : 0xFFFFFFFF;
     }
 
-    /** Perceived-brightness threshold above which a chip gets dark text ({@link #onChipFor}). */
     private static final double CHIP_DARK_TEXT_FROM = 0.6;
 
-    /** The dark text {@link #onChipFor} uses on a bright chip; the light style's ordinary body text. */
     private static final int CHIP_DARK_TEXT = 0xFF202124;
 
-    // ------------------------------------------------------- accents and states
 
     /** Anything that can be acted on, and the accent line of a card. */
     public static int accent() {
         return pick(0xFF2FD0FF, 0xFF1967D2);
     }
 
-    /** {@link #accent()} under the cursor. */
+    /** accent() under the cursor. */
     public static int accentHover() {
         return pick(0xFF52DBFF, 0xFF174EA6);
     }
@@ -497,17 +338,9 @@ public final class UiTheme {
     }
 
     /**
-     * The fill of a row that can be clicked, at rest.
-     *
-     * <p>For a list whose rows open something rather than staying chosen -- the map-data window's
-     * archive list is one -- there is no selection to fill, and a row that is nothing but text is read
-     * as a line of a directory listing rather than as something to click. A grey band per row is the
-     * shape every list in the game uses for "these are rows", and it is the one hint that shows before
-     * the cursor arrives. The hover and active tints are laid over this, not instead of it.
-     *
-     * <p>The white style takes the pale grey the map's land and the search field already use, one step
-     * off the sheet. The black style steps up from its {@code #181818} sheet instead: a band darker than
-     * the panel reads there as a hole rather than as a row.
+     * The fill of a clickable row at rest: a list with no selection needs a band, or rows read as
+     * bare text. Hover and active tints are laid over it; the dark style steps up from its sheet so
+     * the band does not read as a hole.
      */
     public static int rowSurface() {
         return pick(0xFF232B33, 0xFFF1F3F4);
@@ -539,33 +372,24 @@ public final class UiTheme {
     }
 
     /**
-     * Text on {@link #buttonOn()}.
-     *
-     * <p>White in the black style, because that tint is a wash of white over a dark sheet and any
-     * other colour would sit on it as a smudge; near-black in the white style, because there it is a
-     * pale blue and white text on pale blue is unreadable. It is the one state where "the text on a
-     * filled control" and "the text on a selection" cannot be the same value.
+     * Text on buttonOn. White on the dark style's white wash; near-black on the light style's pale
+     * blue, where white would be unreadable.
      */
     public static int onButtonOn() {
         return pick(0xFFFFFFFF, 0xFF202124);
     }
 
-    /** A button's face. */
     public static int button() {
         return pick(0xFF232B34, 0xFFF1F3F4);
     }
 
-    /** {@link #button()} under the cursor. */
     public static int buttonHover() {
         return pick(0xFF303A45, 0xFFE8EAED);
     }
 
     /**
-     * Text on a neutral filled button, the one that carries no meaning of its own.
-     *
-     * <p>Not {@link #onSelection()}: a neutral button's face is the pale sheet in the white style and
-     * a dark grey in the black one, so the text has to be the ordinary text colour in each. A button
-     * filled with the accent or with the danger colour takes {@link #onSelection()} instead.
+     * Text on a neutral filled button. Not onSelection: its face is the pale sheet or a dark grey,
+     * so it takes the ordinary text colour; accent and danger buttons use onSelection.
      */
     public static int onButton() {
         return pick(0xFFF2F6FA, 0xFF202124);
@@ -576,7 +400,6 @@ public final class UiTheme {
         return pick(0x30FFFFFF, 0x1A202124);
     }
 
-    /** The thumb in {@link #scrollTrack()}. */
     public static int scrollThumb() {
         return pick(0x80FFFFFF, 0x6B202124);
     }
@@ -596,14 +419,13 @@ public final class UiTheme {
         return pick(0xFFC0CCD8, 0xFF5F6368);
     }
 
-    // ---------------------------------------------------------------- meanings
 
     /** A destructive button's face. */
     public static int danger() {
         return pick(0xFFB4553F, 0xFFD93025);
     }
 
-    /** {@link #danger()} under the cursor. */
+    /** danger() under the cursor. */
     public static int dangerHover() {
         return pick(0xFFC96A52, 0xFFB3261E);
     }
@@ -633,50 +455,27 @@ public final class UiTheme {
         return pick(0xFF7FD08A, 0xFF188038);
     }
 
-    // ------------------------------------------------------------ map symbols
 
     /**
-     * The part of a route travelled on foot: every walk, including the legs either side of a ride.
-     *
-     * <p>Blue because the one thing a route line has to say at a glance is whether the next stretch
-     * is walked or ridden, and colour says it before the width or the dashes can. A public transport
-     * journey is not one colour; its riding stretches take their line's own colour and this is what
-     * is left at the ends. See {@link #routeRide()} for the driven colour and {@link #routeDone()}
-     * for the part already covered.
+     * The part of a route travelled on foot, including the legs either side of a ride.
+     * Blue distinguishes walking from riding at a glance; riding stretches take their line's own colour.
      */
     public static int route() {
         return pick(0xFF2FD0FF, 0xFF1A73E8);
     }
 
     /**
-     * The part of a route travelled in a vehicle that has no line to take its colour from: driven.
-     *
-     * <p>Green, kept apart from the walking blue and from the violet a ride with an unresolvable
-     * line falls back to -- see {@link #routeLineFallback()}. A public transport ride is drawn in
-     * its line's own colour rather than in this one, because the line's colour is its badge
-     * everywhere else in the mod, so the route, the map and the editor agree about which service is
-     * being ridden.
-     *
-     * <p>The green itself is dark enough to sit beside the walking blue without competing with it,
-     * and light enough to be read on the dark panel and on the light one: the light theme's green is
-     * the same family as {@link #okSoft()} but deeper, because a route is a line rather than a
-     * status, and the dark theme's is lifted so it does not disappear into a night map.
+     * The part of a route ridden in a vehicle with no line colour: driven.
+     * Green, kept apart from the walking blue and the violet of an unresolvable line. A ride with a
+     * line takes the line's colour; the green stays readable on both palettes.
      */
     public static int routeRide() {
         return pick(0xFF3FBF6A, 0xFF1B7F3B);
     }
 
     /**
-     * A ride whose line cannot be named: the colour the route line falls back to.
-     *
-     * <p>The journey on screen records the name of the line it rides, and the line itself can be
-     * deleted, replaced or re-imported while that journey is still being followed. The stretch is
-     * still ridden by something, so drawing it in the walking blue or the driving green would be a
-     * claim about how the player travels that the map has no basis for; drawing it grey would read
-     * as ground already covered. A violet is the one family left that means neither, and it is dark
-     * enough in the light style and bright enough in the dark one to be seen as a line rather than
-     * as a smudge -- {@link #routeRide()}'s green and {@link #route()}'s blue are the two it must
-     * not be mistaken for, and it is neither.
+     * A ride whose line cannot be named (it was deleted mid-journey). Neither walking blue nor
+     * driving green is truthful, and grey would mean done, so a violet that reads on both palettes.
      */
     public static int routeLineFallback() {
         return pick(0xFFB98CFF, 0xFF6A3AB8);
@@ -703,11 +502,9 @@ public final class UiTheme {
     }
 
     /**
-     * The same thing said in words: the place colour used as text.
-     *
-     * <p>The marker orange is a good shape on either map and a poor paragraph: 2.8:1 on the light
-     * map, which is fine for a five-pixel square and not fine for a name. The word form is the same
-     * hue taken down until it reads -- the marker stays {#E8710A} so the two still look related.
+     * The place colour used as text.
+     * The marker orange is 2.8:1 on the light map, fine for a five-pixel square and not for a name; the
+     * word form is the same hue taken down until it reads.
      */
     public static int placeText() {
         return pick(0xFFFFD24A, 0xFFC24E00);
@@ -733,7 +530,6 @@ public final class UiTheme {
         return pick(0xFF10161E, 0xFFFFFFFF);
     }
 
-    // ------------------------------------------------------------------ badges
 
     /** The badge on the step where the player leaves the vehicle. */
     public static int badgeStop() {
@@ -750,7 +546,6 @@ public final class UiTheme {
         return pick(0xFF232A33, 0xFFE8EAED);
     }
 
-    // ----------------------------------------------------------- filter panel
 
     /** The edge of a filter panel's check box. */
     public static int checkboxEdge() {

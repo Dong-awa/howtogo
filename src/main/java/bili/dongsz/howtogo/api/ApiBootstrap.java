@@ -1,23 +1,13 @@
 package bili.dongsz.howtogo.api;
 
 import bili.dongsz.howtogo.HowToGo;
-// NeoForge posts through a central bus; Fabric has no such thing and dispatches the event
-// through its own invoker instead. Only the NeoForge side needs an import for it.
+// NeoForge posts through a central bus; Fabric has no bus, so only this side needs it.
 //? if neoforge {
 import net.neoforged.neoforge.common.NeoForge;
 //?}
 
 /**
- * Posts {@link HowToGoRegistrationEvent} once, on the first client tick.
- *
- * <p>Called by this mod's own tick listener, so nothing here is part of the addon API: an addon either
- * receives the event or calls the registries directly, and never has to know this class exists.
- *
- * <h2>Why once, and why guarded here rather than in the event</h2>
- * A tick listener runs every tick, and posting the event on each of them would re-run every addon's
- * handler sixty times a second -- which the id checks would turn into a log full of refusals rather
- * than into a bug, but a log full of refusals is a bug of its own. The guard is a plain field read and
- * write on the client thread, which is the only thread that calls it.
+ * Posts HowToGoRegistrationEvent once, on the first client tick. Called by this mod's own tick listener, so it is not addon API. The guard is a plain field read and write on the client thread; posting every tick would re-run each addon handler 60 times a second.
  */
 public final class ApiBootstrap {
 
@@ -26,7 +16,7 @@ public final class ApiBootstrap {
     private ApiBootstrap() {
     }
 
-    /** Posts the registration event on the first call and does nothing on every later one. */
+    /** Posts the registration event on the first call only. */
     public static void fireOnce() {
         if (fired) {
             return;
@@ -43,8 +33,7 @@ public final class ApiBootstrap {
                     HowToGoApi.API_VERSION, DestinationSources.registeredCount(),
                     SelfChecks.count());
         } catch (Throwable threw) {
-            // The event bus reports listener failures itself; this catch is for the bus failing, and
-            // either way a broken addon handler must not take the client down on its first tick.
+            // The bus reports listener failures itself; this catch keeps a broken addon handler from killing the client.
             HowToGo.LOGGER.error("[HowToGo] api | posting the registration event failed", threw);
         }
     }

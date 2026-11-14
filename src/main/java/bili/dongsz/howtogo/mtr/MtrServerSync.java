@@ -14,30 +14,11 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * The server's half of the MTR sync: read MTR's network, keep it encoded, send it to clients that ask.
- *
- * <h2>What a client is sent, and when</h2>
- * A client that has this mod sends {@link MtrWire#HELLO} when it joins a world. From then on it is on
- * this class's list, and is sent the reading -- every station, line and rail of every dimension MTR is
- * simulating -- as {@link MtrWire#SNAPSHOT} parts. The reading is re-taken every ten seconds, but only
- * encoded and sent when MTR's own full fingerprint has moved, so a server whose railway has not changed
- * pays one full read every ten seconds and no traffic at all.
- *
- * <h2>Why the read happens on MTR's thread, and the encode with it</h2>
- * A {@code Simulator} mutates its sets on its own thread; {@link MtrServerData#read} is queued onto
- * that thread with MTR's own {@code run(Runnable)}. A server may have one simulator per dimension, so
- * one task is queued on each and the last one to finish encodes the combined reading -- still on an
- * MTR thread, which is the price of not copying the object graph first. Encoding and traffic are paid
- * only when the railway has actually changed.
- *
- * <h2>Why parts, and why a budget</h2>
- * A whole railway is every rail's geometry, which is more than one packet may carry and more than one
- * tick should spend. The reading is split into {@link MtrWire#MAX_PART_BYTES} frames, and a player's
- * queue is drained a few frames a tick, so a large reading arrives over a second or two instead of
- * stalling the connection or the server tick.
- *
- * <p>Nothing is ever written to MTR's data, and no client that has not said hello is ever sent
- * anything: a vanilla client -- or a client without this mod -- is invisible here.
+ * The server's half of the MTR sync: read MTR's network, keep it encoded, send it to clients that
+ * ask.
+ * A client with this mod sends HELLO on join and is then sent the reading as SNAPSHOT parts. The
+ * reading is re-taken every ten seconds but encoded and sent only when MTR's fingerprint moved. The
+ * read runs on each simulator's thread through MTR's own run(), encoding included.
  */
 public final class MtrServerSync {
 
@@ -50,29 +31,23 @@ public final class MtrServerSync {
     private static final int PARTS_PER_TICK = 8;
 
     /**
-     * How long a queued read may stay queued before another is allowed, in milliseconds.
-     *
-     * <p>MTR runs a queued task on its own next tick, which does not happen while a paused game has
-     * stopped ticking it. Waiting a minute between attempts is what keeps a player sitting in a pause
-     * menu from queueing one read a second, all of which would then run in one go on the way back.
+     * How long a queued read may stay queued before another is allowed. A paused game stops MTR's
+     * ticking, and a minute between attempts stops a pause menu queueing a read a second.
      */
     private static final long READ_TIMEOUT_MILLIS = 60_000L;
 
     /** How long a client may go without a hello before its queue is dropped. */
     private static final long HELLO_TIMEOUT_MILLIS = 5_000L;
 
-    /** What this class is talking to, so a change of server or of MTR's main object is noticed. */
     private static Object boundMain;
 
     private static final Map<UUID, ArrayDeque<byte[]>> queues = new LinkedHashMap<>();
 
-    /** Last hello from each queued player; a silent client is dropped after HELLO_TIMEOUT_MILLIS. */
     private static final Map<UUID, Long> lastHellos = new LinkedHashMap<>();
 
     private static volatile List<byte[]> currentFrames = List.of();
     private static volatile int currentSession;
 
-    /** A reading finished on MTR's thread, waiting for the server thread to hand it out. */
     private static List<byte[]> pendingFrames = List.of();
     private static int pendingSession;
     private static long pendingHash = Long.MIN_VALUE;
@@ -117,13 +92,12 @@ public final class MtrServerSync {
             }
         }
         if (fresh) {
-            // A new or expired client must not receive a cached reading before the forced read:
-            // that reading may predate this client or belong to a world it has already left.
+            // A new or expired client must not receive a cached reading before the forced read: it may predate
+            // this client or belong to a world it has left.
             requestRead(player.server, true);
         }
     }
 
-    /** A real goodbye, when a loader offers one; heartbeat timeout covers the usual disconnect. */
     public static void goodbye(ServerPlayer player) {
         if (player == null) {
             return;
@@ -163,12 +137,10 @@ public final class MtrServerSync {
         flush(server);
     }
 
-    /** Whether a player is on the list, which is what makes reading worth doing at all. */
     public static boolean wants() {
         return !queues.isEmpty();
     }
 
-    // ------------------------------------------------------------------- sending
 
     /** Hands a completed reading to every waiting player, from the server thread. */
     private static void applyPending() {
@@ -210,7 +182,6 @@ public final class MtrServerSync {
         queue.addAll(frames);
     }
 
-    /** Replaces one player's queue with a complete set of frames, without caching them as a reading. */
     private static void replaceQueue(UUID player, List<byte[]> frames) {
         ArrayDeque<byte[]> queue = queues.get(player);
         if (queue == null) {
@@ -234,11 +205,6 @@ public final class MtrServerSync {
                 for (int sent = 0; sent < PARTS_PER_TICK && !queue.isEmpty(); sent++) {
                     byte[] frame = queue.peek();
                     try {
-                        // Delivered only once the connection is ready for it: a hello can arrive
-                        // before the client has registered the channel on its side, and dropping the
-                        // frame there would lose part of the reading. The frame may also be for a
-                        // player that has gone away; a send that fails is a player lost, not a
-                        // server fault.
                         if (!MtrNet.sendSnapshotPart(player, frame)) {
                             break;
                         }
@@ -252,12 +218,10 @@ public final class MtrServerSync {
         }
     }
 
-    // ------------------------------------------------------------------- reading
 
     /**
-     * Queues one read, or does nothing when one is already running.
-     *
-     * @param force re-read even when the fingerprint has not moved; used for a fresh client
+     * Delivered only once the connection is ready: a hello can arrive before the client has registered
+     * the channel, and a failed send is a player lost, not a server fault.
      */
     private static void requestRead(MinecraftServer server, boolean force) {
         if (reading && System.currentTimeMillis() - readingSince < READ_TIMEOUT_MILLIS) {
@@ -313,7 +277,6 @@ public final class MtrServerSync {
         }
     }
 
-    /** Runs on one simulator thread: reads once, fingerprints that same read, and keeps the cache. */
     private static void readSimulator(Reading reading, int slot, Object simulator) {
         MtrServerData.Sample sample = MtrServerData.readWithSignature(simulator);
         MtrSnapshotData.Dimension dimension = null;
@@ -327,13 +290,6 @@ public final class MtrServerSync {
         reading.done(slot, dimension, signature);
     }
 
-    /**
-     * One read of every simulator, collecting one dimension per call.
-     *
-     * <p>Synchronised because each dimension's task finishes on its own simulator's thread. The last
-     * one to finish encodes; a task that failed leaves that dimension as it was, so a partial failure
-     * costs a stale dimension rather than the whole reading.
-     */
     private static final class Reading {
 
         private final int total;
@@ -423,8 +379,7 @@ public final class MtrServerSync {
                     clearAndPublishEmpty();
                     return;
                 }
-                // Finished on MTR's thread, so nothing is sent from here: the parts are handed to the
-                // server tick, which is the only thread allowed to send on a player's connection.
+                // Finished on MTR's thread, so nothing is sent from here; the server tick hands the parts out.
                 pendingFrames = frames;
                 pendingSession = session;
                 pendingHash = hash;
@@ -449,8 +404,8 @@ public final class MtrServerSync {
     }
 
     /**
-     * Sends an empty snapshot to every current client and clears the cached reading. Used when MTR
-     * is unavailable or has no simulator: the old railway must not stay on clients indefinitely.
+     * One read of every simulator, one dimension per call. Synchronised because each dimension finishes
+     * on its own simulator thread; the last one encodes.
      */
     private static void publishEmpty() {
         try {
@@ -484,7 +439,7 @@ public final class MtrServerSync {
         }
     }
 
-    /** Clears the cached reading and every pending queue. Used when no reading can be trusted. */
+    /** Finished on MTR's thread; the server tick hands the parts out. */
     private static void clearFramesAndQueues() {
         synchronized (queues) {
             currentFrames = List.of();
@@ -501,13 +456,12 @@ public final class MtrServerSync {
         }
     }
 
-    /** Clears the cached reading and tells clients it is empty, rather than leaving stale data. */
+    /** Clears the cached reading and tells clients it is empty. */
     private static void clearAndPublishEmpty() {
         clearFramesAndQueues();
         publishEmpty();
     }
 
-    /** Drops the per-simulator cache after MTR has gone away or changed its main object. */
     private static void clearCachedReading() {
         boundMain = null;
         cachedDimensions = new MtrSnapshotData.Dimension[0];
@@ -515,7 +469,6 @@ public final class MtrServerSync {
         lastBroadcastHash = Long.MIN_VALUE;
     }
 
-    /** The session the last broadcast used, for diagnostics and tests. */
     static int currentSession() {
         return currentSession;
     }

@@ -35,102 +35,35 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Create's train tracks, read out of the loaded chunks as a read-only rail layer.
+ * Create's train tracks, read out of loaded chunks as a read-only rail layer.
  *
- * <h2>Blocks, not classes</h2>
- * A track is recognised by the block in the world -- by its registry name, {@code create:track} by
- * default -- and by nothing else. No Create class is ever loaded, so a player without Create simply
- * has an empty layer, a Create release that renames a class cannot break anything, and there is no
- * dependency in {@code build.gradle} and none in the mod metadata. The names are configuration
- * rather than constants, so a renamed or add-on block can be followed without a new build.
+ * A track block is recognised by registry name (create:track by default), never by a Create class,
+ * so no Create is loaded and a rename cannot break it. Its own axes decide the joins: a block
+ * joins along each axis end and the neighbour must reach back. An unknown shape reaches
+ * everywhere, so a new shape cannot make a line vanish.
  *
- * <h2>The shape of the layer, and why a track's own shape decides the joins</h2>
- * A track block is not a crossroads of four directions: it carries tracks along one or two
- * <em>axes</em>, and an axis can run diagonally. A straight piece is {@code zo} or {@code xo}; a
- * 45-degree piece is {@code pd} or {@code nd}, whose axis is a corner-to-corner diagonal; a slope is
- * {@code an}, {@code as}, {@code ae} or {@code aw}, whose axis carries its own one-block rise; a
- * curve or a crossing is one of the {@code cr_} shapes, which carry two axes and therefore connect
- * in four places.
+ * Create's graph is preferred; a block scan is the fallback. Track between junctions becomes one
+ * polyline per run, as a plain RoadNetwork of RoadClass#RAIL.
  *
- * <p>So a block is joined to the block at each end of each of its own axes, and the other block has
- * to reach back along the same axis for the join to exist. Joining every side neighbour instead
- * would be wrong twice over: a diagonal piece of track -- which is how Create builds every bend --
- * would be a row of isolated blocks with no line at all, and two tracks laid touching side by side
- * would be welded into one. The axes are read from the block state's own {@code shape} property, by
- * name, so this is still nothing but data: the property is a plain enum implementing Minecraft's
- * {@link StringRepresentable}, and the table below is Create's own {@code TrackShape} axes. A shape
- * this table does not know is treated as reaching in every direction around it rather than as
- * reaching nowhere, so a shape added by a later release or by an add-on can make the layer clumsier
- * but cannot make a line disappear.
- *
- * <p>Blocks are then compressed: track blocks are the graph, and a run of track between two
- * junctions becomes one polyline. A thousand-block line is a handful of segments, and a bend inside
- * one of those runs is kept as a vertex of it. The result is a plain {@link RoadNetwork} of
- * {@link RoadClass#RAIL} segments, so the router, the map and the class colours all treat it exactly
- * as they treat a hand-drawn rail: there is no second kind of road anywhere downstream.
- *
- * <h2>Two sources, one layer</h2>
- * The layer is built from <b>Create's own client-side track graph</b> when it can be read, and from a
- * scan of track blocks when it cannot. The graph is preferred because it is the data Create itself
- * draws on the map: its node positions are Create's, a curve arrives as a real Bezier rather than as
- * a staircase of blocks, and a station carries the name the player gave it. The block scan stays as
- * the fallback for a client without Create, a Create that renamed something, or a graph that has not
- * been sent -- and it is the reason this feature works at all if the reflection ever breaks.
- *
- * <p>Only one of the two is ever the layer, so no track can be counted twice: while the graph answers,
- * the scan is not run and whatever it had remembered is dropped. Both sources produce the same thing
- * -- a graph of nodes and edges, compressed into one polyline per run of track between two junctions
- * -- so everything downstream cannot tell which one built it.
- *
- * <h2>Read-only, and never saved</h2>
- * The layer lives here and in no other place. It is never handed to {@link RoadStore}, so the editor
- * -- which is built over that network -- cannot see it, and it is never passed to storage, so
- * nothing about it reaches {@code config/howtogo/...}. Routing does not merge into the saved network
- * either: {@link #forRouting} returns a copy with the layer folded in, and returns the saved network
- * itself when the layer cannot take part at all, which is what makes "walking and driving routes are
- * untouched" true by construction rather than by inspection. Create's graph is only ever read.
- *
- * <h2>Cost</h2>
- * Reading the world is new ground for this mod, so the budget is explicit. The layer works in
- * <b>one batch a second</b>, on the client tick and never on the render thread: between batches
- * nothing runs but a counter, and when the counter comes round the layer does one second's work and
- * stops. From Create's graph that work is a walk of the graph itself -- no chunk is read at all, and
- * the graph is only re-read when Create's own change counter moves or every fifth second as a safety
- * net. From the block scan it is {@code create_track_chunks_per_second} chunks read in one go, taken
- * nearest-first from a queue filled as rings around the player out to
- * {@code create_track_scan_radius}; a chunk's sections are tested through their palettes and only a
- * section whose palette holds a track is walked block by block, so a chunk with no track costs a few
- * dozen palette tests. A scanned chunk is remembered once read and not read again for a whole sweep,
- * and the chunk the player stands in is read every second regardless, so track laid underfoot shows
- * up at once rather than at the next pass over the map.
+ * Never saved: forRouting returns a copy with it folded in. One batch a second on the client tick.
  */
 public final class RailTrackStore {
 
     /**
      * Node and segment ids for this layer start here.
-     *
-     * <p>Ids are only ever resolved against the network they came from, so the two id spaces do not
-     * have to be disjoint -- but they are made so anyway. A reader that holds a segment id and the
-     * wrong network then gets nothing rather than somebody else's road, which is the difference
-     * between a missing line and a highlighted road that was never selected.
+     * Made disjoint from the saved network's ids so a wrong-network lookup returns nothing, not a road.
      */
     private static final int ID_BASE = 1_000_000_000;
 
-    /** One second: every piece of the layer's work happens on a tick that is a multiple of this. */
     private static final int INTERVAL_TICKS = 20;
 
-    /** How long a chunk's reading is trusted before that chunk is read again. */
     private static final int RESCAN_TICKS = 200;
 
-    /** Batches between re-reads of the configured block id lists. */
     private static final int ID_REFRESH_BATCHES = 5;
 
     /**
-     * Batches between unconditional re-reads of Create's graph.
-     *
-     * <p>The manager's counter says when the network changed, so this is only a safety net for a
-     * change that counter did not move for: five seconds, at which point the graph is read again and
-     * rebuilt if it differs.
+     * Batches between unconditional re-reads of Create's graph: a safety net for a change its
+     * own counter did not move.
      */
     private static final int GRAPH_RECHECK_BATCHES = 5;
 
@@ -140,30 +73,18 @@ public final class RailTrackStore {
     /** Index of the shape used when a block has no shape property, or one this table does not know. */
     private static final int UNKNOWN_SHAPE = 0;
 
-    /**
-     * Ceiling on remembered track blocks.
-     *
-     * <p>The scan radius bounds this anyway; the cap is what makes the bound a promise rather than an
-     * expectation on a server with a rail network larger than any the radius was chosen for. Reaching
-     * it stops the scan rather than growing without limit, and says so once.
-     */
+    /** Ceiling on remembered track blocks; reaching it stops the scan and says so once. */
     private static final int MAX_TRACK_BLOCKS = 100_000;
 
-    /**
-     * Every shape this layer knows, by index, with {@link #UNKNOWN_SHAPE} first.
-     *
-     * <p>Filled from {@link #define} in declaration order; the table is data, not code, which is why
-     * the axes are written out here the way Create declares them.
-     */
+    /** Every shape this layer knows, by index, with UNKNOWN_SHAPE first; filled by define(). */
     private static final List<Shape> SHAPE_TABLE = new ArrayList<>();
-    /** Shape name as a blockstate serialises it, to its index in {@link #SHAPE_TABLE}. */
+    /** Shape name as a blockstate serialises it, to its index in SHAPE_TABLE. */
     private static final Map<String, Integer> SHAPE_IDS = new HashMap<>();
     /** Shape index per block state, looked up once per state rather than once per block. */
     private static final Map<BlockState, Integer> STATE_SHAPES = new IdentityHashMap<>();
 
     static {
-        // Reaching in every direction around it, for a shape whose name is not in the table below:
-        // a track that cannot be placed correctly is better than a line that vanishes mid-way.
+        // Reaching every direction, for a shape whose name is not in the table: clumsy beats a vanishing line.
         SHAPE_TABLE.add(kingMoves());
         define("none");
         define("zo", 0, 0, 1);
@@ -188,7 +109,6 @@ public final class RailTrackStore {
 
     /** Track blocks found so far, by chunk. A chunk that held track and no longer does is absent. */
     private static final Map<Long, ChunkTracks> chunkTracks = new HashMap<>();
-    /** Station block positions found so far, by chunk. */
     private static final Map<Long, long[]> chunkStations = new HashMap<>();
     /** When each chunk was last read, so a reading can be trusted for a while. */
     private static final Map<Long, Long> scannedAt = new HashMap<>();
@@ -203,10 +123,7 @@ public final class RailTrackStore {
 
     /**
      * Which source built the layer currently held.
-     *
-     * <p>Exactly one of the two is ever the layer, so no track can be counted twice: Create's graph
-     * is preferred because it is Create's own data, and the block scan is used only when the graph
-     * gave nothing to build from.
+     * Exactly one is ever the layer; Create's graph is preferred, the block scan used when it gave nothing.
      */
     private static Source source = Source.NONE;
 
@@ -237,30 +154,15 @@ public final class RailTrackStore {
     private static boolean layerReported;
     private static boolean warnedBadId;
 
-    // ----------------------------------------------------- rail layer diagnostic
-    // The layer is the one part of this mod built out of another mod's data, and it fails in ways that
-    // look identical from outside: the scan finding nothing, a scan that found blocks leaving an empty
-    // layer, and a layer that exists but never reaches the map. Everything from here to the matching
-    // banner is what tells those apart, and all of it is written only when the player has asked for
-    // diagnostics -- see {@link RoadConfig#debugLog()}. The counters are kept cheap rather than exact
-    // when it is off: each of the three note methods returns on the first line.
+    // Rail layer diagnostic: counters that tell apart scan-found-nothing, empty-layer and never-drawn.
+    // Written only when the player asked for diagnostics (RoadConfig#debugLog); cheap when off.
 
     /** Chunks read since the layer started, and how many of them held anything. */
     private static long chunksRead;
     private static long chunksWithContent;
     /**
-     * What the map side has done with the layer, counted since the layer started.
-     *
-     * <p>{@code mapPasses} is one per enumeration of the elements, and Xaero asks for them once per
-     * {@code ElementRenderLocation} per frame, so an ordinary frame is more than one pass over the same
-     * layer -- which is why {@code mapHandedOver} is a multiple of {@code mapStroked} rather than equal
-     * to it. {@code mapHandedOver} is one per rail element offered in a pass, {@code mapStroked} one
-     * per rail element actually drawn. Offers are attributed to the location that made them, because
-     * {@code begin} is told the location; strokes are not attributed, because {@code renderElement} is
-     * not, and a guess at which pass a stroke belonged to would be exactly the kind of invented number
-     * this diagnostic exists to avoid. The invariant to read is
-     * {@code mapHandedOver / mapPasses == segments in the layer}: if that ever fails, the layer being
-     * drawn is not the layer being reported.
+     * What the map side has done with the layer, counted since it started.
+     * mapHandedOver / mapPasses == segments is the invariant: otherwise the drawn layer is not the reported one.
      */
     private static long mapPasses;
     private static long mapHandedOver;
@@ -309,24 +211,14 @@ public final class RailTrackStore {
         mapStroked++;
     }
 
-    /**
-     * Rail diagnostic: whether a segment came from this layer rather than from the editor.
-     *
-     * <p>By id range, which is also what keeps the two apart everywhere else.
-     */
+    /** Whether a segment came from this layer rather than the editor, by id range. */
     public static boolean isOurs(RoadSegment segment) {
         return segment != null && segment.id() >= ID_BASE;
     }
 
     /**
-     * Rail diagnostic: the first few segments' two ends and vertex count, written whenever the layer's
-     * size changes.
-     *
-     * <p>Not per second: it is there so that a line seen on the map which no edge connects can be
-     * matched against the numbers. Each entry says which segment it is, where its nodes are, how many
-     * vertices it has, and where its polyline actually starts and ends -- a polyline end that does not
-     * match its node is the signature of invented geometry, and it would be visible here rather than
-     * argued about.
+     * The first few segments' ends and vertex counts, written when the layer's size changes -- to
+     * match a line on the map against the numbers and to spot invented geometry.
      */
     private static void reportSegments() {
         if (!RoadConfig.debugLog()) {
@@ -353,14 +245,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Rail diagnostic: the single line a second, tag {@code [HowToGo] rail}.
-     *
-     * <p>Written to tell apart the failures that look identical from outside: the scan finding
-     * nothing, the layer being empty after a scan that found blocks, and the layer existing but
-     * never reaching the map. It also names the source, because "Create's graph gave us the tracks"
-     * and "we read them out of the blocks ourselves" are different answers with different next steps.
-     * The map figures are the last second's deltas followed by the session totals, because a total
-     * on its own cannot say whether anything is being drawn *now*.
+     * The one line a second, tag [HowToGo] rail: tells apart scan-empty, layer-empty and
+     * never-drawn failures, names the source, and reports last-second deltas.
      */
     private static void report() {
         if (!RoadConfig.debugLog()) {
@@ -393,7 +279,6 @@ public final class RailTrackStore {
                 stationCount(), passes, locations, handedOver, stroked, mapPasses, mapHandedOver,
                 mapStroked);
     }
-    // ----------------------------------------------- end rail layer diagnostic
 
     /** A train station, as a place to navigate to; the name is Create's when the graph supplied it. */
     public record Station(int x, int y, int z, String name) {
@@ -406,7 +291,6 @@ public final class RailTrackStore {
     /** Where a track block's own shape says it reaches, as packed one-block offsets. */
     private record Shape(byte[] offsets, boolean known) {
 
-        /** Whether this shape reaches along the given offset. */
         boolean reaches(byte offset) {
             for (byte candidate : offsets) {
                 if (candidate == offset) {
@@ -418,19 +302,13 @@ public final class RailTrackStore {
     }
 
     /**
-     * The graph the compression walks, whichever source built it.
-     *
-     * <p>Adjacency is a flat edge list: {@code head[node]} is the first edge at that node and edges
-     * pair as {@code e} and {@code e ^ 1}, so the reverse of an edge is its neighbour in the arrays.
-     * Geometry is per <em>directed</em> edge, already oriented from its {@code from} end, because the
-     * two sources differ: the block scan's edges are one block long, and Create's edges are its own
-     * pieces of track, a curve among them carrying its sampled Bezier.
+     * The graph the compression walks, from either source. A flat edge list (edges pair as e and
+     * e ^ 1); geometry is per directed edge, already oriented from its from end.
      */
     private record Graph(int[] head, int[] other, int[] next, int[] degree, int edges,
                          double[] nodeX, double[] nodeY, double[] nodeZ, double[] vertexX,
                          double[] vertexZ, int[] vertexStart, int[] vertexCount) {
 
-        /** The first edge at a node that the walk has not used, or -1. */
         int unusedEdgeAt(int node, boolean[] used) {
             for (int edge = head[node]; edge >= 0; edge = next[edge]) {
                 if (!used[edge]) {
@@ -451,17 +329,10 @@ public final class RailTrackStore {
     private RailTrackStore() {
     }
 
-    // ------------------------------------------------------------------ public
 
     /**
-     * Called every client tick. Nineteen ticks out of twenty it does nothing but count; the
-     * twentieth is one second's worth of work.
-     *
-     * <p>The cadence is a period rather than a "has it been long enough" test on purpose. An earlier
-     * version asked whether {@code ticks - lastRebuild >= interval} and seeded {@code lastRebuild}
-     * with {@link Long#MIN_VALUE} as "never"; the subtraction overflowed to a large negative number
-     * on every tick, so the test never came true and the coarse layer was never built at all -- a
-     * layer that scanned correctly and then drew nothing. A period cannot say "never" wrongly.
+     * Called every client tick: nineteen ticks count, the twentieth does one second's work. A period,
+     * not a has-it-been-long-enough test -- an earlier version's subtraction overflowed on "never".
      */
     public static void tick() {
         ticks++;
@@ -476,7 +347,7 @@ public final class RailTrackStore {
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft == null ? null : minecraft.level;
         if (level == null) {
-            // Left the world. Nothing here survives it: the blocks are only ever what is loaded.
+            // Left the world; nothing here survives it, since the blocks are only what is loaded.
             if (boundLevel != null) {
                 clear();
             }
@@ -485,8 +356,8 @@ public final class RailTrackStore {
         if (level != boundLevel) {
             clear();
             boundLevel = level;
-            // The ids are read at the moment there is something to read them for, rather than
-            // waiting for the periodic re-read, so the first pass of a world is not delayed by it.
+            // The ids are read the moment there is something to read them for, so the first pass is not
+            // delayed by the periodic re-read.
             refreshBlockIds();
         }
         if (!RoadConfig.createTrainTracks()) {
@@ -497,7 +368,7 @@ public final class RailTrackStore {
             return;
         }
         if (trackBlocks.isEmpty() && stationBlocks.isEmpty()) {
-            // Nothing is configured to look for, so there is no reason to read a chunk at all.
+            // Nothing is configured to look for, so there is nothing to read.
             report();
             return;
         }
@@ -510,8 +381,7 @@ public final class RailTrackStore {
         int chunkX = player.getBlockX() >> 4;
         int chunkZ = player.getBlockZ() >> 4;
 
-        // Create's own graph first. It is the data Create itself draws on the map, so while it answers
-        // there is nothing for the block scan to do and it is not run at all.
+        // Create's own graph first: while it answers, the block scan is not run at all.
         if (CreateTrackGraph.available()) {
             int version = CreateTrackGraph.version();
             boolean due = !graphRead || version != graphVersion
@@ -533,9 +403,8 @@ public final class RailTrackStore {
                         report();
                         return;
                     }
-                    // It answered, and the answer is an empty network: whatever it built before is no
-                    // longer there, so it is dropped rather than left on the map. The scan below gets
-                    // its turn either way.
+                    // It answered with an empty network: the previous build is dropped rather than left on the map;
+                    // the scan still gets its turn.
                     if (source == Source.CREATE_GRAPH) {
                         adopt(new RoadNetwork());
                         layerStations = List.of();
@@ -559,8 +428,7 @@ public final class RailTrackStore {
             layerStations = List.of();
         }
 
-        // The chunk underfoot is read every pass whether or not it is still fresh, so a track laid
-        // where the player is standing shows up within the second rather than at the next sweep.
+        // The chunk underfoot is read every pass, so track laid under the player shows within the second.
         urgent.addLast(chunkKey(chunkX, chunkZ));
         if (sweep.isEmpty()) {
             refillSweep(chunkX, chunkZ);
@@ -580,8 +448,7 @@ public final class RailTrackStore {
             scan(key, level, chunkX, chunkZ, false);
         }
 
-        // Once a second, inside the second's own pass: no "am I due" arithmetic, and so no way for
-        // the rebuild to be skipped by accident, which is exactly how the first version failed.
+        // The rebuild happens inside the second's own pass, so it cannot be skipped by arithmetic.
         if (coarseDirty) {
             buildFromBlockScan();
         }
@@ -598,12 +465,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Bumped whenever the layer is replaced.
-     *
-     * <p>The layer is rebuilt whole rather than edited, so its own revision says nothing a reader can
-     * use: every build numbers its segments from scratch, which is why a caller caching something
-     * worked out from the layer needs a version of the layer itself. Both accessors below are on the
-     * render thread, where every build is adopted.
+     * Bumped whenever the layer is replaced. Each rebuild renumbers its segments, so callers caching
+     * derived values need a version of the layer itself.
      */
     private static int layerStamp;
 
@@ -618,36 +481,24 @@ public final class RailTrackStore {
     }
 
     /**
-     * The layer's segments, for drawing.
-     *
-     * <p>A live view of a network only this class builds, handed out to read: nothing outside may
-     * add to it. Drawing reads it directly so a track is drawn from the same geometry the router
-     * routes along, rather than from a second copy that could disagree.
+     * The layer's segments, for drawing: a live view nothing outside may add to, so a track is drawn
+     * from the geometry the router routes along.
      */
     public static Collection<RoadSegment> segments() {
         return coarse.segments();
     }
 
     /**
-     * The layer as a network, for the two things that need topology rather than geometry: hit-testing
-     * a click against a rail, and walking a chain of rail segments to name a whole line.
-     *
-     * <p>Handed out to read. Nothing outside may add to it, and nothing does: the editor's own
-     * network is the saved one, so a rail can be named but never redrawn, moved or deleted. That is
-     * the point of the layer -- it is a reading of what is in the world, and an edit to it would be
-     * overwritten by the next reading anyway.
+     * The layer as a network, for click hit-testing and for walking a chain of rail segments.
+     * Read-only: the editor's network is the saved one, so a rail can be named but never redrawn.
      */
     public static RoadNetwork network() {
         return coarse;
     }
 
     /**
-     * Makes a freshly built network the layer, stamping the stored names onto it first.
-     *
-     * <p>Every assignment to the layer goes through here, and that is deliberate: a rebuild numbers
-     * its segments from scratch, so a build that skipped the naming step would draw a named railway
-     * with no name and silently lose the player's work until the next rebuild happened to name it
-     * again. With one way in, that cannot be forgotten at a new call site.
+     * Makes a freshly built network the layer, stamping stored names onto it first.
+     * Every assignment goes through here so a build cannot silently lose the player's names.
      */
     private static void adopt(RoadNetwork built) {
         coarse = built;
@@ -655,13 +506,7 @@ public final class RailTrackStore {
         RailNameStore.apply(coarse);
     }
 
-    /**
-     * Every station the layer is offering, in no particular order.
-     *
-     * <p>From Create's graph these carry the name the player gave the station; from the block scan
-     * they carry none, because a station's name is not in the world's blocks, only in Create's
-     * railway data.
-     */
+    /** Every station the layer offers; names come from Create's graph, the scan has none. */
     public static List<Station> stations() {
         if (!RoadConfig.createTrainTracks()) {
             return List.of();
@@ -682,35 +527,11 @@ public final class RailTrackStore {
     }
 
     /**
-     * The network to plan on: the saved roads, with every machine-read layer merged in that the trip
-     * could use.
-     *
-     * <h2>Why the unchanged network is returned as-is</h2>
-     * A mode that cannot travel on the layer -- walking and driving for rail -- gets
-     * {@link RoadStore#get()} itself, so there is no rail node and no rail segment anywhere in the
-     * graph it is planned on. Nothing about its routes can change, and that is a property of this
-     * method rather than a claim about the router's filters, which is the version of the argument that
-     * survives the next change to those filters.
-     *
-     * <p>Which classes a <em>trip</em> avoids is not asked here. The layers are merged or not by what
-     * the mode can move on, and a ride over them is then restricted by that line's own policy -- see
-     * {@link bili.dongsz.howtogo.route.LinePlanner#ridePreferences}, which ignores the player's
-     * avoidances on purpose so that a line the player declared a railway is still a railway. A layer
-     * this method declined to merge because of a global avoidance could not be put back by that
-     * policy, so the two would disagree about the same journey.
-     *
-     * <h2>Why the merge is a copy</h2>
-     * The saved network is not touched, and neither is any layer: the router splits segments while
-     * anchoring, so it needs something it may mutate, and it gets copies of all of them. The layers are
-     * therefore read-only in the strong sense -- nothing downstream holds a reference it could write
-     * through -- and neither is ever saved with the player's roads.
-     *
-     * <h2>What is merged</h2>
-     * Three layers, and all are readings of the world rather than drawings of the player's: this
-     * class's Create rails, {@link MtrTransit}'s rails read out of MTR, and the roads
-     * {@link RoadWeaverLayer} read out of RoadWeaver. They are merged in one place because this is the
-     * one place that answers "what does a plan run on", and an answer assembled from several places is
-     * an answer that can be half-updated.
+     * The network to plan on: the saved roads plus every machine-read layer the trip could use.
+     * A mode that cannot travel on a layer gets RoadStore#get() itself, so its routes cannot change;
+     * avoidances are not asked here. The merge is a copy -- the router mutates while anchoring -- and
+     * layers are never saved with the player's roads.
+     * Three layers are merged: Create rails, MTR rails, RoadWeaver roads.
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences) {
         return forRouting(mode, preferences, true);
@@ -718,26 +539,19 @@ public final class RailTrackStore {
 
     /**
      * The same, with MTR's route marks left out on request.
-     *
-     * <p>For a line that has them switched off: the marks are MTR's, one layer serves every line of a
-     * kind, and so a line that does not want them cannot be given a network that merely fails to add
-     * them -- it has to be given the network that never had them. See {@link RideRoads}.
-     *
-     * @param withMtrMarks whether the rails read out of MTR are merged in as well
+     * A line with them switched off needs a network that never had them (see RideRoads).
+     * @param withMtrMarks whether MTR's rails are merged in
      */
     public static RoadNetwork forRouting(TravelMode mode, RoutePreferences preferences,
                                          boolean withMtrMarks) {
         RoadNetwork handDrawn = RoadStore.get();
-        // What a mode may travel on, and nothing else. The player's avoidances are deliberately not
-        // consulted here: a ride's own policy decides which class it runs on, and it ignores them on
-        // purpose (see LinePlanner#ridePreferences), so filtering the layer by them would take the
-        // rails away from the one line that declared itself a railway.
+        // What a mode may travel on; avoidances are deliberately not consulted, or a line that declared
+        // itself a railway would lose its rails.
         boolean movesOnRails = mode != null && mode.allows(RoadClass.RAIL);
         RoadNetwork mtr = withMtrMarks && movesOnMtrMarks(mode) ? MtrTransit.railLayer()
                 : new RoadNetwork();
-        // The roads RoadWeaver generated, when the config lets a trip use them. Null rather than an
-        // empty network so the common case costs no allocation; the layer itself decides which modes
-        // can move on it, the same rule the rails above follow.
+        // RoadWeaver's roads when the config lets a trip use them; null rather than empty so the common
+        // case allocates nothing.
         RoadNetwork roadWeaver = RoadWeaverLayer.routingNetwork(mode);
         if ((!active() || !movesOnRails) && mtr.segmentCount() == 0
                 && (roadWeaver == null || roadWeaver.segmentCount() == 0)) {
@@ -752,8 +566,7 @@ public final class RailTrackStore {
                 merged.putSegment(segment.copy());
             }
         }
-        // MTR's marks are gated inside the layer: only the lines whose switch is on are in it, so there
-        // is nothing to check here as well.
+        // MTR's marks are gated inside the layer, so there is nothing to check here.
         for (RoadNode node : mtr.nodesSnapshot()) {
             merged.putNode(node.copy());
         }
@@ -772,30 +585,17 @@ public final class RailTrackStore {
     }
 
     /**
-     * Whether a mode can travel on the marks MTR reports at all.
-     *
-     * <p>Both of the classes a mark can be, and not only the rail: a mark is rail for a train and water
-     * for a boat, so asking about the rail alone would refuse the layer to exactly the lines whose
-     * waterway it holds -- a boat line would have its switch turned on and be planned as if it were
-     * off. There is no third class, because {@link MtrClientData#roadClassFor} answers for a train, a
-     * cable car and a boat and for nothing else.
-     *
-     * <p>Its own method so that the rule can be checked without a world: it is the one thing that
-     * decides whether a boat's marks are reachable, and the bug it replaces was invisible from the
-     * outside.
+     * Whether a mode can travel on MTR's marks: both classes (rail and water), or a boat line would
+     * be planned as if its switch were off.
      */
     static boolean movesOnMtrMarks(TravelMode mode) {
         return mode != null && (mode.allows(RoadClass.RAIL) || mode.allows(RoadClass.WATER));
     }
 
-    // ------------------------------------------------------------------ config
 
     /**
-     * Re-reads the configured block ids, parsing them once.
-     *
-     * <p>Parsed rather than compared as text because the test runs inside the block loop of a
-     * section scan, where a {@code toString} per block would be the expensive part of the feature.
-     * The lists are compared first, so a config that has not changed costs nothing.
+     * Re-reads the configured block ids, parsed once: parsed because the test runs inside the block
+     * loop. The lists are compared first, so an unchanged config costs nothing.
      */
     private static void refreshBlockIds() {
         List<? extends String> trackIds = RoadConfig.createTrackBlockIds();
@@ -828,7 +628,6 @@ public final class RailTrackStore {
         return parsed;
     }
 
-    // ------------------------------------------------------------------- scan
 
     /** Throws the layer away, which is what every level change and switching the feature off does. */
     private static void clear() {
@@ -845,10 +644,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Drops what the block scan remembered.
-     *
-     * <p>Done when Create's graph becomes the source, so the scan's memory is not held for a layer
-     * that is not being drawn from it, and again on every level change.
+     * Drops what the block scan remembered: when Create's graph becomes the source, and on every
+     * level change.
      */
     private static void forgetScan() {
         chunkTracks.clear();
@@ -863,11 +660,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Queues every chunk within the configured radius, in rings outward from the player.
-     *
-     * <p>Rings rather than rows so the chunks nearest the player are read first: a pass over the map
-     * is allowed to take a while, and what the player is looking at should not be the last thing in
-     * it. The order is square (Chebyshev) distance, because chunks are square.
+     * Queues every chunk within the configured radius in rings outward from the player, so what the
+     * player is looking at is read first.
      */
     private static void refillSweep(int centerChunkX, int centerChunkZ) {
         int radiusChunks = Math.max(1, (RoadConfig.createTrackScanRadius() + 15) / 16);
@@ -885,8 +679,7 @@ public final class RailTrackStore {
 
     /**
      * Reads one chunk and remembers what was in it.
-     *
-     * @param forced read regardless of how recently it was read, used for the player's own chunk
+     * @param forced read regardless of freshness, for the player's own chunk
      */
     private static void scan(long key, ClientLevel level, int centerChunkX, int centerChunkZ,
                              boolean forced) {
@@ -905,9 +698,8 @@ public final class RailTrackStore {
             }
         }
 
-        // The client's own chunk cache, which never blocks and never asks the server for anything: a
-        // chunk that is not loaded comes back as an empty placeholder, and reading one as empty is
-        // right -- a track nobody has loaded is a track nobody can see.
+        // The client's own chunk cache never blocks: an unloaded chunk comes back empty, and reading it
+        // as empty is right.
         LevelChunk chunk = level.getChunk(chunkX, chunkZ);
         List<Long> tracks = new ArrayList<>();
         List<Byte> shapes = new ArrayList<>();
@@ -916,9 +708,8 @@ public final class RailTrackStore {
             collect(chunk, tracks, shapes, stations);
         }
         scannedAt.put(key, ticks);
-        // Rail diagnostic: the two counters, updated here so nothing is measured outside the pass.
-        // Two increments once per chunk read -- not per frame -- so they are left ungated, unlike the
-        // per-element counters the map side feeds.
+        // The two counters, updated here so nothing is measured outside the pass; per chunk, so left
+        // ungated.
         chunksRead++;
         if (!tracks.isEmpty() || !stations.isEmpty()) {
             chunksWithContent++;
@@ -928,19 +719,14 @@ public final class RailTrackStore {
     }
 
     /**
-     * Walks the sections of a chunk that could hold anything, and keeps the track and station blocks.
-     *
-     * <p>The palette test comes first for every section: it answers "could this section hold one of
-     * these blocks at all" from the section's state palette, which is a handful of comparisons,
-     * instead of from 4096 block reads. Only a section that passes is walked, which is what keeps a
-     * chunk with no rail in it nearly free.
+     * Walks the sections that could hold something, keeping track and station blocks.
+     * The palette test comes first: a handful of comparisons instead of 4096 block reads.
      */
     private static void collect(LevelChunk chunk, List<Long> tracks, List<Byte> shapes,
                                 List<Long> stations) {
         LevelChunkSection[] sections = chunk.getSections();
-        // 1.21.4 renamed the level bounds accessors: getMinBuildHeight/getMaxBuildHeight became
-        // getMinY/getMaxY -- the same numbers under the shorter name. The source on disk carries
-        // the 1.21.1 spelling; Stonecutter swaps the pair per node.
+        // 1.21.4 renamed getMinBuildHeight/getMaxBuildHeight to getMinY/getMaxY; the source on disk
+        // carries the 1.21.1 spelling.
         //? if >=1.21.4 {
         /*int minY = chunk.getMinY();
         *///?} else {
@@ -979,10 +765,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Replaces what is remembered for a chunk, and flags the coarse layer if it actually changed.
-     *
-     * <p>Compared rather than assumed: a pass over the map re-reads every chunk in it, and without
-     * this every pass would rebuild the whole coarse layer to arrive at the same answer.
+     * Replaces what is remembered for a chunk, flagging the coarse layer only if it changed -- a
+     * different answer would rebuild it every pass.
      */
     private static void storeTracks(long key, List<Long> found, List<Byte> shapeIds) {
         long[] fresh = new long[found.size()];
@@ -1043,14 +827,8 @@ public final class RailTrackStore {
         return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
     }
 
-    // ------------------------------------------------------------------ shape
 
-    /**
-     * The shape of a block state, as an index into {@link #SHAPE_TABLE}.
-     *
-     * <p>Cached per state: the lookup is a search through the state's properties, and a chunk full of
-     * track is a chunk full of the same handful of states.
-     */
+    /** The shape of a block state as an index into SHAPE_TABLE, cached per state. */
     private static int shapeId(BlockState state) {
         Integer cached = STATE_SHAPES.get(state);
         if (cached != null) {
@@ -1064,10 +842,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * The shape property's serialised value, or null when the state has no property by that name.
-     *
-     * <p>Read through Minecraft's own {@link StringRepresentable} rather than Create's enum, which is
-     * what keeps this free of any Create class: the value is asked for its name and nothing else.
+     * The shape property's serialised value, or null. Read through StringRepresentable, so no
+     * Create class is needed.
      */
     private static String shapeName(BlockState state) {
         for (Property<?> property : state.getProperties()) {
@@ -1086,10 +862,7 @@ public final class RailTrackStore {
 
     /**
      * Registers one shape: its name, then each axis as three numbers.
-     *
-     * <p>Both signs of every axis become offsets, because an axis is a line through the block and its
-     * two ends are both connections. This is Create's {@code TrackShape} table -- the axis of a track
-     * block is the direction its rails run in, and for a curve or a crossing there are two of them.
+     * Both signs of every axis become offsets, because an axis is a line through the block.
      */
     private static void define(String name, int... axes) {
         Set<Byte> offsets = new LinkedHashSet<>();
@@ -1109,7 +882,6 @@ public final class RailTrackStore {
         SHAPE_TABLE.add(new Shape(packed, true));
     }
 
-    /** The fallback shape: every straight and diagonal neighbour, one block up and one block down. */
     private static Shape kingMoves() {
         byte[] offsets = new byte[24];
         int at = 0;
@@ -1146,30 +918,13 @@ public final class RailTrackStore {
         return pack(-offsetX(packed), -offsetY(packed), -offsetZ(packed));
     }
 
-    // ---------------------------------------------------------------- topology
 
     /**
-     * Builds the layer from Create's own graph, <b>one segment per Create edge</b>.
-     *
-     * <h2>Why nothing is joined here</h2>
-     * Create's own map draws each edge on its own: a straight edge as a line between its two nodes, a
-     * curve from the points of {@code BezierConnection.rasterise()}. Nothing in it decides that two
-     * edges form one road, and nothing in it can therefore invent a line between two edges that do not
-     * meet. An earlier version here walked runs of edges through pass-through nodes and stitched them
-     * into one polyline, and every bug that produced phantom geometry came from that stitching: each
-     * edge's geometry had to be assumed to start where the previous one ended. Taking the edges one at
-     * a time removes the assumption instead of guarding it -- there is no order beyond an edge's own
-     * two ends, and no vertex can come from any edge but its own.
-     *
-     * <p>Segments still meet, because the edges that meet at a node are given that node's coordinates
-     * (the ends of each polyline are the node positions): meeting is a consequence of shared
-     * coordinates, not of joining.
-     *
-     * <p>The cost is one segment per edge instead of one per run -- twelve instead of four in the case
-     * that prompted this -- which is nothing for a graph of this size, and a segment per edge is
-     * exactly what a hand-drawn road already is. The router, the map and the class colours see the
-     * same kind of network either way, and {@code RoadChains} still gathers a run of edges into one
-     * road for naming and for the manoeuvre rule, because a node between two edges has degree two.
+     * Builds the layer from Create's own graph, one segment per Create edge.
+     * Nothing is joined: Create draws each edge on its own, so no assumption is made that one edge's
+     * geometry starts where the previous ended -- every phantom-geometry bug came from stitching.
+     * Segments still meet because they share node coordinates. RoadChains still gathers a run of
+     * edges for naming, since a node between two edges has degree two.
      */
     private static void buildFromCreateGraph(CreateTrackGraph.Snapshot snapshot) {
         List<CreateTrackGraph.Edge> edges = snapshot.edges();
@@ -1203,10 +958,8 @@ public final class RailTrackStore {
             }
             segment.setFromNode(fromId);
             segment.setToNode(toId);
-            // The connection's own samples, not the block-rounded vertices: Create rasterises its
-            // beziers in world coordinates, and rounding them first is what put a half-block wobble on
-            // every curved track. The ends are already the two nodes' own positions, so two edges that
-            // meet at a node hand the display curve the same point.
+            // Create's own samples, not block-rounded vertices: rounding put a half-block wobble on curves;
+            // the ends are already the two node positions.
             segment.setCurve(RoadCurve.precise(display));
             build.network.putSegment(segment);
         }
@@ -1226,12 +979,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * Builds the layer from the block scan: track blocks joined along their own axes, then runs of
-     * track between two junctions compressed into one polyline each.
-     *
-     * <p>Used when Create's graph is not there to read -- no Create, a renamed class, or a graph the
-     * client has not been sent. Only one of the two sources is ever the layer, so a track can never
-     * be counted twice.
+     * Builds the layer from the block scan: blocks joined along their axes, runs compressed.
+     * Used when Create's graph is missing; only one source is ever the layer.
      */
     private static void buildFromBlockScan() {
         coarseDirty = false;
@@ -1273,7 +1022,7 @@ public final class RailTrackStore {
         reportSegmentsIfChanged();
     }
 
-    /** Writes the segment dump again only when the layer's size changed, so it cannot become noise. */
+    /** Writes the segment dump again only when the layer's size changed. */
     private static void reportSegmentsIfChanged() {
         if (coarse.segmentCount() != dumpedSegments) {
             dumpedSegments = coarse.segmentCount();
@@ -1283,19 +1032,15 @@ public final class RailTrackStore {
     }
 
     /**
-     * Rail diagnostic: every station's position and name, written when that set changes.
-     *
-     * <p>Wanted because a station's name was reported as landing slightly beside the station rather
-     * than on it. This says which point the name is being drawn from, so the offset can be compared
-     * with the station block that is actually in the world instead of being guessed at -- and it
-     * pairs with the block scan, which finds stations by their blocks and can be asked for the same
-     * thing from the other source.
+     * Builds the layer from Create's own graph, one segment per Create edge.
+     * Nothing is joined: Create draws each edge on its own, so no edge's geometry is assumed to start
+     * where the previous ended -- every phantom-geometry bug came from stitching. Segments meet because
+     * they share node coordinates; RoadChains still gathers a run of edges for naming.
      */
     private static void reportStationsIfChanged() {
         if (!RoadConfig.debugLog()) {
-            // Out of the whole diagnostic, not only out of the writing: this one builds a line of every
-            // station's position and name just to compare it with the last one, and a comparison nobody
-            // is going to read is not worth a walk of every station every time the layer is rebuilt.
+            // Out of the whole diagnostic, not only the writing: building a line per station just to compare
+            // it is not worth it if nobody reads it.
             return;
         }
         StringBuilder line = new StringBuilder();
@@ -1313,15 +1058,8 @@ public final class RailTrackStore {
 
     /**
      * Joins every track block to the blocks at the ends of its own axes.
-     *
-     * <p>A join needs both blocks to reach along the shared axis: a track's ends are at particular
-     * points of its block -- a corner for a diagonal, an edge for a straight -- so two tracks in
-     * touching blocks only meet where each of them actually runs to that point. Two parallel tracks
-     * laid against each other stay two tracks, and a diagonal piece beside a straight one does not
-     * merge into it.
-     *
-     * <p>Edges are stored both ways round, so a block whose shape this table does not know still ends
-     * up in the graph through its neighbours' claims and does not break the line it sits in.
+     * A join needs both blocks to reach along the shared axis, so parallel tracks stay two. Edges are
+     * stored both ways, so an unknown shape still joins through its neighbours.
      */
     private static Graph buildBlockGraph(long[] positions, byte[] shapeIds, Map<Long, Integer> index) {
         List<int[]> directed = new ArrayList<>();
@@ -1363,8 +1101,8 @@ public final class RailTrackStore {
         int[] degree = new int[positions.length];
         int[] vertexStart = new int[edges];
         int[] vertexCount = new int[edges];
-        // One block long, so every edge is its own two node positions: the same graph shape the
-        // compression walks for Create's graph, only without the geometry in between.
+        // One block long, so every edge is its own two node positions -- the graph shape the compression
+        // walks, without geometry.
         double[] vertexX = new double[edges * 2];
         double[] vertexZ = new double[edges * 2];
         for (int edge = 0; edge < edges; edge++) {
@@ -1405,21 +1143,10 @@ public final class RailTrackStore {
     }
 
     /**
-     * Compresses a graph into one polyline per run of track between two junctions.
-     *
-     * <h2>Why the walk here is not {@link bili.dongsz.howtogo.road.RoadChains}</h2>
-     * {@code RoadChains} is the right tool for the saved network, which is a few hundred segments
-     * and is walked a handful of times. It cannot be the tool for this step: it finds the segment
-     * continuing through a node by scanning every segment of the network, which over a graph of tens
-     * of thousands of edges is quadratic, and this runs on a client tick. So the compression is done
-     * here, in one pass over an adjacency table built once, and the result is a plain
-     * {@link RoadNetwork}: from that point on -- the router's degree counts, its graph, the map --
-     * everything downstream is the same code that already handles a hand-drawn rail, whichever source
-     * the geometry came from.
-     *
-     * <p>Nodes are only created at junctions and ends, and shared between every run that meets at
-     * them, so a fork is one node rather than three stacked on one point. Ends and junctions are
-     * walked first, so every run comes out whole; walking from the middle of one would split it in two.
+     * Compresses a graph into one polyline per run between junctions.
+     * Not RoadChains: it scans every segment per node, which is quadratic over tens of thousands of
+     * edges and runs on a client tick. One pass over an adjacency table gives a plain RoadNetwork, so
+     * everything downstream handles it like a hand-drawn rail. Ends are walked first, so runs are whole.
      */
     private static RoadNetwork compress(Graph graph) {
         int count = graph.nodeX().length;
@@ -1437,8 +1164,7 @@ public final class RailTrackStore {
                 emit(build, graph, start, edgePath, walk(start, edge, graph, used, edgePath));
             }
         }
-        // Whatever is left is track with no end in it: a closed loop. It is walked from wherever the
-        // reading happened to meet it and closes back on its first node.
+        // Whatever is left is a closed loop, walked from wherever the reading met it.
         for (int start = 0; start < count; start++) {
             for (int edge = graph.head()[start]; edge >= 0; edge = graph.next()[edge]) {
                 if (used[edge]) {
@@ -1451,18 +1177,16 @@ public final class RailTrackStore {
     }
 
     /**
-     * Follows the track from one node along one edge until the run ends, filling {@code edgePath}.
-     *
-     * <p>The end is a node that is not a pass-through -- fewer than two connections or more than two
-     * of them -- or the node the walk started from, which is how a loop closes.
+     * Follows the track from one node along one edge until the run ends, filling edgePath.
+     * The end is a node that is not a pass-through, or the start node (a loop).
      */
     private static int walk(int start, int firstEdge, Graph graph, boolean[] used, int[] edgePath) {
         int length = 0;
         int edge = firstEdge;
         while (edge >= 0 && length < edgePath.length) {
             used[edge] = true;
-            // Edges are appended in pairs, so the edge back along this one is its neighbour in the
-            // array. Marking it too is what stops the walk from turning round and coming back.
+            // Edges are appended in pairs, so the edge back is its neighbour in the array; marking it stops
+            // the walk turning round.
             used[edge ^ 1] = true;
             edgePath[length++] = edge;
             int current = graph.other()[edge];
@@ -1479,14 +1203,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * One polyline per run of track, between the nodes at its two ends.
-     *
-     * <p>Each edge of the run contributes its geometry less its first vertex, which is the point the
-     * previous edge already laid down. Coordinates are rounded to whole blocks on the way in: the
-     * layer is a plain {@link RoadNetwork} whose vertices are block coordinates, so a curve sampled
-     * from Create keeps its shape but not its half-block precision. That is invisible at map scale
-     * and well inside the six blocks of tolerance a rail is judged "on route" by, and it is what
-     * keeps the editor, the storage format and the renderer untouched.
+     * One polyline per run, between the nodes at its ends. Each edge contributes its geometry less
+     * its first vertex; coordinates are rounded to whole blocks, invisible at map scale.
      */
     private static void emit(Build build, Graph graph, int startNode, int[] edgePath, int length) {
         if (length == 0) {
@@ -1499,7 +1217,7 @@ public final class RailTrackStore {
         }
 
         int fromId = nodeId(build, graph, startNode);
-        // A closed loop ends where it started, so its single node is both ends of the segment.
+        // A closed loop ends where it started, so one node is both ends.
         int toId = lastNode == startNode ? fromId : nodeId(build, graph, lastNode);
 
         RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
@@ -1518,8 +1236,8 @@ public final class RailTrackStore {
         }
         segment.setFromNode(fromId);
         segment.setToNode(toId);
-        // Create's own sampling, for the same reason as the graph source above: this scan exists for
-        // the case where the graph cannot be read, not to lose the precision the graph would have kept.
+        // Create's own sampling, for the same reason as the graph source: the scan exists for when the
+        // graph cannot be read, not to lose precision.
         segment.setCurve(RoadCurve.precise(display));
         build.network.putSegment(segment);
     }
@@ -1557,10 +1275,8 @@ public final class RailTrackStore {
     }
 
     /**
-     * How many stations the layer is offering, whichever source built it.
-     *
-     * <p>Counted rather than listed: the diagnostic asks for this every second, and the picker is the
-     * only thing that needs the list.
+     * How many stations the layer offers; counted rather than listed because it is asked every
+     * second.
      */
     private static int stationCount() {
         return source == Source.CREATE_GRAPH ? layerStations.size() : stationBlockCount();

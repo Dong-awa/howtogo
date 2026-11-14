@@ -78,11 +78,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-// The two custom payloads the MTR sync is carried in -- the 1.21 arm.
-//
-// See the other arm for why the body is one byte[] and why this file is written twice. The only
-// difference here is the ResourceLocation factory: 1.21 made the constructor private and
-// fromNamespaceAndPath the only way in.
+// The two custom payloads MTR sync travels in -- this arm is 1.21. The body is one byte[]; only the ResourceLocation factory differs, since the 1.21 constructor is private and fromNamespaceAndPath is the only way in.
 public final class MtrPayload {
 
     private static final String MOD_ID = "howtogo";
@@ -90,7 +86,7 @@ public final class MtrPayload {
     private MtrPayload() {
     }
 
-    /** One part of one MTR reading, as framed by {@link MtrWire}. */
+    /** One part of one MTR reading, as framed by MtrWire. */
     public record SnapshotPart(byte[] data) implements CustomPacketPayload {
 
         public static final CustomPacketPayload.Type<SnapshotPart> TYPE = new CustomPacketPayload.Type<>(

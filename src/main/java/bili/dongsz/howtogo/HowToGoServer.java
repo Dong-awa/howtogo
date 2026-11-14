@@ -11,32 +11,15 @@ import net.neoforged.fml.common.Mod;
 //?}
 
 /**
- * The entry point that runs on a server, which exists for the MTR sync.
- *
- * <h2>Why a client-side mod has one</h2>
- * Nothing this mod draws, plans or measures happens on a server: the roads are the client's own data,
- * the routing runs on the client, and every pixel is drawn by Xaero there. What a server <em>can</em>
- * do is hold MTR's whole railway in memory, and a client that is neither hosting the world nor running
- * MTR Map Overlay cannot see it. This class is where that becomes a feature: on a server with both MTR
- * and this mod, the railway is read here and sent to the clients that ask for it -- see
- * {@code MtrServerSync}. On the client side the same reading is preferred over the overlay's snapshot,
- * and the overlay is fallen back to only when no server of ours answered.
- *
- * <p>What is registered here is exactly that: the network channel and the server tick that checks MTR.
- * Nothing else runs on a server, and with MTR absent nothing happens at all.
- *
- * <h2>How the two loaders express "exactly one of these runs"</h2>
- * NeoForge gives the author two {@code @Mod} classes, one {@code dist = CLIENT} and one
- * {@code dist = DEDICATED_SERVER}, and constructs exactly one of them. Fabric's equivalent is the
- * entrypoint list in {@code fabric.mod.json}: this class is the {@code main} entrypoint, which runs on
- * a dedicated server <em>and</em> on a physical client, and {@link HowToGo} is the {@code client}
- * entrypoint, which Fabric skips on a dedicated server. Registering a payload type twice would be an
- * error, so on Fabric each entrypoint registers only its own half -- see {@code MtrSync}.
+ * Server entry point; exists only for MTR sync.
+ * Nothing is drawn or planned server-side. A server that has MTR can read the whole railway
+ * and send it to asking clients (see MtrServerSync), and the client prefers that over MTR
+ * Map Overlay's snapshot. Registers only the network channel and the MTR-check tick.
+ * NeoForge instantiates one @Mod class per dist; Fabric's main entrypoint runs on both sides
+ * while HowToGo is the client one, so each registers only its own half -- see MtrSync.
  */
-// The class is written twice rather than conditioned inside, because the two loaders disagree about
-// what an entry point *is*: NeoForge constructs a class and hands it the mod bus, Fabric calls a
-// no-argument method on a class it instantiates itself. The javadoc above stays outside the condition:
-// a `/** ... */` inside the `/* ... */` a condition is written with would close that comment early.
+// The class is written twice instead of conditioned inside: NeoForge constructs a class with
+// the mod bus, Fabric calls a no-arg method; this javadoc stays outside the /* */ condition.
 //? if fabric {
 /*public final class HowToGoServer implements ModInitializer {
 
@@ -54,10 +37,8 @@ import net.neoforged.fml.common.Mod;
 public final class HowToGoServer {
 
     public HowToGoServer(IEventBus modEventBus, ModContainer modContainer) {
-        // The payload types and the server tick are attached to the buses by annotation in MtrNet,
-        // which FML scans for on its own; nothing has to be subscribed from here. Constructing this
-        // class is what makes a dedicated server load the mod at all -- and what makes the log say so
-        // rather than leaving an installed server looking like it did nothing.
+        // Payload types and the server tick are attached by annotation in MtrNet; constructing this
+        // class is what makes a dedicated server load the mod at all.
         MtrSync.onServerInit();
         HowToGo.LOGGER.info("[HowToGo] constructed (dedicated server: MTR sync only)");
     }

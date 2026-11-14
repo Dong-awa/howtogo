@@ -7,96 +7,28 @@ import java.util.Arrays;
 
 /**
  * The world-to-minimap transform for one frame, measured from the frame itself.
- *
- * <h2>Why the transform has to be measured</h2>
- * Xaero's minimap element API hands a renderer one element at a time and no view parameters: no
- * zoom, no rotation, no minimap origin. That is fine for a marker, which is a fixed-size dot at the
- * element's own position, and useless for a polyline, which has to project points that are not its
- * anchor. The extension point does, however, do two things a renderer can observe: it projects each
- * element before calling {@code renderElement}, so the current pose's translation is that element's
- * on-screen position; and it hands the renderer the very element list it walks, in order. So this
- * class steals the transform out of the pipeline itself: the provider emits a handful of probe
- * elements at known world offsets before any real layer, and each probe's pose translation is one
- * sample of the projection. Three offsets along each world axis give the two basis images; four
- * offsets far outside the map are clamped to the frame by Xaero and give its rectangle.
- *
- * <h2>The model</h2>
- * For an element at world {@code w}, Xaero pushes a translation before calling the renderer, so the
- * pose matrix is {@code F_w = P · T(t_w)}, where {@code P} is the same parent transform for every
- * element of the frame and {@code t_w} is the element's projected position. The translation
- * {@code (F_w.m30, F_w.m31)} is therefore {@code w}'s position in GUI pixels, and the linear part of
- * {@code F_w} -- {@code m00, m01, m10, m11} -- is {@code P}.
- *
- * <p>The screen position of a world point is affine in its offsets from the frame anchor:
- * {@code screen(w) = centre + K · (w - anchor)}, where {@code K} is 2x2. {@code K} is sampled from
- * the probes: {@code column 0 = (screen(anchor + d·X) - centre) / d} and
- * {@code column 1 = (screen(anchor + d·Z) - centre) / d}. The largest probe distance whose X and Z
- * pair both arrived un-clamped is used, because a probe that Xaero had to move to the edge of the
- * map is not where the projection would have put it; at the highest zoom settings even 64 blocks is
- * off the map, so 16 and 4 are the fallbacks. A frame with no usable pair draws nothing at all: a
- * frame skipped is invisible, a frame drawn with a guessed transform paints the whole HUD.
- *
- * <p>Drawing happens in an element's own local coordinates, i.e. in the space {@code P} applies to.
- * The world-to-local matrix is {@code L = P⁻¹ · K}, and a marker is a disc of
- * {@code screenPixels / s} local units, where {@code s = sqrt(|det P|)} is the pose's uniform
- * local-to-screen scale. The clip rectangle is Xaero's own: the four far-away probes are clamped to
- * the border or rim of the map, so their posed positions are points on that boundary, and the
- * rectangle around them is the minimap in GUI pixels. It is converted back to local units with
- * {@code (edge - centre) / s}.
- *
- * <h2>The assumption this rests on</h2>
- * {@code P} is treated as a uniform scale, which is what Xaero's minimap pose is -- measured in
- * {@code MinimapRenderer}: it translates to the minimap's corner and scales by
- * {@code 1 / minimapScale}, and the rotation lives in the per-element {@code translatePosition},
- * not in the pose. {@code s} is therefore taken as {@code sqrt(|det P|)}, and the clip rectangle is
- * converted with a division rather than a matrix inverse. If a future Xaero build sheared that
- * pose, the dots would still be right (their scale is scalar) and the clip would be slightly off.
- *
- * <p>One thing the rectangle is not is a circle. Xaero clamps the edge probes to the border of a
- * square minimap or to the rim of a circular one, and the rectangle is the bounding box of the four
- * points either way. For a square map that box is the map exactly, whatever the rotation, because
- * the probes are two antipodal pairs; for a circular map it is the box around the rim, so geometry
- * in the box's corners lies outside the circle and a little of it can be painted over the frame.
- * The emitters clip against rectangles and nothing else, so a circular map is a case to improve if
- * it turns out to show.
- *
- * <h2>Coordinates, once more, exactly</h2>
- * The values read from the pose are GUI pixels; the values handed to {@code HudDraw} are the
- * pose's local units. The conversion between them is the one scale factor {@code s}, which is why
- * every screen-pixel size in the renderer is divided by {@link #localPerScreenPx()} before it is
- * handed to an emitter. Getting that division wrong is exactly what made the previous version's
- * dots sub-pixel: it compensated the minimap scale from an argument whose relationship to the pose
- * was assumed rather than measured.
+ * Xaero's element API gives a renderer no zoom, rotation or map origin, which is useless for projecting a polyline. The pipeline does project each element before renderElement and hands the renderer its element list, so this class emits probe elements at known world offsets and reads each probe's pose translation. Three distances along +X and +Z give the basis images; four far-off probes are clamped to the map edge and give its screen rectangle.
+ * Model: the pose is P*T(t_w), so the translation is the element's GUI-pixel position and the linear part is the same parent pose P for the frame. K maps world offsets to screen, with columns sampled from the probes; the largest un-clamped pair wins, because a clamped probe reports the map edge rather than the projection. No usable pair means the frame draws nothing -- a skipped frame is invisible, a guessed one paints the whole HUD.
+ * Drawing happens in element-local coordinates: L = P^-1 * K, marker radii are screenPixels / s local units with s = sqrt(|det P|), and the clip rectangle is the edge probes' bounding box converted by (edge - centre) / s.
+ * Assumes P is a uniform scale, which Xaero's minimap pose is (it translates to the corner and scales by 1/minimapScale; rotation lives in each element's translatePosition). A sheared pose would leave dot sizes right and the clip slightly off. A circular map yields its bounding box, so corner geometry can paint over the rim.
  */
 final class XaeroMinimapProjection {
 
     /**
-     * The probe distances, largest first.
-     *
-     * <p>Measured in blocks along +X and +Z from the frame anchor. The largest usable pair wins:
-     * the screen offset of a probe is rounded to whole pose units by Xaero before the renderer sees
-     * it, so a 4-block probe carries up to a 12% error in its basis vector at a one-pixel-per-block
-     * zoom, while a 64-block probe carries under 1%. The fallbacks exist for the cases where the
-     * larger probe is off the minimap, which Xaero reports by clamping it.
+     * Probe distances, largest first, along +X and +Z in blocks.
+     * The largest usable pair wins: screen offsets are rounded to whole pose units, so a 4-block probe can carry about 12% error at one pixel per block while 64 blocks is under 1%. Smaller distances are fallbacks for probes Xaero clamps off the map.
      */
     static final double[] PROBE_DISTANCES = {64.0, 16.0, 4.0};
 
     /**
-     * The offset of the four edge probes, in blocks.
-     *
-     * <p>Far enough that no zoom setting can fit it: Xaero clamps a position that falls outside the
-     * minimap to the border, and that clamped position is what tells this class where the map's edge
-     * is. There is no other way to learn the minimap's screen rectangle from inside the element API.
+     * Offset of the four edge probes, in blocks.
+     * Far enough that no zoom setting fits it; Xaero clamps it to the minimap border, which is the only way to learn the map's screen rectangle from the element API.
      */
     static final double EDGE_PROBE_DISTANCE = 100_000.0;
 
     private static final int PROBE_COUNT = PROBE_DISTANCES.length;
 
-    // ---------------------------------------------------------------- frame input
-    //
-    // Everything below is rebuilt by beginFrame and then filled in by the renderer as the probe
-    // elements of that frame arrive. Nothing here is read across frames: a stale projection is
-    // worse than none.
+    // Everything below is rebuilt by beginFrame and filled in as that frame's probe elements
 
     private static double anchorX;
     private static double anchorZ;
@@ -107,19 +39,19 @@ final class XaeroMinimapProjection {
     private static double centreScreenY;
     private static boolean haveCentre;
 
-    /** The parent pose's 2x2 linear part; the same for every element of the frame. */
+    /** The parent pose's 2x2 linear part, the same for every element of the frame. */
     private static boolean haveLinear;
     private static double pl00;
     private static double pl01;
     private static double pl10;
     private static double pl11;
 
-    /** Screen positions of the +X probes, per {@link #PROBE_DISTANCES} index. */
+    /** Screen positions of the +X probes, per PROBE_DISTANCES index. */
     private static final double[] xProbeScreenX = new double[PROBE_COUNT];
     private static final double[] xProbeScreenY = new double[PROBE_COUNT];
     private static final boolean[] xProbeUsable = new boolean[PROBE_COUNT];
 
-    /** Screen positions of the +Z probes, per {@link #PROBE_DISTANCES} index. */
+    /** Screen positions of the +Z probes, per PROBE_DISTANCES index. */
     private static final double[] zProbeScreenX = new double[PROBE_COUNT];
     private static final double[] zProbeScreenY = new double[PROBE_COUNT];
     private static final boolean[] zProbeUsable = new boolean[PROBE_COUNT];
@@ -131,22 +63,21 @@ final class XaeroMinimapProjection {
     private static double edgeMaxScreenX = Double.NEGATIVE_INFINITY;
     private static double edgeMaxScreenY = Double.NEGATIVE_INFINITY;
 
-    // ---------------------------------------------------------------- frame output
 
-    /** Whether the inputs above have been turned into a usable transform yet this frame. */
+    /** Whether the inputs have been turned into a usable transform yet this frame. */
     private static boolean calculated;
     private static boolean prepared;
 
     /** Which probe pair produced the transform; kept for the diagnostic line. */
     private static int chosenProbe = -1;
 
-    /** {@code sqrt(|det P|)}: the pose's uniform local-to-screen scale. */
+    /** sqrt(|det P|): the pose's uniform local-to-screen scale. */
     private static double poseScale;
 
     /** The pose scale's reciprocal: screen pixels to local units. */
     private static double localPerScreen;
 
-    /** {@code sqrt(|det K|)}: GUI pixels per world block, rotation and zoom included. */
+    /** sqrt(|det K|): GUI pixels per world block, rotation and zoom included. */
     private static double screenPerBlock;
 
     /** World-to-local affine, as the six numbers HudDraw's emitters take. */
@@ -157,7 +88,7 @@ final class XaeroMinimapProjection {
     private static double m11;
     private static double m12;
 
-    /** The minimap rectangle, in GUI pixels, taken from the clamped edge probes. */
+    /** The minimap rectangle in GUI pixels, from the clamped edge probes. */
     private static double screenClipMinX;
     private static double screenClipMinY;
     private static double screenClipMaxX;
@@ -169,17 +100,11 @@ final class XaeroMinimapProjection {
     private static double localClipMaxX;
     private static double localClipMaxY;
 
-    // ---------------------------------------------------------------- diagnostics
-    //
-    // These survive the per-frame reset: the point of them is to say the overlay worked once per
-    // session, and to say it again only when something structurally changed.
+    // These survive the per-frame reset: the point is to report once per session and again only
 
     /**
-     * How far an edge of the map rectangle has to move, in GUI pixels, to be worth another
-     * diagnostic line.
-     *
-     * <p>A circular minimap that rotates moves its rim by a pixel or two every frame as the
-     * rotation angle changes; four pixels is a change of shape or size rather than that jitter.
+     * How far an edge of the map rectangle must move, in GUI pixels, to be worth another diagnostic line.
+     * A rotating circular map's rim moves a pixel or two every frame; four pixels is a change of shape or size rather than that jitter.
      */
     private static final int MATERIAL_RECT_CHANGE_PX = 4;
 
@@ -196,13 +121,8 @@ final class XaeroMinimapProjection {
     }
 
     /**
-     * Starts a frame: remembers the anchor every world coordinate is relative to and drops the
-     * previous frame's measurements.
-     *
-     * <p>The anchor is the player's position at the start of the frame, in blocks. It is not used
-     * to project anything by itself -- the probe elements do that -- but every layer element is
-     * anchored here, so the local coordinate system of the frame is "relative to this point", and
-     * the same value has to be subtracted when the world-to-local matrix is built.
+     * Starts a frame: remembers the player position every world coordinate is relative to and drops the previous frame's measurements.
+     * The anchor does not project anything by itself -- the probes do that -- but every layer element is anchored to it, so the same value has to be subtracted when the world-to-local matrix is built.
      */
     static void beginFrame(double playerX, double playerZ) {
         anchorX = playerX;
@@ -225,10 +145,8 @@ final class XaeroMinimapProjection {
     }
 
     /**
-     * Records the CAL_CENTRE element: the parent pose's linear part and the anchor's screen
-     * position.
-     *
-     * @param pose the pose matrix at the moment the centre element is rendered
+     * Records the CAL_CENTRE element: the parent pose's linear part and the anchor's screen position.
+     * @param pose the pose matrix when the centre element is rendered
      * @param screenX the element's on-screen X, in GUI pixels
      * @param screenY the element's on-screen Y, in GUI pixels
      */
@@ -245,16 +163,12 @@ final class XaeroMinimapProjection {
 
     /**
      * Records one axis probe.
-     *
-     * <p>A probe Xaero moved to the edge of the map is not evidence about the projection -- it is
-     * evidence about the edge -- so it is recorded as unusable and the next smaller distance is
-     * tried. That is the whole reason three distances exist.
-     *
-     * @param xAxis whether the probe sits at +d along world X (true) or world Z (false)
-     * @param distance the probe distance in blocks
-     * @param screenX the element's on-screen X after Xaero's centring, in GUI pixels
-     * @param screenY the element's on-screen Y after Xaero's centring, in GUI pixels
-     * @param clamped whether Xaero clamped the element to the minimap's edge
+     * A probe Xaero clamped to the map edge is evidence about the edge, not about the projection, so it is recorded unusable and the next smaller distance is tried.
+     * @param xAxis true for +d along world X, false for world Z
+     * @param distance probe distance in blocks
+     * @param screenX on-screen X after Xaero's centring, in GUI pixels
+     * @param screenY on-screen Y after Xaero's centring, in GUI pixels
+     * @param clamped whether Xaero clamped the element to the minimap edge
      */
     static void readAxisProbe(boolean xAxis, double distance, double screenX, double screenY,
                               boolean clamped) {
@@ -280,10 +194,7 @@ final class XaeroMinimapProjection {
 
     /**
      * Records one clamped edge probe.
-     *
-     * <p>Only a clamped probe is useful here: its pose translation is the point Xaero moved it to,
-     * i.e. a point on the minimap's border. An un-clamped edge probe cannot happen with a
-     * {@link #EDGE_PROBE_DISTANCE}-block offset, and is ignored rather than trusted if it does.
+     * Only a clamped probe is useful: its translation is the point Xaero moved it to, a point on the map border. An un-clamped one cannot happen with EDGE_PROBE_DISTANCE and is ignored if it does.
      */
     static void readEdge(double screenX, double screenY, boolean clamped) {
         if (!clamped) {
@@ -298,10 +209,7 @@ final class XaeroMinimapProjection {
 
     /**
      * Whether this frame's transform is usable, computing it on first ask.
-     *
-     * <p>The probes are emitted before the layers, so by the time the first drawing element asks,
-     * everything this needs has arrived. The answer is cached for the rest of the frame: the
-     * transform is a property of the frame, not of the element asking.
+     * Probes are emitted before the layers, so everything is in by the time the first element asks; the answer is cached for the rest of the frame.
      */
     static boolean ready() {
         if (!calculated) {
@@ -367,12 +275,7 @@ final class XaeroMinimapProjection {
 
     /**
      * Computes the transform from the readings, once per frame.
-     *
-     * <p>Nothing here throws or guesses -- every check inside {@link #attempt} that fails leaves
-     * {@link #prepared} false, and a false answer means the renderer draws nothing for this frame.
-     * Because drawing nothing is invisible, the reason is written out once per session through the
-     * diagnostic channel: without a line, "the projection was never ready" and "the overlay was
-     * never registered" look the same from inside the game, and they are completely different bugs.
+     * Nothing throws or guesses: a failed check leaves prepared false and the renderer draws nothing. The reason is written once per session through the diagnostic channel, because otherwise "projection never ready" and "overlay never registered" look identical in game and are completely different bugs.
      */
     private static void calculate() {
         calculated = true;
@@ -393,7 +296,7 @@ final class XaeroMinimapProjection {
                 haveCentre, haveLinear, edgeCount, pairs);
     }
 
-    /** The arithmetic of {@link #calculate}; every rejected reading returns unprepared. */
+    /** The arithmetic of calculate; every rejected reading returns unprepared. */
     private static void attempt() {
         if (!haveAnchor || !haveCentre || !haveLinear || edgeCount < 4) {
             return;
@@ -428,8 +331,7 @@ final class XaeroMinimapProjection {
             return;
         }
 
-        // L = P^-1 · K; the inverse is written out rather than normalised to a scale because the
-        // design says P is a uniform scale but the algebra does not have to believe it.
+        // L = P^-1 * K; the inverse is written out rather than assuming P is uniform
         double inv00 = pl11 / detP;
         double inv01 = -pl01 / detP;
         double inv10 = -pl10 / detP;
@@ -453,7 +355,7 @@ final class XaeroMinimapProjection {
         screenPerBlock = pxPerBlock;
         chosenProbe = index;
 
-        // The emitters apply m00*x + m01*z + m02, with the world position measured from the anchor.
+        // The emitters apply m00*x + m01*z + m02 with the world position measured from the anchor.
         m00 = a;
         m01 = b;
         m02 = -(a * anchorX + b * anchorZ);
@@ -478,17 +380,8 @@ final class XaeroMinimapProjection {
     }
 
     /**
-     * Says, once, that the overlay found the map -- and, for whoever is reading the log while
-     * iterating on this, what transform it found.
-     *
-     * <p>The INFO line exists because a screenshot is not always at hand: one line per session that
-     * says how many pixels a block is and how big the map rectangle came out is enough to tell a
-     * working overlay from a projection that collapsed. The repeated line goes through
-     * {@link HowToGo#diagnostic} and is therefore only written when diagnostics are asked for; it
-     * fires again only when the pixel scale changes enough to pick a different probe distance or
-     * when the edge rectangle moves by a visible amount -- see {@link #MATERIAL_RECT_CHANGE_PX}. A
-     * rotating circular map's rim moves a pixel this way and that every frame, and a diagnostic
-     * that rewrote itself every frame would be noise rather than a record.
+     * Reports once that the overlay found the map, and what transform it found.
+     * The INFO line replaces a screenshot: pixels per block and the map rectangle tell a working overlay from a collapsed projection. The repeated line goes through HowToGo diagnostic and fires only when the pixel scale picks a different probe distance or the edge rectangle moves visibly -- see MATERIAL_RECT_CHANGE_PX; a rotating rim would otherwise rewrite it every frame.
      */
     private static void report() {
         int clipMinX = (int) Math.round(screenClipMinX);

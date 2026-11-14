@@ -26,53 +26,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongPredicate;
 
 /**
- * What {@link MtrClientData} read, said in this mod's own terms.
- *
- * <h2>Three things come out of it</h2>
- * <ul>
- *   <li><b>stops</b> -- one per station of the network, for the destination and stop pickers to offer
- *       beside the player's own places and the stations Create reports. Read-only by construction,
- *       exactly as a Create station is: {@link LineStop#ofStation} carries no node id, so there is
- *       nothing here the player could rename or retype by accident. A station of MTR's is not
- *       necessarily one entry: MTR makes a station of every area the player draws, so the platforms of
- *       one station commonly arrive as several stations, and they are offered as the one place they are
- *       -- see {@link #places};</li>
- *   <li><b>lines</b> -- one per MTR route whose type this mod has a kind for, with the stops the client
- *       currently knows about. They are handed to the planner and never to the line editor, which is
- *       what makes them read-only: the editor works on the player's own list and this is a different
- *       list, so no accident in the editor can write to a line MTR owns;</li>
- *   <li><b>the track they run along</b> -- for each line whose marks are switched on, the stretch
- *       between its own neighbouring stops, stamped as read-only rail or water roads of this mod. Not
- *       MTR's rails as a whole: MTR's data does not say which rails belong to which line, so each line's
- *       ride is planned over them and the path it takes is what is marked. A line whose marks are off
- *       contributes nothing, and its stops are then matched to the roads the player drew.</li>
- * </ul>
- *
- * <h2>Why the stops are where the platforms are</h2>
- * A station's centre is the centre of its whole area, which for a large station is nowhere near the
- * track; the platforms are where vehicles stop. A line's stop is therefore placed at the middle of the
- * station's platforms, and a station with no platform in range falls back to the centre of its area --
- * see {@link MtrClientData.Snapshot#stopPosition}. A place made of several of MTR's stations stands at
- * the middle of all their platforms, which is the same rule over a wider set.
- *
- * <h2>Why a line may be short</h2>
- * MTR sends a client what is near it, so the stops of a long line arrive a window at a time: what is
- * offered here is the part of the line around the player, which is also the part they could actually
- * board -- unless the whole railway can be read instead, which is what {@link MtrWholeMap} does whenever
- * the player is the one hosting the world, and what {@link MtrMapOverlay} does on any server whose
- * server half has fetched it. A line is not padded out to look complete, a stop whose station the
- * client has not been sent is left out rather than placed wrongly and counted, and a line left with
- * fewer than two placed stops is not offered at all -- a line with no ride in it would only ever
- * answer "no journey".
- *
- * <h2>Where the conversion runs, and what that costs the caller</h2>
- * On a worker of its own, not on the thread that asks -- see {@link #WORKER}. The accessors below
- * therefore offer the newest reading that has finished being worked out rather than one built on the
- * spot, so a caller can be answered with the reading before the current one: that is the price of a
- * whole railway's worth of lines never being converted in the middle of a frame, and it is the same
- * bargain {@link MtrWholeMap} already makes for the network it reads. {@link #warmUp()} is what keeps
- * the window between the two small, by starting the work when the reading changes rather than when
- * something first wants it.
+ * What MtrClientData read, said in this mod's own terms.
+ * Stops: one per station of the network, offered read-only beside the player's own places and Create's stations (LineStop.ofStation carries no node id, so nothing is renameable by accident).
+ * Lines: one per MTR route this mod has a kind for, handed to the planner and never to the line editor, so no editor accident can write to a line MTR owns.
+ * Tracks: for each line whose marks are switched on, the stretch between its neighbouring stops, stamped as read-only rail or water roads. MTR's data does not say which rails belong to which line, so each line's ride is planned over them and the path taken is what is marked.
+ * Stops sit at the platforms, not the station centre: a large station's centre is nowhere near its track. A station may arrive as several MTR station areas; those are grouped into one place.
+ * MTR sends a client what is near it, so a line may be short: a stop whose station has not been sent is left out and counted, and a line with fewer than two placed stops is not offered at all.
+ * The conversion runs on its own worker (see WORKER), so the accessors offer the newest finished build; warmUp() starts it when the reading changes so the gap stays small.
  */
 public final class MtrTransit {
 
@@ -80,12 +40,7 @@ public final class MtrTransit {
     private static final String LINE_ID_PREFIX = "mtr:";
 
     /**
-     * Above the player's own ids and above {@link RailTrackStore}'s layer, and clear of both.
-     *
-     * <p>Both machine-read layers live above a billion so that a segment can be told from a drawn one
-     * by its id alone; this one starts higher so the two layers never share an id when a plan runs on a
-     * network that has both. One counter serves nodes and segments alike, so the two cannot collide
-     * with each other either.
+     * Above the player's own ids and above RailTrackStore's layer, so a segment can be told from a drawn one by its id alone and the two machine-read layers never share an id. One counter serves nodes and segments, so they cannot collide with each other either.
      */
     private static final int ID_BASE = 1_500_000_000;
 
@@ -101,12 +56,7 @@ public final class MtrTransit {
     private static volatile RoadNetwork rails = new RoadNetwork();
     private static volatile Map<Long, RoadNetwork> tracksById = Map.of();
     /**
-     * Bumped whenever a reading publishes new tracks.
-     *
-     * <p>Published beside {@link #tracksById} and after it, so a reader that sees the new version sees
-     * the tracks that go with it. A network read out of MTR is rebuilt whole rather than edited, so its
-     * own revision describes the build's own numbering and nothing a caller can compare across builds;
-     * this is the version a caller caching something worked out from the tracks has to key on.
+     * Bumped whenever a reading publishes new tracks. Published after tracksById, so a reader that sees the new version sees the tracks that go with it. A network read out of MTR is rebuilt whole, so its own revision says nothing a caller can compare across builds.
      */
     private static volatile int trackStamp;
     private static volatile int imported;
@@ -116,25 +66,9 @@ public final class MtrTransit {
     private static volatile int rememberedStations;
 
     /**
-     * The worker the reading is converted on, and the two signatures that say what it has been asked
-     * for and what it has finished.
-     *
-     * <h2>Why the conversion is not done where it is asked for</h2>
-     * It used to be, guarded by a signature so that it ran once per reading rather than once per call.
-     * That was enough while a reading was a couple of lines around the player: marking a line plans one
-     * ride per pair of its neighbouring stops, and a couple of lines is a couple of rides. A reading of
-     * a whole railway is hundreds of lines over a rail layer that a fetched snapshot can make thousands
-     * of segments long, and the first thing to ask for it in a session is a map being drawn -- so the
-     * work is done here instead, and what the map gets is the last build that finished.
-     *
-     * <p>That is a real and deliberate change in what these accessors mean: they offer the newest
-     * finished reading rather than a reading built on the spot, so for as long as a build is running
-     * they answer with the one before it. It is the same bargain {@link MtrWholeMap} already makes for
-     * the whole network, and the honest one: a map that draws a railway one reading out of date is a
-     * map, while a map that blocks the frame it is drawn in is a stutter.
-     *
-     * <p>Daemon, because nothing should be kept alive by a cache: the game asks the process to exit
-     * while this is idle, and the harness exits without ever having asked it for anything.
+     * The worker the reading is converted on, and the two signatures that say what it has been asked for and what it has finished.
+     * The conversion used to run where it was asked for, which was fine while a reading was a couple of lines around the player: marking a line plans one ride per pair of neighbouring stops. A whole railway is hundreds of lines over thousands of rails, so the work moved here and a caller gets the last build that finished -- a map one reading out of date is a map, a blocked frame is a stutter.
+     * Daemon, because nothing should be kept alive by a cache: the harness exits without ever having asked it for anything.
      */
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "HowToGo MTR import");
@@ -151,30 +85,14 @@ public final class MtrTransit {
     private static boolean failureReported;
 
     /**
-     * The reading the worker has been asked for.
-     *
-     * <p>Written by whoever asks and read by the worker as well: a request that arrives while a build is
-     * running is not queued but noticed, by the worker comparing what it took on against what has been
-     * asked for once it is done with the first. It doubles as the record of what has been attempted,
-     * which is why a build that threw is not tried again until the reading changes: a shape that has
-     * moved does not move back, and retrying it on every call would be a failing conversion several
-     * times a frame.
+     * The reading the worker has been asked for. A request arriving while a build runs is not queued but noticed: the worker compares what it took on against this once done. It doubles as the record of what was attempted, so a build that threw is not retried until the reading changes.
      */
     private static volatile String requested = "";
 
     /**
      * The reading the key below was last built from, and the part of the key that came from it.
-     *
-     * <p>{@link #refresh()} is asked on whichever thread wanted an answer -- often the render thread,
-     * several times a frame -- and building its signature is a walk of every line and every rail of a
-     * reading that a fetched snapshot makes large. The reading itself changes once every few seconds
-     * and is the same object until it does, so the walk is done once per reading and the answer kept.
-     *
-     * <p>One value rather than a reading and a string beside it, because it is written from whichever
-     * thread found the reading changed and read from all the others: a reader that matched a reading
-     * against a half-written pair could be handed the part that belongs to the reading before it, and
-     * a signature that is quietly the wrong one is a rebuild that never happens. A record is written in
-     * one go, so what a reader sees is always a reading and its own part.
+     * refresh() is asked from whichever thread wants an answer, often the render thread several times a frame, and building its signature walks every line and rail. The reading is the same object until it changes, so the walk happens once per reading.
+     * One value rather than a reading and a string beside it, because it is written from any thread and read from all the others: a record is written in one go, so a reader never sees a signature that belongs to the reading before.
      */
     private static volatile KeyedPart keyed;
 
@@ -183,20 +101,12 @@ public final class MtrTransit {
     }
 
     /**
-     * Everything MTR has said so far, kept because it only ever says what is near the player.
-     *
-     * <p>See {@link MtrKnown}: a reading on its own is a window, and a window that closes behind the
-     * player would take their railway with it -- the lines, the stations they can navigate to, and the
-     * track the marks are cut from.
+     * Everything MTR has said so far, kept because it only ever says what is near the player: a window that closed behind them would take their railway with it -- the lines, the stations they can navigate to, and the track the marks are cut from.
      */
     private static final MtrKnown known = new MtrKnown();
 
     /**
-     * The counter the marks' ids are drawn from, for the whole session.
-     *
-     * <p>Never reset, because what is kept of one reading is merged with what was kept of the readings
-     * before it: two builds both starting at {@link #ID_BASE} would number two different marks alike, and
-     * the merge would then drop one of them as a duplicate of the other.
+     * The counter the marks' ids are drawn from for the whole session. Never reset: what is kept of one reading is merged with what was kept before, and two builds starting at ID_BASE would number two marks alike and the merge would drop one.
      */
     private static final int[] markIds = {ID_BASE};
 
@@ -210,11 +120,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Every MTR station the client knows about, as a place a journey can end at.
-     *
-     * <p>The same stations as {@link #stops()}, with the height a stop has no room for: a stop is a
-     * point on a line and the router needs only where on the map it is, while a destination is offered
-     * in a list and marked on a map, and a mark has a height.
+     * Every MTR station the client knows about, as a place a journey can end at. The same stations as stops(), with the height a stop has no room for: a mark has a height, a point on a line does not.
      */
     public static List<Station> stations() {
         refresh();
@@ -222,9 +128,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Every MTR line whose type this mod has a kind for, with the stops currently in range.
-     *
-     * <p>Handed to the planner and never to the editor, which is what keeps MTR's lines MTR's.
+     * Every MTR line whose type this mod has a kind for, with the stops currently in range. Handed to the planner and never to the editor, which is what keeps MTR's lines MTR's.
      */
     public static List<TransitLine> lines() {
         refresh();
@@ -233,16 +137,7 @@ public final class MtrTransit {
 
     /**
      * The track each line runs along, as a read-only network of this mod's rail and water roads.
-     *
-     * <p>Only the lines whose marks are switched on are in it, which is what makes the switch beside a
-     * line in the editor real: a line whose marks are off contributes nothing here, so nothing of its
-     * track is drawn and nothing of it is offered to a ride. What each line contributes is the stretch
-     * between its own neighbouring stops rather than MTR's rails as a whole -- MTR's data does not say
-     * which rails belong to which line, so the ride is planned over them and its path is what is marked
-     * (see {@link MtrLineTracks}).
-     *
-     * <p>Empty when no line wants marks at all, which is what a player who has asked for MTR's track to
-     * be left alone gets: their own roads, and none of MTR's.
+     * Only lines whose marks are switched on are in it, which is what makes the switch beside a line in the editor real: nothing of a switched-off line is drawn or offered to a ride. Each line contributes the stretch between its own stops rather than MTR's rails as a whole (see MtrLineTracks). Empty when no line wants marks.
      */
     public static RoadNetwork railLayer() {
         refresh();
@@ -250,12 +145,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The stretch of MTR's track one imported line runs along, or null for a line of the player's own.
-     *
-     * <p>What the map draws the line along, whether or not the line's marks are switched on: the switch
-     * decides whether this track is added to the road network as rail or water roads -- which is what a
-     * ride is planned over, and what puts a road under the line -- and not whether the line is drawn.
-     * The line is always drawn, along the track it actually runs on.
+     * The stretch of MTR's track one imported line runs along, or null for a line of the player's own. The map draws the line along it whether or not the marks are on: the switch decides whether the track joins the road network as roads, not whether the line is drawn.
      */
     public static RoadNetwork trackOf(TransitLine line) {
         refresh();
@@ -264,11 +154,7 @@ public final class MtrTransit {
     }
 
     /**
-     * A version of the tracks the newest finished build published, for a caller caching a reading of
-     * them -- the line editor keys what it worked out about a line's connectivity on this.
-     *
-     * <p>Refreshed first, like {@link #trackOf}, so the version names the same build the tracks beside
-     * it do.
+     * A version of the tracks the newest finished build published, for a caller caching a reading of them; the line editor keys connectivity on it. refresh() first, so the version names the same build the tracks do.
      */
     public static int tracksVersion() {
         refresh();
@@ -294,18 +180,14 @@ public final class MtrTransit {
     }
 
     /**
-     * How many lines are remembered, including the ones MTR is no longer sending.
-     *
-     * <p>Counted by the worker when it published them, rather than by asking the memory here: the
-     * memory belongs to the worker, and a count read off it from the render thread while it was being
-     * written to would be a count of nothing in particular.
+     * How many lines are remembered, including ones MTR is no longer sending. Counted by the worker when it published them: the memory belongs to the worker, and a count read off it from the render thread would be a count of nothing in particular.
      */
     public static int rememberedLines() {
         refresh();
         return rememberedLines;
     }
 
-    /** How many stations are remembered, including the ones MTR is no longer sending. */
+    /** How many stations are remembered, including ones MTR is no longer sending. */
     public static int rememberedStations() {
         refresh();
         return rememberedStations;
@@ -313,15 +195,8 @@ public final class MtrTransit {
 
     /**
      * What a reading becomes, and what had to be left out of it.
-     *
-     * @param tracks the track each line runs along, by MTR's own line id: worked out for every line and
-     *               not only for the ones whose marks are switched on, because the map draws a line
-     *               along its track whatever the switch says -- the switch is about whether that track
-     *               is added to the road network as roads, not about whether the line is drawn. See
-     *               {@link MtrKnown}, which keeps them, and {@link MtrMarks}, which is the switch.
-     * @param stated the lines of {@code tracks} whose rails the reading named rather than leaving to be
-     *               worked out, which is what decides whether what was kept of them is replaced or
-     *               added to. See {@link MtrKnown#remember}.
+     * @param tracks the track each line runs along, by MTR's line id, worked out for every line and not only the switched-on ones -- the map draws a line along its track whatever the switch says; see MtrKnown and MtrMarks.
+     * @param stated the lines whose rails the reading named rather than left to be worked out, which decides whether what was kept of them is replaced or added to.
      */
     record Built(List<Station> stations, List<LineStop> stops, List<TransitLine> lines,
                  Map<Long, RoadNetwork> tracks, Set<Long> stated, int imported, int skipped,
@@ -337,17 +212,9 @@ public final class MtrTransit {
     }
 
     /**
-     * One MTR station, as a place a journey can end at.
-     *
-     * <p>Except where several of MTR's stations are one place, in which case this is that place and
-     * carries the lowest of their ids -- see {@link #places}.
-     *
-     * @param id   MTR's own id for the station, which is what makes two readings the same station -- a
-     *             name can be changed and a position can move as platforms are built
-     * @param name what MTR calls the station, or an empty string when it has no name
-     * @param x    where its vehicles stop: the middle of its platforms, or of its area
-     * @param y    the station's own height, for a marker to be drawn at
-     * @param z    where its vehicles stop
+     * One MTR station, as a place a journey can end at; when several MTR stations are one place, this is that place and carries the lowest of their ids.
+     * @param id MTR's own id, which is what makes two readings the same station -- a name can change and a position can move
+     * @param x where its vehicles stop: the middle of its platforms, or of its area
      */
     public record Station(long id, String name, int x, int y, int z) {
     }
@@ -359,30 +226,16 @@ public final class MtrTransit {
     }
 
     /**
-     * Turns a reading into this mod's stops, lines and the track they run along.
-     *
-     * <p>A function of the reading and the id counter, and of nothing else, so that everything about the
-     * conversion can be checked with no MTR installed -- which is the only way it can be checked at all
-     * here. The state above is a cache of this, not the other way round.
-     *
-     * <p>The switch beside a line is deliberately not an argument: every line's track is worked out, and
-     * which of those tracks are then added to the road network as roads is decided later, by
-     * {@link MtrKnown#marks} -- so that a line switched off is still drawn along the track it runs on,
-     * and switching it on adds the roads without needing a fresh reading.
-     *
-     * @param nextId the id counter the track is drawn from, handed in so that two readings of one session
-     *               cannot number two different pieces alike: what is kept of a reading is merged with
-     *               what was kept of the ones before it, and ids that repeat would make that merge lose
-     *               track
+     * Turns a reading into this mod's stops, lines and the track they run along. A function of the reading and the id counter and of nothing else, so the whole conversion can be checked with no MTR installed.
+     * The marks switch is deliberately not an argument: every line's track is worked out and MtrKnown decides which of them are added as roads, so a switched-off line is still drawn along its track and switching it on needs no fresh reading.
+     * @param nextId the counter the track ids are drawn from, handed in so that two readings of one session cannot number two pieces alike.
      */
     static Built build(MtrClientData.Snapshot reading, int[] nextId) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
         Counts counts = new Counts();
-        // The stations first, because the lines are placed on them: a line's stop is put where its
-        // station's vehicles stop, and after the grouping below that is the place rather than whichever
-        // of MTR's station areas the stop happened to name.
+        // The stations first, because the lines are placed on them: a stop goes where its station's vehicles stop, which after the grouping is the place rather than whichever MTR area the stop named.
         Places places = places(reading);
         List<TransitLine> builtLines = buildLines(reading, places, counts);
         BuiltTracks tracks = buildTracks(reading, builtLines, nextId);
@@ -391,54 +244,24 @@ public final class MtrTransit {
     }
 
     /**
-     * The track each line runs along, and which of those the reading stated rather than left to be
-     * worked out.
-     *
-     * <p>The two are told apart because what is kept of them is kept differently: a reading that names
-     * a line's rails names all of them, so what it says replaces what was kept, while a reading that
-     * works them out says only what is near the player and what it says is added to the rest. See
-     * {@link MtrKnown#remember}.
+     * The track each line runs along, and which of those the reading stated rather than left to be worked out. The two are kept differently: a stated reading names all rails, so it replaces what was kept, while a worked-out one says only what is near the player and is added to the rest.
      */
     private record BuiltTracks(Map<Long, RoadNetwork> byLine, Set<Long> stated) {
     }
 
     /**
      * The track every line runs along, by line.
-     *
-     * <p>MTR's own rails are read first, because the path a line runs along has to be found over them,
-     * and then thrown away: what comes out is the lines' rides and never the rails as a whole. Nothing
-     * of MTR's own geometry reaches a plan, which is what makes a track the stretch <em>this line</em>
-     * uses rather than every rail within reach of the player.
-     *
-     * <p>Per line rather than folded into one network, because a reading is kept per line once it has
-     * been read and the player has walked away from it -- see {@link MtrKnown}. The ids come from the
-     * caller's counter, so the track of one reading can be merged with the track of the next.
-     *
-     * <h2>Two ways to know a line's track, and which is used</h2>
-     * A reading that says which rails a line runs along has its answer taken, and nothing is worked
-     * out: see {@link MtrLineTracks#stated}, which is exact and has no reach. Only a line the reading
-     * is silent about -- MTR's own client data, which joins a route to its platforms and to nothing
-     * else -- falls back to planning a ride between each pair of its neighbouring stops over the rails
-     * in hand.
-     *
-     * <p>That fallback is the expensive one, so it is only paid for when there is something to pay it
-     * on: the rail layer, its extent and the router's workspace are all built here and none of them is
-     * built at all when every line has stated rails. A fetched snapshot names the rails of every line
-     * it carries, so on a server running MTR Map Overlay a whole railway's worth of track is a walk of
-     * its own geometry rather than a plan over it.
-     *
-     * <p>One router workspace is shared by every line that does need planning, rather than one per
-     * line inside {@link MtrLineTracks}: a workspace copies the rail layer, so
-     * one per line is the whole layer copied once per line. What it does not avoid is the
-     * work per pair, which is bounded by the extent.
+     * MTR's own rails are read first because a path has to be found over them, and then thrown away: what comes out is the lines' rides and never the rails as a whole.
+     * Per line rather than folded into one network, because a reading is kept per line once the player has walked away from it (see MtrKnown); the ids come from the caller's counter, so tracks of successive readings can be merged.
+     * A reading that names a line's rails is taken as it gives them (MtrLineTracks.stated); only a silent reading -- MTR's own client data, which joins a route to its platforms and nothing else -- plans a ride between neighbouring stops over the rails in hand. That fallback is expensive, so its layer, extent and router workspace are built only when some line needs it.
+     * One router workspace is shared by every line that needs planning: a workspace copies the rail layer, so one per line would copy the whole layer once per line.
      */
     private static BuiltTracks buildTracks(MtrClientData.Snapshot reading,
                                            List<TransitLine> lines, int[] nextId) {
         Map<Long, RoadNetwork> tracks = new HashMap<>();
         Set<Long> statedIds = new HashSet<>();
         if (lines.isEmpty()) {
-            // No line, no track: MTR's rails are not even joined into a layer, which is what a world
-            // whose lines this mod has no kind for costs.
+            // No line, no track: MTR's rails are not even joined into a layer.
             return new BuiltTracks(tracks, statedIds);
         }
 
@@ -453,8 +276,7 @@ public final class MtrTransit {
             }
         }
 
-        // What each line runs along, where the reading says so. A line it says nothing about is one
-        // the layer below has to exist for.
+        // What each line runs along, where the reading says so. A line it says nothing about is one the layer below has to exist for.
         Map<Long, List<MtrClientData.Track>> stated = new HashMap<>();
         boolean anyPlanned = false;
         for (TransitLine line : lines) {
@@ -475,10 +297,7 @@ public final class MtrTransit {
         RoadRouter.Workspace workspace = null;
         if (anyPlanned) {
             rails = buildRailLayer(reading);
-            // Asked once for the whole reading rather than once per line: it is a walk of the layer,
-            // and the layer is the same for every line of it. See MtrLineTracks.Extent, which is what
-            // keeps a whole railway's worth of stops from being planned pair by pair against a
-            // window's worth of track.
+            // Asked once for the whole reading rather than once per line: it is a walk of the layer, and the layer is the same for every line of it. See MtrLineTracks.Extent.
             extent = MtrLineTracks.Extent.of(rails);
             workspace = new RoadRouter.Workspace(rails);
         }
@@ -503,13 +322,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The rails one line runs along, as the reading gives them, or null when it does not say.
-     *
-     * <p>The ids are looked up against the rails the reading holds and the ones it does not are left
-     * out rather than the line being abandoned: a route longer than the snapshot's rail set is a route
-     * with a stretch whose geometry is unknown, which {@link MtrLineTracks#stated} draws as a gap.
-     * Null, rather than an empty list, is what says "this reading has no answer here" and sends the
-     * line to the planning path instead.
+     * The rails one line runs along, as the reading gives them, or null when it does not say. Ids not held by the reading are left out, which MtrLineTracks.stated draws as a gap; null rather than empty is what sends the line to the planning path.
      */
     private static List<MtrClientData.Track> statedRails(MtrClientData.Line source,
                                                          Map<String, MtrClientData.Track> railsById) {
@@ -527,44 +340,20 @@ public final class MtrTransit {
     }
 
     /**
-     * Starts the build for the newest reading, without waiting for it or for anybody to ask.
-     *
-     * <p>For the client tick, which is where a reading first appears: the conversion is not done where
-     * it is asked for -- see {@link #WORKER} -- so whoever asks first is answered with the build before
-     * theirs, and on the first ask of a session that is nothing at all. Asking from the tick instead
-     * means the reading is worked out while the player is still walking around, rather than during the
-     * first map draw or the first journey planned, which are the moments an empty answer would show.
-     *
-     * <p>Does nothing when a build for this reading is already under way, which is what makes it safe to
-     * call as often as the reading changes.
+     * Starts the build for the newest reading, without waiting for it or for anybody to ask. For the client tick, where a reading first appears: the conversion is not done where it is asked for, so the first asker of a session would otherwise get nothing. Does nothing when a build for this reading is already under way.
      */
     public static void warmUp() {
         refresh();
     }
 
     /**
-     * Hands a changed reading to the worker, and answers with the last build that finished.
-     *
-     * <p>Keyed by a signature of the reading rather than rebuilt per call, because a plan asks for the
-     * lines several times and a map asks while it draws -- and now also because the rebuild itself is
-     * no longer done here: this method's whole job is to notice that the answer would be different and
-     * to say so once, and everything it returns was published by the worker. See {@link #WORKER}.
-     *
-     * <p>Nothing here blocks. The first call of a session therefore answers with nothing at all, and
-     * the reading arrives a moment later -- which is what the reading is: a cache of another mod's
-     * data, filled one build behind whoever asks for it.
+     * Hands a changed reading to the worker, and answers with the last build that finished. Keyed by a signature of the reading rather than rebuilt per call, because a plan asks for the lines several times and a map asks while it draws. Nothing here blocks: the first call of a session answers with nothing and the reading arrives a moment later.
      */
     private static void refresh() {
         MtrClientData.Snapshot reading = MtrClientData.snapshot();
         boolean enabled = RoadConfig.mtrTransit();
         int marks = MtrMarks.version();
-        // Worked out once per reading rather than once per asker. Every accessor on this class calls
-        // this, and the map asks for one line's track per line per frame -- so a signature that walks
-        // every line and lists every remembered id was being built L times a frame, which is the square
-        // of the line count for an answer that cannot have changed. What it is made of is the reading,
-        // the switch and the player's own answers about marks; the reading only changes when the worker
-        // publishes one, so its identity is what says the signature still holds, and the marks version
-        // is what notices a switch being flipped without a new reading arriving.
+        // Worked out once per reading rather than once per asker: the map asks for one line's track per line per frame, so a signature that walks every line was being built L times a frame, the square of the line count. It is made of the reading, the switch and the player's answers about marks; the reading's identity is what says the signature still holds.
         String wanted;
         if (keyedSignature != null && reading == keyedReading && enabled == keyedEnabled
                 && marks == keyedMarks) {
@@ -583,25 +372,17 @@ public final class MtrTransit {
         if (building.compareAndSet(false, true)) {
             WORKER.execute(MtrTransit::work);
         }
-        // A build already running will notice that `requested` moved on, because it compares the
-        // signature it finished against this one before it lets go of the flag.
+        // A build already running will notice that requested moved on, because it compares the signature it finished against this one before it lets go of the flag.
     }
 
-    /** The last signature worked out, and what it was worked out from. See {@link #refresh}. */
+    /** The last signature worked out, and what it was worked out from. See refresh. */
     private static MtrClientData.Snapshot keyedReading;
     private static boolean keyedEnabled;
     private static int keyedMarks = Integer.MIN_VALUE;
     private static String keyedSignature;
 
     /**
-     * One build per request, however many arrive while it runs.
-     *
-     * <p>The loop is what keeps a request from being lost. A request that arrives while this is
-     * running cannot start a second build -- the flag is held -- so the only place it can be noticed
-     * is here, after the flag is given back. Reading `requested` after releasing it, and taking the
-     * flag again rather than leaving the request to a caller that has already given up, is what makes
-     * the handover complete: either this thread picks the new reading up, or another thread took the
-     * flag first and will publish it.
+     * One build per request, however many arrive while it runs. A request arriving during a build cannot start a second one, so the only place it can be noticed is here, after the flag is given back: either this thread picks the new reading up, or another thread took the flag first and will publish it.
      */
     private static void work() {
         while (true) {
@@ -609,13 +390,10 @@ public final class MtrTransit {
             try {
                 rebuild(MtrClientData.snapshot(), RoadConfig.mtrTransit());
             } catch (RuntimeException | LinkageError failed) {
-                // A conversion that throws must cost the player the reading, not the game: what has
-                // already been published stays, and the next reading tries again.
+                // A conversion that throws must cost the player the reading, not the game: what has already been published stays, and the next reading tries again.
                 reportFailure(failed);
             } finally {
-                // Released whatever happened, including an error this does not catch: a flag left set
-                // by a build that died is a reading that is never worked out again, which would look
-                // exactly like a railway that stopped being sent.
+                // Released whatever happened, including an error this does not catch: a flag left set by a build that died is a reading that is never worked out again.
                 building.set(false);
             }
             if (signature.equals(requested)) {
@@ -629,11 +407,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Reports the conversion having failed, once.
-     *
-     * <p>Once and not once per reading: a shape that has moved does not move back, and a warning every
-     * few seconds for the rest of the session is the diagnostic this mod's own rail report was
-     * rewritten to stop being.
+     * Reports the conversion having failed, once. Once and not once per reading: a shape that has moved does not move back, and a warning every few seconds is exactly what this mod's rail report was rewritten to stop being.
      */
     private static void reportFailure(Throwable cause) {
         if (failureReported) {
@@ -645,15 +419,11 @@ public final class MtrTransit {
     }
 
     /**
-     * Converts one reading and publishes everything that comes out of it.
-     *
-     * <p>Runs on the worker and nowhere else, which is what makes {@link #known} and
-     * {@link #markIds} safe to touch without locks: they have exactly one thread.
+     * Converts one reading and publishes everything that comes out of it. Runs on the worker and nowhere else, which is what makes known and markIds safe to touch without locks.
      */
     private static void rebuild(MtrClientData.Snapshot reading, boolean enabled) {
         if (!enabled) {
-            // Switched off means forgotten, not merely hidden: the readings are MTR's, and a player who
-            // turns the integration off is asking for the mod to know nothing about their railway.
+            // Switched off means forgotten, not merely hidden: a player turning the integration off is asking for the mod to know nothing about their railway.
             known.clear();
             stops = List.of();
             stationList = List.of();
@@ -671,19 +441,13 @@ public final class MtrTransit {
 
         long startedAt = System.nanoTime();
         Built built = build(reading, markIds);
-        // What this reading adds to what the ones before it taught, and then the answers taken from the
-        // whole of that rather than from this reading alone: MTR sends a client only what is near it, so
-        // a reading read on its own is a window that closes behind the player as they walk.
+        // What this reading adds to what the ones before it taught, and then the answers taken from the whole of that rather than from this reading alone: MTR sends only what is near, so a reading read on its own is a window that closes behind the player.
         known.remember(built);
         List<Station> keptStations = known.stations();
         List<TransitLine> keptLines = known.lines();
         RoadNetwork marks = known.marks(MtrTransit::marksWanted);
         List<LineStop> keptStops = stopsOf(keptStations);
-        // Published one at a time, and every one of them complete: a reader on another thread takes
-        // whichever of these it asks for, and gets either the build before this one or this one. Two
-        // accessors asked a moment apart can therefore disagree about which reading they are answering
-        // for, which is the same bargain MtrWholeMap makes and is why nothing here is a pair of values
-        // that has to agree -- a marks layer and the lines it belongs to are each usable on their own.
+        // Published one at a time, and each complete: a reader on another thread gets either the build before this one or this one. Two accessors asked a moment apart can therefore disagree about which reading they answer for -- the same bargain MtrWholeMap makes -- which is why nothing here is a pair of values that must agree.
         stationList = keptStations;
         lines = keptLines;
         rails = marks;
@@ -696,9 +460,7 @@ public final class MtrTransit {
         rememberedLines = keptLines.size();
         rememberedStations = keptStations.size();
         if (imported > 0 || skipped > 0 || !keptStops.isEmpty()) {
-            // The time is here because marking plans a ride per pair of neighbouring stops, and this is
-            // the number that says whether it is still worth doing off the thread it used to run on. If
-            // it ever grows past a frame, this is the evidence.
+            // The time is here because marking plans a ride per pair of neighbouring stops, and this is the number that says whether it is still worth doing off the thread it used to run on.
             HowToGo.diagnostic("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
                             + "| marks {} rails {} nodes {} | kept {} lines {} stations {} track pieces "
                             + "| {} ms | {}",
@@ -709,14 +471,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The signature of a reading, as one string.
-     *
-     * <p>Two halves, and they change for different reasons. The first describes the reading itself and
-     * is cached against it -- see {@link #keyed}, because it walks every line and every rail.
-     * The second is every line's own marks switch, which is read here rather than in the conversion so
-     * that the conversion stays a function of the reading and a decision it is handed, and which the
-     * player can flip at any moment -- so it is asked every time, of the lines of the newest reading and
-     * of the ones only remembered.
+     * The signature of a reading, as one string: two halves that change for different reasons. The first describes the reading and is cached against it (see keyed), because it walks every line and rail. The second is every line's own marks switch, asked every time, of the lines of the newest reading and of the ones only remembered.
      */
     private static String key(MtrClientData.Snapshot reading, boolean enabled) {
         StringBuilder key = new StringBuilder();
@@ -727,9 +482,7 @@ public final class MtrTransit {
                     .append(marksWanted(line.id()) ? '+' : '-');
         }
         for (Long id : rememberedLineIds()) {
-            // And the same for what is only remembered: a line the player has walked away from is no
-            // longer in the reading, so its switch would otherwise change nothing until MTR happened to
-            // send that part of the world again.
+            // The same for what is only remembered: a line the player has walked away from is no longer in the reading, so its switch would otherwise change nothing until MTR sent that part of the world again.
             key.append('~').append(id).append(marksWanted(id) ? '+' : '-');
         }
         return key.toString();
@@ -746,22 +499,16 @@ public final class MtrTransit {
                 .append(reading.platforms().size()).append('/')
                 .append(reading.lines().size()).append('/')
                 .append(reading.tracks().size())
-                // A rail that left the client's window as another arrived leaves the count alone, and
-                // the marks are cut out of the rails, so what they are made of is part of what this
-                // notices rather than only how many of them there are.
+                // A rail that left the client's window as another arrived leaves the count alone, and the marks are cut out of the rails, so what they are made of is part of what this notices.
                 .append('/').append(railSignature(reading));
         String built = part.toString();
-        // One write, and a reader either sees the whole pair or the one before it -- which is only a
-        // walk repeated, never a signature that is the wrong one.
+        // One write, and a reader sees either the whole pair or the one before it -- never a signature that is the wrong one.
         keyed = new KeyedPart(reading, built);
         return built;
     }
 
     /**
-     * The ids of the lines only remembered, published by the worker.
-     *
-     * <p>A copy rather than the memory's own list, because this is read from whichever thread asks and
-     * the memory's list is the worker's: what is handed out is immutable and never touched again.
+     * The ids of the lines only remembered, published by the worker. A copy rather than the memory's own list, which belongs to the worker; what is handed out is immutable.
      */
     private static List<Long> rememberedLineIds() {
         List<Long> ids = new ArrayList<>();
@@ -786,22 +533,9 @@ public final class MtrTransit {
 
     /**
      * Whether every line in play runs on a track of its own, so that the shared layer is of no use.
-     *
-     * <p>The shared layer -- {@link #railLayer()} -- is every switched-on line's track in one network.
-     * It is what a ride is planned over when nothing says which rails a line uses, and it is the whole
-     * railway: copying it before a plan can answer is the single largest thing
-     * a plan pays for. A reading that names each line's rails makes it unnecessary, because a ride is
-     * then planned over that line's own track instead -- see {@code RideRoads} -- and a caller that
-     * knows it is unnecessary can leave the layer out of the world entirely.
-     *
-     * <p>Asked of the lines actually in play, which include the player's own: one of those has no track
-     * of its own and does ride the shared layer, so its presence is what keeps the layer in the world.
-     *
-     * <p>One {@link #refresh()} and then a lookup per line, rather than {@link #trackOf} per line: that
-     * would re-derive the reading's signature once for each of them, which on a whole railway is the
-     * square of its line count for a question that is a walk of a list.
-     *
-     * @param lines the lines a plan is being made over, as {@code Navigation#linesInPlay} gives them
+     * railLayer() is every switched-on line's track in one network, and copying it before a plan is the single largest thing a plan pays for. A reading that names each line's rails makes it unnecessary, and a caller that knows this can leave the layer out of the world entirely.
+     * Asked of the lines actually in play, including the player's own: one of those has no track of its own and does ride the shared layer, so its presence keeps the layer.
+     * One refresh() and a lookup per line rather than trackOf per line, which would re-derive the signature for each.
      */
     public static boolean everyLineRidesItsOwnTrack(List<TransitLine> lines) {
         if (lines == null || lines.isEmpty()) {
@@ -818,11 +552,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Whether this line's track is marked as roads of this mod.
-     *
-     * <p>MTR's own switch on the outside: nothing is marked at all while MTR is not being read. Inside
-     * that, the player's answer for the line if they have given one, and otherwise the configured
-     * default -- see {@link MtrMarks}, which is where the answers live.
+     * Whether this line's track is marked as roads of this mod. Nothing is marked at all before MTR is being read; inside that, the player's answer for the line if they gave one, otherwise the configured default -- see MtrMarks.
      */
     private static boolean marksWanted(long mtrLineId) {
         return RoadConfig.mtrTransit() && MtrMarks.forLine(mtrLineId);
@@ -848,15 +578,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Whether a line is planned over MTR's track.
-     *
-     * <p>A line the player built takes the configured default: the marks are MTR's, and a line of the
-     * player's own has no answer of its own to give about them. A line read out of MTR has whatever the
-     * player chose for it, falling back to the same default -- see {@link MtrMarks}.
-     *
-     * <p>For an imported line this is the same question {@link #marksWanted} answers, and deliberately
-     * so: whether a line's track is marked and whether a ride along it uses that track cannot be two
-     * different answers, or the switch would draw one thing and route another.
+     * Whether a line is planned over MTR's track. A player's line takes the configured default, having no answer of its own. For an imported line this is the same question marksWanted answers, deliberately: whether a track is marked and whether a ride uses it cannot be two different answers, or the switch would draw one thing and route another.
      */
     public static boolean marksEnabled(TransitLine line) {
         if (!RoadConfig.mtrTransit()) {
@@ -868,11 +590,7 @@ public final class MtrTransit {
     }
 
     /**
-     * Whether any line has them switched off, and so needs the network without them built.
-     *
-     * <p>Asked before a plan rather than during it: a plan over lines that all agree runs on one
-     * network, and the second copy of the world is only worth making when a line actually wants the
-     * difference.
+     * Whether any line has marks switched off, and so needs the network without them built. Asked before a plan: a plan over lines that all agree runs on one network, and the second copy of the world is only worth making when a line actually wants the difference.
      */
     public static boolean anyLineRefusesMarks(List<TransitLine> lines) {
         for (TransitLine line : lines) {
@@ -884,12 +602,7 @@ public final class MtrTransit {
     }
 
     /**
-     * MTR's own id for an imported line, or null when the line is not one of MTR's.
-     *
-     * <p>Boxed rather than a sentinel, and that is the whole point: MTR's ids are longs and half of the
-     * ones it hands out have the top bit set, so a negative number cannot mean "not ours". It did mean
-     * that here, and the cost was the switch beside a line doing nothing at all -- every such line was
-     * read as somebody else's, so its answer was never written and its marker never moved.
+     * MTR's own id for an imported line, or null when the line is not one of MTR's. Boxed rather than a sentinel: MTR's ids are longs and half of them have the top bit set, so a negative number cannot mean not ours -- it did here once, and the switch beside every such line did nothing.
      */
     public static Long mtrLineId(TransitLine line) {
         return lineId(line);
@@ -901,10 +614,7 @@ public final class MtrTransit {
             return null;
         }
         try {
-            // Unsigned, because the id was written as {@link Long#toHexString} and that prints a negative
-            // long as its sixteen-digit bit pattern: read as a signed number, every id with the top bit
-            // set overflowed and the line was thrown away as somebody else's -- so its track was never
-            // marked and the switch beside it had nothing to change. Half of MTR's ids are like that.
+            // Unsigned, because the id was written with Long.toHexString and that prints a negative long as its sixteen-digit bit pattern: read as signed, every id with the top bit set overflowed and the line was dropped as somebody else's. Half of MTR's ids are like that.
             return Long.parseUnsignedLong(line.id().substring(LINE_ID_PREFIX.length()), 16);
         } catch (NumberFormatException notOurs) {
             // An id this class did not write, which means something else is using the prefix.
@@ -913,42 +623,18 @@ public final class MtrTransit {
     }
 
     /**
-     * Whether a line came from MTR rather than from the player.
-     *
-     * <p>By its id, which is where the distinction is made: an imported line's id is prefixed, so
-     * anything holding a line can tell what it is holding without a second field to keep in step -- and
-     * without the line model having to learn about MTR.
+     * Whether a line came from MTR rather than from the player. By its id, which is prefixed: anything holding a line can tell what it holds without a second field to keep in step, and without the line model having to learn about MTR.
      */
     public static boolean isImported(TransitLine line) {
         return line != null && line.id().startsWith(LINE_ID_PREFIX);
     }
 
-    // ------------------------------------------------------------ stations as places
 
     /**
      * The stations of a reading, as the places a journey can end at.
-     *
-     * <h2>Why MTR's stations are not already places</h2>
-     * MTR makes a station out of every area the player draws, and an area is a box the player drags
-     * over the platforms it covers. A station built the obvious way -- one platform at a time, one box
-     * around each -- therefore reaches this mod as several stations that share a name, standing a few
-     * blocks apart: the same station, said four times. Offered as they arrive, that is a destination
-     * picker listing one station four times, four markers on the map where there is one building, and a
-     * line calling at whichever of the four its platforms happen to be in -- so a change between two
-     * lines that meet at that station looks like a change between two stations a hundred blocks apart,
-     * and a journey through it is planned as two.
-     *
-     * <p>So stations that say they are the same station are one place here: the same name, ignoring
-     * case and surrounding spaces, and boarding points within {@code mtr_station_merge_blocks} of each
-     * other. The distance is what keeps two towns that both called their station "Central" apart, and
-     * the name is what keeps two genuinely different stations of one complex apart. Stations with no
-     * name are never merged -- every nameless station would be one place -- and the whole rule is off
-     * when the configured distance is zero, which offers MTR's stations exactly as MTR has them.
-     *
-     * <p>Nothing is written back to MTR: this is how the reading is offered, not a change to it, and
-     * MTR's own dashboard goes on showing its stations as it always did. A journey planned to a place
-     * reaches whichever of its stations the ride runs to, because the place stands where its platforms
-     * are.
+     * MTR makes a station of every area the player draws, so a station built a platform at a time arrives as several stations sharing a name a few blocks apart -- offered as they arrive, that is a picker listing one station four times, four markers for one building, and a line calling at whichever one its platform fell in.
+     * So stations that say they are the same are one place: the same name (case and surrounding spaces ignored) with boarding points within mtr_station_merge_blocks. The distance keeps two towns that both called their station Central apart; the name keeps different stations of one complex apart. Nameless stations are never merged, and a configured distance of zero turns the rule off.
+     * Nothing is written back to MTR: this is how the reading is offered, not a change to it. A journey planned to a place reaches whichever of its stations the ride runs to.
      */
     private static Places places(MtrClientData.Snapshot reading) {
         List<MtrClientData.Station> raw = reading.stations();
@@ -959,9 +645,7 @@ public final class MtrTransit {
 
         double merge = RoadConfig.mtrStationMergeBlocks();
         if (merge > 0) {
-            // Only stations that share a name are ever compared. MTR's names are what says two areas are
-            // one station, so anything else is a pair there is no reason to measure -- which is what
-            // keeps this from being the square of the network on every rebuild.
+            // Only stations that share a name are ever compared: MTR's names are what says two areas are one station, so anything else needs no measuring -- which keeps this from being the square of the network on every rebuild.
             Map<String, List<Integer>> byName = new LinkedHashMap<>();
             for (int i = 0; i < raw.size(); i++) {
                 String name = placeKey(raw.get(i).name());
@@ -991,8 +675,7 @@ public final class MtrTransit {
         for (List<MtrClientData.Station> member : members.values()) {
             Station place = place(reading, member);
             if (place == null) {
-                // No boarding point anywhere in the group, which a station of this reading cannot be:
-                // kept as "left out" rather than placed at a guess.
+                // No boarding point anywhere in the group, which a station of this reading cannot be: kept as left out rather than placed at a guess.
                 continue;
             }
             places.add(place);
@@ -1004,16 +687,8 @@ public final class MtrTransit {
     }
 
     /**
-     * One place, out of the MTR stations that are it.
-     *
-     * <p>The place takes the lowest of its stations' ids and that station's name, which keeps both the
-     * same from one rebuild to the next for as long as the group does not change -- and a place whose id
-     * moved about would be a second entry in the memory beside the first, since that is keyed by id.
-     *
-     * <p>It stands at the middle of its stations' boarding points. With one station -- which is what
-     * every station that was not merged is -- that is exactly where that station's vehicles stop, the
-     * same answer this mod gave before it knew MTR's stations could be more than one; with several it is
-     * the point between their platforms, which is on the railway and so is a stop a route can reach.
+     * One place, out of the MTR stations that are it. It takes the lowest of their ids and that station's name, which keeps both stable across rebuilds -- a place whose id moved would be a second entry in the memory beside the first.
+     * It stands at the middle of its stations' boarding points: on the railway, and so a stop a route can reach.
      */
     private static Station place(MtrClientData.Snapshot reading,
                                 List<MtrClientData.Station> member) {
@@ -1079,11 +754,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The stations of a reading as places, and which place each of MTR's stations belongs to.
-     *
-     * <p>The lookup is the half the lines need: a stop names an MTR station, and after the grouping
-     * that station is one of several that make up a place, so the stop has to be placed on the place
-     * rather than on the box the stop happened to fall in.
+     * The stations of a reading as places, and which place each of MTR's stations belongs to. The lookup is what the lines need: a stop names an MTR station, and after grouping that station is one of several making a place, so the stop goes on the place.
      */
     private record Places(List<Station> stations, Map<Long, Station> byStationId) {
 
@@ -1094,11 +765,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The stations as the planner's kind of stop.
-     *
-     * <p>A projection rather than a second walk of the reading, so the rule that decides where a
-     * station's vehicles stop -- the middle of its platforms, or of its area -- has one home and a
-     * station can never be offered as a destination at one place and planned to at another.
+     * The stations as the planner's kind of stop. A projection rather than a second walk, so the rule that decides where a station's vehicles stop has one home and a station cannot be offered at one place and planned to at another.
      */
     private static List<LineStop> stopsOf(List<Station> stations) {
         List<LineStop> built = new ArrayList<>(stations.size());
@@ -1110,32 +777,9 @@ public final class MtrTransit {
 
     /**
      * The reading's lines as this mod's lines, with the colour each one runs under.
-     *
-     * <h2>Why the colour is taken here</h2>
-     * A colour is a property of MTR's route, and all three ways a reading can reach this client --
-     * MTR's own window, the local simulated network, and the server's copy synced by this mod -- end
-     * up in the same {@link MtrClientData.Line} record, so there is one place that turns a reading
-     * into lines and one place that has to carry the colour across. Doing it per reader instead would
-     * be three chances to forget, and a line that lost its colour draws in its kind's colour without
-     * anything on screen saying why.
-     *
-     * <h2>What "no colour" means here</h2>
-     * MTR writes zero when a route has no colour of its own, and this mod's {@code TransitLine} says
-     * "no colour of its own" with null and then asks its kind's configured colour. So zero is passed
-     * as null rather than as {@code setColor(0)}: a line set to ARGB black would be a line the player
-     * asked to be black, which zero is not. The RGB part is what is tested, because the readings
-     * disagree about whether they carry MTR's alpha -- the window keeps whatever MTR handed over and
-     * the whole-map and overlay readers drop it -- and a value whose RGB is zero is MTR's unset.
-     *
-     * <h2>Why the direction is taken here too</h2>
-     * A route's circular state is MTR's own fact, and the line it imports is this mod's: the two are
-     * not the same thing, and this is the one place a reading becomes lines, so it is the one place to
-     * translate one into the other -- the same argument as the colour above, and the same three
-     * readers. A circular route is a loop ridden one way round, which is exactly the case a
-     * {@link LineDirection#ONE_WAY} line describes: the stop order is the travel order. Every other
-     * route is travelled both ways, which is what a line is until something says otherwise -- and what
-     * a reading that cannot say leaves it as, so a version whose circular state this mod cannot read
-     * never invents a restriction the line does not have.
+     * A colour is a property of MTR's route, and all three readings end up in the same Line record, so this one place carries it across; doing it per reader would be three chances to forget, and a line that lost its colour draws in its kind's colour with nothing on screen saying why.
+     * MTR writes zero for no colour while TransitLine says it with null, and the RGB part is tested because the readings disagree about whether they carry MTR's alpha. Zero is passed as null, never setColor(0), which would mean the player asked for ARGB black.
+     * The circular state is translated here too, for the same three-reader argument: a circular route is a loop ridden one way round, exactly LineDirection.ONE_WAY; every other route, and a reading that cannot say, stays two-way so no restriction is invented.
      */
     private static List<TransitLine> buildLines(MtrClientData.Snapshot reading, Places places,
                                                 Counts counts) {
@@ -1143,26 +787,20 @@ public final class MtrTransit {
         for (MtrClientData.Line line : reading.lines()) {
             RoadClass kind = line.kind();
             if (kind == null) {
-                // An aeroplane, or a type a later MTR adds: there is no kind of line here for it, and
-                // a line nothing can be routed along is not offered as one.
+                // An aeroplane, or a type a later MTR adds: there is no kind of line here for it, and a line nothing can be routed along is not offered as one.
                 counts.skipped++;
                 continue;
             }
             TransitLine made = new TransitLine(LINE_ID_PREFIX + Long.toHexString(line.id()),
                     line.name() == null ? Long.toHexString(line.id()) : line.name(), kind);
-            // MTR's circular state is the one-way case: a loop is ridden from the first stop to the
-            // last and nowhere else. Every route that is not a loop runs both ways.
+            // MTR's circular state is the one-way case: a loop is ridden from the first stop to the last and nowhere else.
             made.setDirection(line.circular() ? LineDirection.ONE_WAY : LineDirection.TWO_WAY);
-            // Zero is MTR's "this route has no colour", not black: see the method comment. The value
-            // keeps its own RGB and the line makes it opaque, so what is drawn is the colour MTR's
-            // map draws rather than one of this mod's kind colours.
+            // Zero is MTR's this route has no colour, not black. The value keeps its own RGB and the line makes it opaque, so what is drawn is the colour MTR's map draws.
             if ((line.color() & 0xFFFFFF) != 0) {
                 made.setColor(line.color());
             }
             for (MtrClientData.Stop stop : line.stops()) {
-                // The place the stop's station belongs to, which is where the stop goes: a station built
-                // a platform at a time reaches this mod as several stations, and a line calling at one of
-                // them calls at the station -- so two lines meeting there must be two lines at one stop.
+                // The place the stop's station belongs to, which is where the stop goes: a station built a platform at a time arrives as several stations, and a line calling at one of them calls at the station -- so two lines meeting there must be two lines at one stop.
                 Station place = places.of(stop.stationId());
                 int[] position = place != null
                         ? new int[]{place.x(), place.z()}
@@ -1171,8 +809,7 @@ public final class MtrTransit {
                     counts.unplaced++;
                     continue;
                 }
-                // A line that calls twice at one block is refused its second call by the line itself,
-                // which is what keeps "the next stop" unambiguous.
+                // A line that calls twice at one block refuses its second call, which is what keeps the next stop unambiguous.
                 made.addStop(LineStop.ofStation(nameOf(place, stop), position[0], position[1]));
             }
             if (made.stopCount() < 2) {
@@ -1192,16 +829,8 @@ public final class MtrTransit {
     }
 
     /**
-     * MTR's rails as segments, joined where they meet.
-     *
-     * <p>Rails are joined by position rather than by id, because the client's rail data has no node id
-     * to join on: two rails that meet in the world have ends at the same place and nothing else in
-     * common. The tolerance is a little over one block, which is what a rounded coordinate can be out
-     * by -- and no more, so that two tracks running a couple of blocks apart stay two tracks.
-     *
-     * <p>Ids come from {@link #ID_BASE} rather than from the layer's own counter, because a segment of
-     * this layer has to be tellable from one the player drew, and a plan runs on a network holding both
-     * this and the player's roads at once.
+     * MTR's rails as segments, joined where they meet. Rails are joined by position rather than by id, because the client's rail data has no node id to join on: two rails that meet in the world have ends at the same place and nothing else in common. The tolerance is a little over one block -- what a rounded coordinate can be out by -- and no more, so tracks a couple of blocks apart stay two tracks.
+     * Ids come from ID_BASE so a segment of this layer is tellable from one the player drew, as a plan runs on a network holding both.
      */
     private static RoadNetwork buildRailLayer(MtrClientData.Snapshot reading) {
         RoadNetwork layer = new RoadNetwork();
@@ -1225,10 +854,7 @@ public final class MtrTransit {
             return layer;
         }
 
-        // One index entry per end of every rail piece, so "what continues from here" is a lookup in
-        // the nine cells around the point rather than a walk of the whole railway. A junction has two
-        // or more entries in one cell, which is exactly what stops a run: the run is one stretch
-        // between junctions, not the whole network on one line.
+        // One index entry per end of every rail piece, so what continues from here is a lookup in the nine cells around the point rather than a walk of the whole railway. A junction has two or more entries in one cell, which is what stops a run.
         Map<Long, List<End>> index = new HashMap<>();
         for (int piece = 0; piece < pieces.size(); piece++) {
             TrackPiece entry = pieces.get(piece);
@@ -1253,9 +879,7 @@ public final class MtrTransit {
             Run run = new Run();
             appendPiece(run, first, false);
 
-            // Forward from the run's far end, then backward from its near end: a rail handed back in
-            // the middle of a line is stitched both ways rather than sitting as a stub until its
-            // neighbours happen to arrive first.
+            // Forward from the run's far end, then backward from its near end: a rail handed back in the middle of a line is stitched both ways rather than sitting as a stub until its neighbours arrive first.
             boolean grown = true;
             while (grown) {
                 grown = false;
@@ -1279,8 +903,7 @@ public final class MtrTransit {
                 used[previous.piece()] = true;
                 Run prepended = new Run();
                 appendPiece(prepended, piece, previous.atStart());
-                // The piece is laid down so that its connecting end is its last point; the run
-                // already starts at that same point, so the shared joint is written once.
+                // The piece is laid down so its connecting end is last; the run already starts at that point, so the shared joint is written once.
                 if (!prepended.vertices.isEmpty()
                         && prepended.lastVertex()[0] == start[0]
                         && prepended.lastVertex()[1] == start[1]) {
@@ -1303,10 +926,7 @@ public final class MtrTransit {
             }
             segment.setFromNode(from.id());
             segment.setToNode(to.id());
-            // MTR hands its rails over as world-coordinate samples of its own curves, not as blocks.
-            // The display line keeps those samples (rounded to blocks it had a half-block wobble on
-            // every diagonal) and pins its ends on the node positions, so two runs meeting at a
-            // junction meet on the same point.
+            // MTR hands rails over as world-coordinate samples of its curves, not as blocks: the display line keeps those samples (rounded to blocks it had a half-block wobble on every diagonal) and pins its ends on the node positions, so two runs meeting at a junction meet on the same point.
             List<double[]> display = run.display;
             display.set(0, new double[]{from.x(), from.z()});
             display.set(display.size() - 1, new double[]{to.x(), to.z()});
@@ -1317,22 +937,14 @@ public final class MtrTransit {
     }
 
     /**
-     * The rail layer for a reading, for the regression harness.
-     *
-     * <p>Package-private rather than public: it is the conversion and nothing else, and only the
-     * harness -- which lives in this package -- asks for it without a game.
+     * The rail layer for a reading, for the regression harness. Package-private: it is the conversion and nothing else, and only the harness, which lives in this package, asks for it without a game.
      */
     static RoadNetwork railLayerForCheck(MtrClientData.Snapshot reading) {
         return buildRailLayer(reading);
     }
 
     /**
-     * One rail piece as the layer builds it: MTR's own world-coordinate samples, the height, and the
-     * class its mode means.
-     *
-     * <p>The samples are kept as doubles because they are a curve. {@link #x(int)} and {@link #z(int)}
-     * are the block positions the joint index is built on -- two rails meet where their blocks meet --
-     * but they are only ever used to decide what joins, never as the shape that is drawn.
+     * One rail piece as the layer builds it: MTR's world-coordinate samples, the height, and the class its mode means. The samples stay doubles because they are a curve; x(int) and z(int) are the block positions the joint index is built on, used only to decide what joins, never as the drawn shape.
      */
     private record TrackPiece(double[] xs, double[] zs, int y, RoadClass kind) {
 
@@ -1356,7 +968,7 @@ public final class MtrTransit {
     /** How close two rail ends must be to be read as one joint, in blocks. */
     private static final int JOINT_BLOCKS = 2;
 
-    /** The cell a point is filed under for the joint lookup; see {@link #cellKey}. */
+    /** The cell a point is filed under for the joint lookup; see cellKey. */
     private static final int JOINT_CELL = 4;
 
     private static long cellKey(int x, int z) {
@@ -1365,11 +977,7 @@ public final class MtrTransit {
     }
 
     /**
-     * The one unused piece that continues from a point, or null when there is none or more than one.
-     *
-     * <p>More than one is a junction: the run ends there, and the other side of the junction is a
-     * run of its own. That is what turns a network of one-block rail pieces into a handful of long
-     * polylines.
+     * The one unused piece that continues from a point, or null when there is none or more than one. More than one is a junction: the run ends there and the other side is a run of its own.
      */
     private static End uniqueContinuation(List<TrackPiece> pieces, boolean[] used,
                                           Map<Long, List<End>> index, int x, int z, int y,
@@ -1398,9 +1006,7 @@ public final class MtrTransit {
                 }
             }
         }
-        // Three or more ends at one point is a junction: the run ends there and the other branches
-        // are runs of their own. Two ends are one piece continuing into another -- unless both are
-        // the piece already in the run, in which case there is nothing to continue.
+        // Three or more ends at one point is a junction: the run ends there and the other branches are runs of their own. Two ends are one piece continuing into another -- unless both are the piece already in the run.
         if (near.size() != 2) {
             return null;
         }
@@ -1417,14 +1023,8 @@ public final class MtrTransit {
     }
 
     /**
-     * One stitched run of rails: the block vertices the network routes on, and the world-coordinate
-     * samples the display curve is made from.
-     *
-     * <p>Two lists rather than one because the two readers want different things. The network stores
-     * blocks -- a node is a block position -- while MTR's own geometry is a curve in world coordinates,
-     * and rounding it before smoothing is what put a wobble on it. Keeping them side by side means the
-     * curve never has to be derived from the rounded form, and the joints between pieces are dropped
-     * from both at once, so the two cannot disagree about where the run is.
+     * One stitched run of rails: the block vertices the network routes on, and the world-coordinate samples the display curve is made from.
+     * Two lists because the readers want different things: the network stores blocks (a node is a block position) while MTR's geometry is a curve in world coordinates, and rounding before smoothing is what put a wobble on it. Keeping them side by side means the curve is never derived from the rounded form, and the joints are dropped from both at once, so the two cannot disagree about where the run is.
      */
     private static final class Run {
         private final List<int[]> vertices = new ArrayList<>();
@@ -1479,9 +1079,7 @@ public final class MtrTransit {
             int x = piece.x(index);
             int z = piece.z(index);
             if (run.endsAt(x, z)) {
-                // The joint is already written by the piece next to this one; writing its rounded
-                // position again would leave a zero-length step, and its display position is the same
-                // joint, so the display list must not take a second point there either.
+                // The joint is already written by the piece next to this one; writing its rounded position again would leave a zero-length step, and its display position is the same joint.
                 continue;
             }
             run.add(x, z, piece.xs()[index], piece.zs()[index]);

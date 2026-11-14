@@ -3,25 +3,11 @@ package bili.dongsz.howtogo.route;
 import java.util.List;
 
 /**
- * Why a trip could not be planned, as something the player can be shown in their own language.
- *
- * <h2>Why this is not a sentence</h2>
- * The router works out the reason and the picker draws it, and the two are in different source sets: the
- * route package is the pure Java every branch shares, and it cannot name a Minecraft class, so it cannot
- * translate anything. It used to answer with an English sentence anyway -- "no road usable by walk
- * (Walk) within 64 blocks of the start or the destination" -- and the picker drew it as it came, so the
- * one line that explains a failure was the one line in the mod that was always English, in every
- * language, while every other string around it was translated.
- *
- * <p>So the reason travels as a translation key and its arguments instead. The router names the branch,
- * the UI resolves it -- see {@code Navigation#failureText} -- and neither has to know about the other.
- *
- * <p>The arguments are already-localized text in one case and plain numbers in the rest: a mode's name
- * comes from {@code TravelMode#label}, which translates itself, so a translated sentence keeps reading
- * correctly when it is assembled rather than needing its pieces translated again at the far end.
- *
- * @param key  the translation key naming the branch
- * @param args what that branch needs to name, in the order the key expects them
+ * Why a trip could not be planned, as text the player can be shown in their own language.
+ * The route package is pure Java shared by every branch and cannot name a Minecraft class, so it cannot translate; the reason therefore travels as a translation key plus its arguments. The router names the branch, the UI resolves it (Navigation.failureText).
+ * Arguments are plain numbers except a mode name, which comes from TravelMode.label and is already localized.
+ * @param key the translation key naming the branch
+ * @param args what that branch must name, in the order the key expects
  */
 public record RouteFailure(String key, List<Object> args) {
 
@@ -32,27 +18,22 @@ public record RouteFailure(String key, List<Object> args) {
         args = args == null ? List.of() : List.copyOf(args);
     }
 
-    /** A branch that needs nothing named. */
     public static RouteFailure of(String key) {
         return new RouteFailure(key, List.of());
     }
 
-    /** A branch that names one thing. */
     public static RouteFailure of(String key, Object first) {
         return new RouteFailure(key, List.of(first));
     }
 
-    /** A branch that names two things. */
     public static RouteFailure of(String key, Object first, Object second) {
         return new RouteFailure(key, List.of(first, second));
     }
 
-    /** A branch that names three things. */
     public static RouteFailure of(String key, Object first, Object second, Object third) {
         return new RouteFailure(key, List.of(first, second, third));
     }
 
-    /** A branch that names four things. */
     public static RouteFailure of(String key, Object first, Object second, Object third,
                                   Object fourth) {
         return new RouteFailure(key, List.of(first, second, third, fourth));
@@ -64,11 +45,7 @@ public record RouteFailure(String key, List<Object> args) {
     }
 
     /**
-     * The key and its arguments, for a log line.
-     *
-     * <p>The log is read by whoever is diagnosing a report, and it is the one place the untranslated
-     * form is more useful than the sentence: a player's screenshot shows them the sentence anyway, and
-     * the key is what can be searched for in the source.
+     * The key and its arguments, for a log line: unlike the player-facing sentence, the key can be searched in the source.
      */
     @Override
     public String toString() {

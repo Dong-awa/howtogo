@@ -22,28 +22,14 @@ import java.util.Set;
 
 /**
  * What the map draws, and what it leaves out.
- *
- * <h2>Two kinds of leaving out, and why both</h2>
- * The first is the player's own: a switch per kind of road, for the public transport lines, and per kind
- * of place, set from the panel on the map and kept in a file. That is for taste -- a player who never
- * wants footpaths drawn, or who is done with the shops they marked last month.
- *
- * <p>The second is by zoom, and it is not taste but arithmetic: at a scale where a whole region fits on
- * the screen, drawing every path and every market stall turns the map into a smear, and what the player
- * wants at that scale is the shape of the network. So detail is shed as the map is zoomed out, in an
- * order that keeps the things a map is read for: the highways and the ice roads are never shed at all,
- * then the paths go, then the ordinary roads, then the waterways, then the railways; on the places, the
- * shops go first, then the stations, then ordinary landmarks, and the resource points -- the ones worth
- * travelling to from far away -- last. The public transport lines are never shed: they are the mod's own
- * subject, and a line is the one thing on the map that is not already implied by the roads.
- *
- * <p>Both kinds are asked through this class, so the panel's switches and the zoom rules cannot drift
- * apart: {@link #shows(RoadClass, double)} is the whole question, and the answer is "the player has not
- * hidden it, and the map is not too far out to draw it".
+ * Two kinds of leaving out: the player's own switches (kept in a file, taste) and the zoom rule
+ * (arithmetic -- at a regional scale every path and stall is a smear). Detail is shed in the order a
+ * map is read: highways and ice roads never, then paths, ordinary roads, waterways, railways; places
+ * lose shops first, stations, ordinary landmarks, resource points last. Lines are never shed.
+ * Both kinds are asked through this class so the switches and the zoom rules cannot drift apart.
  */
 public final class MapFilter {
 
-    /** A file of its own, beside the roads and the lines rather than among them. */
     private static final String FILE_NAME = "map_filter.json";
 
     private static final Gson GSON = new GsonBuilder()
@@ -53,9 +39,8 @@ public final class MapFilter {
 
     /**
      * The map scale below which each kind of road is left out, in pixels per block.
-     *
-     * <p>A kind that is not here is never left out for being far away: the highway and the ice road,
-     * which are what a zoomed-out map is read for -- where the fast ways across the world are.
+     * A kind not listed is never shed by zoom -- the highway and the ice road, which are what a
+     * zoomed-out map is read for.
      */
     private static final Map<RoadClass, Double> ROAD_FROM = Map.of(
             RoadClass.PATH, 0.35,
@@ -71,20 +56,9 @@ public final class MapFilter {
             PlaceKind.RESOURCE, 0.12);
 
     /**
-     * The map scale below which each kind of place's <em>name</em> is left off, in pixels per block.
-     *
-     * <p>Not the same question as {@link #PLACE_FROM}, and deliberately later than it: a marker is a
-     * dot that says "something is here" and is worth drawing while the map is still far out, while a
-     * name has to be readable and has to not sit on top of the next one. So the marker is what a
-     * zoomed-out map shows, and the name joins it once the map is close enough for the word to be a
-     * word -- a shop, which is the least important and the commonest, waits longest; a resource
-     * point, which is worth travelling to from a distance, is named first.
-     *
-     * <p>What this does for two places close together is the other half of the story: their markers
-     * may sit a few pixels apart at any zoom, but their names are boxes with a width and a height, and
-     * the label pass drops one of them while the boxes overlap. Zooming in separates the boxes -- the
-     * map grows faster than the font does -- so the pair that showed one name at one zoom shows both
-     * names at the next, which is exactly the reading a map wants.
+     * The map scale below which each kind of place's name is left off, in pixels per block.
+     * Later than PLACE_FROM on purpose: a marker is a dot worth drawing far out, a name must be readable
+     * and not collide with the next. Markers show when zoomed out, names join once boxes stop overlapping.
      */
     private static final Map<PlaceKind, Double> PLACE_LABEL_FROM = Map.of(
             PlaceKind.SHOP, 1.0,
@@ -96,15 +70,12 @@ public final class MapFilter {
     private static final Set<PlaceKind> HIDDEN_PLACES = EnumSet.noneOf(PlaceKind.class);
     private static boolean linesHidden;
     private static boolean collapsed;
-    /** Where the panel sits, in screen pixels from the top left, since the player may drag it. */
     private static final int DEFAULT_PANEL_X = 40;
     private static final int DEFAULT_PANEL_Y = 4;
     /**
      * The version whose file may hold a panel position.
-     *
-     * <p>A file written before this one had the panel in the very corner, which is where other mods put
-     * their own overlays; the position it holds is therefore not the position to keep, and the default is
-     * used instead. Written on the first save, so this happens once.
+     * Earlier files had the panel in the corner, where other mods put overlays; their position is
+     * ignored and the default used. Written on the first save, so this happens once.
      */
     private static final int POSITION_VERSION = 2;
     private static int panelX = DEFAULT_PANEL_X;
@@ -115,11 +86,7 @@ public final class MapFilter {
     private MapFilter() {
     }
 
-    /**
-     * Whether a kind of road is drawn at this map scale.
-     *
-     * @param scale pixels per block, as the map view reports it; the sign is ignored
-     */
+    /** Whether a kind of road is drawn at this map scale; scale is pixels per block, sign ignored. */
     public static boolean shows(RoadClass roadClass, double scale) {
         ensureLoaded();
         if (roadClass == null || HIDDEN_ROADS.contains(roadClass)) {
@@ -129,7 +96,6 @@ public final class MapFilter {
         return from == null || Math.abs(scale) >= from;
     }
 
-    /** The same for a place, by what kind of place it is. */
     public static boolean shows(PlaceKind kind, double scale) {
         ensureLoaded();
         if (kind == null || HIDDEN_PLACES.contains(kind)) {
@@ -140,41 +106,32 @@ public final class MapFilter {
     }
 
     /**
-     * Whether a place's name is drawn at this map scale.
-     *
-     * <p>The place has to be drawn at all first -- the player's own switch still hides the name with
-     * the marker -- and then the kind's own label threshold has to be reached. See
-     * {@link #PLACE_LABEL_FROM} for why names come later than markers and in this order.
+     * Whether a place's name is drawn at this map scale, once the place itself is drawn and its kind's label threshold reached.
      */
     public static boolean showsLabel(PlaceKind kind, double scale) {
         return shows(kind, scale) && Math.abs(scale) >= PLACE_LABEL_FROM.getOrDefault(kind, 0.55);
     }
 
-    /** Whether the transit lines are drawn, which the zoom never takes away. */
     public static boolean showsLines() {
         ensureLoaded();
         return !linesHidden;
     }
 
-    /** Whether the player has switched a kind of road off by hand. */
     public static boolean isHidden(RoadClass roadClass) {
         ensureLoaded();
         return HIDDEN_ROADS.contains(roadClass);
     }
 
-    /** The same for a kind of place. */
     public static boolean isHidden(PlaceKind kind) {
         ensureLoaded();
         return HIDDEN_PLACES.contains(kind);
     }
 
-    /** Whether the lines are switched off by hand. */
     public static boolean linesHidden() {
         ensureLoaded();
         return linesHidden;
     }
 
-    /** Whether the panel is rolled up to its title, which is the player's choice like the rest. */
     public static boolean isCollapsed() {
         ensureLoaded();
         return collapsed;
@@ -220,24 +177,19 @@ public final class MapFilter {
 
     /**
      * Where the panel's top-left corner is, in screen pixels.
-     *
-     * <p>The player's own to move, because the top left of a map is not ours alone: the map mod and the
-     * machine mod both put things there, and which of them is in the way depends on what the player has
-     * installed and on the window size. A default corner and a drag is the honest answer to that; a
-     * position worked out from other mods' layouts would be a guess that breaks when they move.
+     * The player's to move: which mod's overlay sits in the top-left depends on what is installed and on
+     * the window size, so a default corner plus a drag beats a guessed layout.
      */
     public static int panelX() {
         ensureLoaded();
         return panelX;
     }
 
-    /** The same for the top. */
     public static int panelY() {
         ensureLoaded();
         return panelY;
     }
 
-    /** Moves the panel, keeping it on screen; called while it is being dragged. */
     public static void movePanel(int x, int y, int screenWidth, int screenHeight, int width,
                                  int height) {
         ensureLoaded();
@@ -245,7 +197,6 @@ public final class MapFilter {
         panelY = Math.max(0, Math.min(y, Math.max(0, screenHeight - height)));
     }
 
-    /** Remembers where the panel was left, at the end of a drag rather than on every pixel of it. */
     public static void keepPanelPosition() {
         ensureLoaded();
         dirty = true;
@@ -291,7 +242,6 @@ public final class MapFilter {
         }
     }
 
-    /** The names are written as the enum constants, so a renamed kind simply stops being hidden. */
     private static RoadClass roadClassNamed(String name) {
         for (RoadClass roadClass : RoadClass.values()) {
             if (roadClass.name().equals(name)) {
@@ -314,7 +264,6 @@ public final class MapFilter {
         return names == null ? List.of() : names;
     }
 
-    /** Written immediately: one small file, on a switch the player just pressed. */
     private static void save() {
         if (!dirty) {
             return;
@@ -348,13 +297,11 @@ public final class MapFilter {
         }
     }
 
-    /** Client-wide rather than per world: what a player wants to see is their taste, not the world's. */
     private static Path file() {
         Path config = GamePaths.configDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
-    /** Field names are the on-disk contract, so they are deliberately terse and stable. */
     private static final class FilterDto {
         int version;
         List<String> roads;

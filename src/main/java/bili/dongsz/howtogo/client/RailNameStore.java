@@ -23,41 +23,15 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Names for the automatically detected rail layer, kept outside the layer itself.
- *
- * <h2>Why a name cannot live on a rail segment</h2>
- * The rail layer is rebuilt from scratch every time Create's graph changes, and each rebuild numbers
- * its segments from scratch -- {@code RailTrackStore} starts every build at its id base and counts up
- * in the order it happens to walk Create's edges. A segment id therefore means "the n-th edge of this
- * particular reading" and nothing more: lay one more piece of track and it can point at a different
- * edge. Storing a name against an id would have it appear on the wrong line, or vanish, with no
- * mistake by anyone.
- *
- * <p>So a name is stored against the segment's <b>shape</b> instead: its two end points, in a
- * canonical order, as whole blocks. That is a property of the track rather than of the reading, so it
- * survives rebuilds, re-joins, reloads and even a switch between the two sources of the layer. Two
- * rail pieces sharing both end points share a name, which for a straight line between the same two
- * junctions is the honest answer rather than a collision worth guarding against.
- *
- * <h2>Naming the line, not the piece</h2>
- * A railway line arrives as a chain of short segments through pass-through nodes, exactly the way a
- * bent road does. Naming one segment of it would leave the line called one thing for one stretch and
- * something else for the next, so a rename names the whole chain -- {@link RoadChains} already
- * decides what a whole road is, and this reuses that decision rather than inventing a second one.
- * Each segment of the chain gets its own entry, so if the network is later cut by a junction the two
- * halves keep the name instead of losing it.
- *
- * <h2>The layer stays read-only</h2>
- * This store is the only place a rail name is written, and the only thing it ever does to the layer
- * is set a display name on a segment that was just built. The saved road network is untouched: rail
- * names go to their own file beside it, resolved by the same {@link WorldFiles} as the roads so the
- * two can never disagree about which world and dimension they describe.
+ * Names for the auto-detected rail layer, stored outside the layer.
+ * The layer is rebuilt on every Create graph change and renumbers its segments, so a name cannot live on a segment id. It is keyed by the segment's two end points as whole blocks in canonical order -- a property of the track that survives rebuilds, re-joins and reloads. Two pieces sharing both ends share a name.
+ * A rename names the whole chain via RoadChains; each segment of the chain gets its own entry, so a later cut keeps the name on both halves. The layer stays read-only apart from its display name; names go to their own file resolved by WorldFiles.
  */
 public final class RailNameStore {
 
     public static final int FORMAT_VERSION = 1;
 
-    /** Distinguishes this file from the road network's, in the same world and dimension. */
+    /** Suffix distinguishing this file from the road network's, in the same world and dimension. */
     private static final String FILE_SUFFIX = "-rail-names";
 
     private static final Gson GSON = new GsonBuilder()
@@ -65,38 +39,21 @@ public final class RailNameStore {
             .disableHtmlEscaping()
             .create();
 
-    /** Name per segment shape key, for the level currently loaded. */
+    /** Name per segment shape key, for the currently loaded level. */
     private static Map<String, String> names = new HashMap<>();
 
     /**
-     * The name each label-carrying segment should draw, recomputed on every rebuild of the layer.
-     *
-     * <p>One label per railway rather than one per segment: a chain of a dozen pieces would
-     * otherwise draw its name a dozen times along the same line. Computed here, once per rebuild,
-     * because the alternative is walking every chain during the render pass of every frame.
-     *
-     * <p>The name is stored beside the id rather than read back off the segment, so a chain whose
-     * middle piece happens to carry no name still gets labelled instead of silently losing its name
-     * from the map.
+     * The name each label-carrying segment should draw, recomputed on every rebuild.
+     * One label per railway rather than per segment, so a chain does not draw its name a dozen times; computed once per rebuild to keep chain walking out of the render pass. Kept beside the id so a middle segment with no name still gets labelled.
      */
     private static Map<Integer, String> labels = Map.of();
 
     /**
-     * The shape keys of the railway the player has selected.
-     *
-     * <p>Every segment of the chain, not just the one that was pointed at: a railway is one line to
-     * the player, and highlighting only the piece under the cursor makes a selected line look like a
-     * stray fragment of one. The keys are geometry, so the highlight survives a rebuild without
-     * anything having to be recomputed.
+     * Shape keys of the selected railway -- every segment of the chain, so the highlight covers the whole line. Keys are geometry, so the highlight survives a rebuild.
      */
     private static Set<String> selectedKeys = Set.of();
 
-    /**
-     * The shape key the selection started from, for a rename that is asked for later.
-     *
-     * <p>Kept beside the set because a rename has to be addressed to one segment of the chain in
-     * order to find the chain again, and a set has no first element that means anything.
-     */
+    /** Shape key the selection started from, needed when a rename is requested later. */
     private static String selectedSeed;
 
     private static Object boundLevel;
@@ -105,13 +62,10 @@ public final class RailNameStore {
     private RailNameStore() {
     }
 
-    // ------------------------------------------------------------------ layer
 
     /**
-     * Applies the stored names to a freshly built layer, and works out which segments label it.
-     *
-     * <p>Called by {@link RailTrackStore} immediately after it builds, so the ids this reads are the
-     * ones of the network it was just handed and cannot be a rebuild out of date.
+     * Applies stored names to a freshly built layer and works out labels.
+     * Called by RailTrackStore immediately after it builds, so the ids cannot be stale.
      */
     public static void apply(RoadNetwork rail) {
         ensureBound();
@@ -125,23 +79,16 @@ public final class RailNameStore {
     }
 
     /**
-     * The name this segment should draw, or null when it is not the one labelling its railway.
-     *
-     * <p>Asked once per rail segment per frame, so it is a map lookup and nothing more.
+     * The name this segment should draw, or null when it does not label its railway. One map lookup per segment per frame.
      */
     public static String labelAt(RoadSegment segment) {
         return labels.get(segment.id());
     }
 
     /**
-     * Names the whole railway the given segment belongs to, or clears its name when given nothing.
-     *
-     * <p>Addressed by shape key rather than by id on purpose: the naming prompt is answered a tick
-     * later, and the layer is rebuilt on its own schedule, so by the time a name arrives the id it
-     * started from may belong to a different segment. The key is found again in whatever the layer is
-     * now.
-     *
-     * @param key the shape key the naming started from, as returned by {@link #keyOf}
+     * Names the whole railway the given segment belongs to, or clears it when name is null.
+     * Addressed by shape key because the naming prompt answers a tick later and the layer may have been rebuilt; the key is found again in the current layer.
+     * @param key the shape key the naming started from, as returned by keyOf
      */
     public static void rename(RoadNetwork rail, String key, String name) {
         ensureBound();
@@ -176,13 +123,9 @@ public final class RailNameStore {
         save();
     }
 
-    // -------------------------------------------------------------- selection
 
     /**
-     * Marks the whole railway the given segment belongs to as selected, for the highlight and for a
-     * following rename.
-     *
-     * <p>The whole chain, so the highlight covers the line the player believes they selected.
+     * Marks the whole railway the segment belongs to as selected, for the highlight and a following rename.
      */
     public static void select(RoadNetwork rail, RoadSegment segment) {
         if (segment == null) {
@@ -210,16 +153,14 @@ public final class RailNameStore {
         selectedSeed = null;
     }
 
-    /** The shape key of the selected railway's seed segment, or null when nothing is selected. */
+    /** Shape key of the selected railway's seed segment, or null. */
     public static String selectedSeed() {
         return selectedSeed;
     }
 
     /**
      * The name stored for a shape key, or null.
-     *
-     * <p>Read from the store rather than from a segment, because the caller that opens the naming
-     * prompt may be holding a key whose segment has already been replaced by a rebuild.
+     * Read from the store because a rebuild may have replaced the segment already.
      */
     public static String nameOfKey(String key) {
         return key == null ? null : names.get(key);
@@ -230,14 +171,10 @@ public final class RailNameStore {
         return !selectedKeys.isEmpty() && selectedKeys.contains(keyOf(segment));
     }
 
-    // ------------------------------------------------------------------ shape
 
     /**
-     * A segment's identity: its two end points, as whole blocks, in a canonical order.
-     *
-     * <p>The whole polyline is not part of it. A curve resampled slightly differently by a new
-     * reading of Create's graph is the same piece of track, and it has to keep its name; its ends are
-     * what the topology actually fixes.
+     * A segment's identity: its two end points as whole blocks, in canonical order.
+     * The polyline is not part of it: a curve resampled differently is the same track and must keep its name.
      */
     public static String keyOf(RoadSegment segment) {
         int last = segment.vertexCount() - 1;
@@ -270,13 +207,7 @@ public final class RailNameStore {
 
     /**
      * One label per named railway, at the middle of its chain.
-     *
-     * <h2>Why each chain is walked once</h2>
-     * Every segment of a named chain carries the name, so a naive pass would walk the same chain
-     * once per segment -- and {@link RoadChains} finds the continuation through a node by scanning
-     * the whole network, which makes that quadratic in the size of the layer on top of being
-     * redundant. A chain that has been walked is remembered here, so the cost is one walk per
-     * railway rather than one per piece of it.
+     * Each chain is walked once: per-segment walking would repeat RoadChains' continuation scan, quadratic in the size of the layer.
      */
     private static void recomputeLabels(RoadNetwork rail) {
         if (names.isEmpty()) {
@@ -306,14 +237,10 @@ public final class RailNameStore {
         labels = found;
     }
 
-    // ------------------------------------------------------------ persistence
 
     /**
-     * Re-reads the current dimension's rail names from disk, after something replaced the file.
-     *
-     * <p>The names are applied to a rail layer when it is built, and the layer is rebuilt on Create's
-     * own schedule; clearing the labels here means the old names stop being drawn immediately rather
-     * than lingering until the next rebuild, which is the honest picture of a file that changed.
+     * Re-reads the loaded dimension's names after the file was replaced.
+     * Clearing labels here stops old names drawing at once rather than lingering until the next rebuild.
      */
     public static void reload() {
         ensureBound();
@@ -322,9 +249,7 @@ public final class RailNameStore {
     }
 
     /**
-     * Rebinds to the level now loaded, reading that level's names.
-     *
-     * <p>The selection is dropped on any rebind: it names a shape in a layer that no longer exists.
+     * Rebinds to the loaded level and reads its names; the selection is dropped because it names a shape in a layer that no longer exists.
      */
     private static void ensureBound() {
         Object level = Minecraft.getInstance().level;
@@ -367,7 +292,7 @@ public final class RailNameStore {
         return result;
     }
 
-    /** Written on every rename, which is one deliberate action rather than a stream of edits. */
+    /** Written on every rename -- one deliberate action, not a stream of edits. */
     private static void save() {
         if (boundPath == null) {
             return;
@@ -376,8 +301,7 @@ public final class RailNameStore {
             Files.createDirectories(boundPath.getParent());
             Dto dto = new Dto();
             dto.version = FORMAT_VERSION;
-            // Sorted, so an unchanged set of names writes identical bytes: a map's own order is not
-            // stable between runs, and churn in a file that did not change is a false alarm.
+            // Sorted, so an unchanged set writes identical bytes; map order is not stable between
             dto.names = new TreeMap<>(names);
             try (Writer writer = Files.newBufferedWriter(boundPath, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);

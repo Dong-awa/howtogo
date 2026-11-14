@@ -14,43 +14,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * MTR's own network, read on the server that is simulating it.
+ * MTR's own network, read on the server that simulates it.
  *
- * <h2>Why the server reads MTR at all</h2>
- * MTR keeps its railway on its server and sends a client only the part of it within a couple of hundred
- * blocks -- see {@code MtrClientData}. Everything this mod offers on a client connected to somebody
- * else's server is therefore a window, unless one of two other readings exists: the simulation running
- * in the same process (single player), or MTR Map Overlay's snapshot. This class is the server's side
- * of a third answer, the one that needs nothing but this mod on the server: the server holds the whole
- * railway in memory, reads it here and hands it to {@link MtrServerSync}, which sends it to clients.
+ * MTR sends a client only the railway near the player, so the server reads its whole network here
+ * and MtrServerSync sends it to clients.
  *
- * <h2>The chain</h2>
- * The same objects MTR's own server simulates, reached the same way the client reaches them when the
- * player hosts the world ({@code MtrWholeMap}):
- * <pre>
- * org.mtr.MTR / org.mtr.Init / org.mtr.mod.Init    (whichever spelling this MTR uses)
- *   .main                        static, org.mtr.core.Main, set once MTR's server has started
- *     .simulators                one per dimension
- *       .dimension               "minecraft/overworld"
- *       .stations / .platforms / .routes / .rails / .railIdMap
- * </pre>
- *
- * <h2>Why every name is looked up and never assumed</h2>
- * MTR documents this as internal working with no stable API and has already moved its own classes once
- * (4.1 renamed {@code org.mtr.mod.*} to {@code org.mtr.*}). No MTR type appears in a signature here,
- * every handle is looked up by name once and guarded, and a version whose shapes have moved reports
- * itself unavailable -- at which point the client keeps its window and nothing else changes.
- *
- * <h2>Threading</h2>
- * A simulator mutates its sets on its own thread. {@link #read} is therefore only ever called from a
- * task queued with {@link #runOn}, which is MTR's own {@code Simulator.run}; the result is an immutable
- * {@link MtrSnapshotData.Dimension}, and nothing of MTR's is held on to afterwards.
+ * Every handle is looked up by name and guarded -- MTR documents this as internal -- so moved
+ * shapes report unavailable. A simulator mutates its sets on its own thread: read only via runOn.
  */
 public final class MtrServerData {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    /** The class MTR keeps its running server in, under each name it has given it. */
+    /** The class MTR keeps its running server in, under each name it has used. */
     private static final String[] ENTRY_NAMES = {
             "org.mtr.MTR",
             "org.mtr.Init",
@@ -68,9 +44,7 @@ public final class MtrServerData {
     private static final String VECTOR = "org.mtr.core.tool.Vector";
     private static final String POSITION = "org.mtr.core.data.Position";
 
-    /** How far apart a rail's geometry is sampled, in metres, when the rail is short. */
     private static final double TRACK_SAMPLE_METRES = 4.0;
-    /** The most points one rail may carry; longer rails sample coarser rather than at 4 metres. */
     private static final int MAX_TRACK_VERTICES = 256;
 
     private static boolean resolved;
@@ -109,7 +83,6 @@ public final class MtrServerData {
     private static Method routeIdMethod;
     private static Method routeNameMethod;
     private static Method routeColorMethod;
-    /** The route's circular state, optional: a version without it reads every line two-way. */
     private static Method routeCircularMethod;
     private static Method routeModeMethod;
     private static Method routeHiddenMethod;
@@ -130,9 +103,7 @@ public final class MtrServerData {
 
     /**
      * Whether MTR's server-side shapes are the ones this reads.
-     *
-     * <p>Resolved once and remembered: a missing class does not appear later, and this is asked from
-     * every server tick while a reading exists.
+     * Resolved once and remembered; asked every server tick while a reading exists.
      */
     public static synchronized boolean available() {
         if (resolved) {
@@ -145,7 +116,6 @@ public final class MtrServerData {
         return bind();
     }
 
-    /** Whether MTR's classes are on the classpath at all, without looking up any of the shapes. */
     public static boolean classesPresent() {
         try {
             load(MAIN);
@@ -158,17 +128,14 @@ public final class MtrServerData {
                 load(name);
                 return true;
             } catch (ClassNotFoundException | LinkageError absent) {
-                // Not that name; the next one is the other spelling of the same class.
             }
         }
         return false;
     }
 
     /**
-     * The running MTR server, or null before it has started (or on a server without MTR).
-     *
-     * <p>This is the same object graph {@code MtrWholeMap} reads from on a client that hosts the world;
-     * on a dedicated server it is the only copy there is.
+     * The running MTR server, or null before it has started or without MTR. On a dedicated
+     * server it is the only copy there is.
      */
     public static Object main() {
         if (!available()) {
@@ -184,9 +151,7 @@ public final class MtrServerData {
 
     /**
      * One simulator per dimension, in whatever order MTR holds them.
-     *
-     * <p>Found by what a field holds rather than by its name: MTR calls it {@code simulators} today and
-     * is free to rename it, while one simulator per dimension is the part that is not free to change.
+     * Found by field type rather than name: the name can change, one per dimension cannot.
      */
     public static List<Object> simulators(Object main) {
         List<Object> found = new ArrayList<>();
@@ -221,12 +186,8 @@ public final class MtrServerData {
     }
 
     /**
-     * Queues a task on one simulator's own thread.
-     *
-     * <p>The only safe way to touch the sets: they are mutated by that thread, and reading them from
-     * the server thread is how a mod that merely meant to look at MTR gets a torn reading.
-     *
-     * @return false when there is no simulator to queue on, or MTR refused the task
+     * Queues a task on one simulator's own thread -- the only safe way to touch its sets.
+     * @return false when there is no simulator, or MTR refused the task
      */
     public static boolean runOn(Object simulator, Runnable task) {
         if (simulator == null || !available() || runMethod == null) {
@@ -241,7 +202,6 @@ public final class MtrServerData {
         }
     }
 
-    /** The dimension a simulator simulates, in MTR's own spelling ("minecraft/overworld"). */
     public static String dimensionOf(Object simulator) {
         if (simulator == null || dimensionField == null) {
             return null;
@@ -255,10 +215,8 @@ public final class MtrServerData {
     }
 
     /**
-     * Reads one simulator once and returns both the dimension and its full fingerprint.
-     *
-     * <p>Runs on the simulator thread. MtrServerSync uses this instead of calling read() and
-     * signatureOf() separately, so the fingerprint and the cached dimension describe one read.
+     * Reads one simulator once and returns the dimension and its full fingerprint.
+     * Runs on the simulator thread; MtrServerSync uses this so both describe one read.
      */
     public static Sample readWithSignature(Object simulator) {
         MtrSnapshotData.Dimension dimension = read(simulator);
@@ -266,16 +224,14 @@ public final class MtrServerData {
     }
 
     /**
-     * Full fingerprint of a simulator's network: every station/platform/line field and every rail
-     * curve. This is deliberately not a count-only check; it runs only on the ten-second poll, never
-     * once a second. The old count-only fingerprint could not see a rename, colour or geometry edit.
+     * Full fingerprint of a simulator's network: every station/platform/line field and rail curve.
+     * Not count-only (renames and geometry edits would hide); runs on the ten-second poll.
      */
     public static long signatureOf(Object simulator) {
         MtrSnapshotData.Dimension dimension = read(simulator);
         return dimension == null ? 0L : signatureOf(dimension);
     }
 
-    /** A dimension and the full fingerprint of the same read. */
     public record Sample(MtrSnapshotData.Dimension dimension, long signature) {
     }
 
@@ -308,10 +264,8 @@ public final class MtrServerData {
     }
     /**
      * Every station, platform, line and rail a simulator holds, as a value that can leave MTR's thread.
-     *
-     * <p>Runs on the simulator's thread -- see {@link #runOn} -- and keeps nothing of MTR's. One
-     * unreadable element costs that element and nothing else; the reader is a mirror of
-     * {@code MtrClientData}'s, for the same reason: MTR's shapes are not a contract.
+     * Runs on the simulator thread (see runOn) and keeps nothing of MTR's; one unreadable element
+     * costs only itself.
      */
     public static MtrSnapshotData.Dimension read(Object simulator) {
         if (simulator == null || !available()) {
@@ -352,7 +306,6 @@ public final class MtrServerData {
         }
     }
 
-    // ------------------------------------------------------------------ elements
 
     private static MtrSnapshotData.Station station(Object raw) {
         try {
@@ -373,8 +326,7 @@ public final class MtrServerData {
 
     private static MtrSnapshotData.Platform platform(Object raw) {
         try {
-            // A platform's station comes from the {@code area} field every saved rail carries; it is
-            // the station object itself rather than an id, so the id is read back off it.
+            // A platform's station is read from the area field every saved rail carries.
             Object area = platformAreaField.get(raw);
             Object mid = platformMidMethod.invoke(raw);
             return new MtrSnapshotData.Platform(number(raw, stationIdMethod),
@@ -391,7 +343,6 @@ public final class MtrServerData {
     private static MtrSnapshotData.Line line(Object raw, Map<Long, String> modeByStation) {
         try {
             if (routeHiddenMethod != null && Boolean.TRUE.equals(routeHiddenMethod.invoke(raw))) {
-                // A route MTR itself does not show is not a line this mod offers either.
                 return null;
             }
             String mode = routeModeMethod == null ? null
@@ -407,8 +358,6 @@ public final class MtrServerData {
                         station == null ? "" : nameOrEmpty(station),
                         destinationOf(routePlatform, raw, index)));
                 if (mode == null && stationId != 0) {
-                    // The same fallback the client reader uses for a route whose own kind cannot be
-                    // read: the stations it calls at are the only other thing that knows.
                     mode = modeByStation.get(stationId);
                 }
                 index++;
@@ -418,7 +367,6 @@ public final class MtrServerData {
                     (int) number(raw, routeColorMethod) & 0xFFFFFF, stops, List.of(),
                     circular(raw));
         } catch (ReflectiveOperationException | RuntimeException e) {
-            // One unreadable route must not cost the reading every other one.
             return null;
         }
     }
@@ -442,10 +390,8 @@ public final class MtrServerData {
 
     /**
      * Whether MTR calls this route circular, or false when the name is missing or does not answer.
-     *
-     * <p>A circular route is a loop ridden one way round; MTR states it as a {@code CircularState} of
-     * {@code NONE}, {@code CLOCKWISE} or {@code ANTICLOCKWISE}. A missing accessor is a version whose
-     * lines are read two-way, which is the answer that cannot invent a restriction.
+     * CircularState is NONE/CLOCKWISE/ANTICLOCKWISE; a missing accessor means lines are read
+     * two-way, which cannot invent a restriction.
      */
     private static boolean circular(Object route) {
         if (routeCircularMethod == null) {
@@ -464,9 +410,7 @@ public final class MtrServerData {
         try {
             Object rails = field(railsField, simulator);
             Object idMap = field(railIdMapField, simulator);
-            // MTR keys its rails by their hex id in a map of String -> Rail. A rail also answers its
-            // own id through the schema's getter, which is preferred; the map is the fallback for a
-            // version that keeps the id only as the map key.
+            // The schema getter is preferred; the map is the fallback for a version that keeps the id only as the key.
             Map<Object, String> hexIds = new IdentityHashMap<>();
             if (idMap instanceof Map<?, ?> map) {
                 for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -486,7 +430,6 @@ public final class MtrServerData {
                 }
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
-            // No rails is a worse reading, not a broken one: the stations and lines still stand.
             warnOnce("[HowToGo] could not read MTR's rails on the server ({})", e.toString());
         }
         return tracks;
@@ -534,7 +477,6 @@ public final class MtrServerData {
         }
     }
 
-    // ------------------------------------------------------------------ helpers
 
     private static Object field(Field field, Object target) throws ReflectiveOperationException {
         return field == null ? null : field.get(target);
@@ -563,7 +505,6 @@ public final class MtrServerData {
         return value instanceof Enum<?> constant ? constant.name() : null;
     }
 
-    // ---------------------------------------------------------------- resolving
 
     private static synchronized boolean bind() {
         try {
@@ -576,14 +517,12 @@ public final class MtrServerData {
                     boundEntry = name;
                     break;
                 } catch (ClassNotFoundException next) {
-                    // Not this name; the next one is the other spelling of the same class.
                 }
             }
             if (entry == null) {
                 throw new ClassNotFoundException(String.join(" or ", ENTRY_NAMES));
             }
-            // The field holding the running server, recognised by the type it holds rather than by
-            // the name MTR gave it: the name is the part an update is free to change, the type is not.
+            // The field holding the running server, recognised by type rather than name.
             for (Field field : entry.getDeclaredFields()) {
                 if (Modifier.isStatic(field.getModifiers()) && field.getType() == main) {
                     field.setAccessible(true);
@@ -596,12 +535,10 @@ public final class MtrServerData {
             }
 
             runMethod = simulator.getMethod("run", Runnable.class);
-            // Not required: it is what names a dimension in the reading, and a reading without one is
-            // still usable when the client has a single dimension to match it against.
+            // Not required: it names the dimension; without it a single-dimension client still matches.
             dimensionField = optionalField(simulator, "dimension");
 
-            // The four collections live on the simulation core's Data, which Simulator extends; getField
-            // walks the chain.
+            // The collections live on the simulation core's Data; Simulator extends it, so getField walks.
             stationsField = simulator.getField("stations");
             platformsField = simulator.getField("platforms");
             routesField = optionalField(simulator, "routes");
@@ -617,9 +554,7 @@ public final class MtrServerData {
             Class<?> vector = load(VECTOR);
             Class<?> position = load(POSITION);
 
-            // Looked up on the class each is invoked on, never on a base class: getMethod finds
-            // inherited methods, so a lookup from the concrete class either works or fails loudly,
-            // while a lookup from a base class can succeed and then fail at the call site.
+            // Looked up on the concrete class: getMethod finds inherited methods, so a base lookup can succeed and fail later.
             stationIdMethod = station.getMethod("getId");
             stationNameMethod = station.getMethod("getName");
             stationColorMethod = station.getMethod("getColor");
@@ -642,9 +577,8 @@ public final class MtrServerData {
             routeIdMethod = route.getMethod("getId");
             routeNameMethod = route.getMethod("getName");
             routeColorMethod = route.getMethod("getColor");
-            // Optional, like the mode and the hidden flag below: a version that moved this name loses
-            // the direction and keeps the line, which reads two-way -- what every line was before
-            // directions existed. The handshake against a real jar is what notices the name moving.
+            // Optional, like the mode and hidden flag: a moved name reads the line two-way instead of losing
+            // it; the real-jar handshake notices the move.
             routeCircularMethod = optionalMethod(route, "getCircularState");
             routeModeMethod = optionalMethod(route, "getTransportMode");
             routeHiddenMethod = optionalMethod(route, "getHidden");

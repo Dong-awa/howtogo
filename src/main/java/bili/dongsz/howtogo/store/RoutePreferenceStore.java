@@ -21,21 +21,9 @@ import java.util.EnumSet;
 import java.util.List;
 
 /**
- * The routing policy currently in force, plus where a change made in the picker is kept.
- *
- * <p>The TOML file stays the single place a value is <em>declared</em>, but it is a file to be
- * edited, reloaded and re-validated by the mod config UI, not a store the game can write to
- * mid-session. Buttons that change the policy therefore need somewhere of their own to persist to,
- * and this is it: a small JSON next to the road data, one file for the client rather than one per
- * world, since a taste about routing is not a property of a map.
- *
- * <p>The choices are read once at client setup and fall back to the TOML values whenever the file
- * is absent, unreadable or does not parse -- so a fresh install behaves exactly as configured, and
- * a corrupt file costs the player their button choices and nothing else.
- *
- * <p>Also holds the guidance switches -- spoken announcements, board-and-alight-only transit
- * guidance, and straight-through junction calls -- which are not routing choices but are choices the
- * readouts make and therefore need the same place to be kept.
+ * Routing policy currently in force, plus where changes made in the picker persist.
+ * The TOML file declares defaults but is not written mid-session, so button choices go to a small client-wide JSON next to the road data. Reads happen once at client setup; the TOML values are the fallback when the file is absent, unreadable or unparsable.
+ * Also holds the guidance switches -- spoken announcements, board-and-alight-only transit, straight-through junction calls -- which are choices the readouts make, not routing inputs.
  */
 public final class RoutePreferenceStore {
 
@@ -47,46 +35,27 @@ public final class RoutePreferenceStore {
             .create();
 
     /**
-     * Seeded from the config rather than from {@link RoutePreferences#DEFAULTS}: before the file
-     * has been read the configured values are the correct answer, and anything asking for the
-     * policy that early should get them rather than a second set of defaults.
+     * Seeded from config rather than RoutePreferences.DEFAULTS: before the file is read the configured values are the correct answer.
      */
     private static RoutePreferences preferences = new RoutePreferences(
             RoadConfig.routePreference(), RoadConfig.avoidedRoadClasses(), RoadConfig.preferMajorRoads());
     /**
-     * Whether navigation is spoken aloud.
-     *
-     * <p>Not a {@link RoutePreferences} field, because speech is not an input to a route. It lives
-     * here because this is the one file the picker's switches persist to: the TOML declares the
-     * default and is reloaded by the mod config UI, not written to by the game.
+     * Whether navigation is spoken. Not a RoutePreferences field -- speech is not a routing input -- but this store is where the picker's switches persist.
      */
     private static boolean voiceAnnouncements = RoadConfig.voiceAnnouncements();
     /**
-     * Whether a public transport journey is guided by boarding and alighting rather than by turns.
-     *
-     * <p>Another switch that is not an input to a route, so it lives beside the voice one for the same
-     * reason: a plan is the same plan either way, and what changes is what the guidance says about it.
+     * Whether transit guidance is by boarding and alighting rather than turns; the plan is the same either way.
      */
     private static boolean transitBoardOnly = RoadConfig.transitBoardOnly();
     /**
-     * Whether a junction the route carries straight through is called out by the guidance.
-     *
-     * <p>Beside the other two switches rather than in {@link RoutePreferences}, for the same reason:
-     * a plan is the same plan either way, and what changes is what is said about it. It is read by
-     * {@code Route#maneuvers}, which is why it has to live in this store rather than only in the
-     * config: that list is what the readout, the voice and the turn cursor all index, so a value the
-     * config owned alone would leave the settings screen's toggle with nothing to change.
+     * Whether a junction carried straight through is announced.
+     * Read by Route#maneuvers, which the readout, voice and turn cursor index; a config-owned value alone would leave the settings toggle with nothing to change.
      */
     private static boolean straightAnnouncements = RoadConfig.straightAnnouncements();
     private static boolean loaded;
     /**
      * Whether there was no game directory to resolve a preferences file against.
-     *
-     * <p>The route regression harness plans routes in a plain JVM with no game running, and the
-     * loader's config directory answers null there. The store is asked for its switches from the
-     * manoeuvre list, so the answer in that case is the configured default -- exactly the answer a
-     * first launch gets -- and the flag stops every later call asking a question whose answer cannot
-     * change.
+     * The route regression harness runs in a plain JVM where the loader's config directory is null; the configured default is then the answer and the flag stops repeated calls.
      */
     private static boolean noGameDirectory;
 
@@ -94,11 +63,8 @@ public final class RoutePreferenceStore {
     }
 
     /**
-     * The policy every plan is made under, read from disk on first use if client setup has not run.
-     *
-     * <p>This has to be the one read the whole game makes: a route chosen under one policy and
-     * estimated under another is the kind of discrepancy nobody can see and everybody blames on
-     * the roads.
+     * The policy every plan is made under; loads from disk on first use if client setup has not run.
+     * Must be the one read the whole game makes, so a route is not chosen under one policy and estimated under another.
      */
     public static RoutePreferences preferences() {
         if (!loaded || configValueMissing()) {
@@ -109,28 +75,21 @@ public final class RoutePreferenceStore {
 
     /**
      * Whether the config values this store fell back to were not there yet.
-     *
-     * <p>A mod's own constructor can reach this class before the config files have been read, and
-     * {@link RoadConfig} answers with its defaults when that happens. Re-seeding once the values
-     * really exist is what stops a whole session running on defaults that were never configured.
-     * While there is no game directory at all there is no config to wait for, so the seeded defaults
-     * stand; see {@link #noGameDirectory}.
+     * A mod constructor can reach this class before config is read; re-seeding once the values exist stops a session running on defaults nobody configured. No game directory means no config to wait for; see noGameDirectory.
      */
     private static boolean configValueMissing() {
         return !noGameDirectory && RoadConfig.defaultTravelMode() == null;
     }
 
-    /** Loads the saved choices, falling back to the config values when there are none. */
     public static void load() {
         loaded = true;
         Path file = file();
         if (file == null) {
-            // No game directory: the config's own defaults are the whole answer. See noGameDirectory.
+            // No game directory: the config's own defaults are the whole answer.
             return;
         }
         if (!Files.isRegularFile(file)) {
-            // No saved choices yet: the config is the answer, so re-seed in case the values read
-            // at class-load time were the pre-config fallbacks.
+            // No saved choices: re-seed from config in case the class-load values were pre-config
             preferences = new RoutePreferences(RoadConfig.routePreference(),
                     RoadConfig.avoidedRoadClasses(), RoadConfig.preferMajorRoads());
             voiceAnnouncements = RoadConfig.voiceAnnouncements();
@@ -155,16 +114,14 @@ public final class RoutePreferenceStore {
             }
             preferences = new RoutePreferences(RoutePreference.byId(dto.metric), avoided,
                     dto.preferMajorRoads);
-            // Boxed in the file so "absent" can be told from "off": a file written before the voice
-            // switch existed must fall back to the configured default, not silently mute it.
+            // Boxed so "absent" can be told from "off": a file predating the voice switch must
             voiceAnnouncements = dto.voiceAnnouncements == null
                     ? RoadConfig.voiceAnnouncements()
                     : dto.voiceAnnouncements;
             transitBoardOnly = dto.transitBoardOnly == null
                     ? RoadConfig.transitBoardOnly()
                     : dto.transitBoardOnly;
-            // Boxed for the same reason again: a file written before straight-through calls existed
-            // must fall back to the configured default, which is on.
+            // Boxed for the same reason: a file predating straight-through calls falls back
             straightAnnouncements = dto.straightAnnouncements == null
                     ? RoadConfig.straightAnnouncements()
                     : dto.straightAnnouncements;
@@ -179,7 +136,6 @@ public final class RoutePreferenceStore {
         }
     }
 
-    /** Switches the metric between quickest and shortest. */
     public static void toggleMetric() {
         RoutePreference flipped = preferences().metric() == RoutePreference.FASTEST_TIME
                 ? RoutePreference.SHORTEST_DISTANCE
@@ -189,7 +145,6 @@ public final class RoutePreferenceStore {
         persist();
     }
 
-    /** Adds or removes one class from the avoid list. */
     public static void toggleAvoided(RoadClass roadClass) {
         if (roadClass == null) {
             return;
@@ -204,34 +159,27 @@ public final class RoutePreferenceStore {
         persist();
     }
 
-    /** Turns the discouragement of minor roads on or off. */
     public static void togglePreferMajorRoads() {
         preferences = new RoutePreferences(preferences().metric(), preferences().avoidedClasses(),
                 !preferences().preferMajorRoads());
         persist();
     }
 
-    /** Turns spoken navigation announcements on or off. */
     public static void toggleVoiceAnnouncements() {
         voiceAnnouncements = !voiceAnnouncements();
         persist();
     }
 
     /**
-     * Turns the board-and-alight-only transit guidance on or off.
-     *
-     * <p>No re-plan is asked for by the callers that draw this switch, for the same reason the voice
-     * switch asks for none: a plan is the same plan whatever the guidance says about it.
+     * Turns board-and-alight-only transit guidance on or off.
+     * Callers ask for no re-plan: the plan is the same whatever the guidance says about it.
      */
     public static void toggleTransitBoardOnly() {
         transitBoardOnly = !transitBoardOnly();
         persist();
     }
 
-    /**
-     * Whether a public transport journey is guided by boarding and alighting rather than by turns,
-     * read from disk on first use.
-     */
+    /** Whether transit guidance is board-and-alight only, read from disk on first use. */
     public static boolean transitBoardOnly() {
         if (!loaded || configValueMissing()) {
             load();
@@ -240,13 +188,8 @@ public final class RoutePreferenceStore {
     }
 
     /**
-     * Whether a junction the route carries straight through is called out, read from disk on first
-     * use.
-     *
-     * <p>The question the manoeuvre list asks, so it has to answer before anything has had a chance
-     * to load the file: the same lazy load the other switches use covers that. Read by a route's own
-     * list of manoeuvres rather than by a readout, which is why the "no game directory" case is
-     * handled at all -- see {@link #noGameDirectory}.
+     * Whether straight-through junction calls are announced, read from disk on first use.
+     * Asked by the manoeuvre list before anything has loaded the file, so the lazy load covers it; the no-game-directory case is handled too -- see noGameDirectory.
      */
     public static boolean straightAnnouncements() {
         if (!loaded || configValueMissing()) {
@@ -256,11 +199,8 @@ public final class RoutePreferenceStore {
     }
 
     /**
-     * Turns straight-through calls on or off, and keeps the answer.
-     *
-     * <p>Named for the value rather than "toggle" because the settings screen's switch passes the
-     * state it wants rather than the state it is leaving, and because the reset button restores the
-     * default through the same door.
+     * Sets straight-through calls on or off and keeps the answer.
+     * Named for the value rather than "toggle" because the settings switch passes the state it wants, and reset restores the default through the same door.
      */
     public static void setStraightAnnouncements(boolean on) {
         straightAnnouncements = on;
@@ -268,10 +208,8 @@ public final class RoutePreferenceStore {
     }
 
     /**
-     * Whether navigation is spoken aloud, read from disk on first use.
-     *
-     * <p>Separate from {@link #preferences()} because it is not part of the routing policy, but it
-     * is loaded by the same call so the two can never disagree about what was on disk.
+     * Whether navigation is spoken, read from disk on first use.
+     * Loaded by the same call as preferences() so the two cannot disagree about what was on disk.
      */
     public static boolean voiceAnnouncements() {
         if (!loaded || configValueMissing()) {
@@ -283,8 +221,7 @@ public final class RoutePreferenceStore {
     private static void persist() {
         Path file = file();
         if (file == null) {
-            // Nothing to write beside, and nothing that could read it back either; the choice still
-            // stands for this session, which is all a caller outside a game can ask for.
+            // Nothing to write beside, and nothing that could read it back; the choice still
             return;
         }
         try {
@@ -311,19 +248,14 @@ public final class RoutePreferenceStore {
                     dto.metric, dto.avoidedRoadClasses, dto.preferMajorRoads, dto.voiceAnnouncements,
                     dto.transitBoardOnly, dto.straightAnnouncements);
         } catch (IOException e) {
-            // Worth saying out loud: the buttons have visibly done their job even though the choice
-            // will be gone next launch, which is the one failure the player cannot see coming.
+            // Worth saying out loud: the buttons visibly worked even though the choice will
             HowToGo.LOGGER.error("[HowToGo] could not write {}", file, e);
         }
     }
 
     /**
-     * Client-wide rather than per world: routing taste is a property of the player, not the map.
-     *
-     * <p>Answered null when there is no game directory to put the file in, which is the route
-     * regression harness and nothing else: it plans routes in a plain JVM, and the loader's config
-     * directory has no answer there. Every caller treats null as "no saved choices", which is what a
-     * first launch gets as well; see {@link #noGameDirectory}.
+     * Client-wide rather than per world: routing taste is the player's, not the map's.
+     * Null when there is no game directory, which is the route regression harness; every caller treats null as "no saved choices", same as a first launch. See noGameDirectory.
      */
     private static Path file() {
         try {
@@ -335,19 +267,15 @@ public final class RoutePreferenceStore {
         }
     }
 
-    // --------------------------------------------------------------------- dto
 
-    /** Field names are the on-disk contract, so they are deliberately terse and stable. */
+    /** DTO field names are the on-disk contract, so terse and stable. */
     private static final class PreferenceDto {
         int version;
         String metric;
         List<String> avoidedRoadClasses;
         boolean preferMajorRoads;
-        /** Boxed so a file predating the switch leaves the configured default in force. */
         Boolean voiceAnnouncements;
-        /** Boxed for the same reason: a file written before the switch reads as the config's answer. */
         Boolean transitBoardOnly;
-        /** Boxed for the same reason again: before straight-through calls existed, the default is on. */
         Boolean straightAnnouncements;
     }
 }

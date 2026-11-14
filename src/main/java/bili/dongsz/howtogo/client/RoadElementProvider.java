@@ -11,13 +11,7 @@ import java.util.List;
 /**
  * Feeds road elements to Xaero's render pipeline one at a time.
  *
- * <p>The list is rebuilt per frame. Road networks are small and the rebuild is a single linear
- * pass, so this trades a negligible cost for never handing Xaero a stale view of the network while
- * the player is editing. Spatial indexing is a P3 concern.
- *
- * <p>Overlays are appended last so they draw on top of the roads, and the roads themselves are sorted
- * by storey before anything is handed over, so a bridge is painted over the road it crosses. See
- * {@link RoadElement#sortForDraw}.
+ * The list is rebuilt per frame -- networks are small and the pass is linear -- so Xaero never sees a stale view while editing. Overlays are appended last; roads are sorted by storey first (see RoadElement#sortForDraw).
  */
 public final class RoadElementProvider extends ElementRenderProvider<RoadElement, RoadRenderContext> {
 
@@ -25,23 +19,14 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
     private int index;
 
     /**
-     * How far outside the screen the view rectangle is extended before anything is dropped.
-     *
-     * <p>A quarter of the screen on each side. The margin has to be generous because the projection
-     * this reads was last updated during the *previous* render pass: culling against a one-pass-old
-     * view with a tight margin would make roads flicker in and out at the edges while the player pans
-     * -- which is a worse bug than the one this culling exists to fix.
+     * How far outside the screen the view rectangle is extended before culling: a quarter of the screen per side, generous because the projection read here is one render pass old and a tight margin would make roads flicker at the edges while panning.
      */
     private static final double VIEW_MARGIN_FRACTION = 0.25;
 
     /**
      * Whether a polyline lies entirely outside the given world rectangle.
      *
-     * <p>Tested by bounding box, and only rejected when the whole box is outside: a road that runs
-     * across the view from one side to the other has neither end inside it, so an "is any vertex
-     * visible" test would throw away exactly the longest, most visible roads. A box that grazes the
-     * view without the line entering it costs one wasted element, which is the cheap direction to be
-     * wrong in -- this is a performance guard, and Xaero still does the precise culling downstream.
+     * Bounding-box test, rejecting only when the whole box is out: an "any vertex visible" test would drop the longest roads crossing the view. A grazing box costs one wasted element; Xaero culls precisely downstream.
      */
     private static boolean outsideView(RoadSegment segment, double minX, double minZ,
                                        double maxX, double maxZ) {
@@ -74,10 +59,8 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
         int roads = 0;
         int rails = 0;
 
-        // Where the view is looking, in world blocks, with a generous margin. Everything outside it
-        // is dropped here instead of being wrapped in an element, handed to Xaero and discarded
-        // there: on a large network that walk *is* the frame cost, and a road nobody can see does not
-        // need an object.
+        // View centre and a generous margin, in world blocks. Dropping here beats wrapping an element for
+        // Xaero to discard: on a large network that walk is the frame cost.
         boolean haveView = MapViewState.isValid();
         double minWorldX = 0;
         double maxWorldX = 0;
@@ -99,14 +82,11 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             buffer.add(RoadElement.of(segment));
             roads++;
         }
-        // Create's tracks go in with the roads rather than behind a second renderer: they are rails
-        // of the same class, drawn in the same colour with the same code, so the map shows one kind
-        // of line. They are the coarse layer, a handful of polylines, so appending them per frame
-        // costs one pass over a list that is small by construction.
+        // Create's tracks join the roads instead of a second renderer: same class, same colour, same drawing
+        // code. A small coarse layer, so appending per frame costs one cheap pass.
         Collection<RoadSegment> layer = RailTrackStore.segments();
         if (!layer.isEmpty()) {
-            // Rail diagnostic: one enumeration of the layer, attributed to the render location that
-            // asked for it, which is how the per-location line explains itself.
+            // Rail diagnostic: one enumeration of the layer, attributed to the render location that asked for it.
             RailTrackStore.noteMapPass(location == null ? -1 : location.getIndex());
         }
         for (RoadSegment segment : layer) {
@@ -119,14 +99,9 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             RailTrackStore.noteElementOffered();
         }
 
-        // Addon layers, drawn with the roads rather than behind a renderer of their own, for the reason
-        // the rails above are: they are roads of a class this mod already knows how to draw, in the
-        // colours that class already has, and a second renderer would have to be told the storeys all
-        // over again to sort against them. Offered after the player's own roads so that the final
-        // storey sort can put an addon's bridge above the road it crosses.
-        //
-        // The list is read once and replaced whole when a layer is re-read, so the reference held here
-        // cannot be rewritten underneath the loop.
+        // Addon layers drawn with the roads, for the same reason.
+        // Offered after the player's roads so the final sort puts an addon bridge above the road it crosses.
+        // The list is replaced whole when a layer is re-read, so the held reference cannot change.
         for (RoadSegment segment : AddonRoadStore.segments()) {
             if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
                 continue;
@@ -134,10 +109,8 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             buffer.add(RoadElement.of(segment));
         }
 
-        // The roads read out of RoadWeaver, drawn with the roads for the same reason Create's tracks
-        // and an addon's layers are: they are roads of classes this mod already knows how to draw, and
-        // a renderer of their own would have to be told the storeys all over again to sort against
-        // them. Read once per pass; the list is replaced whole when the layer is re-read.
+        // RoadWeaver's roads, drawn with the roads for the same reason. Read once per pass; the list is
+        // replaced whole when the layer is re-read.
         for (RoadSegment segment : RoadWeaverLayer.drawnSegments()) {
             if (haveView && outsideView(segment, minWorldX, minWorldZ, maxWorldX, maxWorldZ)) {
                 continue;
@@ -145,16 +118,10 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             buffer.add(RoadElement.of(segment));
         }
 
-        // MTR's marks, as their own pass and before everything that is drawn over them.
-        //
-        // This is where the one thing that made the map slow used to be: the marks are the track each
-        // line read out of MTR runs along, they were handed over as one map element per rail, and a
-        // whole railway's worth of rails is tens of thousands of elements each a quad per vertex of its
-        // own sampling -- most of them a fraction of a pixel at any zoom a map is readable at. They are
-        // drawn by RoadElementRenderer instead, from the same polylines the lines themselves are drawn
-        // from (a line's marks are its own track), thinned to the zoom and culled by the box each
-        // stretch fits in. Their own pass rather than the labels pass because of what is under and over
-        // them: the roads are under, the navigation route and the lines are over.
+        // MTR's marks, in their own pass before overlays.
+        // One element per rail made the map slow: whole railways are tens of thousands of near-pixel elements.
+        // RoadElementRenderer draws them from the lines' own polylines, thinned and culled per stretch.
+        // Own pass because roads are under them and the route and lines are over.
         MapPassReport.elements(roads, rails);
         if (haveView) {
             RoadElement.MARKS.setOverlayAnchor(MapViewState.cameraX(), MapViewState.cameraZ());
@@ -162,8 +129,7 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
         buffer.add(RoadElement.MARKS);
 
         if (Navigation.target() != null) {
-            // Added whenever a destination is set, not just when a route was found, so the HUD can
-            // report that routing failed instead of staying silent.
+            // Added whenever a destination is set, so the HUD can report routing failure.
             if (haveView) {
                 RoadElement.ROUTE.setOverlayAnchor(MapViewState.cameraX(), MapViewState.cameraZ());
             }
@@ -177,22 +143,15 @@ public final class RoadElementProvider extends ElementRenderProvider<RoadElement
             buffer.add(RoadElement.EDIT_UI);
         }
 
-        // Always last, in every mode. Names are a property of the map, not of editing or of an
-        // active trip, so they are drawn whether or not either overlay is up -- and from the tail
-        // so a stroke drawn later can never end up on top of the text.
-        //
-        // Added unconditionally: gating this on haveView meant the element could be missing from
-        // the frame while the route overlay was still present, which is exactly when a name is
-        // most useful.
+        // Names are always last: they belong to the map, not editing, and the tail keeps strokes off the text.
+        // Unconditional, so names are not dropped exactly when the route overlay is up.
         if (haveView) {
             RoadElement.LABELS.setOverlayAnchor(MapViewState.cameraX(), MapViewState.cameraZ());
         }
         buffer.add(RoadElement.LABELS);
 
-        // The order the roads were gathered in says nothing about height -- hand-drawn segments come out
-        // of a hash map, and the rails are appended after all of them -- so the storeys are sorted last,
-        // once, over the whole frame. The overlays all sort after every road and keep their order, which
-        // is what leaves the tail of this list exactly as it was. See RoadElement.sortForDraw.
+        // Storey sort once per frame: gather order says nothing about height; overlays sort after every road.
+        // See RoadElement#sortForDraw.
         RoadElement.sortForDraw(buffer);
 
         index = 0;

@@ -5,16 +5,7 @@ import xaero.map.element.render.ElementRenderInfo;
 
 /**
  * Projects world block coordinates onto Xaero's world map viewport.
- *
- * <p>Measured behaviour (see the P0 diagnostics): the pose Xaero leaves on the stack when element
- * renderers run carries no zoom at all -- its {@code m00} stays at a constant 1/guiScale while the
- * real map scale sweeps over orders of magnitude. The map itself is drawn into a framebuffer and
- * blitted, so elements have to be projected by hand.
- *
- * <p>The correct mapping, confirmed against the recorded values, is
- * {@code screen = (world - camera) * scale + screenCentre}, using the camera position and zoom
- * that Xaero hands us in {@link ElementRenderInfo} (the same pair it passes to
- * {@code ElementReader.isOnScreen}).
+ * The pose Xaero leaves on the stack carries no zoom (m00 stays at 1/guiScale) and the map is blitted from a framebuffer, so elements must project by hand: screen = (world - camera) * scale + screenCentre, with camera and zoom taken from ElementRenderInfo.
  */
 public final class MapProjection {
 
@@ -46,9 +37,7 @@ public final class MapProjection {
     }
 
     /**
-     * Half the on-screen stroke width, in pixels, for a road of the given block width.
-     *
-     * <p>Roads shrink as you zoom out but never disappear entirely, so a floor is applied.
+     * Half the on-screen stroke width in pixels for a road of the given block width. Floored so roads never vanish when zoomed out.
      */
     public double halfStrokePx(double blockWidth) {
         return Math.max(1.25, blockWidth * Math.abs(scale) * 0.5);

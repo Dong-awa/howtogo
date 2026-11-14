@@ -25,60 +25,28 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.gui.GuiGraphics;
 
 /**
- * Shared 2D drawing helpers for this mod's interfaces.
- *
- * <p>Vanilla {@code GuiGraphics} only offers axis-aligned rectangles, which is not enough for
- * road lines, circular markers, turn arrows or rounded cards. Everything here builds on a single
- * position-colour layer with depth testing off, so the results can be drawn over the world as well
- * as over a screen.
- *
- * <p><b>Draw all text after all shapes.</b> {@code GuiGraphics.drawString} flushes the buffer
- * source, which ends the QUADS {@code BufferBuilder} behind a consumer obtained from
- * {@link #consumer}. Emitting one more quad through that stale consumer throws
- * {@code IllegalStateException: Not building!} and takes the whole frame -- and with it the game --
- * down. Mixing the two inside one quad sequence is the trap; a label pass belongs at the tail.
+ * Shared 2D drawing helpers for this mod's interfaces. GuiGraphics only offers axis-aligned rectangles, so road lines, circular markers, turn arrows and rounded cards are built here on one position-colour layer with depth testing off, drawable over the world as well as over a screen.
+ * Draw all text after all shapes: GuiGraphics.drawString flushes the buffer source, and emitting one more quad through the stale consumer throws IllegalStateException: Not building!, taking the frame and the game down.
  */
 public final class HudDraw {
 
     /**
-     * The colour a place is drawn in, on every map this mod draws.
-     *
-     * <p>One definition because three views show the same places -- the world map, the navigation
-     * panel's mini-map and the picker's preview -- and a place that is one yellow in one view and a
-     * slightly different one in another reads as a different kind of thing. Hand-placed places have
-     * always been drawn in this yellow; stations and the names that go with both use it too, so a
-     * place is one colour whether it is a dot, a label or an entry in the picker's list.
+     * The colour a place is drawn in, on every map this mod draws. One definition because three views show the same places, and a place that is one yellow in one view and a slightly different one in another reads as a different kind of thing.
      */
     public static final int COLOR_PLACE = 0xFFFFD24A;
 
     /**
-     * The side in screen pixels of a place's marker square, so every view draws the same mark.
-     *
-     * <p>Screen pixels rather than blocks: a marker is a fixed size at any zoom, and one that scaled
-     * with the map would shrink to nothing when zoomed out -- which is exactly when a place is being
-     * looked for. The value is the size the editor has always drawn a hand-placed place at.
+     * The side in screen pixels of a place's marker square, so every view draws the same mark. Screen pixels because a marker is a fixed size at any zoom: one that scaled with the map would shrink to nothing when zoomed out, exactly when a place is being looked for.
      */
     public static final double PLACE_MARKER_PX = 5.7;
 
     /**
-     * The same marker on the two small maps -- the panel's mini-map and the picker's preview.
-     *
-     * <p>Smaller because those maps are a couple of hundred pixels across: the world map's size,
-     * which is right on a full screen, covers a visible share of a 120-pixel panel and hides the
-     * road it is marking.
+     * The same marker on the two small maps: a full-screen-sized mark covers a visible share of a 120-pixel panel and hides the road it is marking.
      */
     public static final double PLACE_MARKER_SMALL_PX = 3.8;
 
     /**
-     * The angle to draw a label at so it follows a line running in the given screen direction.
-     *
-     * <p>Turned through half a turn when the result would be upside down: a name is read left to
-     * right, and one running right to left is worse than one at a slightly wrong angle. One
-     * definition for all three maps, because a road's name reading one way on one map and the other
-     * way on another is the kind of difference nobody can name but everybody notices.
-     *
-     * @param dx screen-space direction of the line, in pixels
-     * @param dy screen-space direction of the line, in pixels
+     * The angle to draw a label at so it follows a line running in the given screen direction (dx, dy in pixels). Turned half a turn when it would be upside down, because a name is read left to right; one definition for all three maps, so a road's name reads the same way everywhere.
      */
     public static float labelAngle(double dx, double dy) {
         double angle = Math.atan2(dy, dx);
@@ -89,11 +57,7 @@ public final class HudDraw {
     }
 
     /**
-     * The width and height a text box of the given size occupies once rotated.
-     *
-     * <p>Needed because a rotated label is not measured by its own width any more: fit tests and
-     * overlap tests have to measure the box that is actually painted, or a diagonal name is dropped
-     * for not fitting on a line it fits on, and two names are allowed to cross.
+     * The width and height a text box of the given size occupies once rotated. Needed because a rotated label is not measured by its own width: fit and overlap tests have to measure the box actually painted, or a diagonal name is dropped for a line it fits on and two names are allowed to cross.
      */
     public static double[] rotatedExtents(double width, double height, float angle) {
         double cos = Math.abs(Math.cos(angle));
@@ -102,12 +66,7 @@ public final class HudDraw {
     }
 
     /**
-     * A place's marker: the yellow square the editor draws for a hand-placed place.
-     *
-     * <p>One routine for every view, because a place that is a square on the world map and a circle
-     * on the panel's mini-map reads as two different kinds of thing. It is a square rather than a
-     * disc for the same reason: that is what a place already looked like in edit mode.
-     *
+     * A place's marker: the yellow square the editor draws. One routine for every view, because a square on one map and a circle on another read as two kinds of thing.
      * @param half half the marker's side, in the units of the sink's coordinates
      */
     public static void emitPlaceMarker(VertexSink out, double cx, double cy,
@@ -117,13 +76,7 @@ public final class HudDraw {
     }
 
     /**
-     * A five-pointed star: the badge a favourite place carries on every map this mod draws.
-     *
-     * <p>Drawn rather than written as the character "★": the game's font has no glyph for it in
-     * every version this mod builds for, and a missing glyph is a box that says nothing. A star is
-     * ten points round a centre -- five outer and five inner -- and a fan of ten triangles is both
-     * the whole shape and the cheapest way to draw one with the quads this renderer already has.
-     *
+     * A five-pointed star: the badge a favourite place carries. Drawn rather than written as a character because the game's font has no glyph for it in every version this mod builds for, and a missing glyph is a box that says nothing.
      * @param radius distance from the centre to an outer point, in the sink's units
      */
     public static void emitStar(VertexSink out, double cx, double cy, double radius, int argb) {
@@ -136,8 +89,7 @@ public final class HudDraw {
         double[] xs = new double[corners];
         double[] ys = new double[corners];
         for (int i = 0; i < corners; i++) {
-            // Pointing up, because a badge is read as an icon and every star icon anybody knows
-            // points up. The first point is at the top, then alternate outer/inner corners.
+            // Pointing up, because a badge is read as an icon and every star icon anybody knows points up; then alternate outer and inner corners.
             double angle = -Math.PI / 2.0 + i * Math.PI / points;
             double reach = (i % 2 == 0) ? radius : inner;
             xs[i] = cx + Math.cos(angle) * reach;
@@ -152,18 +104,8 @@ public final class HudDraw {
     //? if <1.21.6 {
     /**
      * The shared layer, built on first use rather than when the class is loaded.
-     *
-     * <p>Depth testing is disabled deliberately: {@code RenderType.debugQuads} would otherwise be the
-     * obvious choice, but its default depth test can bury an overlay behind the world. 1.21.6 replaced
-     * this render type with a pipeline; see the HUD_PIPELINE constant on {@link HudBatchLegacy} and
-     * {@link HudBatchNewer}. What a render type used to configure is a pipeline property now, so the
-     * two are the same layer in two vocabularies, and only the pre-1.21.6 path is built here.
-     *
-     * <p>Built lazily because a {@code RenderType} pulls in the game's own static state, which is not
-     * available -- and must not be required -- in a harness: doing it from the class initialiser meant
-     * this class could not be loaded at all outside a game, and the stroke geometry below is exactly
-     * the kind of thing that has to be measurable without one (see {@code HudDrawCheck}). Nothing here
-     * needs the layer until a frame is drawn, so the first frame builds it.
+     * Depth testing is disabled deliberately: RenderType.debugQuads would be the obvious choice, but its default depth test can bury an overlay behind the world. 1.21.6 replaced this render type with a pipeline; see HUD_PIPELINE on HudBatchLegacy and HudBatchNewer, so only the pre-1.21.6 path is built here.
+     * Lazy because a RenderType pulls in the game's static state, which must not be required in a harness: from the class initialiser this class could not be loaded outside a game, and the stroke geometry is exactly what has to be measurable without one.
      */
     private static RenderType quads;
 
@@ -195,9 +137,7 @@ public final class HudDraw {
     //? if <1.21.6 {
     /** A fresh vertex consumer for the shared layer. */
     public static VertexConsumer consumer(GuiGraphics graphics) {
-        // 1.21.4 removed GuiGraphics.bufferSource(): the render buffers now hang off the game
-        // rather than off the drawing context, so the same BufferSource is fetched from Minecraft
-        // instead. The source on disk carries 1.21.1's form; Stonecutter swaps the pair per node.
+        // 1.21.4 removed GuiGraphics.bufferSource(): the render buffers now hang off the game rather than the drawing context, so the same BufferSource is fetched from Minecraft instead. The source on disk carries 1.21.1's form; Stonecutter swaps the pair per node.
         //? if >=1.21.4 {
         /*return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(quads());
         *///?} else {
@@ -208,21 +148,11 @@ public final class HudDraw {
 
     /**
      * Opens a drawing block on a screen or the HUD, and returns where its vertices go.
-     *
-     * <p>This is the seam the two GUI drawing models meet at. Before 1.21.6 a block took a live
-     * consumer from {@link #consumer} and wrote into it through the pose; from 1.21.6 on it opens a
-     * deferred batch instead, which the GUI renderer plays back at the end of the frame. The emitters
-     * themselves do not care -- they write into a {@link VertexSink} either way -- so a caller does
-     * exactly two things differently: this call, and {@link #endBlock}.
-     *
-     * <p>The block's pose push happens here and its pop in {@code endBlock}, because both models need
-     * the matrix balanced around the block and the older one needs the pose captured for its sink.
+     * This is the seam the two GUI drawing models meet at: before 1.21.6 a block took a live consumer and wrote through a pose, from 1.21.6 on it opens a deferred batch the GUI renderer plays back at the end of the frame. A caller only does this call and endBlock differently.
+     * The pose push happens here and the pop in endBlock, because both models need the matrix balanced around the block.
      */
     public static Drawing beginBlock(GuiGraphics graphics) {
-        // Three mutually exclusive branches rather than an if/else, because the deferring ones have
-        // to name different classes and a condition cannot nest inside a condition. 1.21.6 and
-        // 1.21.9 shape the element state differently -- see HudBatchLegacy and HudBatchNewer -- so
-        // which class is named depends on the node.
+        // Three mutually exclusive branches rather than an if/else, because the deferring ones have to name different classes and a condition cannot nest inside a condition. 1.21.6 and 1.21.9 shape the element state differently -- see HudBatchLegacy and HudBatchNewer.
         //? if >=1.21.9 {
         /*graphics.pose().pushMatrix();
         HudBatchNewer batch = HudBatchNewer.beginBatch(graphics);
@@ -240,7 +170,7 @@ public final class HudDraw {
         //?}
     }
 
-    /** Closes a drawing block opened by {@link #beginBlock}. */
+    /** Closes a drawing block opened by beginBlock. */
     public static void endBlock(GuiGraphics graphics, Drawing drawing) {
         drawing.close(graphics);
         //? if >=1.21.6 {
@@ -252,12 +182,7 @@ public final class HudDraw {
     }
 
     /**
-     * One open drawing block: where its vertices go, and how to hand them over.
-     *
-     * <p>{@link #sink} is what the emitters need, and the only part every version has. Handing over
-     * is a callback rather than a field because the two deferring eras spell the element state
-     * differently -- HudBatchLegacy and HudBatchNewer -- and a condition cannot be nested to choose
-     * between them here. The callback is built where the class is named, in {@link #beginBlock}.
+     * One open drawing block: where its vertices go, and how to hand them over. sink is the only part every version has; handing over is a callback because the two deferring eras spell the element state differently and a condition cannot nest to choose, so the callback is built where the class is named.
      */
     public static final class Drawing {
         /** Where the block's vertices go. */
@@ -283,27 +208,16 @@ public final class HudDraw {
         }
     }
 
-    // ------------------------------------------------------------------ shapes
 
     /**
-     * Where a transformed position-colour vertex goes.
-     *
-     * <p>The emitters below are written once against this and not per version. Before 1.21.6 the
-     * destination was a live {@code VertexConsumer} fed through a pose, so {@link #sink} wraps the
-     * pair; from 1.21.6 on a drawing block collects its geometry instead, and
-     * {@link HudBatchLegacy} and {@link HudBatchNewer} are themselves sinks. Either way the clipping, winding and segment
-     * arithmetic runs on the same code, which is the point: those rules are the fiddly part and two
-     * copies of them would drift.
+     * Where a transformed position-colour vertex goes. The emitters are written once against this and not per version: before 1.21.6 the destination was a live VertexConsumer fed through a pose, from 1.21.6 on a drawing block collects its geometry and HudBatchLegacy/HudBatchNewer are themselves sinks. Either way the clipping, winding and segment arithmetic runs on one copy of the rules.
      */
     public interface VertexSink {
         void vertex(double x, double y, int r, int g, int b, int a);
     }
 
     /**
-     * Adapts a pose and a live consumer to a {@link VertexSink}, for everything before 1.21.6.
-     *
-     * <p>The pose is applied here rather than by the consumer, which is what the old code did too:
-     * {@code VertexConsumer.addVertex} takes already-transformed coordinates in this layer's usage.
+     * Adapts a pose and a live consumer to a VertexSink, for everything before 1.21.6. The pose is applied here rather than by the consumer: addVertex takes already-transformed coordinates in this layer's usage.
      */
     public static VertexSink sink(PoseStack.Pose pose, VertexConsumer vc) {
         return (x, y, r, g, b, a) -> vertex(pose, vc, x, y, r, g, b, a);
@@ -341,9 +255,7 @@ public final class HudDraw {
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
         int a = (argb >>> 24) & 0xFF;
-        // QUADS mode, so a triangle is written as a degenerate quad. The third corner is repeated, which
-        // leaves the second triangle with no area; repeating the second corner fills the triangle twice.
-        // See fanTriangle, which every fan in this class goes through.
+        // QUADS mode, so a triangle is written as a degenerate quad. The third corner is repeated, which leaves the second triangle with no area; repeating the second would fill the triangle twice. See fanTriangle.
         out.vertex(x1, y1, r, g, b, a);
         out.vertex(x2, y2, r, g, b, a);
         out.vertex(x3, y3, r, g, b, a);
@@ -366,14 +278,7 @@ public final class HudDraw {
 
     /**
      * One triangle of a fan, painted once.
-     *
-     * <p>The layer is {@code QUADS}, so a triangle is written as a degenerate quad. Which corner gets
-     * repeated is the whole point: repeating the <em>third</em> leaves the second triangle with no
-     * area, while repeating the second -- the same four corners in a different order -- fills the very
-     * same triangle again the other way round. Culling is off, so both are drawn, and on a translucent
-     * road the whole cap or disc is then blended twice: that is what made the ends of the strokes on
-     * this mod's own maps read as a bright semicircle. Everything here fans through this one method so
-     * that ordering cannot be got wrong again.
+     * The layer is QUADS, so a triangle is written as a degenerate quad, and which corner gets repeated is the whole point: repeating the third leaves no area, while repeating the second fills the very same triangle again the other way round. Culling is off, so both draw and a translucent cap or disc is blended twice -- which made stroke ends on this mod's maps read as a bright semicircle. Everything fans through here so the ordering cannot be got wrong again.
      */
     private static void fanTriangle(VertexSink out,
                                     double cx, double cy, double x0, double y0, double x1, double y1,
@@ -405,12 +310,7 @@ public final class HudDraw {
 
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the
-        // method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...).
-        // The pose carries the same matrix, so only the wrapper and the two names differ -- plus
-        // endVertex(), which the 1.20.x API needs and the newer one does not have. See the same
-        // helper in RoadElementRenderer for what leaving it out cost: a vertex count of 0 (nothing
-        // drawn) and a buffer that never grew until putFloat ran past the end of it.
+        // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...). Only the wrapper and the names differ, plus endVertex(), which the older API needs. See the same helper in RoadElementRenderer for what leaving it out cost: a vertex count of 0 and a buffer that never grew.
         //? if >=1.21 {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
         //?} else {
@@ -418,13 +318,9 @@ public final class HudDraw {
         *///?}
     }
 
-    // ------------------------------------------------------------ rounded cards
 
     /**
-     * Fills a rectangle with rounded corners.
-     *
-     * <p>Drawn as one span per row with the ends inset along a quarter circle, which is cheap and
-     * needs no shader or texture.
+     * Fills a rectangle with rounded corners, as one span per row with the ends inset along a quarter circle -- cheap, and no shader or texture.
      */
     public static void fillRounded(GuiGraphics graphics, int x1, int y1, int x2, int y2,
                                    int radius, int color) {
@@ -454,21 +350,10 @@ public final class HudDraw {
         return Math.max(0, Math.min(radius, Math.min((x2 - x1) / 2, (y2 - y1) / 2)));
     }
 
-    // ------------------------------------------------------------ row markers
 
     /**
-     * A list row's colour marker: a small square with a hairline around it.
-     *
-     * <p>The lists that hold one kind of thing per row use this to say what that thing is before a
-     * word of it is read -- a place's own colour in the destination picker, a line's kind colour in
-     * the line editor, an archive's origin in the map-data screen. Without it those rows are columns
-     * of grey text and the one fact the row already knows is only in a word further along the line.
-     *
-     * <p>The hairline is not decoration. The colours come from outside -- a source's own place
-     * colour, which may be white, or a line's configured colour -- and a white square on a white
-     * sheet is not a marker. The ring is the theme's icon grey, so the same call reads on both sheets
-     * and on a selected row's blue.
-     *
+     * A list row's colour marker: a small square with a hairline around it, so a row says what it holds before a word of it is read.
+     * The hairline is not decoration: colours come from outside and a white square on a white sheet is not a marker, so the ring is the theme's icon grey and reads on both sheets and on a selected row's blue.
      * @param size the marker's side in pixels
      */
     public static void drawRowMarker(GuiGraphics graphics, int x, int y, int size, int argb) {
@@ -489,26 +374,16 @@ public final class HudDraw {
     }
 
     /**
-     * Scratch for {@link #clip}: the two parameters of the surviving part, and the four edge tests.
-     *
-     * <p>Fields rather than arrays built per call because {@link #emitClipped} runs once per segment
-     * of every map this mod draws -- three thousand of them in a frame is ordinary -- and two small
-     * arrays per segment was the largest single source of garbage in a map pass. Confined to the
-     * render thread, which is the only thread that draws; {@link #clipToRect} is the allocating
-     * wrapper for anything that wants the points rather than the drawn line.
+     * Scratch for clip: the two parameters of the surviving part, and the four edge tests.
+     * Fields rather than arrays built per call because emitClipped runs once per segment of every map -- three thousand in a frame is ordinary -- and two small arrays per segment was the largest single source of garbage in a map pass. Render thread only; clipToRect is the allocating wrapper.
      */
     private static final double[] CLIP_T = new double[2];
     private static final double[] CLIP_P = new double[4];
     private static final double[] CLIP_Q = new double[4];
 
     /**
-     * Liang-Barsky clip of a segment against a rectangle, as parameters along the segment.
-     *
-     * <p>Useful because vertices go through a batched buffer, so whether a GPU scissor is still in
-     * effect when they are finally flushed is not something to rely on for correctness.
-     *
-     * @return whether anything survived; the two parameters are then in {@link #CLIP_T}, as the
-     *     fractions of the segment from its first point to its last
+     * Liang-Barsky clip of a segment against a rectangle, as parameters along the segment. Vertices go through a batched buffer, so whether a GPU scissor is still in effect when they are flushed cannot be relied on for correctness.
+     * @return whether anything survived; the two parameters are then in CLIP_T, as fractions of the segment from its first point to its last
      */
     private static boolean clip(double x1, double y1, double x2, double y2,
                                 double minX, double minY, double maxX, double maxY) {
@@ -557,12 +432,8 @@ public final class HudDraw {
     }
 
     /**
-     * The segment clipped to the rectangle, as end points.
-     *
-     * <p>Allocates, deliberately: it is the readable form of the clip for a caller that wants the
-     * points, and the per-frame callers use {@link #emitClipped} instead.
-     *
-     * @return {@code {x1, y1, x2, y2}} clipped to the rect, or null when wholly outside
+     * The segment clipped to the rectangle, as end points. Allocates deliberately: it is the readable form for a caller that wants the points, while per-frame callers use emitClipped.
+     * @return {x1, y1, x2, y2} clipped to the rect, or null when wholly outside
      */
     public static double[] clipToRect(double x1, double y1, double x2, double y2,
                                       double minX, double minY, double maxX, double maxY) {
@@ -589,36 +460,26 @@ public final class HudDraw {
                 x1 + CLIP_T[1] * dx, y1 + CLIP_T[1] * dy, halfWidth, argb, alpha);
     }
 
-    // ------------------------------------------------------------------- polylines
 
     /**
-     * Scratch for a projected polyline: world vertices are transformed into these once, then the
-     * stroke pass reads them per edge.
-     *
-     * <p>Render thread only, like {@link #CLIP_T}. Reused and grown rather than allocated per road:
-     * these maps redraw the same road network every frame, and one array per segment would be more
-     * garbage than a whole screen of UI.
+     * Scratch for a projected polyline: world vertices are transformed into these once, then the stroke pass reads them per edge. Render thread only; reused and grown rather than allocated per road, or a map pass would make more garbage than a whole screen of UI.
      */
     private static double[] PATH_X = new double[64];
     private static double[] PATH_Y = new double[64];
     /**
-     * Which chain piece each projected vertex came from, so a one-way mark placed anywhere along the
-     * chain still knows its segment's direction. Per projected vertex, and grown with the path.
+     * Which chain piece each projected vertex came from, so a one-way mark placed anywhere along the chain still knows its segment's direction.
      */
     private static int[] PATH_OWNER = new int[64];
 
     /**
-     * The cross-section of each projected vertex, per edge: the offset the edge arriving at the vertex
-     * uses, and the one the edge leaving it uses. Equal everywhere a mitre can serve both edges; they
-     * differ only at a bend too sharp to mitre, where each edge keeps its own perpendicular and a
-     * round join fills the wedge between them.
+     * The cross-section of each projected vertex, per edge: the offset the edge arriving at the vertex uses and the one the edge leaving it uses. Equal where a mitre can serve both; they differ only at a bend too sharp to mitre, where each edge keeps its own perpendicular and a round join fills the wedge.
      */
     private static double[] ARRIVING_X = new double[64];
     private static double[] ARRIVING_Y = new double[64];
     private static double[] LEAVING_X = new double[64];
     private static double[] LEAVING_Y = new double[64];
 
-    /** Whether a vertex is joined round, so a wedge has to be painted there. Per projected vertex. */
+    /** Whether a vertex is joined round, so a wedge has to be painted there. */
     private static boolean[] ROUND_JOINT = new boolean[64];
 
     /** One round join's boundary, filled and consumed one bend at a time. */
@@ -626,12 +487,7 @@ public final class HudDraw {
     private static final double[] JOIN_Y = new double[StrokeOutline.MAX_JOIN_POINTS];
 
     /**
-     * The cosine of half a turn at which a bend stops being mitred: at or below it the corner is
-     * rounded instead.
-     *
-     * <p>Derived from {@link StrokeOutline#MITER_LIMIT} rather than picked here, so this mod's own
-     * maps and its layer on the world map round the same bends: a corner that is a spike on one map
-     * and a curve on the other is a difference a player would notice before any of the two.
+     * The cosine of half a turn at which a bend stops being mitred: at or below it the corner is rounded. Derived from StrokeOutline.MITER_LIMIT so this mod's own maps and its layer on the world map round the same bends.
      */
     private static final double SHARP_JOINT = 1.0 / StrokeOutline.MITER_LIMIT;
 
@@ -652,22 +508,8 @@ public final class HudDraw {
 
     /**
      * Draws one road as a continuous line, using its smoothed curve when it has one.
-     *
-     * <h2>Why this is not a loop of {@link #emitClipped}</h2>
-     * Two strokes that merely meet at a vertex leave a notch on the outside of every bend: each
-     * quad stops flush at the shared point, and at a block-sampled corner there is a wedge of
-     * background between them. On the small maps -- the navigation panel, the destination picker,
-     * the main screen's viewer -- that reads as a jagged, broken road, especially where a railway was
-     * sampled once per block. Here the two ends of a bend are joined: an ordinary corner takes the
-     * mitre of the two edges' normals, so the stroke is continuous round it, and a corner too sharp for
-     * that -- which is what a hairpin, a switchback or a sharp bend in the player's own road looks like
-     * -- keeps one perpendicular per edge and gets the circular wedge between them painted instead.
-     * A mitre there would be a spike several half widths long; at {@link StrokeOutline#MITER_LIMIT} the
-     * corner is rounded, which is a shape a road can have and a spike is not.
-     *
-     * <p>The transform is an affine map from world blocks to screen pixels, which is all these views
-     * use: {@code screenX = m00*x + m01*z + m02}, {@code screenY = m10*x + m11*z + m12}. It is passed
-     * in rather than done by the caller because the projection happens inside the scratch arrays.
+     * Not a loop of emitClipped: two strokes that merely meet at a vertex leave a notch on the outside of every bend, which on the small maps reads as a jagged, broken road. The ends of a bend are joined instead: an ordinary corner takes the mitre of the two edges' normals, and a corner too sharp for that keeps one perpendicular per edge and gets the circular wedge painted between them.
+     * The transform is affine from world blocks to screen pixels: screenX = m00*x + m01*z + m02, screenY = m10*x + m11*z + m12. Passed in because the projection happens inside the scratch arrays.
      */
     public static void emitPath(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
                                 double m00, double m01, double m02,
@@ -705,11 +547,7 @@ public final class HudDraw {
     }
 
     /**
-     * The same for one segment, taking the sink directly.
-     *
-     * <p>The pair-taking overload above exists for the callers that still hold a {@code PoseStack.Pose}
-     * and a {@code VertexConsumer} of their own; everything drawn inside a {@link #beginBlock} block
-     * has a sink instead, and that is the form the map screens use.
+     * The same for one segment, taking the sink directly. Callers that still hold a pose and a consumer use the pair-taking overload; everything drawn inside a beginBlock block has a sink.
      */
     public static void emitPath(VertexSink out, RoadSegment segment,
                                 double m00, double m01, double m02,
@@ -760,17 +598,8 @@ public final class HudDraw {
     }
 
     /**
-     * Draws every stretch of a route in the ink that stretch calls for.
-     *
-     * <p>The drawing counterpart of {@link RouteInk}: for a walk or a drive the table has one
-     * stretch and this is exactly {@link #emitPath} over the route's points, while a journey is
-     * drawn stretch by stretch, a walked leg in the walking blue and a ridden one in its line's
-     * colour. Nothing is copied to do it -- each stretch is a range of the one point list -- so the
-     * whole route is one walk of the table rather than a list built per stretch per frame.
-     *
-     * <p>Used by the surfaces that draw a route as a whole with no progress colouring: the main
-     * screen's viewer, the picker's map and the picker's plan lines. The surfaces that grey out what
-     * the player has already covered use {@link #emitRouteInk} or {@link #emitInkPart}.
+     * Draws every stretch of a route in the ink that stretch calls for -- the drawing counterpart of RouteInk. A walk or a drive has one stretch and this is emitPath over the route's points; a journey is drawn stretch by stretch. Each stretch is a range of the one point list, so nothing is copied.
+     * Used by the surfaces that draw a route as a whole with no progress colouring; the ones that grey out covered ground use emitRouteInk or emitInkPart.
      */
     public static void emitInk(VertexSink out, RouteInk ink,
                                double m00, double m01, double m02,
@@ -788,29 +617,11 @@ public final class HudDraw {
     }
 
     /**
-     * Draws a whole route with everything behind the player greyed out.
-     *
-     * <p>The same split the maps have always made, moved from the polyline to the stretches: the part
-     * of each stretch before {@code travelled} is the done grey and the part after it keeps the
-     * stretch's own ink, so a journey shows how far along the walk, the ride and the next walk the
-     * player is instead of pretending the whole line is one colour. A single-stretch route comes out
-     * vertex for vertex as it did when the split was made on the whole polyline -- the check for
-     * this feature asserts that.
-     *
-     * <p>One difference is deliberate rather than a regression: when the cut lands exactly on a
-     * vertex, the old two-list code wrote that vertex twice and the duplicate silently took one end
-     * cap away at the cut. This drawing cuts the line by its geometry and never repeats a vertex, so
-     * both caps are painted there -- a half width of ink at a point the old drawing left butt-ended.
-     * That only happens when the player stands exactly on a vertex, and the cap is the one the line
-     * should have; the interior cuts, which are the ones that do happen, are vertex for vertex the
-     * old ones.
-     *
-     * <p>The two halves are two passes, all of the grey first: that is the order the two separate
-     * drawing blocks used to go in, and a cap from the coloured half landing on the grey one would
-     * otherwise paint a bead of colour where the player already is.
-     *
-     * @param travelled drawn distance already covered, as {@code Navigation.travelled()} reports it
-     * @param doneArgb  the ARGB of the covered part
+     * Draws a whole route with everything behind the player greyed out: the part of each stretch before travelled is the done grey and the part after keeps the stretch's own ink, so a journey shows how far along each leg the player is.
+     * When the cut lands exactly on a vertex the old two-list code wrote that vertex twice and lost one end cap; this cuts by geometry and never repeats a vertex, so both caps are painted there.
+     * The two halves are two passes, all of the grey first, so a cap of the coloured half cannot paint a bead of colour where the player already is.
+     * @param travelled drawn distance already covered, as Navigation.travelled() reports it
+     * @param doneArgb the ARGB of the covered part
      */
     public static void emitRouteInk(VertexSink out, RouteInk ink, double travelled, int doneArgb,
                                     double m00, double m01, double m02,
@@ -824,17 +635,8 @@ public final class HudDraw {
     }
 
     /**
-     * One half of {@link #emitRouteInk}: the covered part in one colour, or the part ahead in each
-     * stretch's own.
-     *
-     * <p>A method of its own because one of the five surfaces draws the two halves as two separate
-     * pipeline elements -- Xaero's minimap gives each element its own depth slot -- and each element
-     * has to be able to draw its half from the same table without the other half's lists being built
-     * for it.
-     *
-     * @param done     true for the covered part in {@code doneArgb}, false for the part ahead in each
-     *                 stretch's own colour; {@code doneArgb} is ignored in the second case
-     * @param travelled drawn distance already covered
+     * One half of emitRouteInk: the covered part in one colour, or the part ahead in each stretch's own. A method of its own because Xaero's minimap gives each half its own pipeline element and depth slot, and each has to draw from the same table without the other's lists being built.
+     * @param done true for the covered part in doneArgb, false for the part ahead in each stretch's own colour
      */
     public static void emitInkPart(VertexSink out, RouteInk ink, double travelled, boolean done,
                                    int doneArgb,
@@ -862,12 +664,7 @@ public final class HudDraw {
     }
 
     /**
-     * The same for a run of a point list, both end points included.
-     *
-     * <p>The primitives behind the ink methods: one stretch of a {@link RouteInk} is a run of the
-     * route's own list, so drawing a stretch is this with the stretch's range and colour. The range
-     * is projected into the shared scratch arrays, so a frame that draws five stretches allocates
-     * nothing for them.
+     * The same for a run of a point list, both end points included. One stretch of a RouteInk is a run of the route's list, so drawing a stretch is this with its range and colour; the range is projected into the shared scratch arrays and allocates nothing.
      */
     private static void emitPathRange(VertexSink out, List<double[]> points, int fromPoint,
                                       int toPoint,
@@ -884,7 +681,6 @@ public final class HudDraw {
 
     /**
      * Projects a run of world points into the shared scratch arrays.
-     *
      * @return how many vertices were written, zero when the range is not a line
      */
     private static int project(List<double[]> points, int fromPoint, int toPoint,
@@ -904,11 +700,7 @@ public final class HudDraw {
     }
 
     /**
-     * Copies a run of world points into the shared scratch arrays, without projecting them.
-     *
-     * <p>Split out of {@link #project} because a slice is cut in world blocks before it is
-     * projected, and the two steps share the same range check and the same capacity growth.
-     *
+     * Copies a run of world points into the shared scratch arrays, without projecting them. Split out of project because a slice is cut in world blocks before it is projected, and the two steps share the range check and the capacity growth.
      * @return how many vertices were written, zero when the range is not a line
      */
     private static int copyWorld(List<double[]> points, int fromPoint, int toPoint) {
@@ -932,26 +724,8 @@ public final class HudDraw {
 
     /**
      * Draws the part of one stretch between two distances along the route.
-     *
-     * <h2>Why the slice is cut before it is projected</h2>
-     * A half-covered stretch has to stop exactly where the player is, not at the nearest vertex, so
-     * the ends of the slice are interpolated: the requested distances are walked along the world
-     * polyline and a point is inserted where one falls inside an edge. The cut is made in world
-     * blocks because that is the space the distances are measured in, and only then is the assembled
-     * line projected: the split point is the same arithmetic the whole-polyline call would have
-     * applied to the same world point, so a route in a single mode is drawn with exactly the
-     * vertices it always was. The vertices that are wholly inside are moved down the scratch array
-     * and the two ends are appended, and the result is run through the ordinary path pass -- so the
-     * slice keeps the same mitred bends and round joins as the whole line would, and its ends get
-     * the same caps.
-     *
-     * <p>This allocates nothing: the movement is {@code System.arraycopy} of the shared scratch
-     * arrays, and everything is done for one slice at a time.
-     *
-     * <p>Used with the whole stretch and the whole line's distances, it is exactly
-     * {@link #emitPath}: no end is interpolated, the copy moves every vertex onto itself, and the
-     * path pass sees the same array it would have seen. That is the property the regression check
-     * holds this feature to, because a route in a single mode must still draw as it always did.
+     * The slice is cut before it is projected: a half-covered stretch has to stop where the player is, not at the nearest vertex, so the ends are interpolated in world blocks -- the space the distances are measured in -- and only then projected. The vertices wholly inside are moved down the scratch array and the two ends appended, then the ordinary path pass runs, so the slice keeps the same mitred bends, round joins and caps. Allocates nothing.
+     * With the whole stretch and the whole line's distances it is exactly emitPath, and the regression check holds this feature to that.
      */
     private static void emitSpanSlice(VertexSink out, List<double[]> points, InkSpan span,
                                       double sliceFrom, double sliceTo, int argb,
@@ -968,8 +742,7 @@ public final class HudDraw {
         if (count < 2) {
             return;
         }
-        // The length the line really has, so a slice asked for in the route's own distances is cut
-        // by the same measurement it was described in.
+        // The length the line really has, so a slice asked for in the route's own distances is cut by the same measurement it was described in.
         double total = 0;
         for (int i = 1; i < count; i++) {
             total += Math.hypot(PATH_X[i] - PATH_X[i - 1], PATH_Y[i] - PATH_Y[i - 1]);
@@ -1072,11 +845,7 @@ public final class HudDraw {
             PATH_X[i] = m00 * worldX + m01 * worldZ + m02;
             PATH_Y[i] = m10 * worldX + m11 * worldZ + m12;
         }
-        // A cap belongs only where the stroke genuinely ends. Two neighbouring stretches of one
-        // route share the vertex at a station, and two stretches of one colour would otherwise each
-        // cap there; two of different colours would cap into each other's first half width. So a
-        // slice that runs to a shared end of its stretch stops butt-joined there, and the ends of
-        // the whole line keep their caps as they always did.
+        // A cap belongs only where the stroke genuinely ends. Two neighbouring stretches of one route share the vertex at a station, and capping there would paint their semicircles into each other, so a slice that runs to a shared end of its stretch stops butt-joined; the ends of the whole line keep their caps.
         boolean capStart = headSplit || localFrom > 1.0E-9 || span.fromPoint() == 0;
         boolean capEnd = tailSplit || localTo < total - 1.0E-9
                 || span.toPoint() == points.size() - 1;
@@ -1086,19 +855,8 @@ public final class HudDraw {
 
     /**
      * Draws a whole road -- a stroke of segments through its pass-through nodes -- as one line.
-     *
-     * <h2>Why segment-by-segment still shows notches</h2>
-     * A bend is not always inside one segment: a road drawn with several clicks is stored as several
-     * segments meeting at a pass-through node, and a track read from another mod is cut at every
-     * node. Drawing each segment on its own mitres its own corners and nothing else, so the joint
-     * between two segments is two butt ends with a wedge between them at a bend -- the same notch,
-     * moved to fewer places. The stroke is what the road is; this concatenates it into one polyline
-     * and draws that.
-     *
-     * <p>How each piece is oriented is not worked out here. {@link DisplayStrokes} walks the stroke
-     * and records for every piece whether it is drawn forwards or backwards; inferring it from "the
-     * end nearer the last point written" reads a prepended piece wrongly, and the wrong read is a
-     * straight line painted between two places the road never joined. See that class.
+     * A bend is not always inside one segment: a road drawn with several clicks is several segments meeting at a pass-through node, and drawing each alone mitres only its own corners, so the joint is two butt ends with a wedge between them. This concatenates the stroke and draws it.
+     * Orientation is not worked out here: DisplayStrokes records whether each piece is drawn forwards or backwards, because inferring it from the end nearer the last point reads a prepended piece wrongly, and the wrong read paints a straight line between places the road never joined.
      */
     public static void emitChain(VertexSink out, RoadNetwork network, DisplayStrokes.Stroke stroke,
                                  double m00, double m01, double m02,
@@ -1113,12 +871,7 @@ public final class HudDraw {
         double previousWorldX = 0;
         double previousWorldZ = 0;
         boolean havePrevious = false;
-        // One record per piece, so the one-way marks below know which way round each stretch of the
-        // projected polyline runs. Keeping them here rather than re-deriving them is what stops an
-        // arrow from pointing down a road the player cannot travel that way. Most chains are two-way,
-        // so the arrays are only made when one of the pieces actually needs a mark -- this runs once
-        // per chain per frame, and four small allocations apiece is the kind of garbage a map pass
-        // must not make.
+        // One record per piece, so the one-way marks know which way round each stretch of the projected polyline runs. Most chains are two-way, so the arrays are only made when a piece actually needs a mark: this runs per chain per frame, and four small allocations apiece is garbage a map pass must not make.
         int pieceCount = stroke.pieces().size();
         boolean marks = false;
         for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
@@ -1152,10 +905,7 @@ public final class HudDraw {
                 }
                 PATH_X[written] = m00 * x + m01 * z + m02;
                 PATH_Y[written] = m10 * x + m11 * z + m12;
-                // Which piece owns this vertex: an arrow is placed along a chain, but its direction is
-                // the owning segment's. Recorded for every chain rather than only the marked ones --
-                // it is one int write per vertex and it keeps the two loops from having to agree about
-                // an array's presence.
+                // Which piece owns this vertex: an arrow is placed along a chain but its direction is the owning segment's. One int write per vertex, recorded for every chain so the two loops need not agree about an array's presence.
                 PATH_OWNER[written] = pieceIndex;
                 previousWorldX = x;
                 previousWorldZ = z;
@@ -1169,25 +919,15 @@ public final class HudDraw {
         }
         emitProjectedPath(out, written, halfWidth, argb, alpha, minX, minY, maxX, maxY);
         if (marks) {
-            // The marks come after the stroke so they sit on top of it, and before whatever the
-            // caller draws next -- a route, a marker -- so those still read as being above the road.
+            // The marks come after the stroke so they sit on top of it, and before whatever the caller draws next, so a route or a marker still reads as above the road.
             emitOneWayMarks(out, segments, reversed, written, halfWidth, alpha,
                     screenPxPerUnit, minX, minY, maxX, maxY);
         }
     }
 
-    // ------------------------------------------------------------ one-way marks
 
     /**
-     * The narrowest road, in screen half-width pixels, that carries one-way arrows on a map this mod
-     * draws.
-     *
-     * <p>These maps draw every road at a fixed weight rather than at the zoom's, so the arrows have to
-     * decide for themselves when a road is wide enough to carry one. The rule the player gave is that
-     * the mark has to sit inside the road, so a road too thin to hold a mark at all carries none: below
-     * this width an arrow sized to fit the road would be under a pixel long, and the alternative --
-     * forcing a minimum size -- is a mark wider than the road it belongs to, which is exactly what was
-     * reported and is what this whole rule replaced.
+     * The narrowest road, in screen half-width pixels, that carries one-way arrows. These maps draw every road at a fixed weight, so the arrows decide for themselves when a road is wide enough, and the mark has to sit inside the road: below this width an arrow sized to fit would be under a pixel long, and forcing a minimum size is a mark wider than the road -- which is what was reported and what this rule replaced.
      */
     private static final double ONEWAY_ARROW_MIN_HALF_PX = 0.9;
 
@@ -1195,13 +935,7 @@ public final class HudDraw {
     private static final double ONEWAY_ARROW_MAX_PX = 7.0;
 
     /**
-     * Arrowhead length as a multiple of the road's screen half-width.
-     *
-     * <p>1.15 is what makes the mark fit inside its road. The head and its rim are drawn 1.68 of their
-     * length across (see {@link #emitArrow}), and the road is two half-widths across, so a length of
-     * 1.15 half-widths puts the mark's widest point at 1.93 half-widths -- inside the stroke, with the
-     * rim still on the road rather than hanging off its edge. It used to be 2.6 (about two road widths),
-     * which on a four-pixel street drew a ten-pixel mark that read as an icon beside the road.
+     * Arrowhead length as a multiple of the road's screen half-width. 1.15 is what makes the mark fit inside its road: head and rim are drawn 1.68 of their length across and the road is two half-widths across, so the widest point sits at 1.93 half-widths, inside the stroke. It used to be 2.6, which on a four-pixel street drew a ten-pixel mark that read as an icon beside the road.
      */
     private static final double ONEWAY_ARROW_SIZE_PER_HALF_PX = 1.15;
 
@@ -1209,21 +943,12 @@ public final class HudDraw {
     private static final double ONEWAY_ARROW_SPACING_PER_SIZE = 4.0;
 
     /**
-     * The closest two arrowheads may be on screen, in pixels.
-     *
-     * <p>The size rule is proportional to the road, and the thinnest roads that carry marks are two
-     * pixels wide: a fixed multiple of a two-pixel arrow would be a dotted line rather than a
-     * direction. This floor is what makes even a thin road's arrows read as a few marks along it.
+     * The closest two arrowheads may be on screen, in pixels. The size rule is proportional to the road, so a fixed multiple of a two-pixel arrow would be a dotted line rather than a direction.
      */
     private static final double ONEWAY_ARROW_MIN_SPACING_PX = 12.0;
 
     /**
-     * The most arrowheads one chain draws, so a long road cannot fill the map.
-     *
-     * <p>Per chain rather than per piece, which is what it used to be: a road drawn as one long segment
-     * is one piece, so a per-piece cap of eight stopped marking it after about a tenth of its length --
-     * reported from play as "only part of the one-way road has arrows". The cap here is only a guard
-     * against a pathological chain; the real bound is the spacing against the visible box.
+     * The most arrowheads one chain draws, so a long road cannot fill the map. Per chain rather than per piece: a road drawn as one long segment is one piece, so a per-piece cap of eight stopped marking it after about a tenth of its length -- reported as only part of the one-way road has arrows.
      */
     private static final int ONEWAY_ARROW_LIMIT_PER_CHAIN = 64;
 
@@ -1233,31 +958,15 @@ public final class HudDraw {
 
     /**
      * Draws the direction arrows along the one-way stretches of one chain.
-     *
-     * <p>The maps that draw their own roads have no place of their own for a direction mark: they
-     * draw a road as a continuous chain and the segments' directions are a property of the data, so
-     * the marks are emitted here, from the same pieces and the same projected polyline, and every
-     * map that calls {@link #emitNetwork} gets them without a second implementation. The arrowheads
-     * are sized from the stroke's own width so the small maps get small marks and the viewer's wide
-     * ones get marks that proportionally belong to the road.
-     *
-     * <p>Which way a stretch runs in the projected polyline is not the segment's own direction: a
-     * stroke may be walked backwards or forwards by {@link DisplayStrokes}, so the owning piece's
-     * {@code reversed} flag is what turns "the segment allows FORWARD" into "the path goes this
-     * way". Getting that wrong is an arrow pointing against the only direction the road can be
-     * travelled, which is worse than no arrow at all.
-     *
-     * <p>The walk is over the whole chain and its spacing does not restart at a piece boundary; see
-     * the comment in the body for the two play-reported faults that came from walking piece by piece.
+     * The maps that draw their own roads have no place of their own for a direction mark, so the marks are emitted here from the same pieces and the same projected polyline, and every map that calls emitNetwork gets them. Arrowheads are sized from the stroke's own width so the small maps get small marks.
+     * Which way a stretch runs in the projected polyline is not the segment's own direction: DisplayStrokes may walk a stroke backwards, so the owning piece's reversed flag is what turns the segment allows FORWARD into the path goes this way. Getting that wrong points an arrow against the only direction the road can be travelled.
+     * The walk is over the whole chain and its spacing does not restart at a piece boundary.
      */
     private static void emitOneWayMarks(VertexSink out, RoadSegment[] segments, boolean[] reversed,
                                         int written, double halfWidth, int alpha,
                                         double screenPxPerUnit,
                                         double minX, double minY, double maxX, double maxY) {
-        // The marks are laid out in the emitter's own units, which are screen pixels for the maps
-        // this mod draws itself but the pose's units (a fraction of a pixel) for Xaero's minimap.
-        // The caller states the conversion, so the size and the spacing of an arrowhead are the
-        // same handful of pixels on every map instead of a fraction of one on the minimap.
+        // The marks are laid out in the emitter's own units: screen pixels for the maps this mod draws, the pose's units (a fraction of a pixel) for Xaero's minimap. The caller states the conversion, so an arrowhead is the same handful of pixels on every map.
         double perUnit = screenPxPerUnit > 0 ? screenPxPerUnit : 1.0;
         double screenHalf = halfWidth * perUnit;
         if (segments.length == 0 || written < 2 || screenHalf < ONEWAY_ARROW_MIN_HALF_PX) {
@@ -1273,13 +982,8 @@ public final class HudDraw {
         int rimAlpha = Math.min(alpha * 3 / 5, 0xFF);
         int ink = (bodyAlpha << 24) | (ONEWAY_ARROW_INK & 0xFFFFFF);
         int rim = (rimAlpha << 24) | (ONEWAY_ARROW_RIM & 0xFFFFFF);
-        // One walk over the whole chain, not one per piece. The pieces' marks used to restart their own
-        // spacing at every piece boundary and stop after eight of them, so a road drawn as one long
-        // segment went unmarked past its first stretch and a road of many pieces had its marks bunched
-        // at the joints -- "only part of the one-way road has arrows". The distance counter and the
-        // spacing run across the chain, and the direction of each stretch comes from the piece that
-        // owns the vertex. A two-way stretch still consumes the distance, so the marks on either side
-        // of it stay evenly spaced rather than bunching against it.
+        // One walk over the whole chain, not one per piece. Per-piece marks restarted their own spacing at every boundary and stopped after eight of them, so a road drawn as one long segment went unmarked past its first stretch and a road of many pieces bunched its marks at the joints.
+        // The distance counter and the spacing run across the chain, and each stretch's direction comes from the piece that owns the vertex. A two-way stretch still consumes distance, so the marks on either side stay evenly spaced.
         double travelled = 0;
         double nextAt = spacing * 0.75;
         int drawn = 0;
@@ -1302,9 +1006,7 @@ public final class HudDraw {
                 travelled += edge;
                 continue;
             }
-            // Increasing polyline index is the allowed direction when the piece was appended in
-            // vertex order and the segment runs forwards, or when it was reversed and the segment
-            // runs backwards; the two flags together decide it, which is why it is an xor.
+            // Increasing polyline index is the allowed direction when the piece was appended in vertex order and the segment runs forwards, or when it was reversed and the segment runs backwards: the two flags together decide, which is why it is an xor.
             boolean increasing = (segment.direction() == RoadDirection.FORWARD) != reversed[piece];
             double dirX = (bx - ax) / edge;
             double dirY = (by - ay) / edge;
@@ -1316,8 +1018,7 @@ public final class HudDraw {
                 double along = (nextAt - travelled) / edge;
                 double x = ax + (bx - ax) * along;
                 double y = ay + (by - ay) * along;
-                // Whole arrows only: a mark painted across the edge of the box is clipped by the
-                // stroke pass, and a clipped arrowhead is not a direction.
+                // Whole arrows only: a mark painted across the edge of the box is clipped by the stroke pass, and a clipped arrowhead is not a direction.
                 double reach = size * 1.3 + 0.5;
                 if (x - reach >= minX && x + reach <= maxX
                         && y - reach >= minY && y + reach <= maxY) {
@@ -1335,8 +1036,7 @@ public final class HudDraw {
                                   double size, int rim, int ink) {
         double px = -dirY;
         double py = dirX;
-        // The rim is the same arrow a little larger, which is what makes the head stand out from
-        // every road colour including the pale ice road.
+        // The rim is the same arrow a little larger, which is what makes the head stand out from every road colour including the pale ice road.
         double rimTipX = x + dirX * size * 1.15;
         double rimTipY = y + dirY * size * 1.15;
         double rimBackX = x - dirX * size * 0.72;
@@ -1356,16 +1056,8 @@ public final class HudDraw {
     }
 
     /**
-     * Draws a whole network, one continuous stroke per road rather than one per segment.
-     *
-     * <p>The road a stroke belongs to is the chain the editor and the router already use: segments
-     * joined through pass-through nodes with the same class. Drawing chains is what removes the
-     * notches at segment joints as well as at bends inside one segment, and it collapses a road of
-     * twenty pieces into one buffer write.
-     *
-     * <p>Colours still come per class from the config, and a chain is one class by construction (the
-     * chain walk stops at a class change), so the colour of its first segment is the colour of the
-     * whole stroke.
+     * Draws a whole network, one continuous stroke per road rather than one per segment. The road a stroke belongs to is the chain the editor and the router already use: segments joined through pass-through nodes with the same class. That removes the notches at joints as well as at bends and collapses a road of twenty pieces into one buffer write.
+     * A chain is one class by construction, so the colour of its first segment is the colour of the whole stroke.
      */
     public static void emitNetwork(VertexSink out, RoadNetwork network,
                                    double m00, double m01, double m02,
@@ -1377,13 +1069,7 @@ public final class HudDraw {
     }
 
     /**
-     * The same, for a surface whose emitter units are not screen pixels.
-     *
-     * <p>Xaero's minimap hands its renderers a pose in its own local units, which are a fraction of
-     * a pixel and change with the minimap's zoom; the navigation panel, the viewers and the phone
-     * page work in pixels. The one-way marks are sized and spaced in pixels -- a mark is a reading
-     * of the map, not of the pose -- so the caller states how many screen pixels one emitter unit
-     * is worth, and the same road carries the same mark on every surface.
+     * The same, for a surface whose emitter units are not screen pixels: Xaero's minimap hands its renderers a pose in local units that are a fraction of a pixel. The one-way marks are sized and spaced in pixels -- a mark is a reading of the map, not of the pose -- so the caller states the conversion and the same road carries the same mark on every surface.
      */
     public static void emitNetwork(VertexSink out, RoadNetwork network,
                                    double m00, double m01, double m02,
@@ -1396,11 +1082,7 @@ public final class HudDraw {
     }
 
     /**
-     * The same, with each road's half-width taken from its class rather than given once.
-     *
-     * <p>For the viewer that draws every class at its own weight; the small maps use one thickness
-     * because at their size a highway and a footpath are the same line. A null width function is the
-     * uniform case.
+     * The same, with each road's half-width taken from its class rather than given once. For the viewer that draws every class at its own weight; the small maps use one thickness, because at their size a highway and a footpath are the same line. A null width function is the uniform case.
      */
     public static void emitNetwork(VertexSink out, RoadNetwork network,
                                    double m00, double m01, double m02,
@@ -1438,49 +1120,23 @@ public final class HudDraw {
     }
 
     /**
-     * The colour of a route that is one whole stretch, in the given mode.
-     *
-     * <p>Blue on foot, green when driven. The case that is easy to get wrong is public transport:
-     * a route drawn for that mode with no journey behind it is not a ride, it is the walker's
-     * fallback -- the planners answer a journey no line can carry with the walk -- so it takes the
-     * walking blue rather than the driving green. A route that really does ride is not one colour
-     * at all; see {@link RouteInk}, which has a colour per stretch.
-     *
-     * <p>Every surface that draws a route with one colour asks this one method, so the world map,
-     * the HUD's small map and the two viewers cannot disagree about what a walk or a drive looks
-     * like. It is also what {@link #routeInk} gives the routes that have no journey to split, which
-     * is every walk, every drive, and the walk a public transport plan falls back to.
+     * The colour of a route that is one whole stretch, in the given mode: blue on foot, green when driven.
+     * Public transport is the case to get wrong: a route drawn for that mode with no journey behind it is the walker's fallback -- planners answer a journey no line can carry with a walk -- so it takes the walking blue, not the driving green. A route that really rides is not one colour at all; see RouteInk.
+     * Every surface that draws a route in one colour asks this one method, so the maps and viewers cannot disagree about what a walk or a drive looks like.
      */
     public static int routeColour(TravelMode mode) {
         return mode == TravelMode.DRIVE ? UiTheme.routeRide() : UiTheme.route();
     }
 
-    // ------------------------------------------------------------- route ink
 
     /**
      * One stretch of a drawn route that is drawn in one colour.
-     *
-     * <p>A stretch is a run of the route's own vertices plus the colour they are drawn in, and the
-     * two distances along the route where it begins and ends. The vertices are named as an index
-     * range into the route's single point list rather than copied into a list of their own: the
-     * route is drawn every frame on up to five surfaces, and a second list of the same points per
-     * stretch, rebuilt per frame, is garbage made in the frame loop -- which is why the whole table
-     * {@link RouteInk} is cached by the route it describes.
-     *
-     * <p>Consecutive stretches share the vertex where one ends and the next begins, so a change of
-     * colour happens at a vertex both stretches draw. That is deliberate: it keeps the drawn line
-     * continuous instead of leaving the two strokes to meet across a gap of rounding.
-     *
-     * <p>The distances are <em>drawn</em> distances, measured along the polyline the maps stroke, and
-     * they are the measure {@code Navigation.travelled()} has always been compared against on these
-     * lines. They deliberately do not include the connectors at the two ends of a route: those are
-     * not on the drawn line at all.
-     *
-     * @param fromPoint    index of the first vertex, in the route's point list
-     * @param toPoint      index of the last vertex, inclusive
-     * @param colour       the ARGB this stretch is drawn in
-     * @param fromDistance drawn distance from the start of the route to {@code fromPoint}
-     * @param toDistance   drawn distance from the start of the route to {@code toPoint}
+     * A stretch is a run of the route's own vertices -- an index range into the single point list, not a copy -- plus the colour, plus the two distances where it begins and ends. A second list of the same points per stretch, rebuilt per frame, would be garbage made in the frame loop, which is why the whole table is cached by the route.
+     * Consecutive stretches share the vertex where one ends and the next begins, so a change of colour happens at a vertex both draw and the line stays continuous.
+     * The distances are drawn distances along the stroked polyline, the measure Navigation.travelled() is compared against; they exclude the connectors at the route's two ends.
+     * @param fromPoint index of the first vertex, in the route's point list
+     * @param toPoint index of the last vertex, inclusive
+     * @param colour the ARGB this stretch is drawn in
      */
     public record InkSpan(int fromPoint, int toPoint, int colour,
                           double fromDistance, double toDistance) {
@@ -1493,24 +1149,9 @@ public final class HudDraw {
 
     /**
      * A route as the maps should draw it: one polyline, and the coloured stretches of it.
-     *
-     * <h2>Why a table rather than a colour</h2>
-     * A public transport journey is walked, ridden and walked again, and each of those is drawn in a
-     * different ink: on foot it is the walking blue, on a vehicle it is the colour of the line being
-     * ridden, and only a journey that is one mode throughout is one colour. Asking the drawing
-     * surface for "the route colour" cannot say that, which is the whole of the reported bug -- a
-     * transit journey came out green from end to end, and a ride's colour was not the line's.
-     *
-     * <h2>Why the points are shared</h2>
-     * The polyline is the route's own point list, not a copy, and a stretch names a range of it.
-     * Every surface already draws that list; splitting it into one list per stretch would copy every
-     * point on every frame. The table itself is built once per route and journey and cached beside
-     * the navigation -- see {@code Navigation.inkFor} -- so a frame only walks it.
-     *
-     * <h2>One mode, one stretch</h2>
-     * A walk or a drive, and a public transport route whose journey could not be found, have one
-     * stretch covering the whole line, in that route's own mode colour. So the simple case produces
-     * exactly the drawing it always did, and the checks assert that vertex for vertex.
+     * A public transport journey is walked, ridden and walked again, each drawn in a different ink -- the walking blue on foot, the ridden line's colour on a vehicle -- so asking the surface for the route colour cannot say it. That was the whole of the reported bug: a journey came out green end to end and a ride's colour was not the line's.
+     * The polyline is the route's own point list, and a stretch names a range of it: copying per stretch would copy every point on every frame. The table is built once per route and journey and cached beside the navigation (see Navigation.inkFor), so a frame only walks it.
+     * A walk, a drive, or a journey that could not be found has one stretch covering the whole line, so the simple case draws exactly as it always did.
      */
     public record RouteInk(List<double[]> points, List<InkSpan> spans, double length) {
 
@@ -1525,36 +1166,11 @@ public final class HudDraw {
 
     /**
      * The ink a route is drawn in, stretch by stretch.
-     *
-     * <h2>Where the stretches come from</h2>
-     * When there is a journey, from its legs: a leg on foot is walking blue, a leg on a vehicle is
-     * the colour of the line it rides, and two neighbouring legs in the same ink are one stretch so
-     * the line is not chopped at every station it passes through. Without a journey the route is one
-     * stretch in its own mode's colour -- see {@link #routeColour}.
-     *
-     * <h2>Where a line's colour comes from</h2>
-     * The journey names the line it rides, and the lines in play are searched for that name. The
-     * colour is the line's own when it has one and the default for its kind otherwise, through
-     * {@link TransitLine#colorOr}, so the route is drawn in the same colour as the line's badge on
-     * the map and in the editor. A name that resolves to no line -- the line was deleted or replaced
-     * while the journey was still being followed -- is drawn in {@link UiTheme#routeLineFallback()},
-     * which is deliberately neither the walking blue, the driving green nor the travelled grey: the
-     * one thing the map must not do is silently claim the stretch is one of the modes it is not.
-     *
-     * <h2>When this refuses</h2>
-     * A journey describes a route only if the two are the same line: the legs' drawn lengths, added
-     * up in order, have to land exactly on the vertices of this polyline. They do for every journey
-     * the planner flattens, because that flattening is the same concatenation; a mismatch means the
-     * caller handed over a route and a journey that do not belong together, and colouring that would
-     * put a station boundary at an arbitrary place. The answer then is one stretch, which is what
-     * the line would have been drawn as before there were journeys at all.
-     *
-     * <p>Builds, so it allocates: it is called once per route and journey and cached by them, never
-     * from a frame loop -- see {@code Navigation.inkFor}.
-     *
-     * @param route the route to draw; {@link Route#empty()} yields {@link RouteInk#EMPTY}
-     * @param trip  the journey the route was flattened from, or null for a one-mode plan
-     * @param lines the public transport lines in play, for resolving a ride's colour
+     * With a journey the stretches come from its legs: walking blue on foot, the ridden line's colour on a vehicle, with neighbouring legs of the same ink merged so the line is not chopped at every station. Without a journey the route is one stretch in its own mode colour.
+     * A ride's colour is the line's own when it has one and its kind's default otherwise, through TransitLine.colorOr, so the route matches the line's badge. A name that resolves to no line -- deleted or replaced while following -- uses UiTheme.routeLineFallback(), deliberately none of the three mode colours: the map must not silently claim the stretch is a mode it is not.
+     * A journey describes a route only if the legs' drawn lengths, added in order, land exactly on this polyline's vertices; they do for every journey the planner flattens. A mismatch means the caller paired a route with a journey that is not its own, and the answer is then one stretch, which is how the line was drawn before journeys existed.
+     * Builds, so it allocates: called once per route and journey and cached by them, never from a frame loop.
+     * @param trip the journey the route was flattened from, or null for a one-mode plan
      */
     public static RouteInk routeInk(Route route, Trip trip, List<TransitLine> lines) {
         if (route == null || !route.isPresent()) {
@@ -1574,14 +1190,7 @@ public final class HudDraw {
 
     /**
      * The stretches of a journey, or null when the journey is not this polyline.
-     *
-     * <p>The legs are walked in order and each one's drawn length is added up; that running total is
-     * the distance at which the leg ends in the flattened line, because the flattening wrote the
-     * legs' points one after the other and dropped only the duplicated point at each join. The
-     * running total is matched against the cumulative lengths of the vertices to find the vertex the
-     * boundary falls on. The lengths are the same numbers added in the same order, so the match is
-     * exact rather than approximate; the tolerance is there to survive a route built by anything
-     * other than {@code TransitPlanner.asRoute}, not to paper over a different line.
+     * The legs are walked in order and their drawn lengths summed; that running total is the distance at which the leg ends in the flattened line, because the flattening wrote the legs' points one after another and dropped only the duplicate point at each join. The total is matched against the cumulative vertex lengths. The lengths are the same numbers added in the same order, so the match is exact; the tolerance is there for a route built by anything other than TransitPlanner.asRoute.
      */
     private static RouteInk inkOfJourney(List<double[]> points, double length, Trip trip,
                                          List<TransitLine> lines) {
@@ -1631,7 +1240,6 @@ public final class HudDraw {
 
     /**
      * The distance along the polyline at which the given cumulative distance sits on a vertex.
-     *
      * @return the vertex's index, or -1 when the distance falls between two vertices
      */
     private static int vertexAt(double[] cumulative, double distance) {
@@ -1648,13 +1256,7 @@ public final class HudDraw {
     }
 
     /**
-     * How far a boundary may be from the vertex it is supposed to land on, in blocks.
-     *
-     * <p>A millionth of a block is nothing a map can draw and far more than the difference between
-     * two sums of the same double values. It is not a tolerance for a different route shape; it is
-     * there so that a join written by a future flattening, which might add the same lengths in a
-     * different order, is still recognised as the vertex it lands on. A real mismatch is hundreds of
-     * blocks, and that is refused rather than smeared over.
+     * How far a boundary may be from the vertex it is supposed to land on, in blocks. A millionth of a block is nothing a map can draw and far more than the difference between two sums of the same double values; a real mismatch is hundreds of blocks and is refused rather than smeared over.
      */
     private static final double VERTEX_SLACK = 1.0E-6;
 
@@ -1665,20 +1267,14 @@ public final class HudDraw {
         }
         Trip.Ride ride = leg.ride();
         if (ride == null) {
-            // A vehicle leg with no line: only a drive is shaped like that, and the drive's own
-            // colour is the truthful one. A transit journey always names its line.
+            // A vehicle leg with no line: only a drive is shaped like that, and the drive's own colour is the truthful one.
             return UiTheme.routeRide();
         }
         return lineInk(ride.line(), lines);
     }
 
     /**
-     * The colour of one line by name, or the fallback when no line in play carries that name.
-     *
-     * <p>Matched against {@link TransitLine#label()}, which is what the journey recorded when it
-     * built the ride. Two lines may share a label -- nothing stops a player naming two services the
-     * same -- and the first in play wins; there is no better answer, because the journey carries the
-     * name it was planned with and not the identity of the line object.
+     * The colour of one line by name, or the fallback when no line in play carries that name. Matched against TransitLine.label(), which is what the journey recorded; two lines may share a label and the first in play wins, because the journey carries the name it was planned with, not the identity of the line object.
      */
     private static int lineInk(String lineName, List<TransitLine> lines) {
         if (lineName != null && lines != null) {
@@ -1706,20 +1302,9 @@ public final class HudDraw {
     }
 
     /**
-     * The public transport lines, along the track each one actually runs on.
-     *
-     * <p>For the maps this mod draws itself -- the viewer on the main screen and the picker's small
-     * map. A line is not the chord between two of its stops: a railway between two stations can run a
-     * long way round, and the chord hides the one thing the map is for. The shapes come from
-     * {@link RoadElementRenderer#transitStrokesFor}, which plans each pair of neighbouring stops the
-     * same way the router will and caches the result, so these two maps draw the same track the world
-     * map does without planning anything of their own.
-     *
-     * <p>Each line is drawn in its own colour -- the one the player gave it, or the default for its
-     * kind -- because that colour is the line's badge everywhere else in the mod. Drawn after the
-     * roads and before the route, so a line is under the route the player is following and over the
-     * ground it runs on. Never thinned by zoom: there are a handful of lines, and seeing them is the
-     * point of having them on the small map at all.
+     * The public transport lines, along the track each one actually runs on, for the maps this mod draws itself. A line is not the chord between two of its stops: a railway between two stations can run a long way round, and the chord hides the one thing the map is for.
+     * The shapes come from RoadElementRenderer.transitStrokesFor, which plans each pair of neighbouring stops the way the router will and caches it, so these maps draw the same track as the world map without planning anything of their own.
+     * Each line is drawn in its own colour, after the roads and before the route, and never thinned by zoom: there are a handful of lines, and seeing them is the point.
      */
     public static void emitTransitLines(VertexSink out, List<TransitLine> lines,
                                         double m00, double m01, double m02,
@@ -1737,19 +1322,8 @@ public final class HudDraw {
     }
 
     /**
-     * The same, for a network that holds a whole region's worth of roads but a view that only shows
-     * a window: chains whose world bounding box misses the window are skipped before anything is
-     * projected.
-     *
-     * <p>This is what lets a layer read out of another mod be drawn as whole roads instead of one
-     * piece at a time. The per-piece version had to be used only where the cost allowed, and it is
-     * what made a long road look like a chain of separately painted pieces whenever the stroke was
-     * translucent: each piece ended in a rounded end of its own, and those ends overlapped.
-     *
-     * @param worldMinX left edge of the window, in blocks
-     * @param worldMinZ top edge of the window, in blocks
-     * @param worldMaxX right edge of the window, in blocks
-     * @param worldMaxZ bottom edge of the window, in blocks
+     * The same, for a network holding a whole region's worth of roads but a view that shows only a window: chains whose world bounding box misses the window are skipped before anything is projected.
+     * This is what lets a layer read from another mod be drawn as whole roads instead of one piece at a time. The per-piece version had to be limited by cost and made a long road look like separately painted pieces whenever the stroke was translucent -- each piece ended in its own rounded cap and those caps overlapped.
      */
     public static void emitNetworkInBox(VertexSink out, RoadNetwork network,
                                         double m00, double m01, double m02,
@@ -1820,12 +1394,7 @@ public final class HudDraw {
     }
 
     /**
-     * Whether any segment of a stroke comes within the world rectangle.
-     *
-     * <p>Tested per segment's own bounding box, so a road that crosses the window from outside to
-     * outside still counts -- an "is one of its points inside" test would throw away exactly the
-     * long roads that matter most. A box test is allowed to keep a stroke that only grazes the
-     * window; the stroke pass clips the edges anyway.
+     * Whether any segment of a stroke comes within the world rectangle. Tested per segment's own bounding box, so a road that crosses the window from outside to outside still counts -- an is-one-point-inside test would throw away exactly the long roads that matter most. A box test may keep a stroke that only grazes the window; the stroke pass clips the edges anyway.
      */
     private static boolean strokeInBox(RoadNetwork network, DisplayStrokes.Stroke stroke,
                                        double worldMinX, double worldMinZ,
@@ -1853,8 +1422,7 @@ public final class HudDraw {
     }
 
     /**
-     * The stroke pass over {@link #PATH_X} / {@link #PATH_Y}: one joined quad per visible edge, then a
-     * wedge at every bend too sharp to mitre, then the two end caps.
+     * The stroke pass over PATH_X / PATH_Y: one joined quad per visible edge, then a wedge at every bend too sharp to mitre, then the two end caps.
      */
     private static void emitProjectedPath(VertexSink out, int count,
                                           double halfWidth, int argb, int alpha,
@@ -1864,19 +1432,8 @@ public final class HudDraw {
 
     /**
      * The same, with the two caps optional.
-     *
-     * <p>Both are on for every drawing that has always drawn a line of its own, which is every
-     * caller but the route ink. The ink draws each stretch as its own stroke, and two neighbouring
-     * stretches share a vertex at a station: each stretch's cap belongs at the end of the line, not
-     * at that shared vertex, where the two caps would otherwise paint a semicircle of one stretch's
-     * colour over the first half width of the next one -- a small swap of colours at every station a
-     * journey passes through, and, on the faded plan lines, a darker bead wherever two translucent
-     * caps overlapped. Suppressing the cap at a shared vertex leaves the two strokes butt-joined
-     * there, which is exactly the line they are.
-     *
-     * <p>Neither flag changes anything for a route drawn as one stretch: its two ends are the ends
-     * of the line, so both caps are emitted, and the regression check holds that drawing to the
-     * vertices the old one emitted.
+     * Both are on for every caller but the route ink. The ink draws each stretch as its own stroke and two neighbouring stretches share a vertex at a station, where the caps would paint a semicircle of one stretch's colour over the next one's first half width -- a colour swap at every station, and a darker bead wherever two translucent caps overlapped. Suppressing the cap leaves the two strokes butt-joined there, which is exactly the line they are.
+     * Neither flag changes a route drawn as one stretch: its two ends are the line's ends, so both caps are emitted.
      */
     private static void emitProjectedPath(VertexSink out, int count,
                                           double halfWidth, int argb, int alpha,
@@ -1906,8 +1463,7 @@ public final class HudDraw {
             double startY = y1 + CLIP_T[0] * dy;
             double endX = x1 + CLIP_T[1] * dx;
             double endY = y1 + CLIP_T[1] * dy;
-            // A vertex fully inside the view uses the joint worked out for the edges on either side of
-            // it; a point introduced by the clip is mid-edge, so the edge's own normal is the right one.
+            // A vertex fully inside the view uses the joint worked out for the edges on either side of it; a point introduced by the clip is mid-edge, so the edge's own normal is the right one.
             double fromX = CLIP_T[0] <= 0.0 ? LEAVING_X[i] : nx;
             double fromY = CLIP_T[0] <= 0.0 ? LEAVING_Y[i] : ny;
             double toX = CLIP_T[1] >= 1.0 ? ARRIVING_X[i + 1] : nx;
@@ -1918,18 +1474,8 @@ public final class HudDraw {
                     startX - fromX, startY - fromY, argb, alpha);
         }
         emitRoundJoins(out, count, halfWidth, argb, alpha, minX, minY, maxX, maxY);
-        // Outward semicircular caps on both ends of the stroke. Within one stroke the joins above
-        // close every bend; what they cannot close is the place where two strokes meet -- a chain is
-        // cut at a junction, and a road read out of another mod is stroked one piece at a time. Two
-        // strokes that meet at an angle leave a wedge of background on the outside of the joint, and
-        // the two caps together fill it, exactly as a round line cap does in any 2D canvas.
-        //
-        // They are *half* discs, pointing away from the stroke, and that is the whole point: a full
-        // disc at an end lies half on top of the stroke that it belongs to, and these roads are drawn
-        // translucent (alpha in the 0x9A..0xD0 range), so the overlap came out a shade darker than
-        // the road around it -- a line of beads whenever the geometry was stroked piece by piece. A
-        // cap that only adds the part beyond the end owns every pixel it paints exactly once, and the
-        // two of them at a joint still cover the wedge because each fills its own side of it.
+        // Outward semicircular caps on both ends of the stroke. Within one stroke the joins close every bend; what they cannot close is where two strokes meet -- a chain is cut at a junction, and a road read from another mod is stroked one piece at a time -- and the two caps together fill that wedge, as a round line cap does in any 2D canvas.
+        // They are half discs pointing away from the stroke, and that is the point: a full disc at an end lies half on top of the stroke it belongs to, and these roads are translucent, so the overlap came out a shade darker -- a line of beads whenever the geometry was stroked piece by piece. A cap that only adds beyond the end owns every pixel it paints once, and the two at a joint still cover the wedge.
         if (capStart) {
             capOutward(out, PATH_X[0], PATH_Y[0],
                     PATH_X[0] - PATH_X[1], PATH_Y[0] - PATH_Y[1], halfWidth, argb, alpha,
@@ -1943,12 +1489,7 @@ public final class HudDraw {
     }
 
     /**
-     * A semicircular cap at one end of a stroke, pointing in the outward direction (dx, dy).
-     *
-     * <p>Semicircle rather than full disc: a full one would be painted over the last half-width of
-     * the stroke it caps, and with a translucent road that reads as a darker bead at every end where
-     * a piece was stroked. The cap only covers the ground past the end, so every pixel is blended
-     * once.
+     * A semicircular cap at one end of a stroke, pointing in the outward direction (dx, dy). Semicircle rather than full disc: a full one would be painted over the last half-width of the stroke it caps, and with a translucent road that reads as a darker bead.
      */
     private static void capOutward(VertexSink out, double x, double y,
                                    double dx, double dy, double halfWidth, int argb, int alpha,
@@ -1981,15 +1522,7 @@ public final class HudDraw {
     }
 
     /**
-     * Works out the cross-section at every projected vertex, before the edges are laid down.
-     *
-     * <p>Where the mitre of the two edges fits within {@link StrokeOutline#MITER_LIMIT} both edges
-     * share it, which is the cheap case and the one that leaves the bend square: two edges meet along
-     * a common edge instead of overlapping. Where it does not fit, each edge keeps its own
-     * perpendicular and the vertex is marked for a round join, because a mitre at that angle is a
-     * spike as long as the road is wide -- the spike being the thing the shared cross-section would
-     * otherwise draw beyond the bend -- and forcing a shared cross-section from either edge would
-     * measure the other edge across its own length.
+     * Works out the cross-section at every projected vertex, before the edges are laid down. Where the mitre fits within StrokeOutline.MITER_LIMIT both edges share it -- the cheap case, which leaves the bend square. Where it does not, each edge keeps its own perpendicular and the vertex is marked for a round join, because a mitre there is a spike as long as the road is wide.
      */
     private static void offsetJoints(int count, double halfWidth) {
         for (int vertex = 0; vertex < count; vertex++) {
@@ -2051,9 +1584,7 @@ public final class HudDraw {
                     continue;
                 }
             }
-            // Too sharp to mitre: each edge keeps its own perpendicular, and the wedge between them is
-            // left for a round join. The exact reversal is here too, where both normals are the same
-            // line and there is no bisector at all.
+            // Too sharp to mitre: each edge keeps its own perpendicular, and the wedge is left for a round join. The exact reversal is here too, where both normals are the same line and there is no bisector at all.
             ARRIVING_X[vertex] = previousNormalX * halfWidth;
             ARRIVING_Y[vertex] = previousNormalY * halfWidth;
             LEAVING_X[vertex] = nextNormalX * halfWidth;

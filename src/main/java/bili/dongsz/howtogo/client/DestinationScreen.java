@@ -45,73 +45,24 @@ import java.util.Set;
 
 /**
  * Destination picker: search, a pickable map, and the saved places.
- *
- * <p>The screen the main screen's destination button (K) and {@code /howtogo terminal} open, and the
- * one the old navigator item used to open before the mod stopped registering items.
- *
- * <p>The map is drawn from this mod's own road data and can be clicked to choose a point, the way
- * tapping a map works in a navigation app. Picking is two-step -- a click drops a pin, a second
- * click on the action button commits -- so a stray click does not silently start a trip.
- *
- * <h2>Details of a place</h2>
- * A list row and a place marker both choose on a single click, and a chosen place brings its details
- * with it: the list keeps the top of its band for its rows and the {@link PlaceDetailPanel} takes the
- * bottom, so what the player wrote and the controls that act on it are the same click away as the
- * route. A point picked on the map is not a place -- there is no record behind it -- so it keeps the
- * pin and the two-step commit and shows no card. The card is drawn rather than given a screen of its
- * own: a modal over a picker whose whole point is comparing places would hide the comparison.
- *
- * <h2>Where the plans live</h2>
- * Comparing plans does not take the list band -- the places stay visible, which is the point of
- * choosing from them. The plans are a band of their own under the readout, paid for by folding the
- * four control rows into a one-line bar. That bar is the one control that folds and opens them:
- * choosing a place folds them so its plans can be seen, and cancelling the choice opens them again.
- * It is the only control for the fold -- in both directions -- and the map and the list change
- * height with it rather than after it. See {@link #bottomGroupHeight} for how both forms are
- * measured and {@link #placeBands} for how the bands are then placed.
+ * Opened by the K screen's destination button and /howtogo terminal. The map is this mod's own road
+ * data; picking a point is two-step -- a click drops a pin, the action button commits -- so a stray
+ * click cannot start a trip. A row or marker chooses on one click and brings its details card, which
+ * shares the list band with the rows.
+ * Plans are a band under the readout, paid for by folding the four control rows into the bar.
  */
 public final class DestinationScreen extends Screen {
 
-    /** Width of the panel when the map and the list have to be stacked, one above the other. */
     private static final int PANEL_WIDTH = 268;
-    /**
-     * Widest the two-column panel may get, however wide the window is.
-     *
-     * <p>Only a little wider than the stacked panel's 268: the point of the side-by-side
-     * arrangement is to give the list a column of its own next to a square-ish map, not to fill the
-     * display. At this width the split gives the map column 137 units and the list column 176, which
-     * is a place name, its coordinates and its distance comfortably; a panel any wider spends the
-     * extra room on empty map.
-     */
     private static final int MAX_PANEL_WIDTH = 334;
-    /** Screen edge left clear of the panel, so it never touches the side of the display. */
     private static final int MARGIN = 8;
-    /**
-     * Narrowest the map column may become before the two columns stop being worth having.
-     *
-     * <p>Matched to the split below: the map column is 138 at {@link #MAX_PANEL_WIDTH} and shrinks
-     * to this only at the window width where the arrangement is abandoned for the stacked one.
-     */
     private static final int MIN_MAP_PANE_WIDTH = 125;
-    /** Narrowest the list column may become: a little more than the name and the distance. */
     private static final int MIN_LIST_PANE_WIDTH = 140;
-    /** The map's share of the space left after the column gap, in per cent. */
     private static final int MAP_PANE_SHARE = 44;
-    /**
-     * Gap between the two columns.
-     *
-     * <p>A constant of its own rather than the row gap, which tightens when the window is short:
-     * the column split is decided before that and is not something the vertical fit should move.
-     */
     private static final int COLUMN_GAP = 5;
     /**
-     * Narrowest window that still gets the two-column arrangement, measured rather than assumed.
-     *
-     * <p>Found by asking {@link #fitsAsColumns} at growing widths, so the number this class
-     * advertises is the number its own rule produces: the test is the same one {@code
-     * computePanelLayout} makes, calling the same {@link #mapPaneWidth} and {@link #listPaneWidth}
-     * the columns are then built from. A hand-computed threshold would be a second copy of the
-     * split, and the second copy is the one that drifts.
+     * Narrowest window that still gets two columns, found by asking fitsAsColumns at growing widths
+     * so the advertised floor is the number the rule itself produces.
      */
     private static final int MIN_SIDE_BY_SIDE_WINDOW = smallestWindowForColumns();
 
@@ -121,12 +72,9 @@ public final class DestinationScreen extends Screen {
                 return window;
             }
         }
-        // No window in range can hold both columns at their minimums, so the arrangement is off
-        // entirely and the stacked one is always used.
         return Integer.MAX_VALUE;
     }
 
-    /** Whether the columns the split describes at this window width still respect both minimums. */
     private static boolean fitsAsColumns(int window) {
         int content = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, window - MARGIN * 2))
                 - PADDING * 2;
@@ -134,144 +82,48 @@ public final class DestinationScreen extends Screen {
                 && listPaneWidth(content) >= MIN_LIST_PANE_WIDTH;
     }
 
-    /**
-     * Width of the map column for a given content width.
-     *
-     * <p>One function rather than the same expression written twice, because the decision to use two
-     * columns is a question about the answer it gives: written twice, one of the copies is the one
-     * that drifts.
-     */
     private static int mapPaneWidth(int content) {
         return (content - COLUMN_GAP) * MAP_PANE_SHARE / 100;
     }
 
-    /** Width of the list column: whatever the map column and the gap leave of the content. */
     private static int listPaneWidth(int content) {
         return content - COLUMN_GAP - mapPaneWidth(content);
     }
     /**
-     * Narrowest usable width the stacked panel can be held to without its own rows spilling.
-     *
-     * <p>The control rows put three abutting chips in a row and the class row six, so roughly 220
-     * units of content plus the panel padding is the floor below which the stacked arrangement
-     * would start pushing buttons off its own edge. Below even that the window is smaller than
-     * Minecraft's GUI normally gets; the panel is then allowed to reach the screen edges rather
-     * than being clipped by them, because a control just inside the edge can still be clicked.
+     * Narrowest usable stacked width: the control rows put three abutting chips in a row and six in
+     * the class row, so ~220 units of content plus padding is the floor. Below that the panel may
+     * reach the screen edges rather than be clipped.
      */
     private static final int MIN_PANEL_WIDTH = 236;
     private static final int ROW_HEIGHT = 24;
-    /** Narrowest a list row may be squeezed to when a band has to be shared out. */
     private static final int MIN_LIST_ROW = 24;
-    /**
-     * The details card's share of the list band while a place is selected, in per cent.
-     *
-     * <p>"About half": enough of the card to read a description in, while the list above it keeps
-     * showing the rows around the selected place. Below {@link #MIN_DETAILS_HEIGHT} the share is
-     * raised to it, because a card shorter than that cannot lay its own controls out at all.
-     */
     private static final int DETAILS_BAND_SHARE = 55;
-    /**
-     * Shortest a details card may be and still draw its title, source and action row inside itself.
-     *
-     * <p>{@link PlaceDetailPanel#preferredHeight} bottoms out at this figure for the same reason. A
-     * band too short to give the card this much and the list a row as well is given to the card
-     * whole: a card squeezed below this point would paint its buttons over the list above them.
-     */
     private static final int MIN_DETAILS_HEIGHT = 84;
-    /**
-     * Shortest a card may be squeezed to and still keep a list row above it.
-     *
-     * <p>Less than {@link #MIN_DETAILS_HEIGHT}, because the band is often too short for a full card
-     * and dropping the list to keep one would cost more than a clipped description: this is the
-     * height at which the title, the source pill and the four-button action row still sit inside the
-     * card's own edge. Below it the card takes the whole band and the list waits behind the
-     * panel's collapse button.
-     */
     private static final int MIN_DETAILS_COMPACT = 70;
-    /**
-     * Shortest the panel may become, in units.
-     *
-     * <p>The window is usually the taller of the two, and the panel simply fills it; this is the
-     * floor for a window too short to hold the header, the controls and one row of list at once. A
-     * panel that reaches the screen edges can still be read and clicked, whereas bands squeezed past
-     * this point would start to overlap.
-     */
     private static final int MIN_PANEL_HEIGHT = 232;
-    /**
-     * The map column's share of the two-column content width.
-     *
-     * <p>A width figure only. The map's *height* is not a share of anything: the columns are
-     * stretched to the bottom of the band they sit in, so this decides how wide the map pane is and
-     * nothing else.
-     */
     private static final int MAP_BAND_SHARE = 42;
-    /**
-     * Most rows the list may draw.
-     *
-     * <p>Not the figure that decides the list's height: the band does that, and the band is the panel
-     * less everything fixed. This only stops a very tall window from asking for more rows than
-     * anyone would scroll through; below it, the row count follows the band exactly.
-     */
     private static final int MAX_VISIBLE_ROWS = 12;
     private static final int PADDING = 8;
     private static final int HEADER_HEIGHT = 16;
     private static final int SEARCH_HEIGHT = 16;
     private static final int GAP = 5;
-    /** When the window is too short for the comfortable layout, every gap shrinks to this. */
     private static final int GAP_PACKED = 3;
     private static final int FOOTER_HEIGHT = 22;
-    /** Row of travel-mode buttons, between the place list and the preference controls. */
     private static final int MODE_ROW_HEIGHT = 18;
-    /**
-     * The two control rows under the mode row: the metric and major-road toggles, then one toggle
-     * per {@link RoadClass} for the avoid list. Heights rather than one number because the metric
-     * buttons have to stay tall enough to read while the class row can give up a pixel or two.
-     */
     private static final int PREFERENCE_ROW_HEIGHT = 16;
     private static final int PREFERENCE_ROW_PACKED = 14;
     private static final int CLASS_ROW_HEIGHT = 16;
     private static final int CLASS_ROW_PACKED = 14;
-    /**
-     * The preview readout under the list: one short line naming the state, one for the answer.
-     *
-     * <p>Two lines are reserved whatever the answer is, so the panel does not resize as the player
-     * compares a route that exists with one that does not.
-     */
     private static final int PREVIEW_STATE_HEIGHT = 9;
     private static final int PREVIEW_LINE_HEIGHT = 19;
-    /**
-     * Height of one plan row, and the tighter height a short window gets.
-     *
-     * <p>22 is two lines of the font with a unit of breathing room either side, which the results
-     * band needs because a plan is a title line and a facts line. 18 is not two comfortable lines
-     * but still two, and it is the floor: below this the facts line would be clipped through its
-     * middle, and a clipped row reads as broken rather than as smaller. The band's height is the
-     * number of plans times this figure, so a short window shows shorter rows rather than fewer of
-     * them -- three plans are the whole point of the band.
-     */
     private static final int PLAN_ROW_HEIGHT = 22;
     private static final int PLAN_ROW_PACKED = 18;
-    /** Most plan rows the band may hold; the planner never offers more than three. */
     private static final int MAX_PLAN_ROWS = 3;
-    /**
-     * Height of the one bar that folds the four control rows away and opens them again.
-     *
-     * <p>One control, always in the same place, rather than the two there used to be: a button row
-     * saying "路线选项" while the rows were folded, and the folded summary line above it, which also
-     * opened them. Both did the same job, so the button row is gone and the bar itself is the
-     * control -- it carries the summary on its left and a hint at its right saying what pressing it
-     * does. While the rows are open it stays where it is and says how to fold them again, which is
-     * what makes the fold reachable in both directions without a second row.
-     *
-     * <p>The packed figure is the floor the whole bottom group is measured from when the window is
-     * short, and it is still tall enough to click.
-     */
     private static final int CONTROLS_BAR_HEIGHT = 16;
     private static final int CONTROLS_BAR_PACKED = 14;
     private static final int CORNER_RADIUS = 5;
     private static final int MIN_MAP_HEIGHT = 42;
 
-    /** Half the world span shown in the picker map, in blocks. Zoomable. */
     private static final double DEFAULT_VIEW_RADIUS = 260.0;
     private static final double MIN_VIEW_RADIUS = 40.0;
     private static final double MAX_VIEW_RADIUS = 3000.0;
@@ -279,11 +131,9 @@ public final class DestinationScreen extends Screen {
     private static final int RECENTER_SIZE = 11;
 
     /*
-     * The controls' motion is a pool indexed by slot rather than by object: a chip is a rectangle
-     * both the drawing and the hit test rebuild from the layout every frame, so there is nothing to
-     * hang a slide on. Each row of controls owns a block far wider than any row can need, so a row
-     * that grows a chip never collides with the row below it. Two slides per slot -- the cursor
-     * arriving and the control being switched on -- which is why every access is doubled.
+     * The controls' motion is a pool indexed by slot rather than by object: a chip is a rectangle the
+     * drawing and the hit test rebuild from the layout every frame. Each row owns a block wider than any
+     * row needs, and every access is doubled -- the cursor arriving and the control being switched on.
      */
     private static final int CHIP_MODE = 0;
     private static final int CHIP_PREFERENCE = 16;
@@ -294,68 +144,28 @@ public final class DestinationScreen extends Screen {
 
     private final Screen parent;
 
-    /**
-     * The opacity the whole window is drawn at this frame: the entrance and the exit multiplied.
-     *
-     * <p>Advanced once at the top of {@link #render} and read by every pass below it, so a screen
-     * arriving fades as one surface rather than in the order its bands happen to be drawn -- and so
-     * that the exit, which is the same value falling again, needs no second code path.
-     */
     private float open = 1.0F;
 
-    /**
-     * The opacity of the window's own surface this frame: the dimming, the sheet and the empty map.
-     *
-     * <p>The same number as {@link #open} everywhere except during a hand-off to another page, where
-     * the surface is held at full while the content cross-fades -- see
-     * {@link UiMotion.ScreenState#surface()}. The empty map counts as surface rather than as content:
-     * a map that faded would be a hole in the sheet with the world showing through it.
-     */
     private float surface = 1.0F;
 
     /**
      * How far the four control rows are open this frame, from 0 folded to 1 open.
-     *
-     * <p>A slide rather than a boolean because folding is a change of layout, and a layout that
-     * changes in one frame reads as a glitch. Its target is re-read from {@link #controlsExpanded}
-     * every frame instead of being written where that state is: the bar, a chosen place, a
-     * cancelled one and {@code init} all write the state directly, and none of them has to know
-     * that the fold animates. The value is also what the vertical layout is measured from (see
-     * {@link #relayoutForFold}), because the band above the controls has to grow as they fold, not
-     * after they have finished folding.
+     * A slide rather than a boolean because folding is a layout change; its target is re-read from
+     * controlsExpanded every frame.
      */
     private float fold = 1.0F;
 
-    /** The slide {@link #fold} is read off, resting open because that is how the panel opens. */
     private final UiMotion.Slide controlsFold =
             new UiMotion.Slide(UiMotion.Easing.IN_OUT_CUBIC, 1.0F, UiMotion.EXPAND);
 
-    /** Every place row's cursor arrival (even slot) and its picked-out state (the next slot). */
     private final UiMotion.Slides rowSlides = new UiMotion.Slides();
 
-    /** The same pair for the plan rows, which are hovered and chosen the same way. */
     private final UiMotion.Slides planSlides = new UiMotion.Slides();
 
-    /** Every control's cursor arrival and switched-on state, in the blocks the constants name. */
     private final UiMotion.Slides chipSlides = new UiMotion.Slides();
 
-    /**
-     * The slot of the control being drawn this instant.
-     *
-     * <p>A field for the reason {@code SettingsScreen} keeps its pointer position in one: the
-     * easing has to happen inside {@link #drawButton}, which takes no slot of its own, and the only
-     * alternative is another parameter on every control in the panel. Each row writes its own slot
-     * on the line before it draws, so a slot is never read across two controls.
-     */
     private int chipSlot;
 
-    /**
-     * How far the row being drawn has arrived, for {@link #drawNameLine}.
-     *
-     * <p>The name is the one part of a row that another method writes, and it is written in colours
-     * the row itself picks; a field rather than a parameter for the same reason as
-     * {@link #chipSlot}.
-     */
     private float rowArrival = 1.0F;
 
     private List<Destination> all = List.of();
@@ -366,298 +176,132 @@ public final class DestinationScreen extends Screen {
     private EditBox searchField;
     private String lastQuery = "";
 
-    /** Map point chosen but not yet committed, as {x, z}, or null. */
     private double[] pendingPick;
 
-    /**
-     * How close in pixels the cursor has to be to a place marker to count as pointing at it.
-     *
-     * <p>Generous on purpose: the marker is under four pixels across, and a hit test that matched it
-     * exactly would need a steady hand to use at all.
-     */
     private static final int PLACE_HIT_PX = 5;
 
-    /** Height of one line of the font, for the label boxes. */
     private static final int LABEL_HEIGHT = 9;
 
-    /**
-     * The sign card's measures: the room inside it, shared with the other two maps, and its scale.
-     *
-     * <p>Pixels rather than the world map's font-relative units: this map draws every one of its
-     * labels at the font's own size -- its zoom moves the world under them, not the text -- so the
-     * card here has no zoom factor of the map's to follow. The room inside the card is the shared
-     * {@link RoadSigns} one, which is what makes the same road's shield look like the same object on
-     * all three maps; one unit of it is drawn at {@link #SIGN_CARD_SCALE} screen pixels.
-     */
     private static final int SIGN_CARD_PAD_X = RoadSigns.PAD_X;
     private static final int SIGN_CARD_PAD_Y = RoadSigns.PAD_Y;
     private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
     /**
-     * How much of the font a sign card is drawn at on this map: box and text alike,
-     * {@link RoadSigns#FIXED_CARD_SCALE} of the font.
-     *
-     * <p>A card at the font's own size is the billboard the world map's card was shrunk away from: it
-     * is opaque and coloured, the place names beside it are ink, and on a map a couple of hundred
-     * pixels across a full-size plate is one of the loudest things on it. This map has no zoom to
-     * follow, so the same decision is a constant here. The number is the shared one now -- the main
-     * screen, this map and the phone page draw the same fraction so the same road's shield is the same
-     * object everywhere -- and it is smaller than the 0.72 it used to be: that read as a plate bigger
-     * than the streets it stood on once the card's border and padding were counted.
-     *
-     * <p>The whole card scales, not just its text: a smaller number in a full-sized plate is a box
-     * of padding round a small word, and would take just as much of the map as before. The border
-     * stays one screen pixel -- at this size it is a rim rather than a share of the card.
+     * How much of the font a sign card is drawn at on this map, as RoadSigns#FIXED_CARD_SCALE.
+     * A full-size card would be one of the loudest things on a map this size, and the whole card
+     * scales, not just its text; the border stays one screen pixel, a rim rather than a share.
      */
     private static final float SIGN_CARD_SCALE = RoadSigns.FIXED_CARD_SCALE;
-    /**
-     * The least share of the card's scale the mixed card's name line may shrink to.
-     *
-     * <p>The same floor, and for the same reason, as the world map's SIGN_CARD_NAME_FLOOR: a name
-     * shrunk to a short number's width is a line nobody can read, so the shrink stops here and a name
-     * that would need more shrinking than this widens the plate instead, with the number centred and
-     * padding either side of it. The value is a share of the card rather than a size in pixels, so
-     * the two lines keep their relation whatever the card is scaled to.
-     */
     private static final double SIGN_CARD_NAME_FLOOR = 0.7;
 
-    /**
-     * The room every road label keeps from the labels already on the map, in screen pixels.
-     *
-     * <p>The same rule, and the same number, as the main screen's map: a label claims its painted
-     * box grown by this much, so two plates -- or a plate and a name -- stand a visible gap apart
-     * instead of touching. Both are held in {@link RoadSigns}, because the two maps are read side by
-     * side and a plate that keeps its distance on one and not the other is two different objects.
-     */
     private static final double LABEL_CLEARANCE_PX = RoadSigns.LABEL_CLEARANCE_PX;
 
     /**
-     * The least zoom, in screen pixels per block, at which this map draws a sign card.
-     *
-     * <p>A card keeps its size whatever the zoom does, so a picker zoomed out to show a whole trip
-     * would be plates over strokes: one opaque rectangle for every classified road in view. Below
-     * this zoom the card gives way to the road's name, which is ink along the line, so the road still
-     * says which road it is -- it simply reads as it does in the name-only mode until the player
-     * zooms back in to where a plate can stand. Shared with the main screen's map, which has the same
-     * problem and the same answer.
+     * The least zoom, in screen pixels per block, at which this map draws a sign card. Below it a
+     * card would be plates over strokes, so it gives way to the road's name; shared with the main
+     * screen's map, which has the same problem and answer.
      */
     private static final double LABEL_MIN_SCALE = RoadSigns.LABEL_MIN_SCALE;
 
     /**
      * The widest view, in blocks across, at which this map writes road names at all.
-     *
-     * <p>Measured in blocks rather than in pixels per block because the two maps are very different
-     * sizes: this one is a fraction of the K screen's, so one number for "pixels per block" would mean a
-     * whole region on one and a village on the other. Nine hundred blocks across is a journey seen end
-     * to end -- the reading the picker exists for -- and past it the names are a wall of words over the
-     * plan rather than a help. The default view is 520 blocks across, so this only takes the names away
-     * once the player zooms out to look at the whole trip.
+     * In blocks because the two maps are very different sizes: 900 blocks across is a journey seen end
+     * to end, and past it names are a wall of words over the plan. The default view is 520.
      */
     private static final double NAME_MAX_VIEW_BLOCKS = 900.0;
 
-    /**
-     * The room a road's name leaves at each end of its road, in screen pixels.
-     *
-     * <p>The same margin the main screen's map keeps: a name centred on its road with its first and
-     * last letter exactly on the road's two ends reads as a label for the junctions at either end, so
-     * a few pixels of road are left showing past the word.
-     */
     private static final double ROAD_NAME_END_MARGIN = 4.0;
 
     /**
-     * The widest view, in blocks from the map's centre to its edge, at which this map names a public
-     * transport line.
-     *
-     * <p>A hundred blocks of radius, so the visible area spans two hundred -- a zoomed-in view of one
-     * part of a trip rather than the whole plan. A line's name plate is an opaque capsule at a fixed
-     * size whatever the zoom, and past this view the visible area already holds more than one of the
-     * plates' 160-block candidates on a line crossing it, so the map becomes a band of capsules along
-     * every line. Inside it the map is close enough that a plate names a stretch of track rather than
-     * covering the route the picker exists to show. The default view is 260 blocks of radius, so the
-     * names appear only once the player zooms in past it. The figure is the one the player asked for,
-     * and it is stated as a radius because that is what this map's zoom control actually moves --
-     * pixels per block would mean a different amount of world here than on the K screen, whose map is
-     * several times this one's size.
+     * The widest view, in blocks from the map's centre to its edge, at which this map names a line.
+     * 100 blocks of radius: past this the visible area holds several 160-block candidates and the map
+     * becomes a band of capsules. Written as a radius because that is what the zoom control moves.
      */
     private static final double LINE_NAME_MAX_VIEW_RADIUS = 100.0;
 
-    /**
-     * How far above the line a name plate floats, in screen pixels.
-     *
-     * <p>The world map's figure, and for the same reason: a capsule lying on the stroke would read as
-     * a second, opaque stroke, while one lifted clear of it leaves the line unchanged and the name an
-     * object beside it. Screen pixels rather than blocks, because the plate does not grow with the
-     * zoom the way the stroke does.
-     */
     private static final double LINE_NAME_RISE_PX = 7.0;
 
-    /**
-     * The most line name plates this map draws at once.
-     *
-     * <p>Two: this map is a fraction of the K screen's size and its name plates are a fixed size, so a
-     * couple of them is already a noticeable share of it. The candidate spacing and the shared
-     * reservation list would space more out, but two is the point at which the plates stop being
-     * occasional landmarks and start being the map's subject.
-     */
     private static final int MAX_LINE_NAMES = 2;
 
-    /** The side of a row's colour marker, and the room it and its gap take out of the row's text. */
     private static final int ROW_MARKER = 6;
     private static final int ROW_MARKER_STEP = 9;
 
-    /** The destination the preview belongs to, or null when nothing has been chosen yet. */
     private Destination previewTarget;
-    /** The plan for {@link #previewTarget}, or null when there is nothing to preview. */
     private Navigation.RoutePreview preview;
 
     /**
-     * The plans the picker is offering, quickest first, or an empty list.
-     *
-     * <p>Drawn as a band of its own under the readout, not in the place list's band: the list has to
-     * stay visible while a route is chosen -- covering it with the results was the whole complaint
-     * this layout answers. See {@link #drawPlanList} for the band and {@link #bottomGroupHeight} for
-     * how its height is reserved.
-     *
-     * <p>Held in band order: {@link #planIndex} is an index into this list, and the map, the readout
-     * and the footer all read the same index, so the line picked out and the line started cannot
-     * disagree.
+     * The plans the picker is offering, quickest first, or an empty list, in band order: planIndex
+     * indexes this list and the map, readout and footer all read the same index, so the line picked
+     * out and the line started cannot disagree.
      */
     private List<RouteOption> plans = List.of();
-    /** Which of {@link #plans} the player has picked out; the map and the readout follow it. */
     private int planIndex;
-    /**
-     * The plan row the cursor is over, or -1 while it is over none.
-     *
-     * <p>Worked out by the drawing and read by {@code mouseClicked}, the same arrangement the place
-     * rows use: it is the single place the row geometry is turned into a hit result, so the drawn
-     * rows and the clickable rows cannot drift apart.
-     */
     private int hoveredPlan = -1;
 
     /**
-     * Whether the four control rows are open, or folded under the one-line bar that replaces them.
-     *
-     * <p>Open whenever there is no destination to compare plans for, because then the controls are
-     * the bottom of the panel and the collapsed bar would hide what the panel is for. Choosing a
-     * destination folds them so the plans it produces can be seen; the bar, which is the one
-     * control for both directions, opens them again. See {@link #setControlsExpanded} for why the
-     * layout is measured again rather than the rows simply not being drawn.
+     * Whether the four control rows are open, or folded under the one-line bar. Open whenever there
+     * is no destination to compare plans for; choosing one folds them, and the bar opens them again.
      */
     private boolean controlsExpanded = true;
 
-    /** Height of one plan row in the current layout: {@link #PLAN_ROW_HEIGHT} or its packed twin. */
     private int planRowSize;
-    /** Top of the plan band: the first line under the preview readout. */
     private int planTop;
-    /** Top of the four control rows, in the place the open layout gives them. */
     private int controlsY;
-    /** Height of the toggle bar in the current layout. */
     private int summaryRowHeight;
-    /** Top of the bar that folds the four control rows and opens them again. */
     private int barY;
-    /** The block the fold trades: its top and bottom are what the band above is measured from. */
     private int stackTop;
     private int stackBottom;
     /**
-     * The fold value the current geometry was measured from.
-     *
-     * <p>Layout is a function of the fold while it is moving (see {@link #relayoutForFold}), and
-     * this is what says whether the frame in hand has to measure it again. A value of two is a
-     * sentinel no eased slide can produce, so the first frame always measures.
+     * The fold value the current geometry was measured from. Two is a sentinel no eased slide
+     * produces, so the first frame always measures.
      */
     private float laidOutFold = 2.0F;
 
     /**
-     * The plan band's height this frame, in pixels, followed rather than set.
-     *
-     * <p>The band's height is the number of plans times the row height, and the number of plans can
-     * change under the screen without the fold moving at all -- choosing a second place while one is
-     * already being compared is the ordinary case, and the planner offers one, two or three rows.
-     * Assigned outright, that is a jump of up to 44 pixels in the band the map and the list are
-     * measured against, which is the same visible fault the fold had. So it is followed: the block
-     * height the layout reads is this value, and every frame it moves the layout is re-measured (see
-     * {@link #settlePlansBlock}).
+     * The plan band's height this frame, in pixels, followed rather than set: the plan count can change
+     * while the fold does not, and setting it outright would jump the band the map and list are measured
+     * against.
      */
     private float plansBlockShown;
 
-    /**
-     * How quickly the plan band catches up with a change in the number of plans, in seconds.
-     *
-     * <p>Shorter than a fold on purpose: this is a correction rather than a journey, and the thing
-     * being corrected is a number of rows, so it has to be over before the player reads the new
-     * rows. Same shape as {@link UiMotion#FOLLOW_SECONDS} for the same reason -- it chases a target
-     * that may move again rather than travelling to a fixed one.
-     */
     private static final float PLAN_BLOCK_FOLLOW_SECONDS = 0.09F;
 
     /**
-     * The details card, and the place it is about, or null while the list has the whole band.
-     *
-     * <p>Not a widget and not a screen: {@link PlaceDetailPanel} only draws and reports clicks, so
-     * it lives as long as this screen does and is told where the list band left room for it. A
-     * separate {@code PlaceDetails} value is deliberately not kept here -- the store is asked every
-     * frame, so a favourite toggled from anywhere, or from the card itself, shows up on the next one.
+     * The details card, and the place it is about, or null while the list has the whole band. Not a
+     * widget: it draws and reports clicks, and the store is asked every frame.
      */
     private final PlaceDetailPanel detailPanel = new PlaceDetailPanel();
     private Destination detailsPlace;
 
-    /** Height of the details card, and where its top edge is; zero when no card is shown. */
     private int detailsHeight;
     private int detailsY;
 
-    /** The list band the vertical layout produced, before the details card took its share of it. */
     private int listBandHeight;
 
     /**
-     * The places the current search matched through their description or tags.
-     *
-     * <p>Kept beside {@link #shown} rather than tested in the drawing, because the drawing would
-     * have to look up the store again and would still not know whether the <em>name</em> also
-     * matched. A row in this set shows the one-line summary that explains the hit.
+     * The places the current search matched through their description or tags; a row in this set
+     * shows the summary that explains the hit.
      */
     private final Set<Destination> descriptionMatches = new HashSet<>();
 
-    /**
-     * World position at the centre of the picker map.
-     *
-     * <p>Kept separate from the player's position so the map can be panned around; the player
-     * marker is then drawn wherever they actually are, on or off the visible area.
-     */
     private double mapCenterX;
     private double mapCenterZ;
     private double viewRadius = DEFAULT_VIEW_RADIUS;
 
     /*
-     * The camera is steered rather than set: the two pairs of numbers below are the same statement
-     * "where the view is" at two moments in time.
-     *
-     * During a drag the shown value is moved directly by the cursor, because a map that lags the hand
-     * holding it is not smooth, it is late -- the whole point of a drag is that it is the player's.
-     * What the drag leaves behind is momentum: on release the target keeps travelling and decays, and
-     * the shown value chases it, which is the "ring" a map has when it is thrown. Everything else --
-     * the wheel, the back-to-me button, fitting the view to a planned route -- is aimed: the target
-     * is set and the shown value travels to it over {@link #CAMERA_FOLLOW_SECONDS}.
+     * The camera is steered rather than set: during a drag the shown value follows the cursor and
+     * the target keeps the momentum; everything else is aimed, and the shown value travels to the
+     * target over CAMERA_FOLLOW_SECONDS.
      */
     private double targetCenterX;
     private double targetCenterZ;
     private double targetViewRadius = DEFAULT_VIEW_RADIUS;
-    /** Blocks per second the view is still coasting at, after a drag; zero when it has stopped. */
     private double momentumX;
     private double momentumZ;
-    /** When the last drag step arrived, for turning pixel deltas into blocks per second. */
     private long lastDragNanos;
-    /**
-     * How fast the shown camera catches up with an aimed one, in seconds.
-     *
-     * <p>Short: long enough that a wheel notch or a route fit is a movement rather than a cut, short
-     * enough that a player who lets go of the map is not left watching it settle.
-     */
     private static final float CAMERA_FOLLOW_SECONDS = 0.075F;
-    /** Time constant of the post-drag coast; a throw is over in about a third of a second. */
     private static final float CAMERA_INERTIA_SECONDS = 0.16F;
-    /** Zoom is chased on a logarithmic radius, so this is the snap in that space (about 0.1%). */
     private static final double CAMERA_RADIUS_SNAP = 0.001;
 
-    /** Where the mouse went down inside the map, so a click can be told apart from a drag. */
     private boolean mapPressed;
     private double mapPressX;
     private double mapPressY;
@@ -674,62 +318,23 @@ public final class DestinationScreen extends Screen {
     private int modeY;
     private int preferenceY;
     private int classY;
-    /** The transit guidance switch's own row, under the avoid-class row. */
     private int transitY;
     private int footerY;
     private int previewY;
-    /**
-     * The chosen geometry: the panel width actually used, the width of each column, and where the
-     * list column starts.
-     *
-     * <p>One set of numbers, read by the drawing and the hit tests alike, so the two arrangements
-     * cannot disagree about where anything is. In the two-column arrangement the list sits to the
-     * right of the map and shares its band; in the stacked one it sits below, and {@link #listPaneW}
-     * and the full row width are the same thing.
-     */
     private int panelW;
     private int mapPaneW;
     private int listPaneW;
     private int listPaneX;
-    /**
-     * Whether the map and the list are side by side.
-     *
-     * <p>Kept because the arrangement decides where the list starts as well as how wide it is: side
-     * by side it begins on the map's own top line, stacked it begins under the map. Read from one
-     * field rather than inferred again from a coordinate, so the two cannot disagree.
-     */
     private boolean columnsSideBySide;
-    /** Left edge and width of the full-width rows: the controls and the footer. */
     private int rowX;
     private int rowW;
-    /** Gap in force for this layout, which is the comfortable one until the window is too short. */
     private int gap;
     private int preferenceRowHeight;
     private int classRowHeight;
-    /** Height of the transit guidance row, which follows the other two through the packing rule. */
     private int transitRowHeight;
     private int visibleRows;
-    /**
-     * Height of one list row, which the band's remainder is shared out over.
-     *
-     * <p>Never below {@link #ROW_HEIGHT}; the row count and this figure are produced together by
-     * {@link #listRowMetrics}, so the rows fill their band exactly and the drawing, the wheel and the
-     * hit tests all walk them at the same pitch.
-     */
     private int rowHeight;
-    /**
-     * Units of the list band that the row height division did not use, shared one per row.
-     *
-     * <p>Spread over the first {@code rowRemainder} rows by {@link #rowTop}, so the rows between them
-     * add up to the band exactly and nothing is left under the last place.
-     */
     private int rowRemainder;
-    /**
-     * Height of the band the columns share, which is the panel less the fixed top and bottom groups.
-     *
-     * <p>Kept because {@code init} places the readout at the band's bottom -- the line both columns
-     * run down to -- and the columns may differ in height, so neither of them can stand in for it.
-     */
     private int bandHeight;
     private int modeButtonsX;
     private int modeButtonWidth;
@@ -742,11 +347,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Keep the world running behind the picker.
-     *
-     * <p>A destination is often chosen while travelling, so freezing the world to read the map is
-     * the wrong trade -- the player would step into lava and find out on closing the screen. Only
-     * the keyboard and mouse are captured, the world ticks on.
+     * Keep the world running behind the picker: a destination is often chosen while travelling, so
+     * only the keyboard and mouse are captured.
      */
     @Override
     public boolean isPauseScreen() {
@@ -758,28 +360,16 @@ public final class DestinationScreen extends Screen {
         all = Destinations.all();
         dropVanishedSelection();
         scroll = 0;
-        // With nothing chosen the bottom of the panel is the controls themselves, so they are open;
-        // a resize of a panel that had a choice keeps the state the player left it in, because the
-        // resize is not a choice.
         if (previewTarget == null) {
             controlsExpanded = true;
         }
-        // The window may have been resized since the choice was made, and the road data may have
-        // moved on with it. Re-plan rather than trusting a list measured in pixels ago -- the
-        // navigation's plan cache makes that cheap when the question itself did not change, and
-        // with nothing chosen this simply clears the plans back to their empty state.
         replanPlans();
 
         computePanelLayout();
-        // A screen is measured, not animated, when it is opened or resized: the plan band starts at
-        // the height the plans on offer ask for instead of following up to it from zero. Re-measure
-        // the band once with that value so the columns are laid out against the band they will keep.
         plansBlockShown = planBlockTarget();
         computeVerticalLayout(columnsSideBySide, fold);
         placeBands();
         measureControls();
-        // The geometry above was measured from the fold the slide is at now; a resize is not a
-        // reason to measure it again on the first frame.
         laidOutFold = fold;
 
         searchField = new EditBox(font, rowX, searchY, rowW, SEARCH_HEIGHT,
@@ -802,47 +392,18 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Places every band from the two anchors the panel has, once the vertical metrics are known.
-     *
-     * <p>Split out of {@link #init} because the band heights depend on state that can change while
-     * the screen is open -- whether the controls are folded, how far the fold has got, and how many
-     * plans there are -- and every such change has to move the bands below it. Measuring and
-     * placing are kept apart because they read different things: the heights come from constants
-     * and counts (see {@link #bottomGroupHeight}), while placement needs the panel's top, the
-     * band's height and the gap in force, so only placement can happen once the panel height is
-     * settled.
-     *
-     * <p>Two anchors, not one. The top anchor is the panel's top edge, which fixes the header, the
-     * search box and the top of the columns. The bottom anchor is the footer, whose bottom edge is
-     * the panel's bottom edge in every state -- so the bar above it and the block above that are
-     * placed from the bottom, and the band the columns get is whatever is left between the two.
-     * That is what lets the fold be a change of *height*: as the fold moves, the block the controls
-     * and the plans share changes size (see {@link #bottomGroupHeight}), the readout directly above
-     * it follows, and the columns stretch or give up exactly that much on the same frame. Placed
-     * from the top down instead, the readout would stay put and the bar and footer would have to
-     * move, which is a layout that changes shape rather than height.
-     *
-     * <p>The footer and the bar therefore do not move at all, and the four rows keep the place the
-     * open layout gives them rather than being re-placed every frame: the fold fades and clips one
-     * block out of the shared space while the other comes in, and a block that was also re-placed
-     * would slide through the readout on its way out.
+     * The top anchor fixes the header, search box and column tops; the footer's bottom edge is the panel
+     * bottom, so the bar, the shared block and the readout are placed from the bottom and the columns
+     * get what is left -- which makes the fold a change of height.
      */
     private void placeBands() {
         mapX = panelX + PADDING;
         searchY = panelY + PADDING + HEADER_HEIGHT;
         mapY = searchY + SEARCH_HEIGHT + gap;
-        // The columns start on the same line when they are side by side, and the list gets its own
-        // line under the map when they are stacked. Both run down to the bottom of the band, which is
-        // where the readout begins -- so the columns' bottoms are the band's bottom by construction,
-        // and the bands below start exactly there.
         listTop = columnsSideBySide ? mapY : mapY + mapH + gap;
-        // The details card sits at the bottom of the list band, directly under the rows it left room
-        // for. Both numbers come from the layout above, so the drawing, the wheel and the hit tests
-        // of the rows and of the card all agree about where one ends and the other begins.
         detailsY = listTop + listBandHeight - detailsHeight;
         previewY = mapY + bandHeight;
 
-        // The bottom anchor: footer on the panel's bottom edge, the bar directly above it, and the
-        // shared block above that.
         footerY = panelY + panelHeight - PADDING - FOOTER_HEIGHT;
         barY = footerY - gap - summaryRowHeight;
         stackBottom = barY - gap;
@@ -869,17 +430,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Measures the four control rows' buttons from the panel's width and the gap in force.
-     *
-     * <p>The mode buttons share one row with a short caption, and the widths are derived here rather
-     * than where the rows are drawn so the drawing and the hit tests cannot disagree about where the
-     * controls are. The preference and class rows use the same rule: a caption, then equal buttons
-     * filling what is left.
-     *
-     * <p>Called on every relayout, not only from {@link #init}, because the gap can change when the
-     * controls are opened or folded -- a short window packs -- and a row measured against the other
-     * gap puts its last chip past the panel's edge. That is the mistake that once put the ice toggle
-     * off the side of the screen.
+     * Measures the four control rows' buttons from the panel's width and the gap in force: a caption,
+     * then equal buttons filling the rest. Called on every relayout, because a short window packs a
+     * different gap and a row measured against the other one overflows the panel.
      */
     private void measureControls() {
         int captionWidth = font.width(modeCaption()) + gap;
@@ -900,13 +453,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Re-measures and re-places the whole panel after the content changed under a fixed window.
-     *
-     * <p>Called when the plans change, when the controls open or close, and when a choice is
-     * cleared: all three change how much of the panel the bottom group needs, and the band above it
-     * is whatever is left. Only the vertical layout can move -- the window, the panel's width and
-     * its height are the same -- so the search box stays where {@link #init} built it and only the
-     * bands and the scroll clamp are recomputed.
+     * Re-measures and re-places the whole panel after the content changed under a fixed window: only
+     * the vertical layout can move, so the search box stays where init built it.
      */
     private void relayout() {
         computePanelLayout();
@@ -926,22 +474,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Re-measures the vertical layout for a fold or plan-band value that has moved since last frame.
-     *
-     * <p>This is what makes the map and the list change height as the controls fold rather than in
-     * the frame the fold started: the bottom group is measured from the fold (see
-     * {@link #bottomGroupHeight}) and the band the columns get is the remainder, so the columns grow
-     * exactly as fast as the fold gives the space back. The plan band's own height is followed in
-     * the same way for the case where the fold is still and the number of plans changed; see
-     * {@link #settlePlansBlock}. Called from {@link #render}, once per frame that either of them
-     * actually moved; with {@code ui_animations} off both land on their targets in the frame the
-     * click happened and this is the state change it replaced.
-     *
-     * <p>No hover reset here, unlike {@link #relayout}: the cursor is over something and the rows
-     * are being drawn this frame anyway, so the drawing recomputes the hover result from the geometry
-     * that is in force. The wheel's clamp is re-applied because the list band may have changed while
-     * the wheel is still being turned.
-     *
-     * @param openness how far the four control rows are open this frame, 0 folded to 1 open
+     * Called from render, once per frame that either moved; with ui_animations off both land on their
+     * targets in the click's frame. No hover reset (the drawing recomputes it); the wheel's clamp is
+     * re-applied because the list band may have changed.
      */
     private void relayoutForFold(float openness) {
         computeVerticalLayout(columnsSideBySide, openness);
@@ -952,10 +487,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Opens or folds the four control rows at the player's request, and re-places the bands.
-     *
-     * <p>One entry point because the bar is both controls -- opening the rows and folding them away
-     * again -- and a state written in two places is a state that can disagree with itself.
+     * Opens or folds the four control rows at the player's request and re-places the bands: one
+     * entry point because the bar is both directions.
      */
     private void setControlsExpanded(boolean expanded) {
         if (controlsExpanded == expanded) {
@@ -966,13 +499,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Re-plans after a control that changes the plans was used, and folds the controls so the plans
-     * it produced can be seen.
-     *
-     * <p>Folding is not the control's own choice but the panel's: the row the player just used is
-     * about to disappear under the plans, and leaving the panel open would hide the answer to the
-     * change they made. The bar gets the four rows back in one press, which is why the fold has to
-     * be reachable in both directions.
+     * Re-plans after a control that changes the plans was used, and folds the controls so the answer
+     * is visible: the row just used would otherwise disappear under the plans.
      */
     private void replanAndShowPlans() {
         controlsExpanded = false;
@@ -982,19 +510,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Chooses the arrangement and measures both columns from the same three numbers.
-     *
-     * <p>The map and the list are wanted side by side, which needs a window a little wider than the
-     * stacked panel does. The rule is a window of {@link #MIN_SIDE_BY_SIDE_WINDOW} units or more;
-     * below that the two columns are abandoned and the original stack of map over list is used
-     * instead, at the 268-wide panel it has always had. The threshold is not guessed: the test asks
-     * {@link #mapPaneWidth} and {@link #listPaneWidth} -- the very functions the arrangement is then
-     * built from -- whether the split they describe at that width still respects both minimums, so
-     * the advertised floor and the drawn columns cannot drift apart.
-     *
-     * <p>At the threshold the map column is 125 and the list column 160; at any wider window the
-     * panel reaches {@link #MAX_PANEL_WIDTH} and they are 137 and 176. The invariant {@code
-     * mapPaneW + COLUMN_GAP + listPaneW == content} holds by construction, because the list column is
-     * whatever the map column and the gap leave.
+     * Side by side needs MIN_SIDE_BY_SIDE_WINDOW units; below that the original stack of map over list
+     * is used. The threshold asks mapPaneWidth and listPaneWidth themselves, so the advertised floor
+     * and the drawn columns cannot drift apart.
      */
     private void computePanelLayout() {
         int usable = Math.max(MIN_PANEL_WIDTH, width - MARGIN * 2);
@@ -1029,33 +547,12 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Sizes and stacks the panel's vertical bands.
-     *
-     * <p>Laid out here rather than as a run of constants because the GUI is often only ~240 units
-     * tall. The comfortable layout is tried first and, when it does not fit, the gaps and the
-     * control rows then tighten as one -- the bands are measured from the values chosen here, so no
-     * two of them can be computed from different assumptions and end up overlapping.
-     *
-     * <p>Three parts. Fixed at the top: the padding, the header and the search box. Anchored at the
-     * bottom: the readout, the shared block the controls and the plans trade, the bar and the
-     * footer, measured as one group so the band above can be derived from what is left rather than
-     * guessed -- which is what keeps those pieces on the panel and off the columns. Stretchy in
-     * between: the columns, which take the whole band. Side by side the map and the list share it
-     * and both run to its bottom; stacked the map takes its share and the list has a band of its own
-     * below, stretched by the same rule.
-     *
-     * <p>The bottom group is a function of the fold, not only of the state: the four rows and the
-     * plan band trade places over the fold (see {@link #bottomGroupHeight}), so the group is
-     * measured from the fold value of the frame in hand. That is the whole of what makes the map and
-     * the list change height smoothly when an option is used -- they are given the band that is
-     * left, so the band grows exactly as fast as the group shrinks.
-     *
-     * <p>Whether the window is short, on the other hand, is decided from the two ends of the fold
-     * rather than from where it has got to: a packing rule that read the animated height could
-     * tighten the window halfway through the fold and make the panel jump, which is the one thing
-     * the animation exists to avoid.
-     *
+     * Not a run of constants because the GUI is often only ~240 units tall: fixed at the top (padding,
+     * header, search), anchored at the bottom (readout, shared block, bar, footer as one group), and
+     * the columns stretch between. The bottom group is measured from the frame's fold value, so the
+     * columns grow exactly as fast as it shrinks.
      * @param sideBySide whether the map and the list share a band or are stacked
-     * @param openness   how far the four control rows are open, 0 folded to 1 open
+     * @param openness how far the four control rows are open, 0 folded to 1 open
      */
     private void computeVerticalLayout(boolean sideBySide, float openness) {
         gap = GAP;
@@ -1065,13 +562,9 @@ public final class DestinationScreen extends Screen {
         summaryRowHeight = CONTROLS_BAR_HEIGHT;
         planRowSize = PLAN_ROW_HEIGHT;
         int panel = clamp(height - MARGIN * 2, MIN_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, height));
-        // The bottom group -- the readout and everything under it -- is measured first and then
-        // anchored: the columns get whatever is left above it. That is what puts the bar against the
-        // panel's bottom edge rather than just under the list, and it is also what keeps the bottom
-        // group on the panel, since the band it is subtracted from is the panel itself. The short-
-        // window test uses the taller of the two ends of the fold, and the number of plans rather
-        // than where the plan band's follow currently is: both are properties of the state, so the
-        // decision cannot change halfway through an animation and repack the panel under it.
+        // The bottom group is measured first and then anchored from the panel's bottom; the columns get
+        // what is left above it. The short-window test uses the taller fold end and the plan count, so an
+        // animation cannot repack the panel under it.
         int band = panel - (headerHeight()
                 + bottomGroupFor(Math.max(controlsBlockHeight(), planBlockTarget())) + gap);
         if (band < MIN_MAP_HEIGHT + MIN_LIST_ROW) {
@@ -1088,12 +581,8 @@ public final class DestinationScreen extends Screen {
         // The band for the fold in hand: the taller the bottom group, the shorter the columns.
         band = panel - (headerHeight() + bottomGroupHeight(openness) + gap);
 
-        // Side by side both columns share the band, so both fill it and end on the same line. Stacked
-        // they cannot both fill one band, so the band is split between them: the list keeps its
-        // share (a proportion, floored at one row) and the map takes what is left. That is what keeps
-        // the two from overlapping when the window is too short for both minimums -- before, the map
-        // held its own minimum and pushed the list past the band's bottom, and the rows were painted
-        // over the readout below.
+        // Side by side both columns fill the band; stacked, the band is split -- the list keeps a share
+        // floored at one row and the map takes the rest, so they cannot overlap.
         int listBand;
         int mapHeight;
         if (sideBySide) {
@@ -1131,27 +620,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The height of everything below the columns: readout, the shared block, the bar, the footer.
-     *
-     * <p>The one expression the vertical layout is derived from, so the placement cannot measure a
-     * different group than the band was taken out of. Its content, top to bottom:
-     *
-     * <ul>
-     *   <li>the two-line readout, always;</li>
-     *   <li>the block the controls and the plans trade -- {@link #controlsBlockHeight} at the open
-     *       end, {@link #plansBlockHeight} at the folded one, interpolated by {@code openness} in
-     *       between. This is the figure the map and the list breathe with: measured from a flag
-     *       instead, it would change in one frame when the flag did;</li>
-     *   <li>the bar that toggles the fold, which never moves;</li>
-     *   <li>the footer, and the padding under it;</li>
-     *   <li>three gaps: readout to block, block to bar, bar to footer. The gaps *inside* the block
-     *       belong to the block's own two heights, not here, so the block can be interpolated as one
-     *       number.</li>
-     * </ul>
-     *
-     * <p>This is the figure that would silently grow if a band were added and only the placement
-     * were taught about it, and it is why every change to the bottom of the panel has to be made
-     * here as well.
-     *
+     * The one expression the vertical layout derives from, so placement cannot measure a different
+     * group than the band was taken out of. The shared block is the controls' and plans' heights
+     * interpolated by openness, which is the figure the map and the list breathe with.
      * @param openness how far the four control rows are open, 0 folded to 1 open
      */
     private int bottomGroupHeight(float openness) {
@@ -1161,24 +632,18 @@ public final class DestinationScreen extends Screen {
         return bottomGroupFor(block);
     }
 
-    /** The bottom group's height for a given height of the block the controls and the plans share. */
     private int bottomGroupFor(int block) {
         return PREVIEW_LINE_HEIGHT + PADDING + summaryRowHeight + FOOTER_HEIGHT
                 + block + gap * 3;
     }
 
-    /** The four control rows and the gaps between them: what the fold trades for the plans. */
     private int controlsBlockHeight() {
         return MODE_ROW_HEIGHT + preferenceRowHeight + classRowHeight + transitRowHeight + gap * 3;
     }
 
     /**
-     * Height of the plan band in the current layout: one row per plan, zero when there are none.
-     *
-     * <p>Read from {@link #plansBlockShown} rather than computed from the list, because the list can
-     * change in one frame and the space it takes must not: see that field for why. The rounded value
-     * is what every caller uses, so the drawing, the click tests and the band above all agree on a
-     * whole-pixel height.
+     * Height of the plan band in the current layout: one row per plan, zero when there are none, read
+     * from plansBlockShown so the drawing, click tests and band above agree.
      */
     private int plansBlockHeight() {
         return Math.round(plansBlockShown);
@@ -1186,15 +651,8 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The height the plan band is heading for: one row per plan, zero when there are none.
-     *
-     * <p>The target, not the current value, and asked by the vertical layout's short-window test --
-     * that decision has to be a property of the window and the number of plans, not of where the
-     * follow happens to be, or the panel would repack itself halfway through a change and jump.
-     *
-     * <p>The band is measured from the rows rather than the rows from the band, the opposite of the
-     * place list's rule. There are at most three plans and every one of them has to stay visible, so
-     * the count is the fixed thing and the band follows; every row is then the same height, and the
-     * remainder the place list has to spread out does not arise.
+     * The target, not the current value, so the short-window test is a property of the window and the
+     * plan count rather than of where the follow has got to.
      */
     private int planBlockTarget() {
         if (plans.isEmpty()) {
@@ -1204,12 +662,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Advances the plan band one frame towards its target height, and reports whether it moved.
-     *
-     * <p>The one thing that makes a change in the number of plans a change of height rather than a
-     * jump: the vertical layout reads {@link #plansBlockShown}, so every frame it moves has to be
-     * re-measured, and that is what the answer is for. With {@code ui_animations} off the follow
-     * lands on the target in one call, which is exactly the jump the setting asks for.
+     * Advances the plan band one frame towards its target height and reports whether it moved: every
+     * frame it moves has to be re-measured. With ui_animations off it lands in one call.
      */
     private boolean settlePlansBlock() {
         float before = plansBlockShown;
@@ -1220,18 +674,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Splits one list band between the rows and the details card, and applies the row metrics.
-     *
-     * <p>One function for the two moments the band has to be re-measured -- the vertical layout
-     * itself and a place being selected or collapsed in the middle of a frame -- because the two
-     * must produce exactly the same geometry. Written twice, the row count the wheel believes in
-     * and the rows the drawing believes in would drift the first time the card's share was tuned.
-     *
-     * <p>The card's share is a proportion of the band, raised to {@link #MIN_DETAILS_HEIGHT} when the
-     * band is short, and given the whole band when even that leaves no room for a list row. The
-     * short-window case is a compromise, not the design: on the smallest window the band is about
-     * one row tall, and a card squeezed below its own action row would paint its buttons on top of
-     * the list instead of shrinking further.
-     *
+     * One function for both re-measure moments so the wheel's row count and the drawing's rows cannot
+     * drift. The card takes a proportion, raised to MIN_DETAILS_HEIGHT or given the whole band when no
+     * row fits.
      * @param band the height of the whole list band, before the card takes its share
      */
     private void applyListBand(int band) {
@@ -1266,7 +711,6 @@ public final class DestinationScreen extends Screen {
         }
     }
 
-    /** Re-measures the list band after the details card opened or closed, and re-clamps the scroll. */
     private void relayoutList() {
         applyListBand(listBandHeight);
         detailsY = listTop + listBandHeight - detailsHeight;
@@ -1274,25 +718,14 @@ public final class DestinationScreen extends Screen {
         scroll = Math.max(0, Math.min(scroll, maxScroll));
     }
 
-    /** Header, search box and the padding above them: everything down to the columns. */
     private static int headerHeight() {
         return PADDING + HEADER_HEIGHT + SEARCH_HEIGHT;
     }
 
     /**
-     * How many whole rows the list band holds and how tall each should be, the two chosen together.
-     *
-     * <p>Rows first: as many as fit at the standard height, and never more than {@link
-     * #MAX_VISIBLE_ROWS} or than there are places to show. Then the height, which is whatever makes
-     * those rows add up to the band -- floored at the standard row height, because a row taller than
-     * that is fine (the text centres in it) but a shorter one is not. Picking the height from the
-     * count this way is what makes the rows end exactly at the bottom of the band instead of leaving
-     * up to a whole row of empty list under the last place.
-     *
-     * <p>If the floor and the exact fit disagree -- only possible in a band too short for even one
-     * normal row -- the exact fit wins, so the list still stops where the band does.
-     *
-     * @return {@code {rows, rowHeight}}
+     * How many whole rows the list band holds and how tall each should be, chosen together: as many
+     * as fit at the standard height, then the height that makes them end at the band's bottom.
+     * @return {rows, rowHeight}
      */
     private int[] listRowMetrics(int band) {
         int room = Math.max(0, band);
@@ -1308,27 +741,10 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The name line of a list row: the place in its own colour, then the source note after it.
-     *
-     * <p>The note is a decoration of this line and nothing else. It is derived from the destination's
-     * source id, never from its name, which stays exactly as the source supplied it -- the route
-     * instructions, the spoken announcements, the HUD header and the search all read that name, and
-     * baking "(From XMM)" into it would have the voice read the note aloud and make searching for
-     * the note succeed.
-     *
-     * <p>The note's width is reserved unconditionally and the name is cut to what is left, so the
-     * note appears on every row that has one. That is the opposite of the first attempt, which let a
-     * name long enough to fill the column push the note out; the note is the smaller, more
-     * informative mark, so it keeps its room and the name gives way.
-     *
-     * <p>Degenerate case: a column too narrow for the note itself. A note is then worth nothing --
-     * half of "(From XMM)" reads as corrupt text -- so it is dropped whole and the name takes the
-     * entire column instead. This is unreachable at any width the picker actually builds, where the
-     * name column is at least 100 units and the note is 66, but it is handled so that no width can
-     * produce a half-written note. The name is never cut to a negative room either.
-     *
-     * <p>Selection deliberately does not change the colour. The name is drawn in the source's colour
-     * whether or not the row is picked out; what marks a picked row is its background, drawn by
-     * {@code drawRows}.
+     * The note is a decoration derived from the source id, never baked into the name -- the route
+     * instructions, announcements, HUD header and search all read that name. Its width is reserved
+     * unconditionally and the name is cut to what is left; a column too narrow for the note drops it
+     * whole. Selection changes the background, not the colour.
      */
     private void drawNameLine(GuiGraphics graphics, Destination destination, int x, int y, int width) {
         String name = destination.name();
@@ -1352,17 +768,10 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The colour to draw a name in: the source's own, when it will read on this panel.
-     *
-     * <p>The list is drawn on the panel -- near-black in the black style, white in the white one --
-     * and the colour palette a source may use runs from black to white. Drawn faithfully, the end of
-     * that range nearest the panel is invisible, which is worse than not honouring the colour at all,
-     * so a colour too close to the panel falls back to the ordinary text colour.
-     *
-     * <p>Which end is "too close" is the theme's to say, not a single number's: black and the darkest
-     * greys disappear on the black sheet (below 40), white and the pale yellows on the white one
-     * (above 190). A single threshold would fix one theme and break the other -- a mid-grey reads on
-     * both, and that is the range the two thresholds leave alone.
+     * The colour to draw a name in: the source's own when it reads on this panel.
+     * Drawn faithfully, the end of the palette nearest the panel is invisible, so a colour too close
+     * falls back to the text colour; the threshold is per theme, because one number would fix black
+     * and break white.
      */
     private static int readableColor(Destination destination) {
         if (!destination.hasColor()) {
@@ -1377,19 +786,10 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The short note a source wants beside its places, or an empty string for one that wants none.
-     *
-     * <p>Keyed on the source id rather than on the source object, because the list holds destinations
-     * and not their sources. The key is built from the id by convention -- {@code xaero_waypoint}
-     * gives {@code hud.howtogo.source.xaero.short}, matching the full label's
-     * {@code hud.howtogo.source.xaero} -- so a new source brings its own note simply by shipping that
-     * key, and one without the key gets nothing drawn.
-     *
-     * <p>A registered source may name its own key instead, through
-     * {@link bili.dongsz.howtogo.route.DestinationSource#noteKey()}: the convention is keyed on the
-     * first word of the id, which is a fact about this mod's own ids rather than about anybody's. The
-     * source's own answer wins where it gave one; the convention is what the four built-in sources
-     * were built with and what an id that owns no source at all falls back to.
+     * The short note a source wants beside its places, or an empty string.
+     * Keyed on the source id by convention (xaero_waypoint gives hud.howtogo.source.xaero.short), so a
+     * new source brings its note by shipping that key; a registered source may name its own key
+     * through DestinationSource#noteKey().
      */
     private static String sourceNote(String source) {
         if (source == null || source.isEmpty()) {
@@ -1406,11 +806,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The lang-key middle of a source id: the part before the first underscore.
-     *
-     * <p>{@code xaero_waypoint} names the Xaero <em>waypoint</em> source but shares the
-     * {@code xaero} label with the mod it comes from, so the display keys are keyed on that first
-     * word rather than on the whole id.
+     * The lang-key middle of a source id: the part before the first underscore, since
+     * xaero_waypoint and the mod's own label share it.
      */
     private static String noteSuffix(String source) {
         int underscore = source.indexOf('_');
@@ -1418,30 +815,21 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Top of the given visible row, in screen units.
-     *
-     * <p>The caller passes the absolute list index; the row's slot is {@code index - scroll}, which is
-     * the same offset the drawing and the hit test use, so they cannot disagree. Each row also picks
-     * up one unit of the band's remainder until that is used up, which is what makes the rows add up
-     * to the band rather than leaving a strip of up to {@code rows - 1} units below the last place.
+     * Top of the given visible row, in screen units. The slot is index - scroll, the same offset the
+     * drawing and the hit test use; each row also picks up one unit of the remainder.
      */
     private int rowTop(int index) {
         int slot = index - scroll;
         return listTop + slot * rowHeight + Math.min(slot, rowRemainder);
     }
 
-    /** Bottom of the whole list: the last row plus the last of the shared-out remainder. */
     private int listBottom() {
         return rowTop(scroll + visibleRows);
     }
 
     /**
-     * Height of the list pane, from the top of its first row to the bottom of its last.
-     *
-     * <p>Asked of {@link #listBottom()} rather than kept as its own figure. A separate height field
-     * maintained alongside the row geometry is what went wrong once already: when the rows became
-     * adaptive it stopped being written, and the wheel hit test that read it rejected every position
-     * below the list's top edge, which is why the list could not be scrolled.
+     * Height of the list pane, asked of listBottom() rather than kept separately: a height field went
+     * stale once the rows became adaptive, and the wheel stopped scrolling.
      */
     private int listHeight() {
         return listBottom() - listTop;
@@ -1557,10 +945,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The width of a row's source badge, or zero when the source has no short name to show.
-     *
-     * <p>Capped at a third of the list column: an addon that registered a long display name would
-     * otherwise take the room the second line needs for the summary that explains a search hit.
+     * The width of a row's source badge, or zero when the source has no short name. Capped at a
+     * third of the list column.
      */
     private int badgeWidth(String badge) {
         if (badge == null || badge.isEmpty()) {
@@ -1570,11 +956,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The second line of a list row: the description that matched a search, or the coordinates.
-     *
-     * <p>Only rows the search matched through their description or tags get the summary; every
-     * other row keeps the coordinates it has always shown, so the second line means one thing at a
-     * time and a reader is never told a name is a location.
+     * The second line of a list row: the description that matched a search, or the coordinates
+     * every other row keeps.
      */
     private String secondLine(Destination destination, int width) {
         if (descriptionMatches.contains(destination)) {
@@ -1587,19 +970,14 @@ public final class DestinationScreen extends Screen {
         return PlaceText.ellipsis(font, destination.coordinates(), width);
     }
 
-    /** The preview readout, the four control rows, the footer and the padding under them. */
     private int footerHeight() {
         return PREVIEW_LINE_HEIGHT + MODE_ROW_HEIGHT + preferenceRowHeight + classRowHeight
                 + transitRowHeight + FOOTER_HEIGHT + PADDING;
     }
 
     /**
-     * Puts the player back in the middle of the picker map, at the default zoom, without a cut.
-     *
-     * <p>The button is a jump in intent rather than in space: the view is aimed at the player and
-     * travels there, so a map panned a long way away is not replaced by another map -- it is pulled
-     * back. {@link #init} uses the same numbers, but it also snaps them (see {@link #snapCamera}),
-     * because the first frame of a screen is not a movement.
+     * Puts the player back in the middle of the picker map at the default zoom, without a cut: the
+     * view travels there, unlike init, which snaps.
      */
     private void recenterOnPlayer() {
         Minecraft mc = Minecraft.getInstance();
@@ -1616,7 +994,6 @@ public final class DestinationScreen extends Screen {
         momentumZ = 0;
     }
 
-    /** Puts the shown camera on its target, for a view that is being established rather than moved. */
     private void snapCamera() {
         mapCenterX = targetCenterX;
         mapCenterZ = targetCenterZ;
@@ -1628,15 +1005,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * One frame of camera motion: the coast after a drag, then the shown value's travel to the aim.
-     *
-     * <p>Called at the top of {@link #render}, before anything is drawn, and it is the only place the
-     * shown camera is written. The map, its labels, the place markers, the route preview and every
-     * hit test read the same three numbers ({@link #mapCenterX}, {@link #mapCenterZ},
-     * {@link #viewRadius}), so what is under the pointer is what was drawn under it at every point of
-     * an animated pan -- the difference from a still frame is only that the numbers are still moving.
-     *
-     * <p>With {@code ui_animations} off both halves collapse: the coast is not applied and the chase
-     * lands on its target in the same call, which is the camera this screen had before it moved.
+     * Called at the top of render and the only place the shown camera is written; the map, labels,
+     * markers, preview and hit tests all read the same three numbers. With ui_animations off both
+     * halves collapse into one frame.
      */
     private void stepCamera() {
         if (!UiMotion.on()) {
@@ -1670,13 +1041,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Aims the view at a set of points, with room to read them.
-     *
-     * <p>What a selection asks for: the plans it produced are only worth offering if the player can
-     * see them, and the first place selected is usually chosen at the default zoom, which is far too
-     * wide for one trip and far too narrow for a long one. The aim is computed from the points the
-     * plans would be drawn along, not from the place list, so the view that comes back holds exactly
-     * the lines the map is about to draw.
+     * Aims the view at the plans' own points, with room to read them: the first selection is usually
+     * at a zoom too wide for one trip, so the aim comes from the lines the map is about to draw.
      */
     private void aimAtPlans() {
         double minX = Double.MAX_VALUE;
@@ -1734,13 +1100,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Filters the list to the search box.
-     *
-     * <p>The name and the coordinates were the only things matched when the list was just places;
-     * a place now carries what the player wrote about it, and a search for "parking" that skipped
-     * the note saying where to park would be searching everything but the part the player wrote. A
-     * row found that way is remembered in {@link #descriptionMatches}, so its second line can show
-     * the summary that explains the hit instead of repeating coordinates the query did not contain.
+     * Filters the list to the search box. The name, coordinates and what the player wrote are all
+     * matched; a row found through its description is remembered so its second line can show the
+     * summary that explains the hit.
      */
     private void applyFilter() {
         descriptionMatches.clear();
@@ -1771,7 +1133,6 @@ public final class DestinationScreen extends Screen {
         scroll = 0;
     }
 
-    /** Whether the player's own notes about a place are what a lower-cased query found. */
     private static boolean matchesWrittenText(Destination destination, String query) {
         PlaceDetails details = PlaceDetailStore.detailsOf(destination);
         if (details.description().toLowerCase(Locale.ROOT).contains(query)) {
@@ -1785,7 +1146,6 @@ public final class DestinationScreen extends Screen {
         return false;
     }
 
-    // ------------------------------------------------------------------ render
 
     @Override
     // 1.20.2 added the mouse position and the partial tick to this override; 1.20.1 takes only the
@@ -1811,14 +1171,8 @@ public final class DestinationScreen extends Screen {
         // preview -- draws through the one set of numbers this advances, and the hit tests read the
         // same numbers, so a frame of an animated pan cannot show one thing and offer another.
         stepCamera();
-        // The whole frame travels as one surface, before the first pixel: a sheet that fades in where
-        // it already is reads as a cut, and ten pixels of rise over the two hundred of the entrance
-        // is what turns that cut into a window arriving. Pressed here so the dimming, the panel, the
-        // map, the rows -- and the widgets {@code super.render} draws at the end -- move together,
-        // and popped as the last statement, so the pose the game handed in is the pose it gets back.
-        // The game builds a fresh graphics object every frame, so there is nothing to unwind if a
-        // frame is skipped. Row displacement inside the panel is a pose of its own (see
-        // {@link #foldRowY}); this one is only the entrance and the exit.
+        // The whole frame travels as one surface before the first pixel, so the entrance is not a cut;
+        // popped last so the pose handed in comes back. Row displacement has its own pose (foldRowY).
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
         // The fold follows the panel's own state rather than being written where that state is, so
         // the rows and the plans animate for whichever of the several paths changed it. The
@@ -1827,13 +1181,8 @@ public final class DestinationScreen extends Screen {
                 .duration(controlsExpanded ? UiMotion.EXPAND : UiMotion.COLLAPSE)
                 .to(controlsExpanded ? 1.0F : 0.0F)
                 .eased();
-        // The vertical layout is measured from the fold, not from the flag the fold is heading for:
-        // the band above the controls is the remainder of the panel, so measuring it here is what
-        // makes the map and the list grow and shrink *with* the fold instead of after it. The plan
-        // band's own height is followed on the same principle, for the case where the fold is not
-        // moving at all and the number of plans changes -- choosing a second place while one is
-        // already being compared. Both are cheap arithmetic, and this only runs on a frame where one
-        // of them actually moved.
+        // Measure from the fold, not from the flag it heads for, so the map and list grow with the fold;
+        // the plan band is followed for the case where the fold is still and the plan count changes.
         boolean blockMoved = settlePlansBlock();
         if (fold != laidOutFold || blockMoved) {
             relayoutForFold(fold);
@@ -1870,20 +1219,9 @@ public final class DestinationScreen extends Screen {
         if (clipPlans) {
             graphics.disableScissor();
         }
-        // Both forms of the controls are drawn off the one fold value, and that is the whole of the
-        // hand-over: the rows leave upward while fading, the plans come down into the space they
-        // give up while arriving, and the block they share changes height on the same value -- so
-        // the band above them moves with the hand-over rather than before or after it.
-        //
-        // The rows are drawn whenever the fold is off its collapsed end, not only while the controls
-        // are logically open: a fold that stopped drawing them the instant the state changed was a
-        // cut from four rows to one line, with nothing in between. Nothing here decides what is
-        // clickable -- every row hit test still asks the layout and the logical state.
-        //
-        // Clipped to the block the fold has left them. That block's top is the line the band above
-        // is growing down to, so without the clip the rows would be painted across the readout for
-        // the length of the fold; with it, the band appears to close over them, which is the same
-        // motion read as the rows being pushed out of their room.
+        // Both forms of the controls are drawn off the one fold value: rows leave upward while fading,
+        // plans come down into the space they give up, and the shared block's height changes on the same
+        // value. Rows are drawn wherever the fold is off its collapsed end, clipped to the block.
         if (fold > 0.004F && stackBottom > stackTop) {
             UiMotion.clip(graphics, panelX, stackTop, panelX + panelW, stackBottom);
             drawModeSelector(graphics, mouseX, mouseY);
@@ -1904,12 +1242,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The place list, in whichever column it was given, always visible.
-     *
-     * <p>The hovered row is worked out here and read by {@code mouseClicked}, so the list column's
-     * own bounds are the only thing that decides what is under the cursor. The plans no longer take
-     * this band: they are drawn below the readout (see {@link #drawPlanList}), because covering the
-     * list the player is choosing from was the complaint the new layout answers.
+     * The place list, in whichever column it was given, always visible. The hovered row is worked out
+     * here and read by mouseClicked.
      */
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         hoveredRow = -1;
@@ -1926,20 +1260,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The plan band: up to three plans, one row each, the chosen one picked out.
-     *
-     * <p>It sits between the readout and the bar rather than in the list's band, so the places stay
-     * visible while a route is compared. It exists while the controls are folded and there is at
-     * least one plan -- and while the fold is travelling, because it is the other half of the block
-     * the four rows leave: it comes down into the space they give up and rises back out of it when
-     * they are opened again. Folding the controls is what gives the plans their room, and the bar is
-     * what folds them.
-     *
-     * <p>The rows are bottom-aligned in that block, so the band does not move while the fold changes
-     * the block's height; the fold is expressed by its own alpha and travel, not by re-placing it.
-     * Rows are the full panel width and every one of them is the same height, because the band is
-     * measured from the rows (see {@link #plansBlockHeight}) rather than the other way round. Each is
-     * clickable across its whole width, which takes nothing from the place list's hit tests: the
-     * band lies entirely below them.
+     * Between the readout and the bar, so the places stay visible; it fades and travels with the fold
+     * rather than being re-placed. Rows are bottom-aligned, full panel width, equal height because the
+     * band is measured from the rows; each is clickable across its width.
      */
     private void drawPlanList(GuiGraphics graphics, int mouseX, int mouseY) {
         hoveredPlan = -1;
@@ -2018,31 +1341,22 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Top of plan row {@code index}.
-     *
-     * <p>One function for the drawing and the click test, so the row under the cursor is the row
-     * that was painted under it -- the same rule the place list's {@link #rowTop} exists for. Every
-     * row is {@link #planRowSize} tall, because the band was measured from them, so there is no
-     * remainder to carry and the last row ends exactly where the controls begin.
+     * Top of plan row index: one function for drawing and click tests. Every row is planRowSize tall,
+     * so there is no remainder and the last ends where the controls begin.
      */
     private int planRowTop(int index) {
         return planTop + index * planRowSize;
     }
 
     /**
-     * The first line of a result row: which plan it is, and the strategy that produced it.
-     *
-     * <p>The ordinal is the question ("one of three"), the strategy is the answer ("why this one"),
-     * and both are needed: the rows are sorted by time, so the second row is not "the slower
-     * strategy" but "the strategy asked for second that came out slower". Both strings are localised
-     * through translation keys like every other picker string.
+     * The first line of a result row: which plan it is and the strategy that produced it -- the ordinal
+     * is the question, the strategy the answer, since rows are time-sorted.
      */
     private String planTitle(int index, RouteOption plan) {
         return Component.translatable("screen.howtogo.plan.title", planOrdinal(index),
                 plan.label()).getString();
     }
 
-    /** "Plan one", "plan two", "plan three", localised, for the position in the list. */
     private static String planOrdinal(int index) {
         String key = switch (index) {
             case 0 -> "screen.howtogo.plan.first";
@@ -2054,16 +1368,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The second line of a result row: the numbers that separate one plan from another.
-     *
-     * <p>For a world journey they are the distance and the turns; for a public transport journey
-     * turns are not what is compared -- the journey's own facts are the changes and the walking, and
-     * those are what the numbers say. Asking the plan rather than the route for them is what keeps
-     * the shown figure and the followed figure the same calculation; see {@link RouteOption}.
-     *
-     * <p>Keyed on the journey rather than on the mode: the walk offered in public transport's place
-     * is handed over under the transit mode but is not a journey -- it has no changes and no
-     * boarding, and asking it for its walking would print "0 blocks on foot" about a plan that is
-     * nothing else.
+     * A world journey gives distance and turns, a transit one changes and walking; asking the plan
+     * keeps the shown figure and the followed figure the same calculation. Keyed on the journey, since
+     * the walk offered in transit's place has no changes to report.
      */
     private static String planFacts(RouteOption plan) {
         String distance = Route.formatDistance(plan.length());
@@ -2076,11 +1383,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The plan the map, the readout and the footer are all about, or null when there are none.
-     *
-     * <p>Clamped rather than trusted: the index is written by several paths, and a read a frame
-     * behind a re-plan must show a plan rather than throw. There is no case where the clamp changes
-     * an answer -- every writer stores an index into the list it was written beside.
+     * The plan the map, readout and footer are all about, or null. The index is clamped, since a
+     * read a frame behind a re-plan must show a plan rather than throw.
      */
     private RouteOption selectedPlan() {
         if (plans.isEmpty()) {
@@ -2091,15 +1395,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * The selected place's details, in the band the list left under its rows.
-     *
-     * <p>Drawn after the list and after the map's own block has been closed: the panel writes text
-     * and emits its star, and a string flushes whatever vertex batch it finds open, so it must not
-     * be called from inside the map's quad sequence. It is asked for the details every frame rather
-     * than handed a copy, because the favourite toggle writes the store and the star has to follow
-     * without this screen knowing that it changed.
-     *
-     * <p>Always drawn while a place is selected, whether or not plans are being compared: the card
-     * belongs to the list band and the plans were moved out of that band precisely so it can stay.
+     * Drawn after the list and outside the map's quad sequence, because its strings flush the batch.
+     * Asked for the details every frame rather than handed a copy, since the favourite toggle writes
+     * the store. Always drawn while a place is selected.
      */
     private void drawDetailsPanel(GuiGraphics graphics, int mouseX, int mouseY) {
         if (detailsPlace == null || detailsHeight <= 0) {
@@ -2110,66 +1408,14 @@ public final class DestinationScreen extends Screen {
                 PlaceDetailPanel.Options.STANDARD, false, mouseX, mouseY);
     }
 
-    // ------------------------------------------------------------------ map
 
     /**
      * Road names on the picker map, so a place can be recognised by the roads around it.
-     *
-     * <p>Named roads only, and dropped on collision: the map is a couple of hundred pixels wide and
-     * a dense network would otherwise overprint into an unreadable smear.
-     *
-     * <h2>What this pass used to cost</h2>
-     * Every named road was asked for its chain -- {@link RoadChains#chainContaining} -- to find out
-     * whether it was the piece that carries the name, and that call builds an adjacency index of the
-     * whole network before it answers. One per named road, per frame, before any check that the road
-     * was anywhere near this little map: on a network of a few hundred segments with fifty names that
-     * was about a millisecond of work and five megabytes of garbage every frame, and it grew with the
-     * product of the two (a network of three thousand segments with seven hundred names measured at a
-     * hundred and twenty milliseconds a frame). The answer is a property of the geometry, so it now
-     * comes from the grouping, which is rebuilt only when the roads change -- and the roads are culled
-     * against the map before they are asked about at all.
-     *
-     * <h2>What a label is</h2>
-     * The player's {@code road_label_style} setting decides what a road shows: its name, as this pass
-     * has always drawn it, or -- when the road carries a number -- a small upright sign card in its
-     * category's colour, or one card holding the number and the name together. A card replaces the
-     * name rather than joining it: one road gets one label at its carrying point, and the collision
-     * list is shared between the two kinds, so a card and a name can never be painted over each
-     * other. See {@link #drawSignCard} for the card itself, and for why it is upright, centred on
-     * the road rather than lifted above it, and drawn smaller than the font.
-     *
-     * <h2>What a label claims</h2>
-     * Not what it paints: every box below is grown by {@link #LABEL_CLEARANCE_PX} before it is tested
-     * and kept, so two labels whose painted rectangles merely miss each other still stand a gap apart.
-     * That is the room the world map keeps, one pixel wider because this map is smaller.
-     *
-     * <h2>And when a card gives way to the name</h2>
-     * A card is a fixed-size plate on a map that zooms, so at {@link #LABEL_MIN_SCALE} and beyond
-     * -- the zoom that fits a whole trip on this map, which is exactly what the picker is used for --
-     * the catalogue of plates would cover the roads. From there a classified road is labelled by its
-     * name, like the roads that carry no number at all.
-     *
-     * <h2>And when nothing is written at all</h2>
-     * Past a certain zoom this pass writes nothing: no plates and no names. It used to be the one map
-     * with no zoom rule at all -- the world map, the K screen and the phone page all stop labelling
-     * somewhere, and the picker kept writing a name on every road however far out it was zoomed, which
-     * is what made it look like it was ignoring the rule the others follow.
-     *
-     * <p>The rule is about how much ground the map is showing rather than about pixels per block, and
-     * for a reason: this map is a fraction of the K screen's size, so the same pixels per block is a
-     * very different amount of world on the two. {@link #NAME_MAX_VIEW_BLOCKS} is "the whole trip on
-     * this map", which is the reading the picker is used for and the one at which a name per road is
-     * noise over the plan.
-     *
-     * <h2>Which roads are labelled at all</h2>
-     * {@link MapFilter#shows} -- the same call the K screen and the world map make, and the one this
-     * pass was missing: a road class the map is not drawing at this zoom (switched off by the player,
-     * or left out because the view is too wide) gets no name here either. A label is a label for
-     * something on the map, and this pass was the one place a name could point at nothing.
-     *
-     * <h2>And the lines' names</h2>
-     * The public transport lines' plates are offered what the place names and the road labels left,
-     * last in the pass -- see {@link #drawLineNames}.
+     * Named roads only, dropped on collision; labels are gated by MapFilter#shows, so a class not
+     * drawn at this zoom gets no name either. The player's road_label_style picks a name, a sign card,
+     * or number and name together -- one label per road, one shared collision list.
+     * A card gives way to the name at LABEL_MIN_SCALE; nothing is written past NAME_MAX_VIEW_BLOCKS.
+     * Line names are offered what is left, last -- see drawLineNames.
      */
     private void drawMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network, double scale,
                                double centerX, double centerY,
@@ -2200,13 +1446,8 @@ public final class DestinationScreen extends Screen {
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             boolean named = name != null && !name.isBlank();
-            // As on the world map, a sign needs a number and a category that still exists to print it
-            // on: the number is the card's whole content, and a category the player has deleted is not
-            // a category any more, so a road carrying one is drawn as unclassified (no card, name
-            // fallback). A road with a sign and no name is still labelled, by the card it has. And a
-            // card is only drawn while this map is zoomed in far enough for one plate not to be the
-            // whole view -- see LABEL_MIN_SCALE: past it the road falls back to its name, which
-            // is the fallback a road with no number already gets.
+            // A sign needs a number and a category that still exists: a deleted category draws the road as
+            // unclassified, and a card is only drawn above LABEL_MIN_SCALE.
             boolean sign = signMode && signZoom && segment.hasSign()
                     && RoadCategoryStore.has(segment.category());
             if (!named && !sign) {
@@ -2308,25 +1549,10 @@ public final class DestinationScreen extends Screen {
 
     /**
      * A public transport line's name, as a capsule in the line's own colour above the line.
-     *
-     * <h2>Why a capsule rather than ink along the line</h2>
-     * A road's name belongs to the ground and is written along the stroke. A line's name names a
-     * service, and the mod already draws a line's identity as a coloured object with the name in it
-     * in the list, on a platform sign and on a place card. The capsule is that object on a map: it is
-     * horizontal whatever the line does, and its rounding is half its height, which is what keeps it
-     * from being mistaken for a road's sign card.
-     *
-     * <h2>Where the names are offered, and when they are not offered at all</h2>
-     * The positions come from {@link LineNameLabels}, the same helper the world map and the K screen
-     * use -- every 160 blocks of the line's drawn track plus one just outside each end -- so the
-     * count follows the line rather than the size of this map. The whole pass is gated by
-     * {@link #LINE_NAME_MAX_VIEW_RADIUS}, and by the player's own lines switch: a plate names a line
-     * the map is not drawing otherwise. Each candidate is then offered to the map's one reservation
-     * list, the same boxes the place names and the road labels claimed, and one that finds no room on
-     * any of its candidates is left out rather than moved somewhere unrelated to its line.
-     *
-     * <p>Last in the pass, as on the world map: the plate is the newer and larger object and it is
-     * the one that can do without a spot, so it takes what the established labels left.
+     * A road's name is ink along the ground; a line's name names a service, so it is horizontal with
+     * rounding of half its height, like the same badge in the list and on a place card. Positions come
+     * from LineNameLabels, gated by LINE_NAME_MAX_VIEW_RADIUS and the player's lines switch, and the
+     * pass is last so the plate takes what the established labels left.
      */
     private void drawLineNames(GuiGraphics graphics, Minecraft mc, List<double[]> placed,
                                double minX, double minY, double maxX, double maxY,
@@ -2404,13 +1630,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * One line's name plate: a capsule in the line's colour with the name printed in it.
-     *
-     * <p>The rounding is half the plate's height, so the two ends are semicircles -- deliberately not
-     * the shape a road's sign card is, which is a rectangle with {@link RoadSigns#CARD_CORNER_PX} of
-     * rounding. Both are fills made through the GUI's own batches before their text, so the plate's
-     * name is the last thing written at that spot. The ink comes from the sign cards' own contrast
-     * rule, so a pale line is lettered dark and a dark line pale without a second table of colours.
+     * One line's name plate: a capsule in the line's colour, rounding half its height -- deliberately
+     * not a sign card's rectangle. Fills go through the GUI's batches before the text, and the ink
+     * comes from the sign cards' contrast rule.
      */
     private void drawLineNamePlate(GuiGraphics graphics, Font font, String name, double centreX,
                                    double centreY, double width, double height, int colour) {
@@ -2431,13 +1653,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * How long a chain is on this map, in pixels: the room a name has to lie in.
-     *
-     * <p>Walked along the chain's own vertices rather than measured between its two ends, because a
-     * curved road is longer than the straight line across it. The figure is in screen pixels like
-     * everything the label pass decides with, so it shrinks with the map and a name stops fitting
-     * exactly when the road does. One walk over the pieces of one chain, asked only for the roads that
-     * are about to be named.
+     * How long a chain is on this map, in pixels: the room a name has to lie in, walked along the
+     * chain's vertices because a curved road is longer than the straight line across it.
      */
     private static double chainScreenPx(RoadNetwork network, int[] chain, double scale) {
         double total = 0.0;
@@ -2455,31 +1672,12 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * One road's sign card on the picker map: the category's colour, a one-pixel contrasting border,
-     * the number centred inside, and in mixed mode the road's name shrunk beneath it.
-     *
-     * <h2>Why upright, and why here</h2>
-     * The name above is drawn along the road because it belongs to the line; a sign is an object
-     * standing beside the road, and a plate turned to the road's angle reads as a label lying on it
-     * rather than as a sign next to it. It is centred on the road's midpoint for the same reason it is
-     * centred on the label position on the world map: a plate lifted off the stroke is a second object
-     * with an unexplained gap under it, while a centred plate has the road running into it and out of
-     * it, which is what a sign standing on the road looks like.
-     *
-     * <h2>Why it is drawn at a scale</h2>
-     * The same reason the world map's card is a fraction of its label zoom: at the font's own size a
-     * card is louder than the names around it and takes a bite out of a small map. Everything -- the
-     * plate, the room inside it and both lines -- is therefore measured in the card's own units and
-     * drawn at {@link #SIGN_CARD_SCALE} of them, so the card is the same object at a smaller size.
-     * See that constant for why the number is 0.72.
-     *
-     * <h2>Why the card is measured from the number</h2>
-     * A sign is a plate whose width is the word printed on it, and that word is the number: sized by
-     * the mixed mode's name, a card for a long street name would be a plate as long as the street.
-     * The name's line therefore gives way -- it is shrunk to the width the number's line leaves it,
-     * but never below {@link #SIGN_CARD_NAME_FLOOR} of the card's scale; a name that would need more
-     * shrinking than that widens the plate instead. That is exactly the world map's rule (see its
-     * {@code measureSignCard}), carried out in this map's pixels rather than in font units.
+     * One road's sign card on the picker map: category colour, one-pixel contrasting border, the
+     * number centred, and in mixed mode the name shrunk beneath. Upright and centred on the road,
+     * because a sign stands beside the road rather than lying along it; everything is measured in the
+     * card's units and drawn at SIGN_CARD_SCALE.
+     * The card is sized from the number; the name shrinks no further than SIGN_CARD_NAME_FLOOR and
+     * past that widens the plate.
      */
     private void drawSignCard(GuiGraphics graphics, Font font, RoadSegment segment, double x, double y,
                               boolean withName, double minX, double minY, double maxX, double maxY,
@@ -2543,18 +1741,9 @@ public final class DestinationScreen extends Screen {
 
         int background = RoadCategoryStore.color(segment.category());
         int ink = RoadSigns.ink(background);
-        // Rounded rather than square, and with the shared radius: a sign is a printed plate, and a
-        // plate's corners are rounded -- on a card this small the four square ones are the sharpest
-        // thing on the map. {@link RoadSigns#CARD_CORNER_PX} is clamped inside the fill to half the
-        // card's own height, so a card a few pixels tall rounds by less than that rather than turning
-        // into a pill; the line badges draw their capsule with the same corner arithmetic at their
-        // own height, which is what keeps a plate and a capsule two shapes rather than two roundings.
-        //
-        // Both are fills through the GUI's own batches and both come before the two strings below: a
-        // string flushes the buffer it writes to, so a quad after one would go through a stale
-        // consumer. The rim is one pixel of the same ink as the text, drawn on the fill's own
-        // outline, so it follows the rounded corners without a gap at them and one contrast decision
-        // made from the background keeps the card reading as one object.
+        // Rounded with the shared radius, clamped inside the fill to half the card's height so a short
+        // card does not become a pill. Both fills come before the two strings below: a string flushes the
+        // buffer it writes to. The rim is one pixel on the fill's own outline, so it follows the rounding.
         HudDraw.fillRounded(graphics, left, top, left + cardWidth, bottom,
                 RoadSigns.CARD_CORNER_PX, background);
         HudDraw.outlineRounded(graphics, left, top, left + cardWidth, bottom,
@@ -2576,16 +1765,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Writes one line of a sign card at a given scale, centred on a point.
-     *
-     * <p>The font's draw call takes a position and no size, so the size has to be put on the pose
-     * around the call -- the same matrix the rotated road names above are drawn through. The pose is
-     * pushed, moved to the line's centre, scaled, and the string is written at the origin offset by
-     * half its own width: that offset is what keeps the line centred on the card whatever the scale,
-     * and drawing at the origin is what keeps the scale about the point rather than the screen.
-     *
-     * <p>The two eras' stacks are the two branches the name pass above already keeps: 1.21.6 replaced
-     * the GUI's PoseStack with JOML's Matrix3x2fStack, and for a translate-and-scale the two are the
-     * same operation under the new name.
+     * The draw call takes no size, so the pose is pushed, moved to the line's centre, scaled, and the
+     * string written at the origin offset by half its width. 1.21.6 replaced PoseStack with JOML's
+     * Matrix3x2fStack; for translate-and-scale the operation is the same.
      */
     private static void drawScaledCardText(GuiGraphics graphics, Font font, String text,
                                            double centreX, double top, int colour, float scale) {
@@ -2623,12 +1805,8 @@ public final class DestinationScreen extends Screen {
         double centerX = mapX + mapW / 2.0;
         double centerY = mapY + mapH / 2.0;
 
-        // North-up, unlike the travelling HUD: when choosing a place, a consistent orientation
-        // matters more than knowing which way the player happens to be facing.
-        //
-        // The picker map is one drawing block, opened the same way on either side of 1.21.6 -- a live
-        // consumer through the pose before, a deferred batch the GUI renderer plays back after. The
-        // emitters take the sink, so nothing below this line knows which.
+        // North-up, unlike the travelling HUD: a consistent orientation matters more than facing when
+        // choosing a place. One drawing block, opened the same way on either side of 1.21.6.
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
         HudDraw.VertexSink last = drawing.sink;
 
@@ -2675,12 +1853,8 @@ public final class DestinationScreen extends Screen {
                 0.7, roadAlpha, minX, minY, maxX, maxY,
                 mapCenterX - reach, mapCenterZ - reach, mapCenterX + reach, mapCenterZ + reach);
 
-        // Public transport lines, above the ground they run on and below the route: this map has no
-        // track to follow a line along, so it is drawn through the stops it calls at. Half a footpath's
-        // width -- a line marks a service, not a road -- with a floor because this map draws every
-        // road at one thin weight and half of that rounds away to nothing. The player's own switch
-        // hides them here as it does on the world map: this map used to draw them regardless, so a
-        // line switched off elsewhere came back on the picker.
+        // Public transport lines, above the ground and below the route; drawn through the stops since
+        // this map has no track. Half a footpath's width, floored, and hidden by the player's switch.
         if (MapFilter.showsLines()) {
             HudDraw.emitTransitLines(last, Navigation.linesInPlay(), m00, 0, m02, 0, m11, m12,
                     Math.max(0.5, 0.7 * 0.5), (int) (0xE0 * open), minX, minY, maxX, maxY);
@@ -2700,14 +1874,9 @@ public final class DestinationScreen extends Screen {
         // a preview is only ever the newer of the two, and would otherwise hide under the line it
         // is being compared with.
         if (!plans.isEmpty()) {
-            // Every plan at once, so the comparison is made on the map as well as in the list: each in
-            // its own ink, the chosen one at the live route's width and strength, the others thin and
-            // faded so they recede without disappearing. The unchosen lines are emitted first, so the
-            // chosen one is never hidden under a line it is being compared with.
-            //
-            // These keep their own fixed alphas rather than the screen's: a plan can only exist
-            // once a destination has been chosen, which is long after the entrance has finished, so
-            // there is nothing here for the opacity to scale.
+            // Every plan at once, so the map compares what the list compares: each in its own ink, the chosen
+            // one at live width and strength, the others thin and faded. Unchosen lines first, so the chosen
+            // is never hidden.
             for (int i = 0; i < plans.size(); i++) {
                 if (i != planIndex) {
                     drawPlanLine(last, plans.get(i), false, m00, m02, m11, m12,
@@ -2859,25 +2028,10 @@ public final class DestinationScreen extends Screen {
 
     /**
      * One plan's line on the picker map.
-     *
-     * <p>Every plan is drawn in <em>its own</em> ink -- the walking blue on the stretches walked, the
-     * line's own colour on the stretch ridden, the driving green on a drive -- and not in a colour of
-     * this screen's choosing. The accent is what the rows and the readout use to say which plan is
-     * being compared; the map has to say what the plan <em>is</em>, and a public transport plan drawn
-     * in one colour looks like a walk with a line's length, which is worse than saying nothing.
-     *
-     * <p>The chosen plan is told apart by weight rather than by hue: it is drawn at the width the live
-     * route uses and at full strength, the others thinner and faded. That was the other way round in
-     * the first version -- accent for the chosen line -- and it made the one plan the player was
-     * looking at the only line on the map that could not say whether it rode anything.
-     *
-     * <p>The fading of an unchosen plan is per stretch and by alpha, not by replacing the colour with
-     * a paler one: the hue is what carries the meaning, and mixing each stretch toward the panel would
-     * make two different lines' colours converge at exactly the alpha this band uses to recede.
-     *
-     * <p>Emitted through the shared block's sink like every other line on this map, so it must be
-     * called before the name pass: a string written by {@code GuiGraphics} flushes the batch these
-     * quads are written to.
+     * Drawn in its own ink -- walking blue, the line's colour, driving green -- never this screen's
+     * accent: the map has to say what the plan is. The chosen plan is told apart by weight, not hue:
+     * full width and strength, others thinner and faded per stretch by alpha so hues stay distinct.
+     * Emitted through the shared sink, so it must be called before the name pass.
      */
     private static void drawPlanLine(HudDraw.VertexSink out, RouteOption plan, boolean selected,
                                      double m00, double m02, double m11, double m12,
@@ -2894,10 +2048,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Draws a mark only when the whole of it falls inside the map.
-     *
-     * <p>Fully inside rather than merely centred inside: a disc is a couple of units across, and
-     * testing only its centre let its rim paint over the map's border and the panel beyond it.
+     * Draws a mark only when the whole of it falls inside the map: testing only the centre let its
+     * rim paint over the border.
      */
     private static void emitDiscIfInside(HudDraw.VertexSink out, double x, double y,
                                          double radius, int argb,
@@ -2913,17 +2065,12 @@ public final class DestinationScreen extends Screen {
         emitDiscIfInside(out, x, y, 2.6, color, minX, minY, maxX, maxY);
     }
 
-    /** Every place's marker on the preview as it was last drawn, and the destination it stands for. */
     private record PlaceHit(Destination destination, int x, int y) {
     }
 
     /**
-     * Every place's position on the preview, in the same transform the drawing uses.
-     *
-     * <p>Computed rather than remembered from the last draw, so input handling and drawing agree
-     * within the same frame instead of one behind it. The transform is entirely fields this screen
-     * already holds -- the map rect, the pan and the zoom -- so this is the same arithmetic
-     * {@code drawPickerMap} does, asked by the other caller.
+     * Every place's position on the preview, in the drawing's own transform, computed rather than
+     * remembered so input handling and drawing agree within the same frame.
      */
     private List<PlaceHit> placeHits() {
         double centerX = mapX + mapW / 2.0;
@@ -2942,20 +2089,14 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The place whose marker is under a screen point, or null.
-     *
-     * <p>A generous catch area on purpose: the marker is under four pixels across, and a hit test
-     * that matched it exactly would make the feature unusable without a steady hand.
-     *
-     * <p>Asks for the positions itself, for the input handlers: a click and a release arrive on their
-     * own, and neither has a frame's worth of positions to hand. The drawing passes hold the list they
-     * already built and use the overload below.
+     * The place whose marker is under a screen point, or null, with a generous catch area because
+     * the marker is under four pixels. Works out the positions itself for the input handlers; the
+     * drawing passes use the overload with their own list.
      */
     private PlaceHit placeAt(double mouseX, double mouseY) {
         return placeAt(placeHits(), mouseX, mouseY);
     }
 
-    /** The same test against positions the caller has already worked out for this frame. */
     private static PlaceHit placeAt(List<PlaceHit> places, double mouseX, double mouseY) {
         for (PlaceHit hit : places) {
             if (Math.abs(mouseX - hit.x()) <= PLACE_HIT_PX
@@ -2967,14 +2108,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Every place gets its marker on the preview as well, so the list and the map agree about where
-     * the places are. Before the name pass, for the reason the whole quad sequence is: a string
-     * flushes the batch these were written into. Same list, colour and shape as the other two maps,
-     * at this map's smaller size.
-     *
-     * <p>The positions come from the caller: they are the same ones the hover readout below is
-     * measured against, and working them out again here would be the second answer the class's own
-     * rule about one set of numbers exists to prevent.
+     * Every place gets its marker, so the list and the map agree where the places are.
+     * Before the name pass, because a string flushes the batch these were written into. Positions come
+     * from the caller -- the same ones the hover readout uses.
      */
     private void drawPlaceMarkers(List<PlaceHit> places, HudDraw.VertexSink out,
                                   double minX, double minY, double maxX, double maxY) {
@@ -3006,7 +2142,6 @@ public final class DestinationScreen extends Screen {
         return true;
     }
 
-    /** Whether the whole hover crosshair falls inside the map rect. */
     private boolean crosshairFits(double mouseX, double mouseY) {
         return mouseX - 4 >= mapX && mouseX + 5 <= mapX + mapW
                 && mouseY - 4 >= mapY && mouseY + 5 <= mapY + mapH;
@@ -3016,7 +2151,6 @@ public final class DestinationScreen extends Screen {
         return mouseX >= mapX && mouseX <= mapX + mapW && mouseY >= mapY && mouseY <= mapY + mapH;
     }
 
-    /** Converts a click inside the map into a world position. */
     private double[] worldAt(double mouseX, double mouseY) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
@@ -3030,7 +2164,6 @@ public final class DestinationScreen extends Screen {
                 mapCenterZ + (mouseY - centerY) / scale};
     }
 
-    // ------------------------------------------------------------------ list
 
     private static String distanceLabel(Destination destination) {
         Minecraft mc = Minecraft.getInstance();
@@ -3042,34 +2175,20 @@ public final class DestinationScreen extends Screen {
         return Route.formatDistance(distance);
     }
 
-    // ------------------------------------------------------------------ footer
 
     /**
      * Where one of the four control rows is drawn this frame: its laid-out top, lowered by the fold.
-     *
-     * <p>The drawing half of the fold, and only the drawing half. The rows keep the top the layout
-     * gave them and are moved by this every frame, so the animation never has to write a position:
-     * the places a click is tested against are the ones the layout computed, and a row that is
-     * halfway out of the panel is still exactly where it was when the pointer found it.
-     *
-     * <p>They rise from behind the bar, which is the direction the drawer opens in: the bar is the
-     * bottom of the panel, so the options have to come up out of it rather than down from under the
-     * readout. While they are still low they are drawn below the block's bottom edge and are clipped
-     * away by it (see {@link #render}), so the ones that have not arrived yet are simply not on
-     * screen -- the block looks like it is growing upwards out of the bar.
-     *
-     * <p>The travel is the whole height of the block the rows occupy, so a row is fully below its
-     * place at the folded end rather than a token distance short of it.
+     * Only the drawing half: hit tests use the layout's positions, so a row halfway out is still where
+     * the pointer found it. Rows rise from behind the bar and are clipped by the block, which reads as
+     * the block growing upwards out of it.
      */
     private int foldRowY(int rowY) {
         return rowY + Math.round((1.0F - fold) * controlsBlockHeight());
     }
 
     /**
-     * Travel-mode row: one button per mode, the active one filled with the selection colour.
-     *
-     * <p>All three are shown at once rather than cycled through, because the choice changes the
-     * route as well as the estimate, and seeing which one is on is the point of the row.
+     * Travel-mode row: one button per mode, the active one filled with the selection colour; all
+     * three shown because which one is on is the point of the row.
      */
     private void drawModeSelector(GuiGraphics graphics, int mouseX, int mouseY) {
         int y = foldRowY(modeY);
@@ -3095,7 +2214,6 @@ public final class DestinationScreen extends Screen {
         return Component.translatable("screen.howtogo.mode").getString();
     }
 
-    /** True when two picked places are the same place, by name and position. */
     private static boolean samePlace(Destination a, Destination b) {
         return a != null && b != null && a.name().equals(b.name())
                 && a.x() == b.x() && a.z() == b.z();
@@ -3103,22 +2221,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * What the readout says: the chosen plan, the one plan there is, or why there is no plan.
-     *
-     * <p>Laid out as two lines because the two kinds of answer say different kinds of thing. With
-     * plans, the first line names the one being compared -- which of the three and the strategy
-     * that produced it -- and the second gives its cost, so the row, the map's chosen line and this
-     * readout all describe one plan. Without plans, the old single preview keeps its old two lines:
-     * the state line says which mode the answer is for, and the second line is the trip or the
-     * router's sentence explaining why there is none.
-     *
-     * <p>The second line gives the plan's cost except for the walk offered because no line is worth
-     * riding: there it gives the reason instead, since "how far and how long" is already on the row
-     * and the question left is why there is no ride at all. See {@link #walkInsteadOfRiding}.
-     *
-     * <p>A failed combination is a sentence from the router, which is the only thing that turns
-     * "there is no route" into something the player can act on, so it gets a line of its own to be
-     * read in rather than being clipped to make room for a distance and a time that do not exist.
-     * Showing nothing at all would look like the picker had simply stopped working.
+     * Two lines: with plans, which one is compared and its cost; without, the state line and the trip
+     * or the router's sentence explaining why there is none. The walk offered because no line is worth
+     * riding shows the reason instead of a cost -- see walkInsteadOfRiding.
      */
     private void drawPreviewSummary(GuiGraphics graphics) {
         if (previewTarget == null) {
@@ -3177,17 +2282,10 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Whether the selected plan is the walk offered in public transport's place because the
-     * destination is near enough to walk to.
-     *
-     * <p>The row's own title already says what the plan is -- a walk; this answers the different
-     * question the readout's second line exists for: why there is no ride at all. It is true only
-     * when that is the reason, because a destination further off keeps the plan's own cost there and
-     * "there is no line here" is not what explains that row. It is asked of the same distance the
-     * planner refuses a ride for -- see {@link LinePlanner#closeEnoughToWalk} -- so the sentence and
-     * the list cannot disagree about what "near" means. The origin is the player, which is where the
-     * list was planned from; a player who has wandered while the panel was open changes nothing that
-     * matters here, since the HUD says the same sentence after the trip starts.
+     * Whether the selected plan is the walk offered in transit's place because the destination is
+     * near enough to walk to -- the reason the readout's second line gives instead of a cost.
+     * Asked of the same distance the planner refuses a ride for (LinePlanner#closeEnoughToWalk), so
+     * the sentence and the list cannot disagree.
      */
     private boolean walkInsteadOfRiding(RouteOption plan) {
         if (plan == null || plan.strategy() != RouteStrategy.WALK || previewTarget == null) {
@@ -3200,14 +2298,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The metric, the major-road preference and the voice switch, as buttons that take effect on
-     * the spot.
-     *
-     * <p>The first two change what "best" means, so both re-plan the comparison from
-     * {@code mouseClicked}: a toggle whose effect only appears after the screen is reopened is a
-     * setting, not a control. Speech changes nothing about the routes, so the voice switch has
-     * nothing to re-plan -- it is here rather than on a settings page because a toggle the player
-     * cannot find is a toggle that does not exist.
+     * The metric, the major-road preference and the voice switch, as buttons that take effect on the
+     * spot. The first two re-plan from mouseClicked, since a setting that waits for a reopen is not a
+     * control; speech re-plans nothing, so the voice switch is here rather than on a settings page.
      */
     private void drawPreferenceControls(GuiGraphics graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
@@ -3229,11 +2322,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * One toggle per road class, lighting up the classes kept out of the route.
-     *
-     * <p>All six are always shown rather than only the avoided ones, because the list is what the
-     * player is choosing from: a row that grows as classes are added answers "what can I avoid"
-     * with "what have I avoided", which is not the same question.
+     * One toggle per road class, lighting up the classes kept out. All six are always shown: a row
+     * that grew as classes were avoided would answer the wrong question.
      */
     private void drawClassControls(GuiGraphics graphics, int mouseX, int mouseY) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
@@ -3251,20 +2341,15 @@ public final class DestinationScreen extends Screen {
         }
     }
 
-    /** Localised name for one road class, for the avoid toggles. */
     private static String classCaption(RoadClass roadClass) {
         return Component.translatable(
                 "screen.howtogo.road_class." + roadClass.name().toLowerCase(Locale.ROOT)).getString();
     }
 
     /**
-     * The transit guidance switch: whether a public transport journey is guided by boarding and
-     * alighting rather than by turns.
-     *
-     * <p>Its own row rather than a chip on the preference row, and its own caption rather than a
-     * shorter label on one: the row is where a switch that belongs to one mode can say what it is,
-     * and the caption beside it is what says which mode that is. Like the voice switch it changes
-     * nothing about the route, so nothing is re-planned when it is pressed.
+     * The transit guidance switch: whether a journey is guided by boarding and alighting rather than
+     * turns. Its own row and caption because it belongs to one mode; nothing is re-planned, as with
+     * the voice switch.
      */
     private void drawTransitControls(GuiGraphics graphics, int mouseX, int mouseY) {
         int y = foldRowY(transitY);
@@ -3279,19 +2364,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Draws one toggle in its on or off state.
-     *
-     * <p>A plain button and its state rather than a checkbox: the same hover feedback as every
-     * other control in the panel, and no widget to keep in step with a value that lives outside it.
-     * Where it was clicked is decided in {@code mouseClicked}, which uses the same coordinates.
-     *
-     * <p>Its two states are mixed into the face rather than picked between, because a toggle that
-     * is switched on is a change the player made: the chosen face travels from {@link UiTheme#button()}
-     * to the accent wash this panel has always used for a chosen control, and the label travels with
-     * it, over its own slide. The cursor's face is then mixed over that by {@link #drawButton}, which
-     * is where the hover lives for every control in the panel.
-     *
-     * <p>Both endpoints are the colours the panel used before it animated -- the travel is the only
-     * new thing, so a chip resting at the far end of the mix is pixel-for-pixel the chip it used to be.
+     * A plain button rather than a checkbox, so there is no widget to keep in step with a value that
+     * lives outside it. Its two states are mixed into the face -- and so into the label -- then the
+     * cursor's face is mixed over by drawButton.
      */
     private void control(GuiGraphics graphics, int mouseX, int mouseY, int x, int y, int w, int h,
                          String label, boolean on) {
@@ -3330,24 +2405,20 @@ public final class DestinationScreen extends Screen {
         return Component.translatable("screen.howtogo.transit_board_only").getString();
     }
 
-    /** The rectangle of the transit guidance switch, as {@code {x, y, width}}. */
     private int[] transitRect() {
         int captionWidth = font.width(transitCaption()) + gap;
         return new int[]{rowX + captionWidth, transitY, Math.max(30, rowW - captionWidth)};
     }
 
     /**
-     * The class toggle at the given index, as an x coordinate.
-     *
-     * <p>Derived from the same three numbers the drawing uses, so a click cannot land on a button
-     * the player is not looking at.
+     * The class toggle at the given index, as an x coordinate, derived from the same numbers the
+     * drawing uses.
      */
     private int classButtonX(int index) {
         return rowX + font.width(avoidCaption()) + gap
                 + index * (classButtonWidth + gap);
     }
 
-    /** The class toggle under the cursor, or null when the cursor is not on one. */
     private RoadClass classAt(double mouseX, double mouseY) {
         RoadClass[] classes = RoadClass.values();
         for (int i = 0; i < classes.length; i++) {
@@ -3359,48 +2430,32 @@ public final class DestinationScreen extends Screen {
         return null;
     }
 
-    /** True when the cursor is on the metric toggle. */
     private boolean metricAt(double mouseX, double mouseY) {
         return isInside((int) mouseX, (int) mouseY, preferenceButtonX(0), preferenceY,
                 preferenceButtonWidth, preferenceRowHeight);
     }
 
-    /** True when the cursor is on the major-road toggle. */
     private boolean majorRoadsAt(double mouseX, double mouseY) {
         return isInside((int) mouseX, (int) mouseY, preferenceButtonX(1), preferenceY,
                 preferenceButtonWidth, preferenceRowHeight);
     }
 
-    /** True when the cursor is on the voice switch. */
     private boolean voiceAt(double mouseX, double mouseY) {
         return isInside((int) mouseX, (int) mouseY, preferenceButtonX(2), preferenceY,
                 preferenceButtonWidth, preferenceRowHeight);
     }
 
-    /** True when the cursor is on the transit board-and-alight switch. */
     private boolean transitAt(double mouseX, double mouseY) {
         int[] rect = transitRect();
         return isInside((int) mouseX, (int) mouseY, rect[0], rect[1], rect[2], transitRowHeight);
     }
 
-    // ------------------------------------------------------------ the fold bar
 
     /**
      * The one bar that folds the four control rows away and opens them again.
-     *
-     * <p>Always in the same place, in both forms: at the bottom of the group, directly above the
-     * footer. While the rows are folded it says what they are set to, and a hint at its right end
-     * says that pressing it opens them; while they are open it says the same setting and the hint
-     * says that pressing it folds them. That is the whole of the control -- the separate button that
-     * used to sit here saying "路线选项" was a second way of doing what the summary above it already
-     * did, and a control that only works in one direction is not an affordance, it is a trap: a
-     * player who opened the rows to look at the options had no way to give the plans their room back.
-     *
-     * <p>Drawn as text on a hover tint rather than as a filled button so it reads as a statement
-     * about the state that happens to be clickable, which is what the folded summary always did; the
-     * hint is in the panel's body ink rather than the muted one so that it is the part read as the
-     * instruction. The summary text is cut to leave the hint its room, because a summary at its
-     * longest would otherwise be written under it.
+     * Always at the bottom of the group above the footer, and the only control for the fold in either
+     * direction -- one that works one way is a trap. Drawn as text on a hover tint, summary on the
+     * left and the hint right, with the summary cut to leave the hint its room.
      */
     private void drawControlsSummary(GuiGraphics graphics, int mouseX, int mouseY) {
         float lit = chipSlides.get(CHIP_BAR * 2).to(barAt(mouseX, mouseY) ? 1.0F : 0.0F).eased();
@@ -3420,13 +2475,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * What the controls are set to: the mode, the metric, and whichever preferences are on.
-     *
-     * <p>The four rows are four questions -- how to travel, what "best" means, which classes to keep
-     * out and whether to hear stops or turns -- and the bar answers them in the order the rows ask
-     * them, so a player who folded the panel can still see why the plans look the way they do
-     * without opening it. Only the switches that are on are named: a summary that listed "major
-     * roads: off" as well would be longer without saying anything more.
+     * What the controls are set to, in the order the rows ask, so a folded panel still shows why the
+     * plans look as they do. Only switches that are on are named.
      */
     private String controlsSummaryText() {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
@@ -3452,24 +2502,19 @@ public final class DestinationScreen extends Screen {
         return String.join(" · ", parts);
     }
 
-    /** True when the cursor is on the bar that folds and opens the four control rows. */
     private boolean barAt(double mouseX, double mouseY) {
         return isInside((int) mouseX, (int) mouseY, rowX, barY, rowW, summaryRowHeight);
     }
 
     /**
-     * The metric, major-road or voice toggle at the given index, as an x coordinate.
-     *
-     * <p>All three are derived from the wider of the metric and major-road captions, which is also
-     * how the width was computed, so the drawing and the hit tests cannot disagree about where they
-     * are.
+     * The metric, major-road or voice toggle at the given index, as an x coordinate, derived from
+     * the wider caption so the drawing and the hit tests agree.
      */
     private int preferenceButtonX(int index) {
         return rowX + Math.max(font.width(metricCaption()),
                 font.width(majorRoadsCaption())) + gap + index * (preferenceButtonWidth + gap);
     }
 
-    /** The mode button under the cursor, or null when the cursor is not on one. */
     private TravelMode modeAt(double mouseX, double mouseY) {
         int x = modeButtonsX;
         for (TravelMode mode : TravelMode.values()) {
@@ -3482,13 +2527,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The footer: start the chosen plan, cancel the choice, or leave the picker.
-     *
-     * <p>Three buttons while there are plans to start, in the order the choice is made: the action
-     * on the left where the picker has always put it, "cancel the choice" in the middle, and the way
-     * out of the screen on the right. Without plans the old behaviour stands unchanged -- the action
-     * (or "stop") and cancel -- because there is no choice to cancel separately from the destination
-     * itself; the readout above already says the single answer.
+     * The footer: start the chosen plan, cancel the choice, or leave the picker. Without plans the
+     * old pair -- action or stop, and cancel -- stands, since there is no choice to cancel separately.
      */
     private void drawFooter(GuiGraphics graphics, int mouseX, int mouseY) {
         int count = footerButtonCount();
@@ -3546,11 +2586,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * How many buttons the footer has, which is the only thing that decides its division.
-     *
-     * <p>Three while plans are compared, two for the old behaviour -- the action (or "stop") and
-     * cancel -- and one when there is nothing to act on, so cancel takes the whole row. Asked by
-     * both the drawing and the click test, so the two cannot disagree about where the buttons are.
+     * How many footer buttons there are: three while plans are compared, two otherwise, one when
+     * there is nothing to act on. Asked by the drawing and the click test alike.
      */
     private int footerButtonCount() {
         if (!plans.isEmpty()) {
@@ -3560,28 +2597,21 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Width of each footer button, so the buttons and their gaps add up to {@link #rowW}.
-     *
-     * <p>The two-button figure is the one the picker has always used -- a gap of {@link #PADDING}
-     * between the pair -- and the three-button case is the same rule with two gaps, so switching
-     * between the results footer and the old one does not move the left button. A floor of one unit
-     * avoids dividing by a width that no window can produce.
+     * Width of each footer button so buttons and gaps add up to rowW; the three-button case is the
+     * two-button rule with two gaps, so the left button never moves.
      */
     private int footerButtonWidth(int count) {
         return count == 1 ? rowW : Math.max(1, (rowW - PADDING * (count - 1)) / count);
     }
 
     /**
-     * Left edge of a footer button: the same division its width came from, not a second copy.
-     *
-     * <p>Both the drawing and the click test ask this, so a click on a footer button cannot land
-     * where a different rule put the label.
+     * Left edge of a footer button: the same division its width came from, asked by both the
+     * drawing and the click test.
      */
     private int footerButtonX(int index) {
         return rowX + index * (footerButtonWidth(footerButtonCount()) + PADDING);
     }
 
-    /** Where the action button would commit to: a fresh pin first, then the previewed choice. */
     private Destination actionDestination() {
         if (pendingPick != null) {
             int x = (int) Math.round(pendingPick[0]);
@@ -3593,18 +2623,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * A footer button.
-     *
-     * <p>The label colour follows the face rather than the other way round: a button filled with the
-     * accent or with the danger colour carries white text in both styles, and the neutral cancel
-     * button carries the panel's own text colour, which is what makes it read as neutral rather than
-     * as a second action. That is also why the label is not mixed with the face: it is chosen for
-     * contrast against the resting colour and interpolating it would pass through shades nobody
-     * picked for legibility, so only the face travels.
-     *
-     * <p>The face is the one thing every control in this panel draws through, so the hover lives
-     * here and not at each call site: it mixes from the resting colour to the cursor colour over the
-     * slot's own slide, which is why a chip and the button under the cursor next to it are never at
-     * different points in the same fade.
+     * The label colour follows the face -- white on accent and danger, the panel ink on neutral -- and
+     * is not interpolated, since legibility was chosen against the resting colour. The hover lives
+     * here for every control in the panel, mixed over the slot's own slide.
      */
     private void drawButton(GuiGraphics graphics, int x, int y, int w,
                             String label, int base, int hover, int textColor, boolean hovered) {
@@ -3628,7 +2649,6 @@ public final class DestinationScreen extends Screen {
         return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
     }
 
-    // ------------------------------------------------------------------- input
 
     @Override
     // 1.21.9 turned key input into a record; the body only needs the key code, so it is unpacked on
@@ -3671,10 +2691,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The plan index a number key selects, or -1.
-     *
-     * <p>Out-of-range numbers are ignored rather than clamped: a "3" pressed when there are two
-     * plans is not a request for the second one, it is a key aimed at a list that is not there.
+     * The plan index a number key selects, or -1. Out-of-range numbers are ignored rather than
+     * clamped: a key aimed at a list that is not there.
      */
     private int chosenPlanKey(int keyCode) {
         int index = keyCode - InputConstants.KEY_1;
@@ -3857,15 +2875,9 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Chooses a destination to compare plans for, and opens its details.
-     *
-     * <p>A real place opens its details card, because the list and the map both choose on one click
-     * and the details are what that click was for; the card stays visible, because the plans are
-     * drawn below the list rather than over it. A point picked on the map is not a place -- it has no
-     * record to show and nothing to edit -- so it closes the card rather than opening an empty one.
-     *
-     * <p>The controls fold with the choice: the four rows are what the plan band takes its room
-     * from, so leaving them open would leave the plans they produced hidden. The bar opens them
-     * again, and clicking it once more folds them away.
+     * A real place opens the card; a map-picked point has no record, so it closes the card rather than
+     * opening an empty one. The controls fold with the choice, or the plans they produced would be
+     * hidden; the bar opens them again.
      */
     private void selectPreview(Destination destination) {
         previewTarget = destination;
@@ -3878,17 +2890,9 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Forgets the chosen destination, and gives the panel back to the places and the open controls.
-     *
-     * <p>What the footer's "cancel the choice" does, and what ESC does once the details card is
-     * closed. The place list and its card are untouched -- they were never hidden -- and the four
-     * control rows come back with the space the plans had taken: a selection cancelled is a panel
-     * with nothing being compared, which is exactly the state the panel opens in.
-     *
-     * <p>The map pin goes with the choice: a pin with no plan under it is a point the player has
-     * already stopped choosing. The old single preview is cleared too, so the readout says what to
-     * do rather than describing a route nothing is about. The details card is not cleared -- it
-     * belongs to the places, not to the choice, and is closed by its own controls.
+     * Forgets the chosen destination and gives the panel back to the places and the open controls:
+     * what the footer's cancel and ESC-after-the-card do. The map pin and the old single preview go
+     * with the choice; the details card belongs to the places and is left alone.
      */
     private void clearSelection() {
         plans = List.of();
@@ -3901,12 +2905,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Opens or closes the details card, taking the list's band when it opens and giving it back
-     * when it closes.
-     *
-     * <p>Compared by value rather than by reference: the sources build a fresh {@link Destination}
-     * every time they are asked, so the same place arrives as a different object on every frame and
-     * an identity test would re-lay the list out on each one.
+     * Opens or closes the details card, taking the list's band when it opens. Compared by value,
+     * because sources rebuild Destination instances every frame and identity would re-lay the list.
      */
     private void setDetailsPlace(Destination place) {
         Destination next = Destinations.isPlace(place) ? place : null;
@@ -3918,7 +2918,6 @@ public final class DestinationScreen extends Screen {
         relayoutList();
     }
 
-    /** Runs one of the details card's controls, as reported by its last {@link PlaceDetailPanel#render}. */
     private void handleDetailAction(PlaceDetailPanel.Action action) {
         Destination place = detailsPlace;
         if (place == null) {
@@ -3949,12 +2948,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Opens the editor for the selected place.
-     *
-     * <p>Two editors, because the two kinds of place are stored differently. The player's own place
-     * is a node of the road network, and the place editor writes name, kind and details to it; every
-     * other place belongs to another source, so only the detail record can be edited, through the
-     * details dialog.
+     * Opens the editor for the selected place: the player's own place is a road-network node and gets
+     * the place editor; every other place can only have its detail record edited.
      */
     private void editDetailsPlace(Destination place) {
         int nodeId = manualNodeId(place);
@@ -3967,15 +2962,8 @@ public final class DestinationScreen extends Screen {
 
     /**
      * Drops a selection whose place a rebuilt list no longer offers, before the layout asks the
-     * details card for its height.
-     *
-     * <p>Called from {@link #init}, which is where the list is rebuilt from the sources: a place
-     * that disappears while the picker is open is still in the snapshot being displayed, so it is
-     * noticed when that snapshot is next taken rather than by re-reading every source each frame.
-     * A source such as Xaero's is read through reflective calls that build a whole list per ask, and
-     * polling it for every selected frame would cost far more than the rare deletion it would catch
-     * sooner. Deleting a place is the world map's edit mode's job, so this screen only has to survive
-     * one disappearing under it.
+     * details card for its height; called from init, where the list is rebuilt. A place that vanishes
+     * mid-session is noticed when the snapshot is next taken, not by polling every source each frame.
      */
     private void dropVanishedSelection() {
         if (detailsPlace != null && !all.contains(detailsPlace)) {
@@ -3992,11 +2980,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * The road node id a manual place stands for, or -1 when its id is not a node id.
-     *
-     * <p>Parsed rather than trusted: the id comes from the source and is a string, and a record
-     * whose id is not a number names no node this session can find. The caller then falls back to
-     * the details dialog instead of failing the click.
+     * The road node id a manual place stands for, or -1 when its id is not a node id. Parsed
+     * rather than trusted, so a malformed record falls back to the details dialog.
      */
     private static int manualNodeId(Destination place) {
         if (place == null || place.placeId() == null) {
@@ -4009,30 +2994,16 @@ public final class DestinationScreen extends Screen {
         }
     }
 
-    /** Value equality that also treats two nulls as the same, for the selection fields. */
     private static boolean sameDestination(Destination a, Destination b) {
         return a == null ? b == null : a.equals(b);
     }
 
     /**
      * Re-plans the plans for the current destination, mode and preferences.
-     *
-     * <p>Called when a destination is chosen and from every control that changes one of the three --
-     * through {@link #replanAndShowPlans}, which also folds the controls so the answer is visible --
-     * and from {@code init}, so the band and the map always show the answer to the settings on
-     * screen. The chosen row goes back to the first plan on every re-plan: the rows are sorted by
-     * time, so row two of a new list is not the row two the player was looking at, and keeping the
-     * index would silently switch the plan they had picked.
-     *
-     * <p>Everything this reads is the live session, and neither {@link Navigation#plans} nor
-     * {@link Navigation#preview} writes any of it, so comparing routes here cannot disturb a trip
-     * that is already running.
-     *
-     * <p>When the alternatives list is empty -- the mode has one answer, or none -- the old single
-     * preview is planned as well. That is not a second opinion: it is the only thing that can carry
-     * the router's sentence explaining why there is no route, and it is what the screen drew before
-     * there was a comparison. It costs one extra search only in the case where there is nothing to
-     * compare.
+     * Called on a destination choice, from every control that changes one, and from init. The chosen
+     * row resets to the first plan on every re-plan, since rows are time-sorted and keeping the index
+     * would silently switch the picked plan. When alternatives are empty, the old single preview is
+     * planned too: it carries the router's no-route sentence.
      */
     private void replanPlans() {
         planIndex = 0;
@@ -4049,12 +3020,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Starts the trip along the chosen plan.
-     *
-     * <p>The plan is handed over whole rather than the destination alone: see
-     * {@link Navigation#setTarget(Destination, RouteOption)} for why planning again on commit would
-     * answer a question the player did not ask. The index is clamped defensively even though the
-     * list can only be read through the same index that was set beside it.
+     * Starts the trip along the chosen plan, handed over whole rather than the destination alone --
+     * planning again would answer a question the player did not ask. The index is clamped defensively.
      */
     private void commitPlan(int index) {
         if (previewTarget == null || plans.isEmpty()) {
@@ -4067,13 +3034,8 @@ public final class DestinationScreen extends Screen {
     }
 
     /**
-     * Starts navigating to the chosen destination, planning the route from the destination alone.
-     *
-     * <p>The path kept for the case with no plans: the mode has one answer or none, so there is no
-     * comparison to honour and the live planning decides -- under the mode and policy in force, and
-     * with the walking baseline of {@link Navigation#setTarget} applying as it always has. That is
-     * why the HUD can end up saying the trip was planned on foot when the preview showed a drive;
-     * the plan-band path, which hands the chosen plan over whole, does not have that gap.
+     * Starts navigating to the chosen destination, planning from the destination alone: the path kept
+     * for when there is no comparison, so the live planning decides and can fall back to walking.
      */
     private void commit(Destination destination) {
         pendingPick = null;
@@ -4180,7 +3142,7 @@ public final class DestinationScreen extends Screen {
     *///?}
         if (insideMap(mouseX, mouseY)) {
             // Zoom about the centre, aimed rather than applied: the radius is chased by
-            // {@link #stepCamera}, so a wheel notch is a movement instead of a cut. The centre is
+            // stepCamera, so a wheel notch is a movement instead of a cut. The centre is
             // pinned to where it is so the travel is pure zoom.
             double factor = scrollY > 0 ? 0.85 : 1.0 / 0.85;
             targetViewRadius = Math.max(MIN_VIEW_RADIUS,
@@ -4206,7 +3168,6 @@ public final class DestinationScreen extends Screen {
         return true;
     }
 
-    /** Top-right corner of the map, where the "back to me" button sits. */
     private boolean insideRecenter(double mouseX, double mouseY) {
         return mouseX >= mapX + mapW - RECENTER_SIZE - 2 && mouseX <= mapX + mapW - 2
                 && mouseY >= mapY + 2 && mouseY <= mapY + RECENTER_SIZE + 2;

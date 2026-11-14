@@ -24,155 +24,86 @@ import java.util.function.Consumer;
 
 /**
  * The place-details dialog: a description, tags and a favourite flag, over whatever screen opened it.
- *
- * <h2>Two ways in, one dialog</h2>
- * The same card is reached from two places that want different things done with the result, so the
- * difference is a constructor argument rather than a second screen:
- *
- * <ul>
- *   <li>{@link #openForStore} is the read-and-edit dialog of a place somebody already has -- the
- *       details card of the destination picker and of the main screen. Its Done writes the store
- *       directly, because there is nothing else that could apply the change afterwards.</li>
- *   <li>{@link #openForDraft} is the draft editor the place edit panel opens from its More… button.
- *       Its Done hands the record back and writes nothing: the place panel's Done is the one thing
- *       that commits an edit, and a dialog that saved by itself would make the panel's Cancel a lie
- *       about having cancelled everything.</li>
- * </ul>
- *
- * <p>The card is drawn over a re-render of the parent rather than as a screen of its own. That is the
- * shape {@link RoadNameScreen} uses, and for the same reason: the map underneath is the context for
- * what is being described, and a full-screen sheet would have replaced it.
- *
- * <h2>Why the description is a hand-drawn field</h2>
- * {@link MultilineField} exists because neither {@code EditBox} (one line) nor
- * {@code MultiLineEditBox} (absent before 1.20.5) can be used on every node of this tree. The tags
- * stay a vanilla {@code EditBox}: one line of comma-separated words is exactly what it is for, and
- * the platform input method comes with it.
- *
- * <h2>Why the limits are checked here instead of trusted to the store</h2>
- * The store normalises, which loses text silently -- the part over the limit simply is not there when
- * the player reopens the dialog. Refusing with {@link #OVER_LIMIT_KEY} and staying open is the
- * difference between "that was too long, shorten it" and "what I wrote is gone".
+ * Two ways in, one dialog: openForStore is the read-and-edit card whose Done writes PlaceDetailStore
+ * directly; openForDraft hands the record back and writes nothing, because the place edit panel's
+ * Done is the single commit and a dialog that saved by itself would make the panel's Cancel a lie.
+ * The card is drawn over a re-render of the parent, like RoadNameScreen, because the map underneath
+ * is the context for the place being described.
+ * The description is a hand-drawn MultilineField: neither EditBox nor MultiLineEditBox exists on
+ * every node of this tree. Tags stay a vanilla EditBox.
+ * Limits are checked here before the store's normalisation, which would silently lose text;
+ * refusing with OVER_LIMIT_KEY and staying open is the difference between "too long" and "gone".
  */
 public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
 
     /**
-     * The dialog's own name: this is the editor, not the read-only card, so it says "edit".
-     *
-     * <p>Also the heading for a place that has no name yet: a place dropped with P is nameless until
-     * it is named, and an empty title line would look like a failure rather than like the place whose
-     * name the player is about to type.
+     * The dialog's own name: this is the editor, not the read-only card. Also the heading for a place
+     * that is nameless until the player types a name.
      */
     public static final String TITLE_KEY = "screen.howtogo.place_details.edit_title";
-    /** The caption before the read-only source, whose value is drawn beside it. */
     public static final String SOURCE_KEY = "screen.howtogo.place_details.source";
-    /** The caption over the description box. */
     public static final String DESCRIPTION_KEY = "screen.howtogo.place_details.description";
-    /** The greyed placeholder of an empty description. */
     public static final String DESCRIPTION_HINT_KEY = "screen.howtogo.place_details.description_hint";
-    /** The caption over the tags box. */
     public static final String TAGS_KEY = "screen.howtogo.place_details.tags";
-    /** The hint in the tag box: how the words are separated. */
     public static final String TAGS_HINT_KEY = "screen.howtogo.place_details.tags_hint";
     /**
-     * "Tags %s/%s" -- the used-of-allowed counter beside the tags caption.
-     *
-     * <p>The description needs none: the box itself refuses to take a 513th character, so a counter
-     * over it would only ever say the same number until it stopped moving.
+     * "Tags %s/%s" for the counter beside the tags caption; the description needs none because its box
+     * refuses a 513th character.
      */
     public static final String TAGS_COUNT_KEY = "screen.howtogo.place_details.tags_count";
-    /** The favourite switch, off. */
     public static final String FAVORITE_KEY = "screen.howtogo.place_details.favorite";
-    /** The favourite switch, on. */
     public static final String FAVORITED_KEY = "screen.howtogo.place_details.favorited";
-    /** Marks the draft mode: what is written here is not stored until the place panel's Done. */
+    /** Marks draft mode: what is written here is not stored until the place panel's Done. */
     public static final String DRAFT_KEY = "screen.howtogo.place_details.draft";
     /** The refusal when the typed text is longer than a limit allows. */
     public static final String OVER_LIMIT_KEY = "screen.howtogo.place_details.over_limit";
-    /**
-     * The button in the place edit panel that opens this dialog as a draft.
-     *
-     * <p>Declared here rather than in {@link RoadNameScreen} because this dialog owns the words about
-     * details: a second key for the same action would be the first step towards the two drifting.
-     */
+    /** The button in the place edit panel that opens this dialog as a draft. */
     public static final String MORE_KEY = "screen.howtogo.place_details.more";
 
-    /**
-     * The caption before a station's read-only line chips.
-     *
-     * <p>The address row has no caption key of its own: its text is one whole sentence built by
-     * {@link PlaceAddressView}, and splitting it into a caption and a value would mean translating
-     * the same word twice.
-     */
+    /** The caption before a station's read-only line chips. */
     public static final String LINES_KEY = "screen.howtogo.place_details.lines";
 
-    /**
-     * The hint in the type box: what a shop's type looks like.
-     *
-     * <p>Separate from the tag hint because it is one value, not a list, and the tag hint explains
-     * separators that do not exist here. A resource point gets a different example -- see
-     * {@link #RESOURCE_HINT_KEY} -- because "a convenience store" is a shop and telling a resource
-     * point that its type looks like one is simply the wrong example.
-     */
+    /** The type box hint; separate from the tag hint because it is one value, not a list. */
     public static final String CATEGORY_HINT_KEY = "screen.howtogo.place_details.category_hint";
 
-    /** The hint in the resource-type box: what a gathered resource looks like, not a shop. */
+    /** The hint in the resource-type box: a gathered resource, not a shop. */
     public static final String RESOURCE_HINT_KEY =
             "screen.howtogo.place_details.resource_hint";
 
     /**
-     * How the typed tag text is cut into tags: every comma a Chinese or a western keyboard can send,
-     * the two Oriental semicolons, and any whitespace.
-     *
-     * <p>Generous on purpose. This field is typed on phones with Chinese input methods as often as on
-     * a desktop keyboard, and a player who separates tags with a space where the hint said comma
-     * should get their tags, not one long tag.
+     * Tags are cut on either comma, either Oriental semicolon, or whitespace; generous because the field
+     * is typed with Chinese input methods as often as on a keyboard.
      */
     private static final String TAG_SEPARATORS = "[,，;；、\\s]+";
 
     private static final int PAD = 8;
     private static final int GAP = 6;
-    /** The card never fills the window: it is a dialog over the map, not a replacement for it. */
     private static final int CARD_MAX_WIDTH = 320;
     private static final int CARD_MIN_WIDTH = 200;
     private static final int TITLE_HEIGHT = 11;
     private static final int SOURCE_HEIGHT = 10;
     private static final int CAPTION_HEIGHT = 9;
-    /** The description box gives way first on a short window, but never below this. */
     private static final int DESCRIPTION_MIN_HEIGHT = 40;
     /** The absolute floor, for a window shorter than the card's fixed rows. One line, clipped. */
     private static final int DESCRIPTION_CRAMPED_HEIGHT = 20;
     private static final int DESCRIPTION_MAX_HEIGHT = 90;
     private static final int TAG_FIELD_HEIGHT = 16;
     private static final int TOGGLE_HEIGHT = 16;
-    /**
-     * The read-only address row (also the height of the station's line-chip row).
-     *
-     * <p>One line of text, no box: it is a sentence the player reads, and a box around it would
-     * suggest it can be typed into.
-     */
     private static final int ADDRESS_HEIGHT = 10;
     /**
-     * The error line: two lines' worth, reserved whether or not there is a refusal on it.
-     *
-     * <p>Two because the limits message names three numbers and does not fit one line of the card's
-     * narrowest width in either language -- and an explanation cut off halfway is worse than none,
-     * since it reads as the dialog being broken. Reserved rather than grown so the card does not jump
-     * when a refusal appears.
+     * The error line: two lines' worth, reserved whether or not there is a refusal. The limits message
+     * names three numbers and does not fit one line at the card's narrowest width.
      */
     private static final int ERROR_LINES = 2;
     private static final int ERROR_LINE_HEIGHT = 10;
     private static final int ERROR_HEIGHT = ERROR_LINES * ERROR_LINE_HEIGHT;
     private static final int BUTTON_HEIGHT = 16;
     private static final int CORNER_RADIUS = 5;
-    /** The marker square that makes the favourite switch readable as a switch, not a word. */
     private static final int TOGGLE_MARK = 6;
 
     /*
-     * The rows the card is built from, in the order they are read. The card has no list, but its rows
-     * arrive the way a list's do: each one starts UiMotion.STAGGER milliseconds after the one above
-     * it, which is what makes the dialog look written rather than switched on. The numbers are named
-     * because a call site that passed a bare index would be a row inserted by mistake.
+     * The card's rows in reading order. Each starts UiMotion.STAGGER ms after the one above, which is
+     * what makes the dialog look written rather than switched on.
      */
     private static final int ROW_TITLE = 0;
     private static final int ROW_SOURCE = 1;
@@ -186,62 +117,32 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
 
     private final Screen parent;
     private final Destination place;
-    /** What Done does with the record: the store, or the caller that opened this as a draft. */
     private final Consumer<PlaceDetails> onAccept;
-    /**
-     * Whether the record being edited is a draft that nothing will store yet.
-     *
-     * <p>Only the title row uses it -- a badge saying so -- but it is a field because the difference
-     * matters to the player: this dialog's Done keeps the text, and the place panel's Done is what
-     * commits it. Without the badge, cancelling the panel after writing a long description would look
-     * like a lost save rather than like a cancelled edit.
-     */
     private final boolean draft;
-    /** The description field, kept across {@link #init()} so a resize does not lose the text. */
     private final MultilineField description;
 
     private boolean favorite;
 
-    /**
-     * Whether the description has the focus.
-     *
-     * <p>This field is not a widget, so the screen's own focus cannot describe it: the vanilla focus
-     * is either the tags box or {@code null}, and this flag says what {@code null} means. Kept as a
-     * field rather than derived so a resize (which rebuilds the widgets) does not move the typing.
-     */
     private boolean descriptionFocused = true;
 
     private EditBox tagsField;
-    /** The tag text, carried through {@link #init()} so a resize does not lose it either. */
+    /** The tag text, carried through init() so a resize does not lose it either. */
     private String tagsText;
 
-    /**
-     * The type / resource-type box, or null for a kind that has no type.
-     *
-     * <p>Null rather than hidden, because the whole row is absent for an ordinary place and a
-     * hidden widget would still take a tab stop and still be walked by {@link #init}. The category
-     * itself is remembered in {@link #categoryText} when there is no box, so a place that used to be
-     * a shop keeps its type instead of losing it the next time its details are edited.
-     */
     private EditBox categoryField;
-    /** The type as it stood when the dialog opened, carried across a resize like the tag text. */
+    /** The type as it stood when the dialog opened, carried across a resize. */
     private String categoryText;
 
-    /** The message shown when the last attempt was refused, or null. */
     private Component error;
 
-    /** Done and cancel, built in {@link #init()} and drawn and hit-tested by hand. */
+    /** Done and cancel, built in init() and drawn and hit-tested by hand. */
     private List<PanelButton> buttons = List.of();
 
-    /** The opacity the whole card is drawn at this frame; the row helpers read it. See {@link #render}. */
     private float open = 1.0F;
 
     /**
-     * The favourite switch's hover, the one control on this card that answers the cursor.
-     *
-     * <p>A pool rather than a plain slide, because it is the same primitive the list rows of this
-     * mod's screens use, and because it is a field: the switch is redrawn every frame, and a slide
-     * made per frame would restart from nothing each time and never travel.
+     * The favourite switch's hover, the one control on this card that answers the cursor. A field
+     * because the switch is redrawn every frame; a slide made per frame would never travel.
      */
     private final UiMotion.Slides hovers = new UiMotion.Slides();
 
@@ -281,12 +182,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         this.categoryText = start.category();
     }
 
-    /**
-     * Opens the dialog for a place that already exists; Done writes {@link PlaceDetailStore}.
-     *
-     * <p>The write is direct because this path has no other commit point: the caller is a details
-     * card that is still open underneath, and it redraws from the store on the next frame.
-     */
     public static void openForStore(Screen parent, Destination place) {
         if (place == null) {
             return;
@@ -297,11 +192,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * Opens the dialog as a draft: Done hands the record to {@code onAccept} and writes nothing.
-     *
-     * <p>Used by the place edit panel, whose own Done is the single commit of a place edit -- name,
-     * kind and details together. Its Cancel therefore drops the whole edit, and this dialog's Cancel
-     * drops only the details, which is what the two buttons have to mean for the pair to be honest.
+     * Opens the dialog as a draft: Done hands the record to onAccept and writes nothing, because the
+     * place edit panel's own Done is the single commit of a place edit.
      */
     public static void openForDraft(Screen parent, Destination place, PlaceDetails initial,
                                     Consumer<PlaceDetails> onAccept) {
@@ -311,13 +203,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         Screens.set(new PlaceDetailScreen(parent, place, initial, onAccept, true));
     }
 
-    /**
-     * Keep the world running behind the dialog, like every other panel this mod opens.
-     *
-     * <p>Writing a description is not worth freezing a trip for, and the screens this one opens over
-     * -- the picker, the map -- have already made the same choice. Nothing here is
-     * multiplayer-synchronised, so the host is not waiting on it either.
-     */
     @Override
     public boolean isPauseScreen() {
         return false;
@@ -331,16 +216,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         boolean showsLines = showsLines();
         boolean showsType = showsType();
 
-        // The card's height is the fixed rows plus whatever the window can spare for the description,
-        // inside the description's own bounds. Measured first so `cardY` can centre the card before
-        // any row is placed -- the rows are then placed from the card down, and cannot disagree with
-        // the height that was used to centre it.
-        //
-        // The per-kind rows are in the fixed part and not in the description's slack, because they
-        // are what this dialog is for: an address, a station's lines and a shop's type must not
-        // disappear on a small window, while the description is the one row that can be clipped and
-        // still leave a working dialog. Every row is placed sequentially from the measured height,
-        // so even a window shorter than the fixed part clips at the bottom rather than overlapping.
         int fixed = PAD + TITLE_HEIGHT + 2
                 + SOURCE_HEIGHT + GAP
                 + ADDRESS_HEIGHT + GAP
@@ -356,9 +231,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         int spare = height - 16 - fixed;
         descriptionH = Mth.clamp(spare, DESCRIPTION_MIN_HEIGHT, DESCRIPTION_MAX_HEIGHT);
         if (descriptionH > spare) {
-            // A window too short even for the minimum box: the description gives up the rest rather
-            // than pushing the buttons off the bottom. Minecraft's own smallest GUI is taller than
-            // this, so it is a guard against a resized window rather than a normal layout.
             descriptionH = Math.max(DESCRIPTION_CRAMPED_HEIGHT, spare);
         }
         cardH = fixed + descriptionH;
@@ -399,50 +271,44 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
 
         description.setBounds(contentX, descriptionY, contentW, descriptionH);
 
-        // The tag text is carried across the rebuild: this method runs again on a window resize, and
-        // re-reading the old box is the only way the half-typed words survive it.
         String seed = tagsField != null ? tagsField.getValue() : tagsText;
         tagsField = new EditBox(this.font, contentX, tagsY, contentW, TAG_FIELD_HEIGHT,
                 Component.translatable(TAGS_KEY));
         tagsField.setHint(Component.translatable(TAGS_HINT_KEY));
-        // A tag is at most eight characters and there are at most sixteen; the box takes the room
-        // those need with their separators, so the field refuses nothing the dialog would accept.
+        // A tag is at most eight characters and there are at most sixteen; the box takes the room those
+        // need with their separators.
         tagsField.setMaxLength(PlaceDetails.MAX_TAGS * (PlaceDetails.MAX_TAG_LENGTH + 1));
         tagsField.setValue(seed == null ? "" : seed);
         addRenderableWidget(tagsField);
 
         if (showsType) {
             String categorySeed = categoryField != null ? categoryField.getValue() : categoryText;
-            // The box refuses a ninth character rather than letting the player type one and then
-            // refusing Done: the limit is one tag's length, and the field's own limit is the same
-            // number, so the two cannot disagree about what fits.
+            // The box refuses a ninth character rather than letting the player type one and then refusing Done:
+            // the field's own limit and the rule are the same number.
             categoryField = new EditBox(this.font, contentX, categoryY, contentW, TAG_FIELD_HEIGHT,
                     Component.translatable(PlaceSections.labelKey(place.kind())));
-            // A resource point's example is a resource, not a shop: the two kinds share the field and
-            // its rule, but "e.g. convenience store" under "Resource type" would be telling the player
-            // to write the wrong sort of word in it.
+            // A resource point's example is a resource, not a shop: "e.g. convenience store" under "Resource
+            // type" would tell the player to write the wrong sort of word.
             categoryField.setHint(Component.translatable(
                     place.kind() == PlaceKind.RESOURCE ? RESOURCE_HINT_KEY : CATEGORY_HINT_KEY));
             categoryField.setMaxLength(PlaceDetails.MAX_TAG_LENGTH);
             categoryField.setValue(categorySeed == null ? "" : categorySeed);
             addRenderableWidget(categoryField);
         } else {
-            // A kind that has no type shows no box. The value is kept in `categoryText` and carried
-            // through accept(), so changing a place's kind does not silently erase what was typed.
+            // A kind that has no type shows no box; the value is kept in categoryText so changing a place's
+            // kind does not erase what was typed.
             categoryField = null;
         }
 
         if (descriptionFocused) {
-            // The description is why the dialog exists and is all the player came to write; the tags
-            // box is a Tab away, which is what the key handler below is for.
+            // The description is what the player came to write; the tags box is a Tab away.
             setFocused(null);
         } else {
             setFocused(tagsField);
         }
 
         int half = (contentW - GAP) / 2;
-        // Done is the action the dialog exists for, so it takes the accent; cancel is ordinary. Both
-        // are this mod's own buttons rather than the game's grey widgets, like every other panel here.
+        // Done is the action the dialog exists for, so it takes the accent; cancel is ordinary.
         buttons = List.of(
                 new PanelButton(contentX, buttonY, half, BUTTON_HEIGHT,
                         Component.translatable("gui.done"), PanelButton.Kind.PRIMARY, this::accept),
@@ -460,18 +326,14 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         return place.kind() == PlaceKind.STATION;
     }
 
-    // ---------------------------------------------------------------- accepting
 
     /**
-     * Checks the raw text against the limits, then normalises and hands the record over.
-     *
-     * <p>The check is on what was typed, before {@link PlaceDetails#normalize()} -- which trims and
-     * truncates. Checking after normalising would always pass, and the text that was cut away would
-     * disappear without a word; see the class comment.
+     * Checks the raw text against the limits, then normalises and hands the record over. The check must
+     * be on what was typed, before PlaceDetails.normalize() trims and truncates; afterwards it always
+     * passes.
      */
     private void accept() {
-        // The last refusal was about the text as it stood then; every attempt starts clean, so a
-        // message cannot outlive the reason for it while the player fixes the field it named.
+        // The last refusal was about the text as it stood then; every attempt starts clean.
         error = null;
         List<String> typedTags = parseTags(tagsField.getValue());
         String typedCategory = categoryField != null ? categoryField.getValue() : categoryText;
@@ -488,11 +350,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
             }
         }
         if (overLimit) {
-            // One message for every field: the type shares a tag's length limit, and a second
-            // sentence saying so would be the same numbers with a different noun. Refusing rather
-            // than truncating is the same rule the tags and the description follow -- see the class
-            // comment on why the store's silent normalisation must not be the first the player hears
-            // of it.
+            // One message for every field: the type shares a tag's length limit, and a second sentence would be
+            // the same numbers with a different noun.
             error = Component.translatable(OVER_LIMIT_KEY, PlaceDetails.MAX_DESCRIPTION,
                     PlaceDetails.MAX_TAGS, PlaceDetails.MAX_TAG_LENGTH);
             return;
@@ -503,11 +362,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * The typed tag text cut into tags, blanks dropped and nothing yet trimmed or de-duplicated.
-     *
-     * <p>The raw pieces rather than a cleaned list: the limit checks and the counter above the box
-     * have to describe what the player typed, and the store does the trimming and de-duplication
-     * itself on the way in.
+     * The typed tag text cut into tags, blanks dropped and nothing yet trimmed or de-duplicated. The
+     * store does the trimming, and the counter has to describe what the player typed.
      */
     private static List<String> parseTags(String raw) {
         List<String> tags = new ArrayList<>();
@@ -522,12 +378,7 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         return tags;
     }
 
-    /**
-     * The stored tags as one editable line: what the tag box starts with.
-     *
-     * <p>Joined with the same kind of comma the hint tells the player to type, and no space: the box
-     * is narrow, and the parser accepts both separators so nothing depends on which one this picks.
-     */
+    /** The stored tags as one editable line, joined with the comma the hint tells the player to type. */
     private static String joinTags(List<String> tags) {
         if (tags == null || tags.isEmpty()) {
             return "";
@@ -535,7 +386,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         return String.join(",", tags);
     }
 
-    // -------------------------------------------------------------------- input
 
     @Override
     //? if >=1.21.9 {
@@ -547,8 +397,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
     //?}
         if (button == MouseButton.LEFT) {
-            // The drawn buttons first: they are not widgets, so this is their only chance at the click,
-            // and a press on one must not also move the caret under it.
+            // The drawn buttons first: they are not widgets, so this is their only chance at the click, and a
+            // press on one must not also move the caret under it.
             for (PanelButton candidate : buttons) {
                 if (candidate.click(mouseX, mouseY)) {
                     return true;
@@ -561,15 +411,14 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 return true;
             }
             if (description.contains(mouseX, mouseY)) {
-                // The custom field becomes the focused thing, which on a plain Screen means the screen
-                // has no focused widget: the flag above is what {@link #charTyped} reads.
+                // The custom field becomes the focused thing, which on a plain Screen means no widget is focused:
+                // the flag above is what charTyped reads.
                 descriptionFocused = true;
                 setFocused(null);
                 description.mouseClicked(this.font, mouseX, mouseY);
                 return true;
             }
-            // Anywhere else leaves the description; a click on the tags box is handled by the widget
-            // itself when the super call below offers it the click.
+            // Anywhere else leaves the description; a click on the tags box is handled by the widget itself.
             descriptionFocused = false;
         }
         //? if >=1.21.9 {
@@ -581,23 +430,19 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     }
 
     @Override
-    // 1.21.9 made key input a record and moved the key codes onto the SDL-backed InputConstants. The
-    // dispatch compares the code against a handful of constants, so the record is unpacked on entry
-    // and the body below reads the same either way -- the same unpacking RoadNameScreen does.
+    // 1.21.9 made key input a record and moved key codes onto InputConstants. The record is unpacked on
+    // entry so the body below reads the same either way, as RoadNameScreen does.
     //? if >=1.21.9 {
     /*public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
         int keyCode = event.key();
     *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
     //?}
-        // Tab is the only way the two fields trade the focus: a plain Screen has no tab order, and
-        // without this the description -- which is not a widget -- could never be reached from the
-        // widgets at all, and the tags box could never be left.
+        // Tab is the only way the two fields trade focus: a plain Screen has no tab order, and without this
+        // the description could never be reached from the widgets.
         if (keyCode == InputConstants.KEY_TAB) {
-            // Three fields at most, one cycle: the description (not a widget, so it needs the flag),
-            // the tag box, and -- for a shop or a resource point -- the type box. A plain Screen has
-            // no tab order, and without this the description could never be reached from the widgets
-            // at all, and the type box could only ever be clicked.
+            // Three fields at most, one cycle: description (not a widget, so it needs the flag), tag box, and
+            // the type box for a shop or resource point.
             if (descriptionFocused) {
                 descriptionFocused = false;
                 setFocused(tagsField);
@@ -619,19 +464,9 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         //?}
     }
 
-    /**
-     * Sends committed characters to the focused field.
-     *
-     * <p>The custom description field cannot receive them any other way: it is not a widget, so the
-     * game has nowhere to deliver a character except this screen. That is the reason the field is fed
-     * from here rather than from key codes -- see {@link MultilineField}, whose class comment is the
-     * long form of it.
-     */
     @Override
-    // 1.21.9 bundled committed characters into CharacterEvent, the same input-record change that
-    // renamed the key and mouse events: the code point and the modifiers used to arrive as two
-    // arguments and are one record now. The field takes an int either way, so only the signature and
-    // the unpacking differ.
+    // 1.21.9 bundled committed characters into CharacterEvent, the same input-record change that renamed
+    // the key and mouse events. The field takes an int either way.
     //? if >=1.21.9 {
     /*public boolean charTyped(net.minecraft.client.input.CharacterEvent event) {
         if (descriptionFocused) {
@@ -649,16 +484,12 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     //?}
 
     @Override
-    // 1.20.2 split the wheel delta into a horizontal and a vertical component; 1.20.1 passes one.
-    // Every use in this mod reads the vertical one, so only the signature and the super call differ.
     //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
     //?} else {
     /*public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
     *///?}
         if (description.contains(mouseX, mouseY)) {
-            // Consumed even when the text is short enough not to scroll, so the wheel over the card
-            // does not leak into whatever is underneath it.
             description.scroll(this.font, scrollY);
             return true;
         }
@@ -674,11 +505,7 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         Screens.set(parent);
     }
 
-    /** No dim, no blur: the map underneath is the context for the place being described. */
     @Override
-    // 1.20.2 added the mouse position and the partial tick to this override; 1.20.1 takes only the
-    // graphics. Both do nothing here -- the dimming is handled in render so the card sits between it
-    // and the widgets -- so the bodies are the same and only the signature differs.
     //? if >=1.20.2 {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     //?} else {
@@ -686,14 +513,12 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     *///?}
     }
 
-    // ------------------------------------------------------------------- render
 
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The frame's motion first, before anything is drawn: the dimming, the sheet and the rows all
-        // read this one value, and UiMotion.of is also what pumps a deferred screen swap, so it is
-        // asked exactly once per frame rather than from each row that wants it.
+        // The frame's motion first, before anything is drawn: the dimming, sheet and rows all read it, and
+        // UiMotion.of also pumps a deferred screen swap, so ask once per frame.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
         if (parent != null) {
@@ -703,18 +528,13 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 // The map is only backdrop here; if it cannot be re-rendered the dialog still works.
             }
         }
-        // The dialog then travels as one piece -- wash, card, rows, fields and buttons -- so it rises
-        // into place instead of being cut on. Pushed after the parent's own pass rather than before
-        // it: that backdrop is another screen's frame, and a translated one would slide the map under
-        // the dialog and leave a strip of the parent's own (unexpanded) dimming along the edge it
-        // moved away from. Everything this screen paints itself is inside the push.
+        // The dialog then travels as one piece -- wash, card, rows, fields and buttons. Pushed after the
+        // parent's own pass: that backdrop is another screen's frame, and translating it would slide the map
+        // under the dialog and leave a strip of the parent's unexpanded dimming.
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
-        // A modal card is painted over a wash rather than straight over the map: the description is a
-        // paragraph of text, and it has to be read against the card and not against whatever the map
-        // happens to be drawing under that column.
-        // Oversized by SCRIM_MARGIN on every side, and only this full-frame layer: the frame it is
-        // drawn in is translated while the dialog arrives, so a wash measured to the window would
-        // come with an undimmed strip along the edge the translation moved away from.
+        // A modal card is painted over a wash so the description is read against the card rather than
+        // whatever the map draws. Oversized by SCRIM_MARGIN on every side, because the frame it is drawn in
+        // is translated while the dialog arrives.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 width + UiMotion.SCRIM_MARGIN, height + UiMotion.SCRIM_MARGIN,
                 UiMotion.fade(UiTheme.dim(), open));
@@ -730,9 +550,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
             drawLines(graphics);
         }
         if (showsType()) {
-            // The box itself is a widget and draws in super.render below; only its caption is here,
-            // and it uses the word the kind's own section picks -- "类型" for a shop, "资源类型"
-            // for a resource point.
+            // The box itself draws in super.render below; only its caption is here, and it uses the word the
+            // kind's section picks.
             graphics.drawString(font, caption(PlaceSections.labelKey(place.kind())), contentX,
                     categoryCaptionY, UiMotion.fade(UiTheme.header(),
                             UiMotion.stagger(ROW_TYPE, open)), false);
@@ -745,8 +564,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 UiMotion.fade(UiTheme.header(), UiMotion.stagger(ROW_TAGS, open)), false);
         drawTagsCounter(graphics);
 
-        // The tags box is a widget, so it draws itself; the description and the favourite switch do
-        // not, and are drawn here once the card under them exists.
+        // The tags box is a widget and draws itself; the description and the favourite switch are drawn
+        // here once the card under them exists.
         super.render(graphics, mouseX, mouseY, partialTick);
         description.render(graphics, this.font, descriptionFocused);
         drawFavorite(graphics, mouseX, mouseY);
@@ -754,22 +573,17 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         if (error != null) {
             drawError(graphics);
         }
-        // The buttons last: everything above them is this class's own drawing, and a button painted
-        // before it could have a line of it across its face.
         for (PanelButton button : buttons) {
             button.render(graphics, this.font, mouseX, mouseY);
         }
-        // Last, and unconditional: the displacement applies to everything this frame drew from here
-        // down, so leaving it pushed would misplace whatever the game draws after the dialog.
+        // Last and unconditional: leaving the displacement pushed would misplace whatever the game draws
+        // after the dialog.
         UiMotion.popFrame(graphics);
     }
 
     /**
-     * The title row: the place's name on the left, and the draft badge on the right when there is one.
-     *
-     * <p>The badge is what tells the player that Done here keeps the text rather than storing it: the
-     * one thing this dialog does differently in its two modes, and the one thing a player would
-     * otherwise have to guess.
+     * The title row: the place's name on the left, the draft badge on the right when there is one. The
+     * badge says that Done keeps the text rather than storing it.
      */
     private void drawTitle(GuiGraphics graphics) {
         String name = place.name();
@@ -788,11 +602,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * The read-only source line: a caption, then the source as a pill.
-     *
-     * <p>The pill is the details card's own mark for a source, reused here so the dialog and the card
-     * it was opened from say where the place came from in the same shape. The value is never editable:
-     * it is a property of the source, not of the place.
+     * The read-only source line: a caption, then the source as a pill. The value is never editable: it
+     * is a property of the source, not of the place.
      */
     private void drawSource(GuiGraphics graphics) {
         float arrived = UiMotion.stagger(ROW_SOURCE, open);
@@ -813,12 +624,9 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
     }
 
     /**
-     * The read-only address row: where this place is, in the road's words rather than in numbers.
-     *
-     * <p>The same sentence the card draws, from the same cache: opening this dialog must not cost a
-     * search of the network per frame, and the two views must not describe one place two ways. The
-     * coordinates are deliberately absent -- a player editing a description is not navigating, and
-     * a number here would be the only text in the dialog that this mod did not derive.
+     * The read-only address row: where this place is in the road's words. The same sentence the card
+     * draws, from the same cache, so opening the dialog costs no network search per frame and the two
+     * views cannot describe one place two ways.
      */
     private void drawAddress(GuiGraphics graphics) {
         String line = PlaceAddressView.line(place.x(), place.z());
@@ -826,15 +634,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 UiMotion.fade(UiTheme.textSecondary(), UiMotion.stagger(ROW_ADDRESS, open)), false);
     }
 
-    /**
-     * The station's read-only lines: a caption, then one chip per line in that line's own colour.
-     *
-     * <p>Drawn on one row and clipped rather than wrapped: this is the editor dialog, and the lines
-     * are context for what is being edited, not a list to be read at length. When not all of them
-     * fit, the last slot is a "+N" so a player knows the row is showing a subset. A station with no
-     * lines draws nothing at all -- a caption with nothing after it would read as a failure to load
-     * rather than as a station that no line calls at yet.
-     */
     private void drawLines(GuiGraphics graphics) {
         List<TransitLine> lines = PlaceLines.at(place.x(), place.z());
         if (lines.isEmpty()) {
@@ -846,8 +645,7 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         int startX = contentX + font.width(lineCaption) + GAP;
         int limit = contentX + contentW;
 
-        // How many chips fit, then take slots back until a "+N" for the rest also fits. The loops run
-        // at most lines.size() times, which is a handful at worst.
+        // How many chips fit, then take slots back until a "+N" for the rest also fits.
         int shown = 0;
         int width = 0;
         for (int i = 0; i < lines.size(); i++) {
@@ -877,8 +675,8 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
             if (chipWidth <= 0) {
                 break;
             }
-            // Each chip is a row of a very short list: it arrives with the row it belongs to and one
-            // stagger step after the chip before it, so the line colours are read left to right.
+            // Each chip is a row of a very short list: it arrives with its row and one stagger step after the
+            // chip before it, so the colours are read left to right.
             float arrived = UiMotion.stagger(ROW_LINES + i, open);
             int fill = line.colorOr(RoadConfig.transitLineColor(line.kind()));
             HudDraw.fillRounded(graphics, chipX, linesY - 1, chipX + chipWidth, linesY + 9, 3,
@@ -900,13 +698,6 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         }
     }
 
-    /**
-     * The refusal, wrapped over its reserved lines.
-     *
-     * <p>The message names three numbers, so it does not fit one line at the card's narrowest; the
-     * second line is there for exactly that. More text than two lines gets an ellipsis rather than
-     * being dropped silently, which is the same rule the limits themselves follow.
-     */
     private void drawError(GuiGraphics graphics) {
         float arrived = UiMotion.stagger(ROW_ERROR, open);
         List<String> lines = PlaceText.wrap(font, error.getString(), contentW);
@@ -920,18 +711,10 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
         }
     }
 
-    /** A caption's text; the keys are constants so a typo cannot hide a translation. */
     private static String caption(String key) {
         return Component.translatable(key).getString();
     }
 
-    /**
-     * The used-of-allowed counter at the far right of the tags caption.
-     *
-     * <p>The tag count is the one the player can push past a limit by hand -- the description box
-     * refuses a character past its own limit -- so it is the one that needs saying before Done has to
-     * refuse.
-     */
     private void drawTagsCounter(GuiGraphics graphics) {
         String text = Component.translatable(TAGS_COUNT_KEY,
                 String.valueOf(parseTags(tagsField.getValue()).size()),
@@ -941,23 +724,14 @@ public final class PlaceDetailScreen extends Screen implements ParentBackdrop {
                 UiMotion.fade(UiTheme.textFaint(), UiMotion.stagger(ROW_TAGS, open)), false);
     }
 
-    /**
-     * The favourite switch: a chip whose face changes with its state, with a marker square at its left.
-     *
-     * <p>A switch rather than a tick box because it is one of three fields on a card whose other two
-     * are boxes: a row that changes colour when pressed reads as a control without having to look like
-     * a form. The marker carries the state for a player who cannot tell the two faces apart -- the
-     * accent fill is the answer, and the label repeats it in words.
-     */
     private void drawFavorite(GuiGraphics graphics, int mouseX, int mouseY) {
         boolean hovered = insideFavorite(mouseX, mouseY);
-        // Two values, not one: how far this row has arrived with the card, which fades it, and how far
-        // the cursor has moved onto the switch, which mixes its face. They stay separate because the
-        // row must be readable at full strength once it is there, whatever the cursor is doing.
+        // How far the row has arrived with the card and how far the cursor has moved onto the switch, kept
+        // separate so the row is readable at full strength once there.
         float arrived = UiMotion.stagger(ROW_FAVORITE, open);
         float lit = hovers.get(0).to(hovered ? 1.0F : 0.0F).eased();
-        // A switched-on switch keeps its own face under the cursor: the fill is the answer, and a
-        // hover that repainted it would hide the state it was just set to.
+        // A switched-on switch keeps its own face under the cursor: the fill is the answer, and a hover that
+        // repainted it would hide the state just set.
         int face = favorite ? UiTheme.buttonOn()
                 : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit);
         HudDraw.fillRounded(graphics, contentX, favoriteY, contentX + contentW,

@@ -9,10 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Destinations from the player's own placed landmarks.
- *
- * <p>Always available, which matters because the richer source (Xaero's waypoints) needs the
- * Minimap mod, and the World Map alone ships without any waypoint storage.
+ * Destinations from the player's own placed landmarks. Always available; Xaero's
+ * waypoints need the Minimap mod and the World Map alone has no waypoint storage.
  */
 public final class PoiDestinationSource implements DestinationSource {
 
@@ -23,12 +21,7 @@ public final class PoiDestinationSource implements DestinationSource {
         return ID;
     }
 
-    /**
-     * Whether the player has placed any named landmark.
-     *
-     * <p>Stops at the first one rather than building every destination to ask whether the list is
-     * empty: this is called by {@link Destinations#places()} on every frame a map is drawn.
-     */
+    /** Whether any named landmark exists. Short-circuits; called every frame a map is drawn. */
     @Override
     public boolean isAvailable() {
         for (RoadNode node : RoadStore.get().nodes()) {
@@ -44,18 +37,13 @@ public final class PoiDestinationSource implements DestinationSource {
         return "hud.howtogo.source.poi";
     }
 
-    /** The player's own places are places: they get a marker on every map this mod draws. */
+    /** Player places get a marker on every map this mod draws. */
     @Override
     public boolean marksPlaces() {
         return true;
     }
 
-    /**
-     * First in the list.
-     *
-     * <p>The mod's own places come before anything read out of another mod: they are the ones the
-     * player put there deliberately, and the ones a journey most often ends at.
-     */
+    /** First in the list: deliberate destinations come before anything read from another mod. */
     @Override
     public int priority() {
         return 0;
@@ -66,8 +54,7 @@ public final class PoiDestinationSource implements DestinationSource {
         List<Destination> result = new ArrayList<>();
         for (RoadNode node : RoadStore.get().nodes()) {
             if (node.type() == RoadNode.Type.POI && node.name() != null) {
-                // The node id is the place's stable id: it is what the detail store keys the player's
-                // own places on, and what the editor deletes the node by.
+                // The node id is the place's stable id, keyed by the detail store and used by the editor to delete.
                 result.add(new Destination(node.name(), node.x(), node.y(), node.z(), ID,
                         Destination.NO_COLOR, node.placeKind(), String.valueOf(node.id())));
             }

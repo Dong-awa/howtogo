@@ -8,8 +8,7 @@ import bili.dongsz.howtogo.route.Destination;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-// 26.1 moved the vertex-format types into the renderpearl API, and this file only ever carried the
-// import -- nothing here names VertexFormat. Dropped rather than moved.
+// 26.1 moved the vertex-format types into the renderpearl API; this file only ever carried the import and nothing here names VertexFormat.
 //? if <26.1 {
 import com.mojang.blaze3d.vertex.VertexFormat;
 //?}
@@ -21,8 +20,7 @@ import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-// 1.21.9 dissolved RenderStateShard: what a render type used to be assembled from is the render
-// pipeline's business now, and this file has no use for the class beyond the import it carried.
+// 1.21.9 dissolved RenderStateShard; this file only ever carried the import.
 //? if <1.21.9 {
 import net.minecraft.client.renderer.RenderStateShard;
 //?}
@@ -38,32 +36,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * In-game navigation overlay: a corner panel with a mini-map and the trip readout under it.
- *
- * <p>Shown whenever a destination is set and no screen is open, so navigation keeps working after
- * the fullscreen map is closed -- the fullscreen map already carries its own readout.
- *
- * <p>The mini-map is drawn from this mod's own road data rather than borrowing Xaero's rendering:
- * the Minimap is an optional dependency and may not be installed at all, so there would otherwise
- * be nothing to draw into.
- *
- * <h2>The two layouts</h2>
- * The panel is one of two ways the HUD can look. In {@code hud} display mode -- see
- * {@link MapDisplayMode} -- it draws the map and the readout together, as it always has. In
- * {@code xaero_minimap} mode the map half is Xaero's and this class draws no map at all: what is left
- * is {@link NavCompactHud}, a small card with the readout only. Both layouts take one
- * {@link NavHudReadout}, read once at the top of the frame, so switching display modes cannot make
- * the trip read differently, and the arrow, the stop marker and the progress bar live in
- * {@link NavHudShapes} for the same reason.
- *
- * <h2>Motion, without a screen to hang it on</h2>
- * The panel is not a screen: it is never constructed, the game draws it whenever a destination is
- * set and no window is open, and there is no instance for {@link UiMotion#of} to key a state on. So
- * its presence is one static {@link UiMotion.Slide}, driven to 1 while a trip exists and to 0 once it
- * does not, and the fade is applied to the theme's own colours rather than to a second set of them.
- * The consequence worth knowing is that the panel keeps drawing for the few frames after a trip ends
- * -- that is what the fade is -- and then stops drawing anything at all, including an invisible sheet
- * over the corner of the screen: see {@link #VANISHED}.
+ * In-game navigation overlay: a corner panel with a mini-map and the trip readout under it, shown whenever a destination is set and no screen is open.
+ * The mini-map draws this mod's own road data rather than borrowing Xaero's rendering: the Minimap is an optional dependency and may not be installed at all.
+ * Two layouts: in hud display mode the panel draws map and readout together; in xaero_minimap mode the map half is Xaero's and this class draws NavCompactHud, a readout-only card. Both take one NavHudReadout read once at the top of the frame, so switching modes cannot make the trip read differently.
+ * The panel is not a screen: its presence is one static UiMotion Slide driven to 1 while a trip exists, and the fade is applied to the theme's colours. It keeps drawing for the few frames after a trip ends, then stops entirely -- see VANISHED.
  */
 public final class NavHudRenderer {
 
@@ -79,13 +55,11 @@ public final class NavHudRenderer {
     /** Left gutter of the readout, left clear for the turn arrow. */
     private static final int READOUT_TEXT_X = 26;
     /**
-     * Height of the readout block when nothing extra is being said: the rows down to the journey
-     * line, with room under them for the fallback hint.
+     * Height of the readout block when nothing extra is being said: the rows down to the journey line, with room under them for the fallback hint.
      */
     private static final int READOUT_HEIGHT = 62;
     /**
-     * Height of the readout block while the narrator hint is up, which needs the two rows below the
-     * fallback one. Only then does the panel reach this far down.
+     * Height of the readout block while the narrator hint is up, which needs the two rows below the fallback one.
      */
     private static final int READOUT_HINT_HEIGHT = 84;
     /** Top of the narrator hint line inside the readout block. */
@@ -107,11 +81,7 @@ public final class NavHudRenderer {
     private static final double ROUTE_THICKNESS = 2.6;
 
     /**
-     * Half the width of a public transport line's stroke, in GUI pixels.
-     *
-     * <p>Thinner than a road's half pixel, because a line marks a service rather than a road and the
-     * roads it runs beside have to stay readable under it. The same figure Xaero's minimap overlay
-     * uses, so the two small maps draw a line at the same weight.
+     * Half the width of a public transport line's stroke, in GUI pixels. Thinner than a road's half pixel, because a line marks a service and the roads beside it must stay readable; the same figure Xaero's minimap overlay uses.
      */
     private static final double LINE_HALF_WIDTH_PX = 0.35;
 
@@ -121,70 +91,40 @@ public final class NavHudRenderer {
     // ------------------------------------------------------------------- motion
 
     /**
-     * Below this the panel has no visible pixel left, so the frame stops drawing it outright.
-     *
-     * <p>Not a rounding guard. It is what makes an overlay nobody is navigating with cost one null
-     * check per frame instead of a mini-map's worth of geometry, and it is what keeps a panel at
-     * alpha two from painting over whatever else shares that corner.
+     * Below this the panel has no visible pixel left, so the frame stops drawing it outright. Not a rounding guard: it is what makes an idle overlay cost one null check per frame and keeps a panel at alpha two from painting over its corner.
      */
     static final float VANISHED = 0.01F;
 
     /**
      * Whether the panel is on screen, as a value travelling between 0 and 1.
-     *
-     * <p>Static because a HUD is not a screen: there is no instance to hang a {@link
-     * UiMotion.ScreenState} on and nothing to construct. One slide for the whole overlay, driven by
-     * the one question the renderer asks -- is there a trip -- and read once per frame.
-     *
-     * <p>Out-cubic on {@link UiMotion#HUD}: a HUD is furniture rather than a window, so it arrives and
-     * leaves more softly than a screen does. It does move, but only vertically and only by
-     * {@link UiMotion#HUD_RISE}: a card this small reads as sliding into its corner, while a
-     * horizontal travel would read as the layout breaking -- the panel shares that corner with
-     * Xaero's map, whose own position this overlay must not appear to disturb.
+     * Static because a HUD is not a screen: there is no instance to hang a state on and nothing to construct. One slide for the whole overlay, driven by the one question the renderer asks -- is there a trip -- and read once per frame.
+     * Out-cubic on UiMotion HUD: a HUD is furniture rather than a window, so it arrives and leaves more softly. Vertical only, by HUD_RISE: a card this small reads as sliding into its corner, while horizontal travel would fight Xaero's map in the same corner.
      */
     private static final UiMotion.Slide presence =
             new UiMotion.Slide(UiMotion.Easing.OUT_CUBIC, 0.0F, UiMotion.HUD);
 
     /**
-     * How far the panel has come this frame, 0 to 1; set once by {@link #draw} and read by every
-     * colour below.
-     *
-     * <p>A field rather than one more parameter: the fade reaches the sheet, its edge, the mini-map's
-     * geometry, a dozen strings and the two shapes {@link NavHudShapes} draws, and threading one
-     * number through nine private methods would change nine signatures to say one thing once. There
-     * is exactly one reader -- the render thread, in the frame that set it -- so there is no second
-     * reading to disagree with.
+     * How far the panel has come this frame, 0 to 1; set once by draw and read by every colour below.
+     * A field rather than one more parameter: the fade reaches the sheet, its edge, the map's geometry and a dozen strings, and threading it through nine private methods would change nine signatures to say one thing. One reader, on the render thread in the frame that set it.
      */
     private static float open = 1.0F;
 
     /**
-     * The last reading that had a trip behind it, kept for the frames in which the trip has ended but
-     * the panel has not finished leaving.
-     *
-     * <p>The readout describes the current trip; once that is gone there is nothing to describe, and
-     * a fade-out would then be an emptied sheet rather than the panel leaving with its last words
-     * still on it. One reference, replaced on every frame that has a trip and dropped the moment the
-     * panel is fully gone -- which is also what lets the idle frames below return before anything
-     * else is asked.
+     * The last reading that had a trip behind it, kept for the frames in which the trip has ended but the panel has not finished leaving -- a fade-out should show the panel leaving with its last words, not an emptied sheet.
+     * One reference, replaced on every frame that has a trip and dropped the moment the panel is fully gone, which is what lets idle frames return early.
      */
     private static NavHudReadout lastReadout;
 
     /**
-     * Where the progress bar is drawn, which chases {@link NavHudReadout#progress()} rather than
-     * being it: the fraction of a trip moves in steps as waypoints are passed, and a bar that jumped
-     * by those steps reads as a counter. See {@link #smoothProgress}.
+     * Where the progress bar is drawn, chasing the readout's fraction rather than being it: trip progress moves in steps as waypoints are passed, and a bar that jumped by those steps reads as a counter.
      */
     private static float progressShown;
 
     private NavHudRenderer() {
     }
 
-    // The two loaders hand the HUD pass different things. NeoForge posts an event carrying the
-// graphics object; Fabric's HudRenderCallback takes the graphics object and the partial tick as
-// arguments. Only the parameter list and where the graphics object comes from differ, so the body
-// is shared.
-// Fabric's callback took a float partial tick through 1.20.x and a DeltaTracker from 1.21 on, so the
-// second parameter is a third axis. The three conditions are independent rather than nested.
+    // The two loaders hand the HUD pass different things.
+// NeoForge posts an event carrying the graphics object; Fabric's HudRenderCallback takes it plus a partial tick. Only the parameter list and where the graphics object comes from differ, so the body is shared. Fabric took a float through 1.20.x and a DeltaTracker from 1.21 on, so the second parameter is a third axis; the three conditions are independent.
 //? if fabric && <1.21 {
 /*public static void onRenderGui(GuiGraphics graphics, float tickDelta) {
 *///?}
@@ -198,10 +138,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (Screens.of(mc) != null || mc.player == null || mc.level == null) {
             return;
         }
-        // A trip that has just ended is not a reason to stop drawing: the panel fades out over the
-        // next few frames, and whether there is anything left to draw is decided in draw() once the
-        // presence slide has advanced. What must not be deferred is the world having gone away, and
-        // that is the guard above.
+        // A trip that has just ended is not a reason to stop drawing: the panel fades out over the next frames, and draw() decides once the slide has advanced. What must not be deferred is the world having gone away.
         //? if fabric {
         /*draw(graphics, mc);
         *///?} else {
@@ -213,48 +150,32 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * How far this frame's layout has faded in, which layout it is, and the readout it draws.
-     *
-     * <p>The decision is taken once, here, rather than inside either layout: the panel and the compact
-     * card are alternatives, and a frame that started drawing one must not change its mind halfway
-     * down. {@link NavMapMode#effective()} is also the only thing that knows why the answer might not
-     * be the configured one -- Xaero's Minimap missing, or not yet registered -- so the fallback is
-     * not re-derived here and its log line is not duplicated.
-     *
-     * <p>Presence is decided before either layout is entered, which is what produces the frames after
-     * a trip has ended: the reading is kept from the last frame that had one, the slide travels to
-     * closed, and the moment there is nothing left to see the frame stops drawing altogether.
+     * Decided once, here, rather than inside either layout: the panel and the compact card are alternatives, and a frame that started one must not change its mind halfway down. NavMapMode effective() is also the only thing that knows why the answer might not be the configured one.
+     * Presence is decided before either layout is entered, which is what produces the frames after a trip has ended.
      */
     private static void draw(GuiGraphics graphics, Minecraft mc) {
         boolean navigating = Navigation.target() != null;
         if (navigating) {
-            // Read before the branch: both layouts need it, and one value means the arrow, the words
-            // and the progress bar describe the same instant whichever layout draws them.
+            // Read before the branch: both layouts need it, and one value means the arrow, the words and the progress bar describe the same instant.
             lastReadout = NavHudReadout.of();
         }
         NavHudReadout readout = lastReadout;
         if (readout == null) {
-            // No trip has been read out yet in this session, so neither layout has anything to fade
-            // out of and there is nothing to draw. This is the whole cost of a game with no
-            // navigation running: one null check.
+            // No trip has been read out yet this session, so there is nothing to fade out of and nothing to draw. This is the whole cost of a game with no navigation running.
             return;
         }
         MapDisplayMode mode = NavMapMode.effective();
         if (mode == MapDisplayMode.HUD) {
             open = presence.to(navigating ? 1.0F : 0.0F).eased();
             if (open < VANISHED) {
-                // Gone, and asked for nothing: no geometry is projected, no text is measured, and
-                // nothing is drawn over whatever else shares the corner. The bar is put back to
-                // nothing as well, so the next trip starts from empty instead of running backwards
-                // down from the finish of the last one, and the reading is dropped so the frames
-                // after this one are as cheap as the ones before the first trip.
+                // Gone, and asked for nothing: no geometry is projected, no text measured, nothing drawn over the corner. The bar is put back to nothing so the next trip starts empty instead of running backwards down from the last finish, and the reading is dropped so the frames after are as cheap as the ones before.
                 forgetProgress();
                 lastReadout = null;
                 return;
             }
             drawPanel(graphics, mc, readout);
         } else {
-            // The compact card owns the slide for its own corner: this frame only decides that the
-            // card is the layout in force, and the card decides whether it is still visible at all.
+            // The compact card owns the slide for its own corner: this frame only decides that the card is the layout in force.
             NavCompactHud.draw(graphics, mc, readout);
         }
     }
@@ -266,20 +187,10 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         int panelX = Math.max(MARGIN, screenWidth - PANEL_WIDTH - MARGIN);
         int panelY = MARGIN;
 
-        // The card slides up into its corner while it arrives, and the push is taken here rather
-        // than in draw() on purpose: draw() is where the frame decides the panel is gone, and a
-        // push taken before that early return would have to be unwound on the path that draws
-        // nothing. Vertical only -- the panel hangs beside Xaero's own map, and a card that came in
-        // sideways would be fighting that overlay's layout every time a trip started.
-        // HudDraw.beginBlock inside the mini-map pushes its own pose; the game's matrix nests, so
-        // that block is free to open and close inside this one.
+        // The card slides up into its corner while it arrives, and the push is taken here rather than in draw(): draw() is where the frame decides the panel is gone, and a push taken before that early return would have to be unwound. Vertical only -- the panel hangs beside Xaero's own map, and a card coming in sideways would fight that layout. HudDraw beginBlock inside the mini-map pushes its own pose; the matrix nests.
         UiMotion.pushFrame(graphics, 0.0F, (1.0F - open) * UiMotion.HUD_RISE);
 
-        // Panel: the theme's sheet colour with a soft edge, drawn as rounded spans so the corners do
-        // not look like a raw rectangle. The sheet is translucent in both styles -- over the world it
-        // has to be, or the panel would be a hole punched in the scene rather than a card on it.
-        // The fade is applied to the theme's own colour rather than to a second copy of it, so a
-        // fully open panel is drawn in exactly the ink it was drawn in before there was any motion.
+        // The theme's sheet colour with a soft edge, drawn as rounded spans so the corners are not a raw rectangle. The sheet is translucent in both styles -- over the world it has to be, or the panel would be a hole punched in the scene. The fade is applied to the theme's colour rather than a second copy of it.
         fillRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
                 CORNER_RADIUS, UiMotion.fade(UiTheme.panel(), open));
         outlineRounded(graphics, panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight,
@@ -299,20 +210,13 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
         drawInfo(graphics, mc, contentX, mapY + MAP_SIZE + PADDING, readout);
 
-        // Last, and unconditional within this method: every early exit that means "nothing to draw"
-        // is taken in draw() before drawPanel is entered, so this pairing cannot be skipped.
+        // Last, and unconditional within this method: every nothing-to-draw exit is taken in draw() before drawPanel is entered, so this pairing cannot be skipped.
         UiMotion.popFrame(graphics);
     }
 
     /**
-     * Height of the whole panel.
-     *
-     * <p>The map and the header are fixed; the readout under them is as tall as what it actually
-     * holds. Only the narrator hint's two rows are ever in doubt -- they are up when the speech
-     * engine failed and down the rest of the time -- so the panel is the shape it has always been
-     * unless that hint is being shown, rather than carrying two empty rows under the journey line
-     * for the whole session. The readout carries that fact so the height and the note itself cannot
-     * disagree about whether the rows exist.
+     * Height of the whole panel. The map and the header are fixed; the readout under them is as tall as what it actually holds.
+     * Only the narrator hint's two rows are ever in doubt, so the panel keeps its usual shape unless that hint is shown rather than carrying two empty rows all session. The readout carries that fact so the height and the note cannot disagree.
      */
     private static int panelHeight(NavHudReadout readout) {
         int readoutHeight = readout.narratorHint() != null ? READOUT_HINT_HEIGHT : READOUT_HEIGHT;
@@ -324,13 +228,9 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         if (readout.destinationName() == null) {
             return;
         }
-        // Always the destination. Leading with the road the player is standing on reads as the
-        // panel reporting a position the player never asked about, and the road being entered is
-        // already named on the instruction line below, so nothing is lost by dropping it here.
+        // Always the destination. Leading with the road the player is standing on reads as reporting a position the player never asked about, and the road being entered is named on the instruction line below.
         String label = readout.headerLabel();
-        // The mode shares this row rather than the readout below: the readout is already tight on
-        // width at this panel size, and the mode belongs next to the heading, not buried at the end
-        // of a sentence that may not fit.
+        // The mode shares this row rather than the readout below: the readout is already tight on width at this panel size, and the mode belongs next to the heading, not at the end of a sentence that may not fit.
         String mode = readout.modeLabel();
         int modeWidth = mc.font.width(mode);
         graphics.drawString(mc.font, mc.font.plainSubstrByWidth(label, MAP_SIZE - modeWidth - 6),
@@ -343,11 +243,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * The rotating mini-map: the roads and rails, the transit line strokes, the route and the places.
-     *
-     * <p>No transit line names are drawn on it. A line's name is a fixed-size capsule, and this map is
-     * 120 pixels across: a plate that fits at all covers a large share of the ground the map exists to
-     * show, which is what the player reported after seeing it in game. The two big maps keep their
-     * plates -- there is room for them there -- and this pass draws the lines themselves as strokes.
+     * No transit line names are drawn: a line's name is a fixed-size capsule and this map is 120 pixels across, so a plate that fits at all covers a large share of the ground the map exists to show. The two big maps keep their plates; this pass draws the lines themselves as strokes.
      */
     private static void drawMiniMap(GuiGraphics graphics, Minecraft mc, int mapX, int mapY) {
         double playerX = mc.player.getX();
@@ -356,9 +252,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         double centerX = mapX + MAP_SIZE / 2.0;
         double centerY = mapY + MAP_SIZE / 2.0;
 
-        // Rotate so the direction the player faces points up, the way a navigation app does.
-        // Minecraft yaw 0 faces south (+Z) with forward (-sin y, cos y); rotating world deltas by
-        // (PI - yaw) sends that forward vector to screen (0, -1), i.e. straight up.
+        // Rotate so the direction the player faces points up, as navigation apps do. Minecraft yaw 0 faces south (+Z); rotating world deltas by (PI - yaw) sends that forward vector to screen (0, -1).
         double theta = Math.PI - Math.toRadians(mc.player.getYRot());
         double cos = Math.cos(theta);
         double sin = Math.sin(theta);
@@ -368,26 +262,17 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         double maxX = mapX + MAP_SIZE;
         double maxY = mapY + MAP_SIZE;
 
-        // Everything in this block is geometry rather than a theme colour, so its share of the fade
-        // is the alpha each emitter already takes -- the same fade, one layer down. Rounded rather
-        // than truncated, so a half-open panel's map is not a shade darker than the sheet around it.
+        // Everything in this block is geometry rather than a theme colour, so its share of the fade is the alpha each emitter already takes. Rounded rather than truncated, so a half-open panel's map is not a shade darker than the sheet around it.
         int solid = (int) (0xFF * open + 0.5F);
         int pale = (int) (0x9A * open + 0.5F);
 
-        // The mini-map is one drawing block. Before 1.21.6 that meant a live vertex consumer reached
-        // through the pose; from 1.21.6 on the same block collects into a deferred batch that the GUI
-        // renderer plays back at the end of the frame. HudDraw.beginBlock hides which, and the
-        // emitters below take the sink it returns either way.
+        // The mini-map is one drawing block. Before 1.21.6 that meant a live vertex consumer reached through the pose; from 1.21.6 on the same block collects into a deferred batch the GUI renderer plays back at the end of the frame. HudDraw beginBlock hides which.
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
         HudDraw.VertexSink last = drawing.sink;
 
-        // The map is rotated to the player's heading, so a corner of it is sqrt(2) times its
-        // half-width away in world blocks. The guard has to cover the corners: at the old bound of
-        // half-width plus forty -- which is *less* than the corner distance -- a road visible in a
-        // corner of the panel was thrown away for being too far from the player.
+        // The map is rotated to the player's heading, so a corner is sqrt(2) times its half-width away in world blocks; the guard has to cover the corners. At the old bound of half-width plus forty, a road visible in a corner was thrown away for being too far from the player.
         double reach = VIEW_RADIUS * Math.sqrt(2.0) + 8;
-        // The same projection the old per-edge loops did, as one affine map, so the stroke pass can
-        // join each road's bends instead of leaving a notch at every one of them.
+        // The same projection the old per-edge loops did, as one affine map, so the stroke pass can join each road's bends instead of leaving a notch at every one.
         double m00 = cos * scale;
         double m01 = -sin * scale;
         double m10 = sin * scale;
@@ -398,41 +283,24 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         emitNetwork(last, network, m00, m01, m02, m10, m11, m12,
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
 
-        // The machine-read rails -- Create's tracks and MTR's -- drawn in with the roads and culled by
-        // the same reach: the map is a view of the ground, and a rail the player can see on the world
-        // map belongs on this one too. Each layer is drawn chain by chain, so a long rail is one
-        // stroke rather than one per sampled piece.
+        // The machine-read rails -- Create's tracks and MTR's -- drawn with the roads and culled by the same reach. Each layer is drawn chain by chain, so a long rail is one stroke rather than one per sampled piece.
         emitNetwork(last, RailTrackStore.network(), m00, m01, m02, m10, m11, m12,
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
         emitNetwork(last, MtrTransit.railLayer(), m00, m01, m02, m10, m11, m12,
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY);
 
-        // The roads read out of RoadWeaver, drawn with the same two passes and the same reach: they
-        // are drawn on the world map and planned over, so the mini-map has to show them too. They are
-        // drawn chain by chain -- whole roads rather than one piece at a time -- so a long road is one
-        // continuous stroke. The layer holds a whole region's worth of roads, so chains outside this
-        // window are skipped before anything is projected.
+        // The roads read out of RoadWeaver, with the same two passes and the same reach: they are drawn on the world map and planned over. Drawn chain by chain -- whole roads rather than one piece at a time -- and chains outside this window are skipped before anything is projected.
         emitNetworkInBox(last, RoadWeaverLayer.drawnNetwork(), m00, m01, m02, m10, m11, m12,
                 ROAD_THICKNESS * 0.5, pale, minX, minY, maxX, maxY,
                 playerX - reach, playerZ - reach, playerX + reach, playerZ + reach);
 
-        // The public transport lines, with the ground they run on and under the route: the panel draws
-        // the strokes so a journey can be read off the mini-map without opening the full map. No line
-        // names are drawn here -- a name plate is a fixed-size capsule and this map is 120 pixels
-        // across, so a plate that fits at all covers the ground the map exists to show; the two big
-        // maps keep theirs. Same strokes the world map and the two viewers draw -- see
-        // RoadElementRenderer.transitStrokesFor -- thinned to the zoom the same way. The player's own
-        // switch hides them, as it does everywhere the filter is asked.
+        // The public transport lines, under the route, so a journey can be read off the mini-map without opening the full map. No line names here, for the reason above. The same strokes RoadElementRenderer transitStrokesFor draws, thinned to the zoom; the player's switch hides them as it does everywhere.
         if (MapFilter.showsLines()) {
             emitTransitLines(last, Navigation.linesInPlay(), m00, m01, m02, m10, m11, m12,
                     LINE_HALF_WIDTH_PX, (int) (LINE_ALPHA * open + 0.5F), minX, minY, maxX, maxY);
         }
 
-        // The live route, in the ink each of its stretches calls for: the part behind the player
-        // grey, and what is left ahead blue where it is walked, the line's own colour where it is
-        // ridden. The split is made per stretch inside the drawing, so a journey is coloured the
-        // whole way along instead of one mode's colour hiding the others; a walk or a drive is one
-        // stretch and comes out exactly as it always did.
+        // The live route, in the ink each stretch calls for: behind the player grey, ahead blue where walked and the line's own colour where ridden. The split is made per stretch inside the drawing, so a journey is coloured the whole way along instead of one mode's colour hiding the others.
         HudDraw.RouteInk ink = Navigation.routeInk();
         if (ink.isPresent()) {
             HudDraw.emitRouteInk(last, ink, Navigation.travelled(), UiTheme.routeDone(),
@@ -457,11 +325,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
         drawPlayerArrow(last, centerX, centerY);
 
-        // Every place gets its marker on the mini-map too, so places can be seen while travelling
-        // without opening anything. The same list and marker shape as the world map, from
-        // Destinations and HudDraw, in the theme's place colour, so the two views read as one map --
-        // at this map's smaller size, because a world-map marker covers a visible share of a panel
-        // this size.
+        // Every place gets its marker on the mini-map too, so places can be seen while travelling without opening anything. The same list and marker shape as the world map, in the theme's place colour, at this map's smaller size.
         for (Destination place : Destinations.places()) {
             emitPlaceMarkerClipped(last,
                     screenX(place.x() - playerX, place.z() - playerZ, cos, sin, scale, centerX),
@@ -472,8 +336,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         drawMiniMapLabels(graphics, mc, network, playerX, playerZ, cos, sin, scale, centerX, centerY,
                 minX, minY, maxX, maxY);
 
-        // North indicator: with the map rotated to the player's heading, "up" is not north, so the
-        // direction has to be shown explicitly.
+        // North indicator: with the map rotated to the player's heading, up is not north.
         double northX = sin;
         double northY = -cos;
         double markerX = centerX + northX * (MAP_SIZE / 2.0 - 7);
@@ -487,16 +350,8 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * Road names on the mini-map, so a route can be read without opening the full map.
-     *
-     * <p>Only named roads: most of a fresh network is unnamed, and a placeholder on all of them
-     * would bury the names that exist. Labels that do not fit inside the panel, or that would
-     * overprint one already placed, are dropped -- the map is 120 px across and two names in the
-     * same corner would smear into each other.
-     *
-     * <p>Whether a road is the piece that carries the name comes from the grouping, and the road is
-     * culled against the panel before it is asked: this pass runs every frame the panel is up, and
-     * asking {@link RoadChains#chainContaining} per named road -- which builds an adjacency index of
-     * the whole network to answer -- was the panel's dominant cost and its largest source of garbage.
+     * Only named roads: most of a fresh network is unnamed, and a placeholder on all of them would bury the names that exist. Labels that do not fit inside the panel, or that would overprint one already placed, are dropped.
+     * Whether a road is the piece that carries the name comes from the grouping, and the road is culled against the panel before it is asked: asking chainContaining per named road built an index of the whole network and was the panel's dominant cost and its largest source of garbage.
      */
     private static void drawMiniMapLabels(GuiGraphics graphics, Minecraft mc, RoadNetwork network,
                                           double playerX, double playerZ, double cos, double sin,
@@ -519,10 +374,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             double x = screenX(mid[0] - playerX, mid[1] - playerZ, cos, sin, scale, centerX);
             double y = screenY(mid[0] - playerX, mid[1] - playerZ, cos, sin, scale, centerY);
 
-            // Along the line, and the angle has to be taken through this map's own rotation: the panel
-            // turns with the player, so a road's direction on screen is not its direction in the
-            // world. The linear part of the map transform applied to the road's own world direction
-            // gives the screen direction; the centre and the scale cancel out of an angle.
+            // Along the line, with the angle taken through this map's own rotation: the panel turns with the player, so a road's screen direction is not its world direction. The linear part of the transform gives the screen direction; the centre and the scale cancel out of the angle.
             int last = segment.vertexCount() - 1;
             double wdx = segment.x(last) - segment.x(0);
             double wdz = segment.z(last) - segment.z(0);
@@ -530,8 +382,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
             int width = mc.font.width(name);
             double[] extents = HudDraw.rotatedExtents(width, LABEL_HEIGHT, angle);
-            // The box that is actually painted: the text is centred on the same point it was before,
-            // so rotating it does not shift it off the road.
+            // The box that is actually painted: the text stays centred on the same point, so rotating it does not shift it off the road.
             double centreY = y - 4 + LABEL_HEIGHT / 2.0;
             double boxX = x - extents[0] / 2.0;
             double boxY = centreY - extents[1] / 2.0;
@@ -552,12 +403,8 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
             }
             placed.add(new double[] {boxX, boxY, extents[0], extents[1]});
 
-            // Road names take the map-label colour rather than the readout's: the map is the
-            // backdrop, so a name on it has to sit under the trip text in weight.
-            //
-            // A rotated label. 1.21.6 moved the GUI matrix stack from a PoseStack to JOML's
-            // Matrix3x2fStack: for a 2D translate-and-rotate the two are the same operation under
-            // the new name, and the stack belongs to GuiGraphics either way.
+            // Road names take the map-label colour rather than the readout's: the map is the backdrop, so a name on it has to sit under the trip text in weight.
+            // A rotated label. 1.21.6 moved the GUI matrix stack from a PoseStack to JOML's Matrix3x2fStack: for a 2D translate-and-rotate the two are the same operation under the new name.
             //? if >=1.21.6 {
             /*Matrix3x2fStack pose = graphics.pose();
             pose.pushMatrix();
@@ -580,14 +427,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * Whether a one-block piece of a road is wholly outside the reach box around the player.
-     *
-     * <h2>Why "wholly", and why the box is generous</h2>
-     * This is only a guard to keep far-away geometry out of the clipper; {@code emitClipped} is what
-     * actually clips. The previous test asked whether <em>either</em> end was beyond the bound, which
-     * threw away a road running in from outside the map even though the part inside it belonged on
-     * screen -- a road at the edge of the map vanishing. A guard that is too generous costs a handful
-     * of clipped quads; one that is too strict costs a visible road, so the bound is set at the map's
-     * own corner distance rather than at its half-width.
+     * Only a guard to keep far-away geometry out of the clipper; emitClipped does the clipping. The previous test asked whether either end was beyond the bound, which threw away a road running in from outside even though the part inside belonged on screen, so the bound is the map's own corner distance rather than its half-width -- too generous costs a handful of clipped quads, too strict costs a visible road.
      */
     private static boolean outsideReach(double ax, double az, double bx, double bz,
                                         double playerX, double playerZ, double reach) {
@@ -612,16 +452,11 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
                 UiMotion.fade(UiTheme.text(), open), false);
     }
 
-    // ------------------------------------------------------------------- info
+    // --------------------------------------------------------------------- info
 
     /**
      * The readout under the map, drawn from the value both layouts share.
-     *
-     * <p>The three branches are the readout's three answers, in the order they have always been asked:
-     * the arrival banner, then the absence of a route, then the live trip. The two dead readings draw
-     * a straight arrow in their status colour -- the arrow keeps the marker in the same cell so the
-     * block does not move when the state changes, and the colour is the one the readout picked for
-     * both the marker and the line.
+     * The three branches are the readout's three answers: the arrival banner, the absence of a route, then the live trip. The two dead readings draw a straight arrow in their status colour, keeping the marker in the same cell so the block does not move when the state changes.
      */
     private static void drawInfo(GuiGraphics graphics, Minecraft mc, int x, int y,
                                  NavHudReadout readout) {
@@ -652,27 +487,20 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * The turn, the distance, the progress bar and the remaining line: the live trip readout.
-     *
-     * <p>Transit and turn used to be two methods because each found its own words and its own number.
-     * That work is in {@link NavHudReadout} now, and the only difference left between the two readings
-     * is the marker at the left: a stop square for a transit cue, a turn arrow otherwise. One method
-     * draws both from one row layout, so the two cannot drift into different spacing -- which is what
-     * the panel's two readouts were one small edit away from doing.
+     * Transit and turn used to be two methods, each finding its own words and number; that work is in NavHudReadout now, and the only difference left is the marker at the left -- a stop square for a transit cue, a turn arrow otherwise. One row layout, so the two cannot drift into different spacing.
      */
     private static void drawRouteReadout(GuiGraphics graphics, Minecraft mc, int x, int y,
                                          NavHudReadout readout) {
         Font font = mc.font;
         if (readout.transit()) {
-            // A square rather than an arrow: an arrow would be a claim about a junction, and there is
-            // no junction being asked about -- the marker says "a stop" and nothing more.
+            // A square rather than an arrow: an arrow would claim a junction, and there is no junction being asked about -- the marker says a stop and nothing more.
             NavHudShapes.drawTransitMarker(graphics, x + 11, y + 12, open);
         } else {
             NavHudShapes.drawTurnArrow(graphics, x + 11, y + 12,
                     readout.arrowDegrees(), UiMotion.fade(readout.arrowColor(), open));
         }
 
-        // Distance to the turn is the number that matters, so it gets the large treatment. "Now" has
-        // already been decided by the readout, at the same distance the spoken announcement uses.
+        // Distance to the turn is the number that matters, so it gets the large treatment. Now has already been decided by the readout, at the same distance the spoken announcement uses.
         graphics.drawString(font, readout.distance(), x + READOUT_TEXT_X, y + 2,
                 UiMotion.fade(UiTheme.textStrong(), open), false);
         graphics.drawString(font,
@@ -683,15 +511,11 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
     }
 
     /**
-     * The progress bar, the remaining line and the walking-fallback note: everything under the
-     * instruction, drawn from the one readout value so the live readings cannot report the trip
-     * differently.
+     * The progress bar, the remaining line and the walking-fallback note: everything under the instruction, drawn from the one readout value so the live readings cannot report the trip differently.
      */
     private static void drawTripProgress(GuiGraphics graphics, Font font, int x, int y, int barY,
                                          NavHudReadout readout) {
-        // The bar is fed the eased fraction rather than the readout's own: a trip's progress moves in
-        // steps, and a bar that jumped by those steps is the one part of this readout that would read
-        // as a counter instead of as a journey. See smoothProgress.
+        // The bar is fed the eased fraction rather than the readout's own: trip progress moves in steps, and a bar that jumped by those steps would read as a counter instead of a journey.
         NavHudShapes.drawProgressBar(graphics, x, barY, MAP_SIZE, 5,
                 smoothProgress(readout.progress()));
 
@@ -706,17 +530,12 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         }
     }
 
-    // ---------------------------------------------------------------- progress
+    // ----------------------------------------------------------------- progress
 
     /**
      * The fraction the progress bar is drawn at, chasing the readout's own.
-     *
-     * <p>It lives here rather than in either layout because both draw the same bar from the same
-     * trip: a copy per layout would step whenever the player switched the map display mode, and
-     * there is no reason for the bar to behave differently in a smaller card.
-     *
-     * <p>Read exactly once per frame, by whichever layout drew the bar. A follow advances by this
-     * frame's delta each time it is read, so reading it twice would run the bar at double speed.
+     * Here rather than in either layout because both draw the same bar from the same trip: a copy per layout would step whenever the player switched the map display mode.
+     * Read exactly once per frame, by whichever layout drew the bar: a follow advances by this frame's delta each time it is read, so reading it twice runs the bar at double speed.
      */
     static float smoothProgress(double target) {
         progressShown = UiMotion.follow(progressShown, (float) target, UiMotion.FOLLOW_SECONDS);
@@ -724,10 +543,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
     }
 
     /**
-     * Puts the bar back at nothing, for a layout that has finished leaving the screen.
-     *
-     * <p>Without this the next trip's bar would run backwards down from the last one's finish during
-     * its fade-in, which reads as the progress being undone rather than as a new journey starting.
+     * Puts the bar back at nothing, for a layout that has finished leaving the screen. Without this the next trip's bar would run backwards down from the last one's finish during its fade-in.
      */
     static void forgetProgress() {
         progressShown = 0.0F;
@@ -735,13 +551,8 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
 
     /**
      * Says why nothing is being spoken, when the player has asked for speech and cannot have it.
-     *
-     * <p>Only a speech engine that failed to load can cause this, so it is rare -- but a toggle that
-     * looks on and produces nothing reads as a broken feature, and the log is not where a player
-     * looks. Wrapped rather than clipped: it is worded to fit one line at the panel's width, and the
-     * second line is there so a translation that runs longer cannot be cut in half. The note is part
-     * of the readout value because the panel's height depends on whether the rows exist; the wrapping
-     * stays here because it is the panel's width that decides where they break.
+     * Only a speech engine that failed to load causes this, so it is rare -- but a toggle that looks on and produces nothing reads as a broken feature, and the log is not where a player looks. Wrapped rather than clipped: it is worded to fit one line at the panel's width, and the second line is there so a longer translation cannot be cut in half.
+     * The note is part of the readout value because the panel's height depends on whether the rows exist; the wrapping stays here because the panel's width decides where they break.
      */
     private static void drawNarratorHint(GuiGraphics graphics, Font font, int x, int y,
                                          NavHudReadout readout) {
@@ -756,7 +567,7 @@ public static void onRenderGui(RenderGuiEvent.Post event) {
         }
     }
 
-    // ---------------------------------------------------------------- geometry
+    // ------------------------------------------------------------------ geometry
 
     private static double screenX(double dx, double dz, double cos, double sin,
                                   double scale, double centerX) {

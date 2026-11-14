@@ -22,40 +22,15 @@ import java.util.List;
 
 /**
  * Destinations from Xaero's own waypoints, read reflectively out of the Minimap mod.
- *
- * <h2>Why the reading is reflective</h2>
- * Waypoint storage is <b>not</b> part of Xaero's World Map: neither the World Map jar nor the
- * {@code xaerolib} it bundles has a single class under {@code waypoints/}. The storage, and every
- * class needed to reach it, lives in the Minimap mod ({@code xaero.common.minimap.waypoints.*}),
- * which is only an <em>optional</em> dependency of the World Map and may not be installed at all.
- *
- * <p>The adapter is therefore bound by name at runtime rather than against the jar, so this mod
- * keeps compiling and running with the Minimap absent and does not gain a dependency on it in
- * {@code build.gradle}. When the Minimap is present the chain is walked once and the handles are
- * cached; when it is absent, or when the mod has renamed anything, the source reports itself
- * unavailable and the picker falls back to {@link PoiDestinationSource}.
- *
- * <p>The chain, verified against {@code xaerominimap-neoforge-1.21.1-25.3.13.jar}:
- * <pre>
- * XaeroMinimapSession.getCurrentSession()   // static, null before a world is joined
- *   .getWaypointsManager()
- *   .getCurrentWorld()                      // WaypointWorld, null outside a world
- *   .getCurrentSet()
- *   .getList()                              // ArrayList&lt;Waypoint&gt;
- * </pre>
- *
- * <p>Each waypoint then answers {@code getName()}, {@code getX()}, {@code getZ()},
- * {@code isTemporary()} -- temporary ones are skipped, since a death marker or a just-dropped pin is
- * not a place to navigate to -- and its colour through {@code getWaypointColor().getHex()}. The name
- * is handed on exactly as Xaero stores it: the picker's "(From XMM)" note is a row decoration drawn
- * from the destination's source id, never part of the name, so the route instructions, the spoken
- * announcements and the search all still see the bare name.
+ * Waypoint storage lives in the optional Minimap jar (xaero.common.minimap.waypoints.*), not in the World Map, so it is bound by name at runtime: this mod compiles and runs with the Minimap absent and takes no build dependency on it. When present the chain is walked once and the handles cached; when absent or renamed the source reports itself unavailable and the picker falls back to PoiDestinationSource.
+ * Chain, verified against xaerominimap-neoforge-1.21.1-25.3.13.jar: XaeroMinimapSession.getCurrentSession().getWaypointsManager().getCurrentWorld().getCurrentSet().getList().
+ * Each waypoint answers getName(), getX(), getZ(), isTemporary() (skipped) and getWaypointColor().getHex(). The name is handed on exactly as stored: the "(From XMM)" note is a row decoration drawn from the source id, never part of the name.
  */
 public final class XaeroWaypointSource implements DestinationSource {
 
     public static final String ID = "xaero_waypoint";
 
-    /** The mod id of Xaero's Minimap, which owns the waypoint classes. */
+    /** Mod id of Xaero's Minimap, which owns the waypoint classes. */
     private static final String MINIMAP_MOD_ID = "xaerominimap";
     private static final String MINIMAP_SESSION_CLASS = "xaero.common.XaeroMinimapSession";
     private static final String WAYPOINTS_MANAGER_CLASS =
@@ -103,11 +78,7 @@ public final class XaeroWaypointSource implements DestinationSource {
     }
 
     /**
-     * Waypoints are destinations, not places, and are deliberately not marked.
-     *
-     * <p>They belong to Xaero and carry Xaero's own colours, so drawing one in this mod's place colour
-     * would contradict the list it appears in. Stated rather than left to the interface default: the
-     * default exists for sources that have not thought about it, and this one has.
+     * Waypoints are destinations, not places, and are deliberately not marked: they belong to Xaero and carry Xaero's own colours, so this mod's place colour would contradict the list they appear in.
      */
     @Override
     public boolean marksPlaces() {
@@ -122,15 +93,14 @@ public final class XaeroWaypointSource implements DestinationSource {
 
     @Override
     public List<Destination> destinations() {
-        // Never throws: this runs while the picker is open, so anything unexpected has to come back
-        // as "nothing to offer" rather than as a crashed frame.
+        // Never throws: this runs while the picker is open, so anything unexpected must come back
         try {
             if (!isAvailable()) {
                 return List.of();
             }
             Object session = getCurrentSession.invoke(null);
             if (session == null) {
-                // The Minimap is loaded but no world is open yet; not an error, and not worth a line.
+                // The Minimap is loaded but no world is open yet; not an error, and not worth
                 return List.of();
             }
             Object manager = getWaypointsManager.invoke(session);
@@ -156,67 +126,34 @@ public final class XaeroWaypointSource implements DestinationSource {
             List<Destination> result = new ArrayList<>(waypoints.size());
             for (Object waypoint : waypoints) {
                 if (!waypointClass.isInstance(waypoint)) {
-                    // The getters were looked up on the waypoint class, so anything that is not one is
-                    // left alone rather than risking an invoke against a type that cannot answer.
-                    // Checked by assignment rather than by exact class, so a Minimap that models a
-                    // special kind of waypoint as a subclass is still read.
+                    // The getters were looked up on the waypoint class, so anything else
                     continue;
                 }
                 String name = (String) waypointGetName.invoke(waypoint);
                 if (name == null || name.isBlank()) {
                     continue;
                 }
-                // The human asked for temporary waypoints to be ignored: a death marker or a
-                // just-dropped pin is not a place to navigate to.
+                // Temporary waypoints are ignored: a death marker or a just-dropped pin is not
                 if ((Boolean) waypointIsTemporary.invoke(waypoint)) {
                     continue;
                 }
                 int x = (Integer) waypointGetX.invoke(waypoint);
                 int z = (Integer) waypointGetZ.invoke(waypoint);
-                // Y is deliberately ignored: waypoints carry the height they were made at and
-                // destinations are 2D, so the coordinate shown and routed to is the column.
-                //
-                // The id is the waypoint's name and column, hashed: Xaero has no id of its own for a
-                // waypoint, and those are the two things that identify one in its storage. See
-                // PlaceKeys.xaeroId for why the hash is a specified one rather than any hash.
+                // Y is deliberately ignored: waypoints carry the height they were made
                 result.add(new Destination(name, x, 0, z, ID, displayColor(waypoint),
                         PlaceKind.PLACE, PlaceKeys.xaeroId(name, x, z)));
             }
             return result;
         } catch (ReflectiveOperationException | RuntimeException e) {
-            // ReflectiveOperationException covers both a handle that will not invoke and a lookup
-            // that fails late; RuntimeException covers a Minimap that answers with an unexpected
-            // shape, such as a null where a primitive was expected. All of them mean the same thing
-            // here: no waypoints from this source.
+            // ReflectiveOperationException covers a handle that will not invoke and a lookup
             warnUnavailable(e);
             return List.of();
         }
     }
 
     /**
-     * The waypoint's own colour as the picker wants it, or {@link Destination#NO_COLOR}.
-     *
-     * <h2>Which getter, and why not {@code getColor()}</h2>
-     * The Minimap has three colour getters and only one of them is a colour. Read out of its
-     * bytecode:
-     * <ul>
-     *   <li>{@code getColor()} returns <b>the enum ordinal</b>, not a colour at all -- it is
-     *       {@code getWaypointColor().ordinal()}, used as the index the GUI lists colours by;</li>
-     *   <li>{@code getActualColor()} returns a field of the same kind, set from that same ordinal
-     *       (the {@code int} constructor writes its index argument straight into it);</li>
-     *   <li>{@code getWaypointColor().getHex()} is the colour, and is what the Minimap's own
-     *       renderer draws with -- {@code WaypointMapRenderer.renderElement} calls it and then
-     *       extracts channels as {@code (hex >> 16) & 0xFF} for red.</li>
-     * </ul>
-     *
-     * <h2>Format</h2>
-     * The enum constants are standard Minecraft text colours packed as <b>ARGB with full alpha</b>:
-     * BLACK is {@code -16777216} = {@code 0xFF000000}, DARK_AQUA {@code -16733526} = {@code 0xFF00AAAA},
-     * DARK_RED {@code -5636096} = {@code 0xFFAA0000}, and so on. They are converted defensively
-     * anyway -- masked to the low 24 bits and given full alpha -- so a future release that packs
-     * them without alpha, or with a different one, still yields a visible colour instead of an
-     * invisible one. A colour that comes back as bare {@code 0} is treated as none, which also keeps
-     * this from ever storing the sentinel by accident.
+     * The waypoint's own colour, or Destination.NO_COLOR.
+     * Use getWaypointColor().getHex(): getColor() returns the colour enum's ordinal, not a colour, and getActualColor() is a field of that same kind. The constants are Minecraft text colours packed as ARGB with full alpha; the result is masked to 24 bits and given full alpha so a future packing change still yields a visible colour, and bare 0 is treated as none.
      */
     private static int displayColor(Object waypoint) {
         try {
@@ -233,10 +170,7 @@ public final class XaeroWaypointSource implements DestinationSource {
     }
 
     /**
-     * Whether the world Xaero is showing is the dimension the player is actually in.
-     *
-     * <p>If they disagree, the waypoints in hand belong to somewhere the player is not, so they are
-     * withheld rather than offered as a route across dimensions.
+     * Whether the world Xaero is showing is the dimension the player is in; if not, its waypoints are withheld rather than offered as a route across dimensions.
      */
     private static boolean sameDimension(Object world) {
         Minecraft minecraft = Minecraft.getInstance();
@@ -269,10 +203,7 @@ public final class XaeroWaypointSource implements DestinationSource {
 
     /**
      * Looks every class and method up once and caches the result.
-     *
-     * <p>Guarded rather than re-run per call: this is read for every frame the picker is open, and
-     * class loading is far too expensive for that. A failure here is permanent for the session --
-     * a missing class does not appear later -- so one attempt is enough.
+     * Read every frame the picker is open, and class loading is far too expensive for that; a failure is permanent for the session, so one attempt is enough.
      */
     private static synchronized void resolve() {
         if (resolved) {
@@ -312,14 +243,7 @@ public final class XaeroWaypointSource implements DestinationSource {
 
     /**
      * The named method from the class or the nearest class above it that declares it.
-     *
-     * <p>{@code getDimId} is declared on {@code MinimapWorld} rather than on the {@code WaypointWorld}
-     * the chain hands back, and {@code Class.getMethod} would find that anyway -- but walking the
-     * hierarchy explicitly keeps the intent visible and covers a method moving between those two
-     * classes in a later Minimap release.
-     *
-     * <p>No {@code setAccessible} call: every method wanted here is public, and asking for privileged
-     * access to a method that does not need it can only add a way to fail.
+     * getDimId is declared on MinimapWorld rather than the WaypointWorld the chain hands back; walking the hierarchy keeps the intent visible and survives a move between the two. No setAccessible: every method wanted is public.
      */
     private static Method findMethod(String className, String methodName)
             throws ReflectiveOperationException {

@@ -17,21 +17,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Reads and writes a {@link RoadNetwork} as JSON.
- *
- * <p>The on-disk shape is deliberately plain and versioned: ids are preserved so topology survives
- * a round trip, and vertices are stored as flat {@code xs}/{@code zs} arrays because that is
- * already the in-memory layout.
+ * Reads and writes a RoadNetwork as JSON. The on-disk shape is plain and versioned: ids are preserved so topology survives a round trip, and vertices are stored as flat xs/zs arrays, already the in-memory layout.
  */
 public final class RoadStorage {
 
     public static final int FORMAT_VERSION = 1;
 
     /**
-     * Suffix of the file a save is written to before it takes the real one's place.
-     *
-     * <p>Kept beside the target rather than in a temporary directory, because the last step of the
-     * save is a rename onto the target and a rename cannot cross a filesystem.
+     * Suffix of the file a save is written to before it takes the real one's place. Kept beside the target because the last step is a rename onto the target, and a rename cannot cross a filesystem.
      */
     private static final String PARTIAL_SUFFIX = ".part";
 
@@ -54,9 +47,7 @@ public final class RoadStorage {
                 return network;
             }
             if (dto.version > FORMAT_VERSION) {
-                // Written by something newer than this build. Read it anyway -- the fields this
-                // version knows are still the fields it wrote -- but say so, because the next save
-                // will write only what this version understands.
+                // Written by a newer build: read it anyway -- the fields this version knows are still there -- but say so, because the next save writes only what this version understands.
                 HowToGo.LOGGER.warn("[HowToGo] {} says version {} and this build writes {}; reading "
                                 + "the fields it knows", file.getFileName(), dto.version,
                         FORMAT_VERSION);
@@ -65,26 +56,18 @@ public final class RoadStorage {
             int duplicates = 0;
             if (dto.nodes != null) {
                 for (NodeDto n : dto.nodes) {
-                    // A negative id is not an id: -1 is NO_NODE, the sentinel for "this endpoint has
-                    // no node". A file carrying one used to be loaded as written, so the node was
-                    // built, drawn on the map and saved again -- and every segment referring to it was
-                    // skipped by the router, for ever: a road that looks perfectly good and can never
-                    // be travelled.
+                    // A negative id is not an id: -1 is NO_NODE. Loading one built a node the router could never route through, so the road looked fine and could never be travelled.
                     if (n.id < 0) {
                         rejected++;
                         continue;
                     }
-                    // Ids are the network's keys, so a repeated one used to overwrite: the first
-                    // node, with its position and its name, disappeared without a word.
+                    // Ids are the network's keys, so a repeated one used to overwrite: the first node, with its position and its name, disappeared.
                     if (network.node(n.id) != null) {
                         duplicates++;
                         continue;
                     }
                     RoadNode node = new RoadNode(n.id, n.x, n.y, n.z, parseType(n.type), n.name);
-                    // Absent in any file written before place kinds existed, and it reads back as
-                    // PLACE -- so every place a player had already put down is still an ordinary place
-                    // and no road vertex becomes one, because whether a node is a place at all is its
-                    // type, not this field.
+                    // Absent in files written before place kinds existed, and reads back as PLACE. Whether a node is a place at all is its type, not this field.
                     node.setPlaceKind(PlaceKind.byId(n.placeKind));
                     network.putNode(node);
                 }
@@ -112,11 +95,7 @@ public final class RoadStorage {
                     network.nodeCount(), network.segmentCount(), file.getFileName());
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting empty", file, e);
-            // Starting empty is the only thing that can be done with a file that does not parse, but
-            // it must not also be the end of that data: the next autosave writes over it, and a save
-            // interrupted before this version wrote atomically leaves exactly this -- a truncated
-            // file whose roads are still in there, in part. Moving it aside keeps the salvagable
-            // remainder and costs a name in the world's folder instead of the player's whole map.
+            // A file that does not parse cannot be used, but must not be destroyed by the next autosave: a truncated file still holds roads. Move it aside instead.
             quarantine(file);
         }
         return network;
@@ -137,22 +116,8 @@ public final class RoadStorage {
 
     /**
      * Writes the network out, replacing the file in one step.
-     *
-     * <h2>Why this does not write the target directly</h2>
-     * A save is not one operation but a stream of them, and a stream can be cut in half: the game
-     * can be killed, the machine can lose power, the disk can fill. Writing straight onto the target
-     * means the moment that happens the only copy of a player's whole road network is a truncated
-     * JSON file, and {@link #load} reports it as unreadable and starts empty -- so the failure mode of
-     * an interrupted save is losing the map, not losing the edit that was in flight.
-     *
-     * <p>So the bytes go to a neighbouring {@code .part} file first and the target is replaced by a
-     * rename, which a filesystem performs as one step: either the old file is still there in full or
-     * the new one is. The half-written file is never a name anything reads.
-     *
-     * <p>The move is attempted as an atomic one and falls back to a plain replace, because atomic
-     * moves are a filesystem capability rather than a guarantee -- a network share or an unusual
-     * filesystem can refuse. The fallback is the old behaviour on those, which is the honest answer:
-     * better a save that can be interrupted than a save that does not happen.
+     * Writing straight onto the target means an interrupted save leaves the only copy truncated and load starts empty -- losing the map rather than the edit in flight. So the bytes go to a neighbouring .part file and the target is replaced by a rename, which a filesystem performs in one step.
+     * The move is attempted atomically and falls back to a plain replace, because atomic moves are a filesystem capability, not a guarantee; the fallback is the old behaviour, better a save that can be interrupted than none.
      */
     public static boolean save(Path file, RoadNetwork network) {
         if (file == null) {
@@ -197,9 +162,7 @@ public final class RoadStorage {
                 }
                 RoadCurve curve = segment.curve();
                 if (curve != null) {
-                    // The display line travels with the road it belongs to. It is optional and
-                    // absent from every road that has none, so a file written by this version is
-                    // byte-for-byte what the old one wrote until a road actually has a curve.
+                    // The display line travels with the road it belongs to. Optional and absent when there is none, so a file without curves is byte-for-byte what the old one wrote.
                     double[][] points = new double[curve.size()][2];
                     for (int i = 0; i < curve.size(); i++) {
                         points[i][0] = curve.x(i);
@@ -217,14 +180,13 @@ public final class RoadStorage {
             return true;
         } catch (IOException e) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", file, e);
-            // The half-written file is left behind otherwise, and the next save would overwrite it
-            // anyway -- but a stray .part beside the network is confusing to find, so it goes now.
+            // Discarded now: otherwise the half-written file is left behind for the next save to overwrite, and a stray .part is confusing to find.
             discard(partial);
             return false;
         }
     }
 
-    /** Gives {@code partial} the target's name, atomically where the filesystem allows it. */
+    /** Gives partial the target's name, atomically where the filesystem allows it. */
     private static void replace(Path partial, Path file) throws IOException {
         try {
             Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING,
@@ -277,18 +239,13 @@ public final class RoadStorage {
         for (int i = 0; i < count; i++) {
             segment.addVertex(xs[i], zs[i]);
         }
-        // Tolerant like every other optional field: a file written before categories existed leaves
-        // the field null, which resolves to the class's own "not classified" -- every road that has
-        // never been classified looks exactly as it did. The id is opaque here: whether it names a
-        // category the player still has is the store's question, and a reference to a deleted one is
-        // drawn and edited as "not classified" rather than being an error in a save file.
+        // Tolerant like every other optional field: an absent category resolves to the class's not classified, so unclassified roads look as they did. The id is opaque here; a reference to a deleted category is drawn as not classified, not an error.
         segment.setCategory(RoadCategory.resolve(segment.roadClass(), s.category));
         segment.setNumber(s.number);
         segment.setFromNode(s.from);
         segment.setToNode(s.to);
         segment.setDirection(directionOf(s));
-        // Clamped by the segment itself, so a file somebody edited by hand costs them the storey
-        // rather than the road.
+        // Clamped by the segment itself, so a hand-edited file costs the player the storey rather than the road.
         segment.setLayer(s.layer);
         segment.setName(s.name);
         RoadCurve curve = curveOf(s);
@@ -299,11 +256,7 @@ public final class RoadStorage {
     }
 
     /**
-     * A segment's display curve, or null when the file has none or it does not describe a line.
-     *
-     * <p>Tolerant like every other optional field in this format: a curve with fewer than two points,
-     * a point that is not a finite number, or a mismatched pair is dropped as a whole. A display
-     * line is never worth refusing a road over -- the vertices are the road.
+     * A segment's display curve, or null when the file has none or it does not describe a line. Tolerant: fewer than two points, a non-finite number or a mismatched pair drops the whole curve -- a display line is never worth refusing a road over.
      */
     private static RoadCurve curveOf(SegmentDto s) {
         if (s.curve == null || s.curve.length < 2) {
@@ -329,12 +282,7 @@ public final class RoadStorage {
 
     /**
      * A segment's direction, from whichever of the two fields the file has.
-     *
-     * <p>{@code direction} is what this version writes. {@code oneWay} is the boolean an earlier build of
-     * this feature wrote, and a file from it means the one direction that boolean could express, which is
-     * {@link RoadDirection#FORWARD}. Reading the old field rather than ignoring it is what keeps a save
-     * from that build meaning the same thing after the upgrade; a file with neither field is a road
-     * nobody has said anything about, which is a two-way road.
+     * direction is what this version writes; oneWay is the boolean an earlier build wrote, meaning FORWARD. Reading the old field keeps such a save meaning the same after the upgrade; neither field means a two-way road.
      */
     private static RoadDirection directionOf(SegmentDto s) {
         if (s.direction != null) {
@@ -343,7 +291,7 @@ public final class RoadStorage {
         return s.oneWay ? RoadDirection.FORWARD : RoadDirection.TWO_WAY;
     }
 
-    // ------------------------------------------------------------------- DTOs
+    // DTOs
 
     private static final class NetworkDto {
         int version;
@@ -358,12 +306,7 @@ public final class RoadStorage {
         int z;
         String type;
         String name;
-        /**
-         * Added after the first release; written always, read tolerantly.
-         *
-         * <p>Left absent in every file written before it existed, and {@code Gson} leaves the field
-         * null rather than complaining, which is what makes the addition one that older saves survive.
-         */
+        /** Added after the first release; written always, read tolerantly -- older files leave it null. */
         String placeKind;
     }
 
@@ -371,57 +314,28 @@ public final class RoadStorage {
         int id;
         String roadClass;
         /**
-         * Which category of {@link #roadClass} the road is, as the category's opaque id.
-         *
-         * <p>Added after the first release and left absent in every file written before it: read
-         * tolerantly, and an absent one resolves to the class's "not classified", which is what those
-         * roads were. Written always, so the file states the category rather than relying on a
-         * default. The id is not a name: see {@link RoadCategory} for why a road carries a reference
-         * and the definition lives with the client's category store.
+         * Which category of roadClass the road is, as the category's opaque id. Added after the first release, read tolerantly: absent means not classified, which is what those roads were. Written always; the id is a reference, not a name.
          */
         String category;
         /**
-         * The road's number as the player typed it, or absent when it has none.
-         *
-         * <p>Not a number in the file either: a national highway is "G318" and a ring road may be
-         * "一环", so this is text and is written only when there is some.
+         * The road's number as the player typed it, absent when it has none; text because G318 and 一环 are both numbers.
          */
         String number;
         int from;
         int to;
         /**
-         * The one-way state, as {@link RoadDirection}'s constant name.
-         *
-         * <p>Written always, read tolerantly: absent in a file written before directions existed, and
-         * then {@link #oneWay} decides.
+         * The one-way state, as RoadDirection's constant name. Written always, read tolerantly: absent in a file written before directions existed, and then oneWay decides.
          */
         String direction;
-        /**
-         * The boolean this field replaced, still read and no longer written.
-         *
-         * <p>A file that has it was written by the version that could only say "one-way forwards", and
-         * writing it again would claim the same thing about a road that now runs backwards.
-         */
+        /** The boolean this field replaced, still read and no longer written. */
         boolean oneWay;
         int y;
-        /**
-         * Which storey the road is on: 0 the surface, positive above it, negative below.
-         *
-         * <p>Written alongside the rest and absent in every file written before storeys existed, where
-         * {@code Gson} leaves it at zero -- which is exactly the right reading of an older save: every
-         * road in it was drawn on the surface, because there was nothing else to draw one on.
-         */
+        /** Storey: 0 surface, positive above, negative below; older files default to 0, which is right. */
         int layer;
         String name;
         int[] xs;
         int[] zs;
-        /**
-         * The smoothed display line, as {@code [[x, z], ...]}, or absent for a road with none.
-         *
-         * <p>Added after the first release. Written only when it exists, read tolerantly, and never
-         * used for routing -- see {@link RoadCurve}. An older build reading this file ignores the
-         * field, which is what keeps a save from this one readable by it.
-         */
+        /** Smoothed display line as [[x, z], ...], written only when present, never used for routing. */
         double[][] curve;
     }
 }

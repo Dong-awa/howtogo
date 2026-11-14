@@ -7,39 +7,12 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * What the player wrote about one place: a description, a set of tags, one single-value tag (the
- * place's <em>category</em>), and a favourite flag.
- *
- * <h2>What the category is, and why it is not a tag</h2>
- * The user asked for different kinds of place to carry different entries: a shop shows its type, a
- * resource point shows its resource type, a station shows the lines it belongs to -- and those are
- * one value each, not a list. Putting them in {@link #tags()} would have made the type one of the
- * tags: it would be sorted among them, could be removed twice by the same command, and the card
- * would have no way to know which chip was the type and which was an ordinary label. A field of its
- * own is also what the storage needs: an older build reading the file must not see the type as an
- * anonymous tag and draw it grey.
- *
- * <p>Deliberately <em>one</em> value with the same length limit as a tag, rather than an enum.
- * "Shop type" is as open a vocabulary as the names on the player's map -- 便利店, 药房, 银行 -- and
- * an enumeration here would make the feature a fixed list that every new kind of place has to be
- * added to. Empty means "this place has no type to show", which is also what a place that is not a
- * shop or a resource point reads as.
- *
- * <h2>Why the limits are enforced here</h2>
- * The edit screen clamps what it accepts, the storage reads what it finds, and the web map truncates
- * what it sends -- three places, one rule. Putting the rule in the value object means the three
- * cannot disagree: a hand-edited file with a 4000-character description is reduced to the same thing
- * a typed one would be, and the self-checks that pin the boundaries call exactly the code the game
- * does. Truncation is measured in <em>code points</em> rather than in {@code char}s so a limit of
- * 512 never cuts an emoji or a rare CJK character in half.
- *
- * <h2>Immutable on purpose</h2>
- * A detail record is read from the store several times a frame by screens that are drawing, and
- * written by dialogs. A mutable object shared between those two would be edited while it is being
- * drawn -- so every change goes through {@link #withDescription}, {@link #withTags},
- * {@link #withCategory} or {@link #withFavorite}, and the store is told separately. The modification
- * time is part of the value for the same reason the content is: it is what a later session would
- * compare.
+ * What the player wrote about one place: description, tags, one category value, favourite flag.
+ * The category is a separate field, not a tag: one value, not sorted among tags or removed twice,
+ * and storage must not read it as an anonymous tag. It is a length-limited string, not an enum --
+ * shop types are an open vocabulary. Empty means none.
+ * Limits are enforced here so edit screen, storage and web map agree; truncation counts code points.
+ * Immutable, read several times a frame: every change returns a new value.
  */
 public final class PlaceDetails {
 
@@ -53,16 +26,12 @@ public final class PlaceDetails {
     public static final int MAX_TAG_LENGTH = 8;
 
     /**
-     * The category when there is none: {@code ""}.
-     *
-     * <p>A constant rather than a sprinkle of empty-string literals so the one meaning -- "no type
-     * written" -- is stated once, the way {@link #EMPTY} states "nothing written at all". It is also
-     * what the storage writes as "field absent", which is what makes the format additive: a record
-     * from a build without this field is a record with no category, not an error.
+     * The category when there is none: "". Also what storage writes as field absent, so the format
+     * stays additive.
      */
     public static final String EMPTY_CATEGORY = "";
 
-    /** Nothing written yet. The value a place with no detail record reads back as. */
+    /** Nothing written yet; what a place with no detail record reads back as. */
     public static final PlaceDetails EMPTY = new PlaceDetails("", List.of(), EMPTY_CATEGORY, false, 0L);
 
     private final String description;
@@ -72,14 +41,9 @@ public final class PlaceDetails {
     private final long updatedAt;
 
     /**
-     * A detail with every field, including the category.
-     *
-     * <p>The full constructor. {@code category} is stored as given -- blank is trimmed and shortened
-     * by {@link #normalize()}, not here -- for the same reason the description and the tags are: a
-     * value object that silently rewrites what a caller handed it is a value object whose caller
-     * cannot predict what it will read back. The only substitution made here is {@code null} to the
-     * empty string, because a null category is the one thing every reader would otherwise have to
-     * defend against.
+     * A detail with every field, including category.
+     * Stores values as given -- normalize() trims and shortens -- except null, which becomes the empty
+     * string because every reader would otherwise have to defend against it.
      */
     public PlaceDetails(String description, List<String> tags, String category, boolean favorite,
                         long updatedAt) {
@@ -90,14 +54,7 @@ public final class PlaceDetails {
         this.updatedAt = updatedAt;
     }
 
-    /**
-     * The four-argument form, kept for the call sites written before places had a category.
-     *
-     * <p>Every one of those callers -- the details store, the draft editor, the self-checks -- means
-     * "nothing changes about the category", and for all of them that is the empty category. Keeping
-     * the overload rather than editing a dozen call sites is what makes adding a field to this class
-     * a change to this file rather than a change to the whole mod.
-     */
+    /** The four-argument form, kept for callers written before places had a category -- an empty one. */
     public PlaceDetails(String description, List<String> tags, boolean favorite, long updatedAt) {
         this(description, tags, EMPTY_CATEGORY, favorite, updatedAt);
     }
@@ -109,10 +66,8 @@ public final class PlaceDetails {
     }
 
     /**
-     * The three-argument {@code of}, for a place whose category is not being edited.
-     *
-     * <p>Kept for the same reason as the four-argument constructor: existing callers -- and the
-     * Harness -- construct details without a category, and "no category" is exactly what they mean.
+     * The three-argument of, for a place whose category is not being edited; no category is what
+     * those callers mean.
      */
     public static PlaceDetails of(String description, List<String> tags, boolean favorite) {
         return new PlaceDetails(description, tags, EMPTY_CATEGORY, favorite, 0L);
@@ -131,14 +86,7 @@ public final class PlaceDetails {
         return tags;
     }
 
-    /**
-     * The place's type or resource type, or {@link #EMPTY_CATEGORY} when none was written.
-     *
-     * <p>The value the card draws as an orange chip and the dialog's type box edits. Never null, so
-     * a caller can compare it with the empty string without a null check -- a null category and an
-     * empty one mean the same thing, and two spellings of one meaning is how a UI ends up drawing a
-     * grey chip with nothing in it.
-     */
+    /** The place's type or resource type, or EMPTY_CATEGORY when none; never null. */
     public String category() {
         return category;
     }
@@ -152,13 +100,9 @@ public final class PlaceDetails {
     }
 
     /**
-     * Whether there is nothing to store: no description, no tags, no category and not a favourite.
-     *
-     * <p>The store deletes a record that becomes empty rather than keeping a row of blanks, which is
-     * what makes "clear everything" mean the same thing as "never wrote anything" -- including for
-     * the unlinked-details screen, where an empty record would be a row with nothing to identify it.
-     * The category counts because a record that is only a type would otherwise be written as an
-     * otherwise-empty row and deleted on the next read, which would look like the type was lost.
+     * Whether there is nothing to store: no description, tags, category and not a favourite.
+     * The store deletes such a record, so "clear everything" equals "never wrote anything". The category
+     * counts, or a type-only record would be written and deleted on the next read.
      */
     public boolean isEmpty() {
         return description.isBlank() && tags.isEmpty() && category.isBlank() && !favorite;
@@ -173,11 +117,8 @@ public final class PlaceDetails {
     }
 
     /**
-     * This detail with the category replaced, everything else carried along.
-     *
-     * <p>The category is normalised by {@link #normalize()} like every other field; a caller that
-     * clears the type passes {@code ""} (or null, which the constructor turns into it) and the next
-     * save drops the field.
+     * This detail with the category replaced, everything else carried along; it is normalised by
+     * normalize().
      */
     public PlaceDetails withCategory(String text) {
         return new PlaceDetails(description, tags, text, favorite, updatedAt);
@@ -192,16 +133,8 @@ public final class PlaceDetails {
     }
 
     /**
-     * This detail with everything brought inside the limits: description trimmed and shortened,
-     * tags trimmed, de-duplicated, shortened and capped, category trimmed and shortened.
-     *
-     * <p>The one normalisation every writer goes through. It is deliberately lossy in one direction
-     * only -- it never adds anything -- so calling it twice is the same as calling it once, which is
-     * what a store that normalises on both read and write needs.
-     *
-     * <p>The category has no de-duplication and no cap beyond its length: there is exactly one, and
-     * a blank one -- which is how a typed space-only value normalises -- becomes
-     * {@link #EMPTY_CATEGORY} rather than a one-space type.
+     * This detail with description and tags trimmed and shortened, tags de-duplicated and capped; a
+     * blank category becomes EMPTY_CATEGORY. Lossy one way only, so it is idempotent.
      */
     public PlaceDetails normalize() {
         String text = description
@@ -220,8 +153,7 @@ public final class PlaceDetails {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            // Case-insensitive de-duplication, keeping the spelling first written: "MTR" and "mtr" are
-            // one tag to a reader, and two chips that differ only in case look like a mistake.
+            // Case-insensitive de-duplication, keeping the first spelling: "MTR" and "mtr" are one tag.
             if (seen.add(trimmed.toLowerCase(Locale.ROOT))) {
                 clean.add(trimmed);
             }
@@ -229,22 +161,17 @@ public final class PlaceDetails {
                 break;
             }
         }
-        // A category is one short label: trimmed and cut to a tag's length, and whitespace-only is
-        // the same as absent. Truncated rather than refused so a hand-edited file reads as the
-        // first eight characters of what it said instead of as no category at all.
+        // A category is one short label: trimmed and cut to MAX_TAG_LENGTH; whitespace-only is absent.
+        // Truncated rather than refused, so a hand-edited file still reads.
         String cleanCategory = truncate(category.strip(), MAX_TAG_LENGTH);
         return new PlaceDetails(text, List.copyOf(clean), cleanCategory, favorite, updatedAt);
     }
 
     /**
-     * A one-line preview of the description: whitespace runs and newlines collapsed, shortened to
-     * {@code maxChars} characters.
-     *
-     * <p>One line rather than a prefix of the raw text because every caller of this draws a preview
-     * in a place that has room for exactly one line -- a map tooltip, a search result row, a card's
-     * collapsed body -- and a preview that began with a newline would draw nothing at all.
-     *
-     * @param maxChars most characters the preview may show, before the caller adds an ellipsis
+     * A one-line preview: whitespace runs and newlines collapsed, shortened to maxChars.
+     * Callers draw it where there is room for exactly one line; a preview starting with a newline would
+     * draw nothing.
+     * @param maxChars most characters before the caller adds an ellipsis
      */
     public PlaceSummary summary(int maxChars) {
         String flat = description.replaceAll("\\s+", " ").strip();
@@ -260,12 +187,9 @@ public final class PlaceDetails {
     }
 
     /**
-     * The whole description as a truncated payload string, for the browser map.
-     *
-     * <p>Different from {@link #summary} on purpose: the web page has a card that can wrap, so a
-     * multi-line description is worth sending with its lines intact for the truncated view, and the
-     * page asks for the full text only when the player opens it. Newlines survive here; the card's
-     * CSS decides how many of them it shows.
+     * The whole description as a truncated payload string for the browser map.
+     * Unlike summary(), newlines survive so the page's card can wrap; the page asks for the full text
+     * only when opened.
      */
     public PlaceSummary truncated(int maxChars) {
         String text = description.strip();
@@ -277,11 +201,8 @@ public final class PlaceDetails {
     }
 
     /**
-     * {@code text} shortened to at most {@code limit} code points, never splitting a surrogate pair.
-     *
-     * <p>{@code String.substring} counts UTF-16 units: a description cut at 512 that way can end in
-     * half of a surrogate pair, which is not text any more and which every later consumer -- JSON,
-     * a font, a file -- would have to defend against separately.
+     * text shortened to at most limit code points, never splitting a surrogate pair.
+     * substring counts UTF-16 units, and a cut pair is not text that JSON, a font or a file can handle.
      */
     public static String truncate(String text, int limit) {
         if (text == null || text.isEmpty() || limit <= 0) {

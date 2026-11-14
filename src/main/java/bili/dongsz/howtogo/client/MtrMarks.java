@@ -19,34 +19,14 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Whether each line read out of MTR has its track marked as roads of this mod.
+ * Whether each line read out of MTR has its track marked as read-only rail or water roads of this mod.
  *
- * <h2>What the switch does</h2>
- * A line read out of MTR has its stops, and MTR's rails are in the world under them. With a line's
- * marks on, the stretch of that track the line actually runs along is marked as read-only rail or water
- * roads -- drawn on the map like any other road, and the roads a ride along that line is planned over.
- * With them off, the line contributes no roads at all, and its stops are matched to the roads the
- * player drew by the ordinary rule this mod used before it knew anything about MTR, which is the right
- * answer for a line that runs on water or on roads that have already been drawn.
- *
- * <h2>Why it is per line and not one setting</h2>
- * The two kinds of line want opposite answers and the two answers coexist: a train line's track is its
- * own and is worth marking, while a boat line's water usually is not. A single switch would make the
- * player choose which of their lines to spoil.
- *
- * <h2>Why the choice is kept here rather than on the line</h2>
- * An imported line is rebuilt from MTR's reading every time the reading changes, so a field on it would
- * last until the next reading. What is kept instead is the player's answer, by MTR's own line id, which
- * is stable across readings and across sessions.
- *
- * <p>Nothing is kept for a line the player built: they are not MTR's, they take the configured default,
- * and a file full of ids of lines that no longer exist is not worth the trouble of writing. The answer
- * for a line that has never been touched is the configured default, so a player who never opens this
- * gets exactly what the config says.
+ * On, the stretch that line runs along becomes roads the map draws and rides plan over; off, the line contributes no roads and its stops are matched by the ordinary rule. Per line because a train's track is its own while a boat line's water usually is not.
+ * The player's answer is kept by MTR line id, which is stable across readings and sessions; imported lines are rebuilt on every reading, so a field on the line would not last. Lines the player built are not stored and take the config default.
  */
 public final class MtrMarks {
 
-    /** A file of its own, beside the roads and the lines rather than among them. */
+    /** Its own file, beside the roads and the lines rather than among them. */
     private static final String FILE_NAME = "mtr_line_marks.json";
 
     private static final Gson GSON = new GsonBuilder()
@@ -60,48 +40,35 @@ public final class MtrMarks {
     private static boolean dirty;
 
     /**
-     * How many times the answers have changed since the game started.
+     * How many times the answers have changed since start.
      *
-     * <p>For anything that caches a reading of them -- the signature MtrTransit decides whether to
-     * rebuild the railway from, which asks about every line -- so that a switch the player has just
-     * flipped counts as a change even when the reading from MTR has not moved.
+     * Lets caches such as MtrTransit's rebuild signature notice a switch even when the MTR reading has not moved.
      */
     private static int version;
 
     private MtrMarks() {
     }
 
-    /** @see #version */
     public static int version() {
         return version;
     }
 
-    /**
-     * Whether a line brings its own track with it.
-     *
-     * <p>The player's answer if they have given one, and otherwise whether MTR's marks are wanted at
-     * all -- which is the config default, so a session that never touches the switch behaves exactly as
-     * the setting says.
-     */
+    /** Whether a line brings its own track: the player's answer if given, otherwise the config default. */
     public static boolean forLine(long mtrLineId) {
         ensureLoaded();
         return decide(ON.contains(mtrLineId), OFF.contains(mtrLineId), RoadConfig.mtrAutoRouteMarks());
     }
 
     /**
-     * The answer, as a function of the two lists and the configured default.
+     * The answer given the two id lists and the configured default.
      *
-     * <p>A method of its own so that the rule can be stated in one place and checked without a game:
-     * an id on the list of lines switched on is on, an id on the list switched off is off even when the
-     * default is on, and an id on neither takes the default. An id on both lists -- which only a
-     * hand-edited file can produce -- counts as on, because the alternative is an answer that depends on
-     * which list happened to be consulted first.
+     * An id on the on-list is on, on the off-list is off even when the default is on, on neither takes the default; an id on both counts as on so the result does not depend on list order.
      */
     static boolean decide(boolean listedOn, boolean listedOff, boolean fallback) {
         return listedOn || (!listedOff && fallback);
     }
 
-    /** Whether the player has answered for this line at all, rather than taking the default. */
+    /** Whether the player has answered for this line rather than taking the default. */
     public static boolean isChosen(long mtrLineId) {
         ensureLoaded();
         return ON.contains(mtrLineId) || OFF.contains(mtrLineId);
@@ -123,11 +90,7 @@ public final class MtrMarks {
     }
 
     /**
-     * Forgets this line's answer, putting it back on the configured default.
-     *
-     * <p>No screen offers this, and it is not a gap: flipping a switch twice leaves the player with the
-     * answer they can see, so there is nothing a reset would give them. It is here as the way back from
-     * an answer for the harness to check the rule with, and for whatever offers one later.
+     * Forgets this line's answer, putting it back on the configured default. No screen calls it; it exists for tests and any future UI.
      */
     static void clear(long mtrLineId) {
         ensureLoaded();
@@ -143,8 +106,7 @@ public final class MtrMarks {
             return;
         }
         loaded = true;
-        // Counted as a change: the answers have just arrived from disk, and a reading of them taken
-        // before this ran was taken with none of them.
+        // Counted as a change: the answers just arrived from disk, so earlier readings had none of them.
         version++;
         Path file = file();
         if (file == null || !Files.isRegularFile(file)) {
@@ -176,11 +138,7 @@ public final class MtrMarks {
     }
 
     /**
-     * Writes the answers out.
-     *
-     * <p>Immediately rather than debounced, unlike the roads and the lines: this is one small file
-     * written when a button is pressed, and a switch whose answer is lost by a crash is a switch the
-     * player has to set twice.
+     * Writes the answers immediately, unlike the debounced roads and lines: one small file per button press, and a crash must not lose a switch.
      */
     private static void save() {
         if (!dirty) {
@@ -188,8 +146,8 @@ public final class MtrMarks {
         }
         Path file = file();
         if (file == null) {
-            // Nowhere to put it. The answers are still held in memory, so the switch works for this
-            // session, and {@code dirty} stays set in case there is a directory to write to later.
+            // Nowhere to write. Answers stay in memory so the switch works this session, and dirty stays set in
+            // case a directory appears later.
             return;
         }
         try {
@@ -209,22 +167,16 @@ public final class MtrMarks {
     }
 
     /**
-     * The answers' file, or null when there is no config directory to keep it in.
+     * The answers' file, or null when there is no config directory.
      *
-     * <p>Resolved on demand and allowed not to resolve, because this is read from the client tick and
-     * from planning, both of which can run before the game directory is known -- the harness, which has
-     * no game at all, is one such caller and a loading screen is another. With nowhere to keep the
-     * answers there is nothing to do but take the configured default, which is what a session that
-     * never touches the switch does anyway, and it is not worth a crash to find that out.
-     *
-     * <p>Client-wide rather than per world: which of MTR's lines are worth reading is the player's taste.
+     * Resolved on demand because it is read from the client tick and from planning, which can run before the game directory is known (the harness, a loading screen); with nowhere to keep them, the config default applies. Client-wide, not per world.
      */
     private static Path file() {
         Path config = GamePaths.configDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
-    /** Field names are the on-disk contract, so they are deliberately terse and stable. */
+    /** Field names are the on-disk contract: keep them terse and stable. */
     private static final class MarksDto {
         int version;
         List<Long> on;

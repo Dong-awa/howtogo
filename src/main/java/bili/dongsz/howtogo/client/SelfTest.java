@@ -59,67 +59,35 @@ import java.util.Set;
 
 /**
  * Everything this mod does, checked against the world the player actually has open.
- *
- * <h2>Why this exists inside the game</h2>
- * The routing harness in {@code tools/} covers the pure logic on networks built for the purpose, and
- * that is where a rule belongs. What it cannot cover is the part a player meets: whether the roads they
- * drew are the roads the mod loaded, whether a line they configured can carry a journey across the
- * world as it stands, whether the guidance says something a person could follow, and whether anything
- * at all survives a save and a reload. Those questions have no answer outside a running client with
- * real data in it -- so this runs there, is asked for by a command, and reports what it found.
- *
- * <h2>What it is allowed to do</h2>
- * Read, and put back. It plans routes and journeys (which are pure calculations), judges the
- * connectivity of every line (also a calculation), and round-trips the network through a temporary file
- * rather than the player's. The one thing it changes is the live navigation: a simulated ride is driven
- * through the real {@link Navigation} guidance, which means setting a destination and putting back
- * whatever was being navigated before. That is why the command that runs this says so.
- *
- * <h2>What a failure means</h2>
- * A check fails when the mod could not do something it says it can do with data that is there -- a
- * journey the lines describe but the planner cannot carry, a save that does not read back as what was
- * written, a guidance sequence with a stage missing. A line the player has left broken, or an empty
- * world, is reported as a finding rather than as a failure: those are answers about their data, not
- * about this mod.
+ * The routing harness in tools/ covers the pure logic on purpose-built networks; what only a running client can answer is whether the roads the player drew are the roads the mod loaded, whether their lines can carry a journey as the world stands, whether the guidance says something followable, and whether anything survives a save and reload.
+ * It reads and puts back. It plans routes, judges line connectivity and round-trips data through temporary files; the one thing it changes is the live navigation, because a simulated ride is driven through the real guidance -- hence the command warns first.
+ * A check fails when the mod cannot do something it says it can with data that is there. A world the player left broken is reported as a finding, not a failure: that is an answer about their data, not about this mod.
  */
 public final class SelfTest {
 
     /**
      * How many steps a simulated ride is sampled at, and the closest together they may be.
-     *
-     * <p>A stage of the ride is only reported within a few blocks of where it happens -- the boarding
-     * prompt is said as the stop is reached, not a hundred blocks before it -- so sampling a long
-     * journey evenly at a fixed count walks straight over it: the first real run of this check sampled a
-     * two-thousand-block ride forty blocks at a time, saw the arrival and the stop counts, and never saw
-     * the boarding at all, which read as a missing stage rather than as a sampling gap. The count
-     * therefore follows the length: {@value #RIDE_SAMPLE_BLOCKS} blocks a step, capped so a journey
-     * across a whole railway cannot make this slow.
+     * A stage is reported only within a few blocks of where it happens, so sampling at a fixed count walks straight over it: the first run sampled a 2000-block ride 40 blocks at a time and never saw the boarding. The count follows the length, capped by MAX_RIDE_SAMPLES.
      */
     private static final int RIDE_SAMPLE_BLOCKS = 2;
 
     /** The most steps a simulated ride is sampled at, whatever its length. */
     private static final int MAX_RIDE_SAMPLES = 4000;
 
-    /** How many lines the plan check walks through, so a whole railway cannot make this slow. */
+    /** How many lines the plan check walks, so a whole railway cannot make it slow. */
     private static final int MAX_LINES_CHECKED = 8;
 
     /** How many planned routes the route check tries. */
     private static final int MAX_ROUTE_PROBES = 6;
 
     /**
-     * How many trips the alternatives check plans, per kind, so a whole railway cannot make it slow.
-     *
-     * <p>Two, because the check is about the shape of a plan list rather than about coverage: a second
-     * pair across the other axis is there so one axis's worth of road cannot hide a list that is always
-     * a single plan.
+     * How many trips the alternatives check plans, per kind, so a whole railway cannot make it slow. Two, because the check is about the shape of a plan list rather than coverage: a second pair across the other axis keeps one axis from hiding a list that is always a single plan.
      */
     private static final int MAX_ALTERNATIVE_PROBES = 2;
 
     /**
      * One check's outcome.
-     *
-     * @param name   which check, as a translation key
-     * @param ok     whether the mod did what it says it does
+     * @param name which check, as a translation key
      * @param detail what was found, as text ready to show
      */
     public record Result(String name, boolean ok, String detail) {
@@ -129,10 +97,7 @@ public final class SelfTest {
     }
 
     /**
-     * Runs every check against the state the client is holding.
-     *
-     * <p>Called from the command, which runs on the client thread with the world loaded, so everything
-     * here may touch the mod's own stores and the live navigation.
+     * Runs every check against the state the client is holding. Called from the command, which runs on the client thread with the world loaded, so everything here may touch the mod's stores and the live navigation.
      */
     public static List<Result> run() {
         List<Result> results = new ArrayList<>();
@@ -171,16 +136,8 @@ public final class SelfTest {
 
     /**
      * Every layer the maps draw, checked for a stroke that jumps between two of its own pieces.
-     *
-     * <p>A jump is a straight line painted between two points the network does not join: the road
-     * itself is fine, routing is fine, and the only symptom is a line across the map that no road
-     * follows -- precisely the kind of defect that is invisible to every other check because the
-     * data is all correct. The coordinates of a jump are reported so the line can be found in the
-     * world it was reported in.
-     *
-     * <p>Only the maps that stroke whole roads are covered, which is every map except Xaero's world
-     * map: that one draws segment by segment, so this defect would not show there at all -- and a
-     * bug that is only visible on some of the maps is exactly the one worth naming out loud.
+     * A jump is a straight line painted between two points the network does not join: all the data is correct, so no other check can see it, and the only symptom is a line across the map no road follows. The coordinates are reported so it can be found.
+     * Only the maps that stroke whole roads are covered: Xaero's world map draws segment by segment, so this defect could not show there.
      */
     private static Result checkMapDrawing(RoadNetwork network) {
         Map<String, RoadNetwork> layers = new LinkedHashMap<>();
@@ -222,12 +179,7 @@ public final class SelfTest {
     }
 
     /**
-     * Every line, gap by gap, read exactly as the line editor reads it.
-     *
-     * <p>A gap that is {@code SEPARATE} is a red stop in the editor -- the line is genuinely cut there.
-     * That is a fact about the player's data and is reported as a count rather than as a failure; what
-     * would be a failure is the reading itself throwing, which the calling command turns into a failed
-     * check.
+     * Every line, gap by gap, read exactly as the line editor reads it. A SEPARATE gap is a red stop in the editor -- a fact about the player's data, reported as a count rather than a failure; what would fail is the reading itself throwing, which the command turns into a failed check.
      */
     private static List<Result> checkLines(RoadNetwork network, List<TransitLine> lines) {
         List<Result> results = new ArrayList<>();
@@ -265,21 +217,14 @@ public final class SelfTest {
     }
 
     /**
-     * Whether each line can carry a journey along its own length.
-     *
-     * <p>Asked from the line's first stop to its last, which is the longest journey that line can be
-     * responsible for and the one that exercises every gap in it. A line that cannot carry that is
-     * reported: either its stops are not connected, which is the player's to fix, or the planner has a
-     * fault, which is this mod's.
+     * Whether each line can carry a journey along its own length, asked from its first stop to its last: the longest journey that line is responsible for and the one that exercises every gap. A line that cannot is reported -- either its stops are not connected (the player's to fix) or the planner has a fault (this mod's).
      */
     private static Result checkPlans(List<TransitLine> lines) {
         int tried = 0;
         int planned = 0;
         int rides = 0;
         StringBuilder detail = new StringBuilder();
-        // The networks a ride is planned on, built once for the whole check: each is a copy of the world
-        // with the machine-read layers folded in, and rebuilding them per line would make a whole-railway
-        // reading cost its own size times the number of lines checked.
+        // The networks a ride is planned on, built once for the whole check: each is a copy of the world with the machine-read layers folded in. Rebuilding them per line would make a whole-railway reading cost its size times the lines checked.
         RoutePreferences preferences = RoutePreferenceStore.preferences();
         boolean ownTracksOnly = MtrTransit.everyLineRidesItsOwnTrack(lines);
         RoadNetwork marked = RailTrackStore.forRouting(TravelMode.TRANSIT, preferences, true);
@@ -324,17 +269,8 @@ public final class SelfTest {
 
     /**
      * The plans a trip is offered, checked for being plans: several questions, one list, no repeats.
-     *
-     * <h2>What can only be checked here</h2>
-     * The harness checks the mechanisms on networks built for the purpose. What it cannot check is the
-     * list a player actually sees: whether the mod, on their own roads and their own lines, comes back
-     * with plans that are real, distinct, in time order, and at most three -- and whether a trip the
-     * router can plan is one the picker can offer. A list that repeats one line under three labels, or
-     * offers nothing where a route exists, is a fault in this mod whatever the world looks like.
-     *
-     * <p>An empty list is not a failure on its own: a network with two separate fragments has no
-     * journey to offer, and that is a fact about the world. It is a failure only when the plain router
-     * can plan the same trip, which is exactly the disagreement the check exists to catch.
+     * The harness checks the mechanisms on built networks; what only the game can check is the list a player sees -- whether the mod, on their own roads and lines, returns plans that are real, distinct, in time order and at most three, and whether a trip the router can plan is one the picker offers.
+     * An empty list is not a failure on its own: two separate fragments have no journey to offer. It is a failure only when the plain router can plan the same trip, which is the disagreement this exists to catch.
      */
     private static Result checkAlternatives(RoadNetwork network, List<TransitLine> lines) {
         RoutePreferences preferences = RoutePreferenceStore.preferences();
@@ -409,12 +345,7 @@ public final class SelfTest {
     }
 
     /**
-     * Two corners of the player's own road network to plan across.
-     *
-     * <p>Chosen by extreme coordinate rather than by any search: the point of the check is the plan
-     * list, not which places are interesting, and a far-apart pair is what gives the strategies room to
-     * disagree. Two pairs across the two axes, when the network is wide enough for the second to be a
-     * different question.
+     * Two corners of the player's own network to plan across, chosen by extreme coordinate: the point is the plan list, not which places are interesting, and a far-apart pair gives the strategies room to disagree. Two pairs across the two axes when the network is wide enough for the second to be a different question.
      */
     private static List<int[]> alternativeProbes(RoadNetwork network) {
         List<int[]> probes = new ArrayList<>();
@@ -472,11 +403,7 @@ public final class SelfTest {
     }
 
     /**
-     * A plan's shape, coarse enough to say "the same line".
-     *
-     * <p>Three points at whole-block precision, plus the rounded length: two plans of the same trip
-     * that agree on all four must be the same line for any purpose this check has, and a plan that
-     * differs by a turning somewhere in the middle does not agree on the middle point.
+     * A plan's shape, coarse enough to say the same line. Three points at whole-block precision plus the rounded length: plans of one trip agreeing on all four are the same line for any purpose here, and a different turn in the middle shows in the middle point.
      */
     private static String planShape(RouteOption plan) {
         List<double[]> points = plan.route().points();
@@ -513,21 +440,10 @@ public final class SelfTest {
     }
 
     /**
-     * A ride driven through the real guidance, from the first step to the last.
-     *
-     * <p>This is the test the harness cannot make: the player's own destination is set, the planner
-     * plans it against the world as it stands, and the ride is then walked along the planned route
-     * {@value #RIDE_SAMPLES} steps at a time, asking {@link Navigation} what it would say at each one.
-     * What comes back is the sequence of sentences a passenger would hear -- and a sequence with no
-     * boarding, or no arrival, or a stop count that never comes down, is a guidance failure.
-     *
-     * <p>Read through the same seam the HUD reads, but without the readout switch: whether the player
-     * has "board and alight only" turned on decides what is <em>shown</em>, and the journey's own
-     * reading is the same either way. Testing it only for players who have the switch on would leave
-     * the reading untested exactly when somebody turns it on to try it.
-     *
-     * <p>The player's own navigation is put back afterwards, re-planned from where they are, which is
-     * what any re-plan would do.
+     * A ride driven through the real guidance, from first step to last.
+     * The player's destination is set, the planner plans it against the world as it stands, and the ride is walked RIDE_SAMPLE_BLOCKS at a time, asking Navigation what it would say at each step; the sequence is what a passenger would hear, so a missing boarding or arrival, or a stop count that never comes down, is a guidance failure.
+     * Read through the same seam the HUD reads but without the readout switch: whether the player has board-and-alight-only on decides what is shown, and the journey's own reading is the same either way.
+     * The player's own navigation is put back afterwards, re-planned from where they are.
      */
     private static Result checkSimulatedRide() {
         Destination previous = Navigation.target();
@@ -541,12 +457,7 @@ public final class SelfTest {
             Navigation.setTarget(here);
             Route route = Navigation.route();
             if (!route.isPresent() || Navigation.fallbackHint() != null) {
-                // A route planned on foot is not a public transport journey: the destination has no
-                // line that reaches it, which is the ordinary state of a world with no transit network.
-                // Reported rather than failed for the same reason "no route" is -- there is nothing
-                // here for this mod to have got wrong. The fallback is checked as well as the route's
-                // presence because a destination with no line still gets a walking route, and taking
-                // that for a ride made this check demand boarding prompts from a walk.
+                // A route planned on foot is not a public transport journey: the destination has no line that reaches it, the ordinary state of a world with no transit network. Reported rather than failed for the same reason no-route is -- nothing here for this mod to have got wrong. The fallback is checked too, or a walking route would be taken for a ride that must show boarding prompts.
                 return new Result("command.howtogo.selftest.check.ride", true,
                         "no public transport journey to '" + here.name() + "' from here");
             }
@@ -585,23 +496,13 @@ public final class SelfTest {
     }
 
     /**
-     * The destination the simulated ride is aimed at: the one being navigated, or else the farthest
-     * station from where the player stands.
-     *
-     * <p>A station and not any destination, because a line calls at stations and nothing else, so a
-     * destination that is not one can never be the end of a ride. Farthest rather than first, because
-     * that is the one most likely to need a public transport journey at all: a station across the
-     * street is walked to and would test nothing about lines.
+     * The destination the simulated ride is aimed at: the one being navigated, or else the farthest station from where the player stands. A station because a line calls at stations and nothing else; farthest because that is the one most likely to need a journey, where a station across the street is walked to and tests nothing.
      */
     private static Destination transitDestination(Destination previous) {
         if (previous != null) {
             return previous;
         }
-        // Only stops: a line calls at stations, so a destination that is not one can never be the end
-        // of a ride. Picking the farthest destination of every source meant a world whose farthest
-        // place was a village or a waypoint could never test the ride at all -- and, once RoadWeaver's
-        // structures joined the list, reported the walking route to that village as a ride with no
-        // stops in it.
+        // Only stops: a line calls at stations, so a destination that is not one can never be the end of a ride. Picking the farthest destination of every source meant a world whose farthest place was a village or a waypoint could never test the ride at all, and reported the walking route to it as a ride with no stops.
         List<Destination> all = Destinations.all();
         List<Destination> stops = new ArrayList<>();
         for (Destination destination : all) {
@@ -652,18 +553,8 @@ public final class SelfTest {
     }
 
     /**
-     * Whether the ordinary router can cross the world that is loaded.
-     *
-     * <p>Probes between the nodes furthest apart in each direction, for walking and for driving, and
-     * reports what came back. A network of separate pieces is expected to fail some of these -- the
-     * reason is printed with it, so a failure reads as "the roads are in fragments" rather than as
-     * "the router is broken".
-     *
-     * <p>Run on a copy of the network, through a temporary file, and not on the player's own. Anchoring a
-     * route to a point in the middle of a road splits that road at the point, which is right when the
-     * player asked for a route from where they are standing and wrong when a self-test asks on their
-     * behalf: the first real run of this check left a node and a segment in the world that nobody had
-     * drawn, and a player who opened the line editor afterwards would have found a junction there.
+     * Whether the ordinary router can cross the loaded world: probes between the nodes furthest apart in each direction, for walking and driving, and reports what came back. A network of separate pieces is expected to fail some -- the reason is printed with it, so a failure reads as the roads are in fragments rather than the router is broken.
+     * Run on a copy through a temporary file, not the player's own: anchoring a route to a point in the middle of a road splits that road, right when the player asks from where they stand but wrong when a self-test asks on their behalf. The first run left a node and a segment nobody had drawn.
      */
     private static Result checkRoutes(RoadNetwork network) {
         RoadNetwork probe = copyOf(network);
@@ -693,7 +584,9 @@ public final class SelfTest {
         return new Result("command.howtogo.selftest.check.routes", ok, detail.toString());
     }
 
-    /** A copy of a network, through a temporary file, or the network itself when there is none to be had. */
+    /**
+     * A copy of a network, through a temporary file, or the network itself when there is none to be had.
+     */
     private static RoadNetwork copyOf(RoadNetwork network) {
         Path file = null;
         try {
@@ -718,9 +611,7 @@ public final class SelfTest {
     }
 
     /**
-     * Whether the player's data survives being written and read back.
-     *
-     * <p>Through a temporary file of its own, so a check can never be the thing that loses a world.
+     * Whether the player's data survives being written and read back, through a temporary file of its own, so a check can never be the thing that loses a world.
      */
     private static Result checkStorage(RoadNetwork network, List<TransitLine> lines) {
         Path file = null;
@@ -732,10 +623,7 @@ public final class SelfTest {
                         "the network could not be written");
             }
             RoadNetwork read = RoadStorage.load(file);
-            // Category and number are fields this build writes and earlier files do not have, so the
-            // counts alone no longer prove the round trip: ask it back segment by segment. A file
-            // written before the fields existed loads them as the class's own "none" and no number,
-            // which is what the network in memory says too, so an old world passes this unchanged.
+            // Category and number are fields this build writes and earlier files do not have, so the counts alone no longer prove the round trip: ask it back segment by segment. An old file loads both as the class's own none and no number, which is what the in-memory network says too.
             int classified = 0;
             int mismatched = 0;
             for (RoadSegment segment : network.segments()) {
@@ -775,26 +663,13 @@ public final class SelfTest {
 
     /**
      * Whether the notes a player writes about a place are kept as this mod promises.
-     *
-     * <h2>What only the game can answer</h2>
-     * The regression harness covers the same limits and the same file on a directory of its own, and
-     * it covers the tolerant reading -- unknown fields, a repeated key, a version from a newer build
-     * -- which a player's own file can hold but which this check must not fake. What the harness
-     * cannot reach is the half that ties a record to a place: whether the five destination sources
-     * and the portable {@link PlaceSources} still agree on the ids the records are keyed by. A
-     * renamed source would not fail loudly -- every note from it would simply stop being found -- so
-     * the ids are pinned here against the source classes themselves, which only the compiled game
-     * has. The constants are compile-time constants and are inlined, so no MTR or Xaero class has to
-     * be present at run time for the comparison to work.
-     *
-     * <p>Every file this uses is a temporary one of the check's own; the player's store is never
-     * opened. A failure is reported as one line of counts rather than as a stack trace: this runs for
-     * a player who asked what is wrong with their world, not for a developer with a console.
+     * The regression harness covers the same limits and file on a directory of its own, including the tolerant reading; what it cannot reach is whether the five destination sources and the portable PlaceSources still agree on the ids the records are keyed by. A renamed source would not fail loudly -- every note from it would simply stop being found -- so the ids are pinned here against the source classes, which only the compiled game has. Compile-time constants, so no MTR or Xaero class must be present at run time.
+     * Every file used is a temporary one of the check's own; the player's store is never opened. A failure is one line of counts, not a stack trace: this runs for a player, not for a developer.
      */
     private static Result checkPlaceDetails() {
         Path file = null;
         try {
-            // --- the limits, at their own boundaries, with a surrogate pair across one of them
+            // The limits, at their own boundaries, with a surrogate pair across one of them.
             String emoji = "\uD83D\uDE00";
             String overlong = "a".repeat(PlaceDetails.MAX_DESCRIPTION - 1) + emoji + "b";
             PlaceDetails cut = PlaceDetails.of(overlong, List.of(), false).normalize();
@@ -802,8 +677,7 @@ public final class SelfTest {
                     && PlaceDetails.MAX_TAGS == 16 && PlaceDetails.MAX_TAG_LENGTH == 8;
             boolean trimmed = "贴边".equals(
                     PlaceDetails.of("  贴边 \r\n", List.of(), false).normalize().description());
-            // What is kept last has to be the whole emoji: a cut between its two chars would leave a
-            // lone surrogate, which no font and no JSON reader accepts.
+            // What is kept last has to be the whole emoji: a cut between its two chars leaves a lone surrogate, which no font and no JSON reader accepts.
             boolean surrogateSafe = PlaceDetails.lengthInCodePoints(cut.description())
                     == PlaceDetails.MAX_DESCRIPTION
                     && cut.description().endsWith(emoji)
@@ -830,8 +704,7 @@ public final class SelfTest {
             boolean limits = valuesPinned && trimmed && surrogateSafe && tagsCapped
                     && firstSpellingKept && tagShortened && noBlankOrDuplicate;
 
-            // --- the one-line preview and the cut payload: short text is not flagged, long text is,
-            // and no newline or tab survives the preview
+            // The one-line preview and the cut payload: short text is not flagged, long text is, and no newline or tab survives the preview.
             PlaceDetails shortDetails = PlaceDetails.of("短描述", List.of(), false);
             PlaceSummary shortPreview = shortDetails.summary(200);
             PlaceSummary longPreview = PlaceDetails.of("描".repeat(300), List.of(), false)
@@ -848,7 +721,7 @@ public final class SelfTest {
                     && longPayload.text().startsWith("第一行\n")
                     && !PlaceDetails.of("短\n描述", List.of(), false).truncated(200).truncated();
 
-            // --- two records through a temporary file, one of them carrying every awkward character
+            // Two records through a temporary file, one of them carrying every awkward character.
             file = Files.createTempFile("howtogo-selftest-details", ".json");
             Files.delete(file);
             Map<PlaceKey, PlaceDetails> written = new LinkedHashMap<>();
@@ -866,7 +739,7 @@ public final class SelfTest {
                     && written.get(manualKey).equals(read.get(manualKey))
                     && written.get(stationKey).equals(read.get(stationKey));
 
-            // --- the key of a place, built the way each of the five built-in sources builds it
+            // The key of a place, built the way each of the five built-in sources builds it.
             String dimension = "minecraft:overworld";
             Destination manual = new Destination("家", 10, 64, 20, PlaceSources.MANUAL,
                     Destination.NO_COLOR, PlaceKind.PLACE, String.valueOf(12));
@@ -889,17 +762,14 @@ public final class SelfTest {
                     PlaceSources.XAERO, PlaceKeys.xaeroId("营地", 500, 600)))
                     && PlaceKeys.of(dimension, roadWeaver).equals(new PlaceKey(dimension,
                     PlaceSources.ROADWEAVER, "minecraft:village_plains"));
-            // The five source ids are a file-format contract: a renamed source would leave every note
-            // it ever wrote behind as an unlinked record. The sources live in this same package, so
-            // the comparison needs no import and no class to be constructed.
+            // The five source ids are a file-format contract: a renamed source would leave every note it ever wrote behind as an unlinked record. The sources live in this same package, so the comparison needs no import and no class to construct.
             boolean idsPinned = PlaceSources.MANUAL.equals(PoiDestinationSource.ID)
                     && PlaceSources.MTR.equals(MtrStationSource.ID)
                     && PlaceSources.XAERO.equals(XaeroWaypointSource.ID)
                     && PlaceSources.CREATE.equals(CreateStationSource.ID)
                     && PlaceSources.ROADWEAVER.equals(RoadWeaverStructureSource.ID);
 
-            // --- only the player's own places may be deleted; an unknown id is an addon's, and is
-            // automatic like every other source that is not the road network
+            // Only the player's own places may be deleted; an unknown id is an addon's and is automatic like every other source that is not the road network.
             boolean delete = manualKey.isManual()
                     && PlaceSources.deletable(PlaceSources.MANUAL)
                     && !PlaceSources.deletable(PlaceSources.MTR)
@@ -930,20 +800,8 @@ public final class SelfTest {
     }
 
     /**
-     * Whether this world's map really survives being packed into an archive and unpacked again.
-     *
-     * <h2>What this adds to the storage check above</h2>
-     * That one round-trips the network through a file this class wrote; this one goes through the
-     * feature a player uses to move a map to another machine: the whole data directory is packed as a
-     * zip, read back through the same reader an import uses, and unpacked into a temporary directory.
-     * What can go wrong only here is the glue -- which directory this world's data is actually in, what
-     * the manifest says the world is, and whether an import rewrites the directory's {@code .world}
-     * record to the importing world rather than carrying the sender's.
-     *
-     * <p>The temporary target stands in for "somebody else's world", and the record it ends up with is
-     * checked against that name rather than against this world's. Nothing is written to the player's
-     * own directory and nothing is imported over it: the archive is a copy, the target is a temporary
-     * directory, and both are removed before this returns.
+     * Whether this world's map survives being packed into an archive and unpacked again.
+     * The storage check round-trips a file this class wrote; this goes through the feature that moves a map to another machine: the data directory is zipped, read back through the same reader an import uses, and unpacked into a temporary directory. What can go wrong only here is the glue -- which directory this world's data is in, what the manifest says the world is, and whether an import rewrites the directory's .world record to the importing world. Nothing is written to the player's own directory.
      */
     private static Result checkArchive() {
         Path archive = null;
@@ -966,8 +824,7 @@ public final class SelfTest {
             boolean filesOk = read.files() == packed.files && read.files() == contents.files();
             boolean manifestOk = contents.manifest != null && world.equals(contents.manifest.world);
 
-            // The road network of the dimension being played, byte for byte. Other files are covered
-            // by the file count; this is the one whose loss would be the player's map.
+            // The road network of the dimension being played, byte for byte. Other files are covered by the file count; this is the one whose loss would be the player's map.
             Path current = WorldFiles.of("");
             boolean roadsOk = true;
             if (Files.isRegularFile(current)) {
@@ -976,11 +833,7 @@ public final class SelfTest {
                         && Arrays.equals(Files.readAllBytes(current), Files.readAllBytes(copy));
             }
 
-            // The place details, byte for byte, when the player has written any: the notes are the
-            // one thing in this directory that exists nowhere else, and they travel as an ordinary
-            // JSON member of it simply because the archive packs every JSON file. The name is the
-            // one PlaceDetailStore writes; the store's own constant is private, and a check that
-            // guessed a different name would compare two missing files and pass.
+            // The place details, byte for byte, when the player has written any: the notes exist nowhere else and travel as an ordinary JSON member of the archive. The name is the one PlaceDetailStore writes; a check that guessed a different name would compare two missing files and pass.
             Path detailsFile = WorldFiles.worldFile("place_details");
             boolean detailsExist = Files.isRegularFile(detailsFile);
             boolean detailsOk = true;
@@ -1045,26 +898,9 @@ public final class SelfTest {
 
     /**
      * Whether the browser map's server really starts and really serves, in this client.
-     *
-     * <h2>What only the game can answer</h2>
-     * The regression harness runs this same server over a real socket, so the HTTP surface itself is
-     * covered outside. What it cannot cover is the two things that depend on how the game is
-     * launched: whether {@code com.sun.net.httpserver} is resolvable from a mod at all -- it needs the
-     * JDK's own module, and a launcher that built a narrower module graph would leave the page dead
-     * with nothing but a {@code NoClassDefFoundError} in the log -- and whether the page, its scripts
-     * and the vendored html2canvas are found through the mod's own class loader, which is a
-     * transforming one in development and a jar in a release.
-     *
-     * <p>It is checked on a port the operating system hands out, on the loopback address, and the
-     * server is stopped before this returns, so a self-test never leaves a listening socket behind and
-     * never collides with a map the player has open.
-     *
-     * <h2>Why it does not go through the main-thread hand-off</h2>
-     * This runs <em>on</em> the client thread, and the real API reads the roads by queueing work for
-     * exactly that thread and waiting for it -- so asking it here would be the client thread waiting
-     * for itself, and the check would hang until the timeout and then fail for the wrong reason. The
-     * snapshot is therefore taken here, where the network is, and handed to the server as a finished
-     * reading; that is a copy by construction, so nothing on the HTTP thread can touch the live roads.
+     * The harness runs the same server over a real socket, so the HTTP surface is covered outside; what only the game can answer is whether com.sun.net.httpserver resolves from a mod at all -- a launcher with a narrower module graph would leave the page dead with a NoClassDefFoundError -- and whether the page, its scripts and the vendored html2canvas are found through the mod's class loader, which differs between development and release.
+     * Checked on an OS-assigned port on the loopback address, and the server is stopped before returning, so a self-test leaves no listening socket and never collides with an open map.
+     * Why it does not use the main-thread hand-off: the real API reads roads by queueing work on this very thread and waiting, so asking it here would be the client thread waiting for itself. The snapshot is taken here and handed to the server as a finished reading, a copy by construction.
      */
     private static Result checkWebMap(RoadNetwork network) {
         WebMapServer server = null;
@@ -1072,10 +908,7 @@ public final class SelfTest {
             String dimension = Minecraft.getInstance().level == null
                     ? "unknown"
                     : Minecraft.getInstance().level.dimension().location().toString();
-            // The real reader, so the check sees exactly what a browser tab would: the player's roads
-            // and the read-only layers the world map draws. The fallback exists only for a client
-            // thread with no world, where the API itself would answer 503 and there is nothing to
-            // compare -- the page and asset half of this check still has to run.
+            // The real reader, so the check sees exactly what a browser tab would: the player's roads and the read-only layers the world map draws. The fallback exists only for a client thread with no world, where the API would answer 503.
             RoadMapSnapshot snapshot;
             try {
                 snapshot = WebMapService.liveSnapshot();
@@ -1092,9 +925,7 @@ public final class SelfTest {
             }
 
             server = WebMapServer.start(() -> reading, freePort());
-            // Java 17's HttpClient is not AutoCloseable, and the 1.20.1 and 1.20.4 nodes are
-            // Java 17 -- the same boundary that decides the rest of the Java-version differences.
-            // The probing body is one method either way; only the statement around it differs.
+            // Java 17's HttpClient is not AutoCloseable and the 1.20.1 and 1.20.4 nodes are Java 17 -- the same boundary as the rest of the Java-version differences. The probing body is one method either way; only the statement around it differs.
             //? if >=1.20.5 {
             try (HttpClient client = newClient()) {
                 return probeWebMap(client, server, network, reading, autoSegments);
@@ -1104,8 +935,7 @@ public final class SelfTest {
             return probeWebMap(client, server, network, reading, autoSegments);
             *///?}
         } catch (IOException | RuntimeException failed) {
-            // Most likely here: no port could be bound, or the JDK's HTTP module is not in this
-            // launcher's graph. Both are worth the whole line the command gives them.
+            // Most likely here: no port could be bound, or the JDK's HTTP module is not in the launcher's graph. Both are worth the whole line the command gives them.
             return new Result("command.howtogo.selftest.check.webmap", false,
                     "the browser map could not be served: " + failed);
         } finally {
@@ -1159,11 +989,7 @@ public final class SelfTest {
     }
 
     /**
-     * Whether the payload marks any segment as coming from a read-only layer.
-     *
-     * <p>The sources are what the browser uses to say a road is 阡陌交通's or MTR's rather than the
-     * player's, so a payload with the auto-recognised segments in it but no sources would draw them
-     * as the player's own roads.
+     * Whether the payload marks any segment as coming from a read-only layer. The sources are what the browser uses to say a road belongs to another mod rather than the player, so a payload with the auto-recognised segments but no sources would draw them as the player's own roads.
      */
     private static boolean hasSourceField(JsonObject payload) {
         if (payload == null || !payload.has("segments")) {
@@ -1178,18 +1004,9 @@ public final class SelfTest {
     }
 
     /**
-     * Whether the interface theme resolves the way it promises.
-     *
-     * <p>A palette is a matter of taste and cannot pass or fail; the rule that chooses between the
-     * two palettes can. Auto has to come out white in daylight, black at night, and black in every
-     * dimension that has no sky, which is the whole of what the option says it does. The spellings
-     * are checked too, because the two loaders write the setting differently -- one the id, one the
-     * constant name -- and a mode whose id does not read back as itself is a mode half the players
-     * cannot select; an id that names nothing has to fall back rather than throw.
-     *
-     * <p>The mode actually in force is reported with the verdict: "the theme is wrong" is otherwise
-     * a report nobody can act on, and this check runs in whatever dimension the player is standing
-     * in, which is exactly what auto depends on.
+     * Whether the interface theme resolves the way it promises. A palette is a matter of taste and cannot pass or fail; the rule that chooses between the two palettes can.
+     * Auto has to come out white in daylight, black at night and black in every dimension that has no sky. The spellings are checked too, because the two loaders write the setting differently -- one the id, one the constant name -- and an id that names nothing has to fall back rather than throw.
+     * The mode in force is reported with the verdict, since the theme is wrong is otherwise a report nobody can act on.
      */
     private static Result checkTheme() {
         boolean day = UiTheme.autoIsLight(true, 1.0F);
@@ -1201,9 +1018,7 @@ public final class SelfTest {
         }
         boolean unknownFallsBack = UiTheme.Mode.byId("not-a-mode") == null;
         boolean ok = day && night && noSky && ids && unknownFallsBack;
-        // The live brightness is reported with the verdict: "the theme is wrong" is otherwise a
-        // report nobody can act on, and it is the number auto decides on -- a player can read it at
-        // noon and again at night and see the game's own reading move.
+        // The live brightness is reported with the verdict: it is the number auto decides on, so a player can read it at noon and again at night and see the game's own reading move.
         String detail = "mode=" + RoadConfig.uiTheme().id() + " light=" + UiTheme.light()
                 + " sky=" + UiTheme.liveSkyBrightness()
                 + " day=" + day + " night=" + night + " noSky=" + noSky

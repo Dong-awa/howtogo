@@ -5,54 +5,20 @@ import java.util.List;
 
 /**
  * Where a public transport line's name is offered on a map, and where it may stand.
- *
- * <h2>What a line's name is, and what it is not</h2>
- * A road's name is drawn as ink lying along the road, once per stretch of screen the road crosses.
- * A line's name is not that: it is a capsule in the line's own colour with the name printed in it,
- * so it reads as a badge for the service rather than as a second road name -- the same
- * coloured-object language the mod already uses for a line in a list, on a platform sign and on the
- * place card. A capsule is horizontal on every map, because the plate is an object that names the
- * line rather than a word belonging to its geometry.
- *
- * <h2>Why the positions are a fixed distance apart</h2>
- * The player asked for one every 160 blocks, and for one just outside each end of the line. A screen
- * distance would put a name on every line every time the map was zoomed, and a name per stop would
- * be a name per station -- the line would read as its timetable. A world distance means the names
- * stay put while the map moves, so the same plate is in the same place next to the same stretch of
- * track, and the count is the length of the line rather than the size of the screen.
- *
- * <h2>Why the plate never wanders down the line</h2>
- * An earlier version hunted for a free place by stepping <em>along the line in blocks</em>, and at a
- * close zoom that is the worst possible unit: twenty pixels a block turns one twenty-four-block step
- * into nearly five hundred pixels, so a plate whose first place was taken ended up over empty ground
- * hundreds of pixels from the line it names -- reported from play as "the name is floating far away;
- * at least keep it near the line". A block is the wrong unit for a screen-space object, and stepping
- * along a stored direction is the wrong geometry for a line that bends.
- *
- * <p>So the rule is now the one a reader assumes: the plate sits on its line, raised just clear of
- * the stroke ({@code risePx}, the caller's own). If that place is taken it is tried one plate-height
- * higher -- still beside the line -- and if that is taken too the stretch is simply left unnamed. A
- * name is a badge for a service, and a plate over ground the service does not run along is worse than
- * no plate at all. The cost of this is that a crowded map shows fewer line names; the alternative is
- * a name nobody can attach to a line.
- *
- * <p>The geometry lives here, once, so the world map, the main screen's viewer, the destination
- * picker and the phone page cannot drift apart about where a line's name goes or which spots are
- * worth trying. (The minimaps do not name lines at all: a fixed-size capsule on a hundred-pixel map
- * is most of the map, so those two surfaces carry the coloured line and nothing else.)
+ * A line's name is a capsule in the line's colour, horizontal like a badge, not ink along the
+ * road. Candidates sit one every SPACING_BLOCKS of world distance and just outside each end, so
+ * names stay put while the map moves and the count follows the line, not the screen.
+ * The plate is never moved along the line: an earlier version stepped along it in blocks and at
+ * close zoom threw plates hundreds of pixels off the line. It sits on the line raised by risePx,
+ * tries one plate-height higher, and otherwise leaves the stretch unnamed. Shared by the world
+ * map, viewer, picker and phone page so they cannot drift apart.
  */
 public final class LineNameLabels {
 
     /** One name per this many blocks of drawn line, the spacing the player asked for. */
     public static final double SPACING_BLOCKS = 160.0;
 
-    /**
-     * How many places one candidate offers, in screen space.
-     *
-     * <p>Two, and both of them on the line: the plate's own place above the stroke, and one
-     * plate-height higher. More than that would be the old hunt again -- a plate that has left the
-     * line's neighbourhood is a label for whatever it ended up over.
-     */
+    /** How many places one candidate offers in screen space: on the line, and one plate-height higher. */
     public static final int PLACES = 2;
 
     /** Room between the two places a candidate offers, in screen pixels. */
@@ -60,17 +26,9 @@ public final class LineNameLabels {
 
     /**
      * The font factor a line's name is drawn at, on every map.
-     *
-     * <p>Not tied to a road's label zoom, and not the sign card's smaller fraction either: the
-     * capsule is the one thing on the map that is about the service rather than about the ground,
-     * so it is drawn at a readable size of its own and the plate is sized around it. All the maps
-     * that draw one use the same factor so the same line's badge is the same badge wherever it
-     * appears.
-     *
-     * <p>0.65 rather than the 0.8 this started at: with the plates finally sitting on their own
-     * lines, the player read them as large for a badge and asked for one step smaller. It is the
-     * whole plate that shrinks -- text, padding and all -- so the capsule keeps its shape and only
-     * its size changes.
+     * Not tied to a road's label zoom: the capsule is about the service, not the ground, and every
+     * surface uses the same factor so a line's badge looks the same everywhere. 0.65 rather than
+     * the original 0.8 because the player asked for one step smaller.
      */
     public static final float NAME_FACTOR = 0.65F;
 
@@ -84,12 +42,7 @@ public final class LineNameLabels {
     }
 
     /**
-     * The screen the placer is placing on: the projection of one map, and its own fit test.
-     *
-     * <p>A small interface rather than a map-specific callback so the search below is written once.
-     * The fit test is the map's business because it is where the map's already-placed labels, its
-     * panels and its frame live -- the placer only knows what box it needs and whether that box is
-     * free on this screen.
+     * The screen the placer is placing on: one map's projection and its own fit test. The fit test is the map's business, because that is where its other labels and panels live.
      */
     public interface Screen {
 
@@ -104,30 +57,17 @@ public final class LineNameLabels {
     }
 
     /**
-     * One offered place: its world point, the distance along the line, and the line's direction there.
-     *
-     * <p>The distance and the direction are kept because a candidate is a place <em>on</em> the line
-     * rather than merely a point near it: the direction says which way the stroke runs under the
-     * plate, which is what lets a future map draw the capsule turned with a steep line if it ever
-     * wants to. Nothing in the placer needs them to move the plate any more -- see the class comment.
+     * One offered place: world point, distance along the line, and the line's direction there.
+     * Distance and direction say which way the stroke runs under the plate; the placer itself no
+     * longer needs them to move it.
      */
     public record Candidate(double x, double z, double distance, double dirX, double dirZ) {
     }
 
     /**
-     * The places a line's name is offered at, as world points, worked out in one walk of the line.
-     *
-     * <p>Every {@link #SPACING_BLOCKS} of the drawn line, plus both of its ends exactly -- the
-     * terminus is the one place on a line a passenger reads a name from. The end places used to sit
-     * 24 blocks <em>outside</em> the line, which is invisible on a zoomed-out map and absurd on a
-     * close one: at twenty pixels a block the "just past the terminus" plate was nearly five hundred
-     * pixels past it. A plate centred on the end already reaches half its own width past the line,
-     * which is the look the end places were for.
-     *
-     * <p>One walk rather than one walk per candidate, because a line read out of MTR is sampled every
-     * few blocks and tens of thousands of points long: the places can be refused in world space
-     * before the placer is asked about them, which is what keeps the world map's cost per frame a
-     * function of the screen rather than of the railway.
+     * The places a line's name is offered at, worked out in one walk of the line.
+     * Every SPACING_BLOCKS of drawn line plus both ends exactly -- the terminus is where a passenger
+     * reads a name. One walk keeps the world map's per-frame cost a function of the screen, not the railway.
      */
     public static List<Candidate> candidatePoints(List<double[]> points) {
         List<Candidate> candidates = new ArrayList<>();
@@ -177,20 +117,13 @@ public final class LineNameLabels {
     }
 
     /**
-     * Looks for a place for one capsule, starting at the candidate itself and lifting it one row
-     * when that place is taken.
-     *
-     * <p>The plate is never moved along the line: see the class comment for the play-reported drift
-     * that rule replaced. Every place tried is within one plate-height of the line, so a name that is
-     * drawn at all is drawn next to the thing it names, and one whose places are both taken is left
-     * for the next candidate or not drawn at all.
-     *
-     * @param candidate the offered place, in world blocks
-     * @param width     the painted capsule's width in screen pixels
-     * @param height    the painted capsule's height in screen pixels
-     * @param risePx    how far above the line the capsule's centre sits, in screen pixels
-     * @param screen    the map's projection and fit test
-     * @return {@code {centreX, centreY}} in screen pixels, or null when every place is taken
+     * Looks for a place for one capsule, starting at the candidate and lifting it one plate-height
+     * when that place is taken; the plate is never moved along the line. A candidate whose places are
+     * both taken is left to the next one or not drawn.
+     * @param width the painted capsule's width in screen pixels
+     * @param height the painted capsule's height in screen pixels
+     * @param risePx how far above the line the capsule's centre sits, in screen pixels
+     * @param screen the map's projection and fit test
      */
     public static double[] find(Candidate candidate, double width, double height, double risePx,
                                 Screen screen) {

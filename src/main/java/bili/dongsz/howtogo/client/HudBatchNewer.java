@@ -55,8 +55,8 @@ public final class HudBatchNewer implements HudDraw.VertexSink {
     // path character. The static initialiser threw, which took the class down with it and crashed the
     // game the first time the HUD drew:
     //
-    //     IdentifierException: Non [a-z0-9/._-] character in path of location:
-    //     minecraft:howtogo:pipeline/hud_quads
+    // IdentifierException: Non [a-z0-9/._-] character in path of location:
+    // minecraft:howtogo:pipeline/hud_quads
     //
     // Underscores rather than slashes so that this file and its twin are the same in this respect;
     // the twin compiles on nodes where a slash is not accepted, and one flat name works everywhere.

@@ -7,15 +7,7 @@ import bili.dongsz.howtogo.HowToGo;
 import net.neoforged.fml.ModList;
 //?}
 
-/**
- * Wires the road layer into Xaero's world map.
- *
- * <p>This class deliberately has no Xaero type in its signature or method body. The class that does
- * is {@link RoadLayerXaero}; it is loaded only after the loader check here has succeeded. That
- * separation is what makes a missing Xaero a soft failure: loading this class cannot resolve
- * {@code ElementRenderer}, so the first client tick reports the missing mod instead of throwing
- * {@code NoClassDefFoundError}.
- */
+/** Wires the road layer into Xaero's map; no Xaero type here, so a missing mod fails soft, not hard. */
 public final class RoadLayer {
 
     private static boolean attempted;

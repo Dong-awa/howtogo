@@ -14,38 +14,14 @@ import java.util.zip.InflaterInputStream;
 
 /**
  * The shape of an MTR reading, with no Minecraft type in it.
- *
- * <h2>Why this exists rather than the records the client already has</h2>
- * The client reads MTR into {@code MtrClientData.Snapshot}, and that class is client-side: it reaches
- * for MTR's client data, the local simulation and the overlay, and it is compiled against Minecraft's
- * client half. A dedicated server cannot load it, so the server cannot build the very records it would
- * have to send. This file is the same reading in a shape both sides can hold -- records of ids, names
- * and numbers, plus the two arrays a rail's geometry is -- and the wire format of it.
- *
- * <p>The conversion is deliberately one-for-one with {@code MtrClientData}'s records: no thinking
- * happens here, and a field this file does not carry is a field the client was not going to be sent
- * anyway.
- *
- * <h2>The wire format</h2>
- * A version int, then the dimensions, each with its own stations, platforms, lines and rails, written
- * with {@link DataOutputStream} and then deflated. Plain data streams rather than a
- * {@code FriendlyByteBuf} on purpose: the buffer classes and their method names are exactly what
- * changes between the Minecraft versions this mod supports, while {@code DataOutputStream} has not
- * changed since Java 1.0. The payload's own codec therefore carries one {@code byte[]} and nothing
- * else.
- *
- * <p>Decoding is bounded: the counts and lengths are checked against limits <em>before</em> anything
- * is allocated, because a malformed or hostile packet must not be able to ask this side for an
- * arbitrarily large array. The deflated body is bounded the same way.
+ * MtrClientData Snapshot is client-side, so a dedicated server could not build the records it must send. This is the same reading in a shape both sides hold, plus the wire format; the conversion is one-for-one and no thinking happens here.
+ * Wire format: a version int, then the dimensions with their stations, platforms, lines and rails, written with DataOutputStream and deflated -- the buffer classes change between Minecraft versions, DataOutputStream has not. Decoding is bounded: counts and lengths are checked against limits before anything is allocated.
  */
 public final class MtrSnapshotData {
 
     /**
-     * Bumped when the shape below changes; a reader refuses a version it does not know.
-     *
-     * <p>2 added a route's circular state to every line. Both sides ship in the same jar, so a bump is
-     * the honest way to say it: an older peer's body is refused rather than misread as a reading whose
-     * lines happen to be missing a field.
+     * Bumped when the shape changes; a reader refuses a version it does not know.
+     * 2 added a route's circular state to every line. Both sides ship in the same jar, so an older peer is refused rather than misread.
      */
     public static final int VERSION = 2;
 
@@ -59,7 +35,7 @@ public final class MtrSnapshotData {
     private MtrSnapshotData() {
     }
 
-    /** A station area, with the extent MTR gave it. Mirrors {@code MtrClientData.Station}. */
+    /** A station area, with the extent MTR gave it. Mirrors MtrClientData Station. */
     public record Station(long id, String name, String mode, int color, int centerX, int centerY,
                           int centerZ, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
     }
@@ -74,12 +50,7 @@ public final class MtrSnapshotData {
 
     /**
      * A line, with MTR's own ids for the rails it runs along when the reading states them.
-     *
-     * @param circular whether MTR calls the route circular -- a loop, ridden one way round. This is
-     *                 MTR's raw fact and not this mod's direction: {@code MtrTransit} is the one place
-     *                 it becomes a {@code LineDirection}, exactly as the colour becomes the line's
-     *                 colour. False when the reading cannot say, which is the answer that cannot
-     *                 invent a restriction.
+     * circular is MTR's raw fact, not this mod's direction: MtrTransit turns it into a LineDirection. False when the reading cannot say, which cannot invent a restriction.
      */
     public record Line(long id, String name, String mode, int color, List<Stop> stops,
                        List<String> rails, boolean circular) {
@@ -140,12 +111,7 @@ public final class MtrSnapshotData {
         }
     }
 
-    /**
-     * The reading as the bytes that go on the wire, deflated.
-     *
-     * @throws IOException only when the in-memory streams fail, which they do not in practice; the
-     *                     signature is kept so a caller can log rather than crash on a broken value
-     */
+    /** The reading as the wire bytes, deflated. IOException only if the in-memory streams fail. */
     public static byte[] encode(Snapshot snapshot) throws IOException {
         ByteArrayOutputStream raw = new ByteArrayOutputStream(1 << 16);
         try (DataOutputStream out = new DataOutputStream(raw)) {
@@ -185,8 +151,7 @@ public final class MtrSnapshotData {
                     writeNullable(out, line.name());
                     writeNullable(out, line.mode());
                     out.writeInt(line.color());
-                    // MTR's own fact, not the direction it becomes: the wire carries what the reading
-                    // knew and the client decides once, in MtrTransit, what a circular route means.
+                    // MTR's own fact, not the direction it becomes: the client decides once, in MtrTransit.
                     out.writeBoolean(line.circular());
                     out.writeInt(line.stops().size());
                     for (Stop stop : line.stops()) {
@@ -226,9 +191,7 @@ public final class MtrSnapshotData {
 
     /**
      * The reading back, or an exception when the bytes are not a reading this version understands.
-     *
-     * <p>{@link IOException} rather than a null return: the caller is a network handler that has to
-     * log what arrived, and "malformed" and "empty" are different answers.
+     * IOException rather than a null return: the caller is a network handler that has to log what arrived, and malformed and empty are different answers.
      */
     public static Snapshot decode(byte[] bytes) throws IOException {
         if (bytes == null || bytes.length == 0) {
@@ -349,7 +312,7 @@ public final class MtrSnapshotData {
         return in.readBoolean() ? in.readUTF() : null;
     }
 
-    /** Keeps a name inside what a {@code writeUTF} can carry, in bytes rather than characters. */
+    /** Keeps a name inside what a writeUTF can carry, in bytes rather than characters. */
     private static String truncate(String text) {
         if (text == null) {
             return "";
@@ -357,8 +320,7 @@ public final class MtrSnapshotData {
         if (text.length() > MAX_TEXT) {
             text = text.substring(0, MAX_TEXT);
         }
-        // The length of a modified UTF-8 string is at most 3 bytes per char, and writeUTF refuses
-        // anything over 65535 bytes; the cap above keeps every char inside that by a wide margin.
+        // Modified UTF-8 is at most 3 bytes per char and writeUTF refuses anything over 65535 bytes; the cap above keeps every char inside that.
         return text;
     }
 }

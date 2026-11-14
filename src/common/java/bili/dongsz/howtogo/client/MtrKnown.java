@@ -18,69 +18,29 @@ import java.util.function.LongPredicate;
 
 /**
  * Everything MTR has told this client so far, kept.
- *
- * <h2>Why a reading cannot be used on its own</h2>
- * MTR sends a client only what is near it, and re-sends it as the player moves: a reading is a window
- * that closes behind them. Used on its own, that window takes the player's railway with it -- the lines
- * vanish from the planner and the editor as they walk away, the stations stop being destinations, and
- * the track the marks are cut from is gone, so a journey over a line they were just riding cannot be
- * planned at all. That is not a bug in the reading; it is the reading being asked to mean more than it
- * says. So each reading is folded into what the earlier ones taught, and the answers are taken from the
- * whole of that.
- *
- * <h2>What each thing keeps</h2>
- * <ul>
- *   <li><b>lines and stations</b> -- the newest word about each, by MTR's own id. Walking back over
- *       ground the player has already covered updates them; walking away leaves the last word standing.
- *       A line is only replaced by a reading that placed at least as many of its stops, so a window
- *       arriving with fewer of them cannot shrink the line to what happens to be in range.</li>
- *   <li><b>track</b> -- for a line the reading names the rails of, what it says, in place of what was
- *       kept: such a reading is a whole network and is the line, so there is nothing to add it to. For
- *       a line whose track has to be worked out, the union of every stretch of it ever found, because
- *       that is discovered a window at a time and the pieces have to be added rather than replaced: the
- *       map draws the line along the track the player found earlier, and a ride planned from far away
- *       runs along it too. A piece already kept is not added twice, and the union is capped, so a
- *       session that walks the whole network cannot grow without limit.</li>
- * </ul>
- *
- * <p>Track is kept for every line, not only for the ones whose marks are switched on: the switch is about
- * whether a line's track is added to the road network as roads, and a line switched off is still drawn
- * along the track it runs on. Nothing here reads a config or a switch either -- which lines want their
- * roads is asked of the caller when the roads are assembled, so a line's answer applies to track that was
- * found before the answer was given.
+ * MTR sends a client only what is near it and re-sends as the player moves, so a reading alone is a
+ * window that closes behind them: lines vanish from the planner and editor, stations stop being
+ * destinations, and the track a just-ridden line was cut from is gone. Each reading is folded into
+ * what earlier ones taught, and answers come from the whole.
+ * Lines and stations keep the newest word per MTR id; a line is only replaced by a reading that
+ * placed at least as many of its stops. Named track replaces what was kept; worked-out track is
+ * unioned, deduplicated and capped.
  */
 final class MtrKnown {
 
     /**
      * Ceiling on remembered lines.
-     *
-     * <p>A bound rather than a policy, and deliberately far above what any railway holds: the point of
-     * the memory is that a line the player has seen stays usable, and a bound tight enough to be reached
-     * by an ordinary network would take lines away again -- which is the bug the memory exists to fix,
-     * arriving from the other side. The oldest is dropped, along with its marks, and it says so once.
-     *
-     * <p>Sized for a whole railway rather than for a session's window, because that is what a reading
-     * can now hold: {@link MtrWholeMap} reads every line of a network the player is hosting at once, and
-     * a cap meant for a hundred lines at a time would evict most of them the moment they arrived.
+     * Far above what any railway holds, because the point is that a line the player has seen stays
+     * usable: a tight cap would take lines away again -- the bug the memory exists to fix. Sized for a
+     * whole railway, since MtrWholeMap reads every line of a hosted network at once.
      */
     static final int MAX_LINES = 2048;
 
-    /** Ceiling on remembered stations, for the same reason and at the same kind of number. */
     static final int MAX_STATIONS = 20_000;
 
     /**
-     * Ceiling on remembered mark segments.
-     *
-     * <p>Every window of track the player walks past adds its own segments, and a railway is a lot of
-     * track -- so this is the bound on what one session keeps, and reaching it stops the union growing
-     * rather than stopping the world.
-     *
-     * <p>Counted in pieces of track rather than in rails, which is what makes the number generous
-     * rather than tight: a line whose reading names its rails arrives as one stitched piece per
-     * continuous stretch, not as one per rail, so a whole railway of a few hundred lines is a few
-     * hundred pieces. What the bound is really for is the reading that does not name them -- MTR's own
-     * window, where a line becomes one piece per pair of neighbouring stops that could be planned --
-     * and there it is the player's own travels that decide how much accumulates.
+     * Ceiling on remembered mark segments: the bound on what one session keeps, so reaching it stops
+     * the union growing rather than stopping the world. Counted in pieces of track, not rails.
      */
     static final int MAX_MARK_SEGMENTS = 100_000;
 
@@ -90,11 +50,8 @@ final class MtrKnown {
     private final Map<Long, TransitLine> lines = new LinkedHashMap<>();
     private final Map<Long, MtrTransit.Station> stations = new LinkedHashMap<>();
     /**
-     * The remembered stations by the name the grouping compares them under.
-     *
-     * <p>What makes remembering a whole railway cost a walk of the railway rather than its square: a
-     * station arriving can only be the same place as one whose name it shares, so the ones it has to be
-     * compared with are a handful rather than twenty thousand.
+     * The remembered stations by the name the grouping compares them under: a station arriving can
+     * only match one whose name it shares, so a whole railway costs a walk rather than its square.
      */
     private final Map<String, List<MtrTransit.Station>> stationsByName = new HashMap<>();
     private final Map<Long, RoadNetwork> tracks = new LinkedHashMap<>();
@@ -103,10 +60,8 @@ final class MtrKnown {
     private boolean markCapReported;
 
     /**
-     * Takes a reading into what is remembered.
-     *
-     * <p>The lines and stations it placed are the newest word about each; the marks it cut are added to
-     * the ones already kept.
+     * Takes a reading into what is remembered: lines and stations are the newest word, marks are
+     * added to the kept union.
      */
     void remember(MtrTransit.Built reading) {
         for (MtrTransit.Station station : reading.stations()) {
@@ -125,22 +80,10 @@ final class MtrKnown {
             if (line.stopCount() < kept.stopCount()) {
                 continue;
             }
-            // The newer reading has the line's newest stops, but not always everything that is known
-            // about it: a colour is a fact about MTR's route rather than about the window it arrived
-            // in, and the three readings this client merges do not all carry one -- a reading of the
-            // whole railway is read from a richer object, and a reader that could not get the colour
-            // says zero where the window said the route's real colour. Replacing the line with a
-            // copy that has no colour would repaint it in its kind's colour for the rest of the
-            // session, so a winner without one inherits the colour already learned for the same MTR
-            // line. A winner that does carry one keeps its own: MTR is the authority on it, and the
-            // memory is only the fallback for a reading that was silent.
-            //
-            // The direction is deliberately not inherited here, which is the difference worth stating:
-            // a route's circular state is MTR's answer rather than a reading's, so a newer reading that
-            // says "no longer a loop" is MTR changing the service, and keeping the remembered one-way
-            // would leave a line the railway no longer runs that way. The colour has to be inherited
-            // because "no colour" is how a thin reader says "I could not ask"; two-way is a real
-            // answer, so there is nothing to fall back over.
+            // The newer reading has the newest stops but not always everything known about the line: a colour
+            // is a fact about MTR's route and not all readings merged here carry one. A winner without a colour
+            // inherits the learned one; direction is deliberately not inherited, since a route's circular state
+            // is MTR's answer while "no colour" means the reader could not ask.
             if (!line.hasColor() && kept.hasColor()) {
                 line.setColor(kept.color());
             }
@@ -157,15 +100,8 @@ final class MtrKnown {
     }
 
     /**
-     * Puts what a reading says a line's track is, in place of whatever was kept of it.
-     *
-     * <h2>Why this is not the union {@link #addMarks} makes</h2>
-     * Because a reading that names a line's rails names <em>all</em> of them, and one that works them
-     * out does not. A window is the part of the railway near the player, so what it says about a line
-     * is a piece of that line and has to be added to the pieces earlier windows brought. A whole
-     * network fetched from the server is the line, so what it says is the line -- and adding that to
-     * what an earlier reading said would keep both, which for a line whose reading is now one stitched
-     * piece means a stale spike hanging off a live one every time the railway is edited.
+     * Puts what a reading says a line's track is, in place of whatever was kept: a reading that names
+     * the rails names all of them, and adding that to an earlier window would leave a stale spike.
      */
     private void replace(long lineId, RoadNetwork fresh) {
         RoadNetwork kept = tracks.get(lineId);
@@ -182,14 +118,9 @@ final class MtrKnown {
     }
 
     /**
-     * Puts the newest word about one place, taking out whatever was known about it before.
-     *
-     * <p>What is remembered is a place rather than an MTR station -- see {@link MtrTransit} -- and a
-     * place takes the lowest of its stations' ids. Building one more of a station's platforms can
-     * therefore give the place an id it did not have, and the entry under the old id would stand beside
-     * the new one for ever after: the same station offered twice, which is the thing the grouping exists
-     * to stop, arriving by the other door. A station that has been renamed is the same problem with the
-     * same answer.
+     * Puts the newest word about one place, removing whatever was known before. A place takes the
+     * lowest of its stations' ids, so a new platform can give it a new id; the old entry would stand
+     * beside the new one for ever -- the same station offered twice.
      */
     private void rememberStation(MtrTransit.Station station) {
         for (MtrTransit.Station kept : sameNameAs(station)) {
@@ -208,7 +139,6 @@ final class MtrKnown {
         }
     }
 
-    /** Everything remembered under a station's name, or nothing when the name is not one. */
     private List<MtrTransit.Station> sameNameAs(MtrTransit.Station station) {
         if (station.name().isBlank()) {
             // A station with no name is never the same place as another, because every nameless station
@@ -219,7 +149,6 @@ final class MtrKnown {
         return sameName == null ? List.of() : List.copyOf(sameName);
     }
 
-    /** Forgets a station, under its own name as well as by its id. */
     private void drop(MtrTransit.Station station) {
         stations.remove(station.id());
         if (station.name().isBlank()) {
@@ -240,11 +169,8 @@ final class MtrKnown {
     }
 
     /**
-     * Whether two remembered stations are one place.
-     *
-     * <p>The same rule {@link MtrTransit} groups them by, and deliberately the same: a station this
-     * memory thinks is two places is a station the picker will offer twice, whether the two arrived in
-     * one reading or in two.
+     * Whether two remembered stations are one place, by the same rule MtrTransit groups them: a
+     * station this memory thinks is two places is one the picker will offer twice.
      */
     private static boolean samePlace(MtrTransit.Station one, MtrTransit.Station other) {
         if (one.name().isBlank() || !one.name().equalsIgnoreCase(other.name())) {
@@ -257,11 +183,8 @@ final class MtrKnown {
     }
 
     /**
-     * Adds one line's newly marked track to the track kept for it.
-     *
-     * <p>Piece by piece, and a piece already kept is not added: the same stretch of rail is marked again
-     * every time the player's window slides back over it, and a union that kept every copy would grow by
-     * the whole line every second.
+     * Adds one line's newly marked track, piece by piece; a piece already kept is not added, because
+     * windows re-mark the same rail every second.
      */
     private void addMarks(long lineId, RoadNetwork fresh) {
         if (fresh.segmentCount() == 0 || markSegments >= MAX_MARK_SEGMENTS) {
@@ -273,17 +196,9 @@ final class MtrKnown {
             return;
         }
         // Copy on write, because what this memory hands out is read by another thread.
-        //
-        // MtrTransit publishes the map this method fills -- and every network inside it -- to whoever
-        // asks, and the drawing thread then walks those networks while this thread keeps converting
-        // readings. Writing into a network that has already been handed out is therefore a data race
-        // against an iteration: a ConcurrentModificationException out of a render pass, or a reading of
-        // half-updated geometry. It was written that way, and the javadoc on tracks() claimed the
-        // networks "are never mutated once built" while this method did exactly that.
-        //
-        // A new instance per update costs one copy of this line's own track each time a window adds to
-        // it -- the line, not the railway, and only on the readings that actually add something.
-        // Anything already handed out stays exactly as it was, so a reader needs no lock at all.
+        // The drawing thread walks the published networks while this thread converts readings, so writing in
+        // place is a data race out of a render pass. A new instance per update costs one copy of this line's
+        // track, only when the reading adds something.
         RoadNetwork previous = tracks.get(lineId);
         RoadNetwork kept = previous == null ? new RoadNetwork() : previous.deepCopy();
         boolean added = previous == null;
@@ -297,12 +212,8 @@ final class MtrKnown {
                     // The same piece, read again because the player's window has slid back over it.
                     continue;
                 }
-                // The same two stops joined by different geometry: MTR's rails have been edited, and
-                // this reading is the newest word about where that stretch runs. The piece it replaces
-                // was the same pair of ends and nothing else, so it goes. Nothing else would ever
-                // revisit it -- a piece once remembered is never looked at again except to be
-                // recognised -- so keeping it meant the map and the ride followed a line that is no
-                // longer there until the game was restarted.
+                // The same two stops joined by different geometry: MTR edited the rails and this is the newest
+                // word, so the old piece goes -- it would never be revisited otherwise.
                 kept.removeSegment(remembered.id());
                 markSegments--;
                 forgetNodesOf(kept, remembered);
@@ -328,16 +239,8 @@ final class MtrKnown {
 
     /**
      * The remembered piece with this one's two ends, or null when none has them.
-     *
-     * <p>The kept network's own view rather than a snapshot of it: this is asked once per fresh piece,
-     * and taking a copy each time is a copy of the line's whole track per piece of it -- which on a
-     * line whose reading names its rails is one piece, but on a windowed reading is a line planned a
-     * pair at a time, and the square of its length in copies. Nothing is added to {@code kept} while
-     * this runs, so its live view is safe to walk.
-     *
-     * <p>Either way round: the same stretch of track planned from the other end is the same stretch of
-     * track, and treating it as a new one would keep a second copy of every piece the player re-read
-     * from the opposite direction.
+     * Live view rather than a snapshot: a copy per piece would be the square of the line's length, and
+     * nothing is added to kept while this runs. Either way round counts.
      */
     private static RoadSegment sameEndsIn(RoadNetwork kept, RoadSegment segment) {
         int last = segment.vertexCount() - 1;
@@ -366,11 +269,8 @@ final class MtrKnown {
     }
 
     /**
-     * Whether two pieces of track are the same piece: the same endpoints joined the same way.
-     *
-     * <p>Endpoints alone were the old test, and they are not the question. A line MTR has been edited
-     * still joins the same two stops, so the old answer was "already remembered" about a stretch that
-     * now runs somewhere else.
+     * Whether two pieces are the same piece: the same endpoints joined the same way. Endpoints alone
+     * let an edited line keep a stretch that now runs somewhere else.
      */
     private static boolean sameShape(RoadSegment one, RoadSegment other) {
         int last = one.vertexCount() - 1;
@@ -412,7 +312,7 @@ final class MtrKnown {
         return dx * dx + dz * dz <= SAME_TRACK * SAME_TRACK;
     }
 
-    /** Drops the oldest lines once there are more than {@link #MAX_LINES} of them. */
+    /** Drops the oldest lines once there are more than MAX_LINES of them. */
     private void cap() {
         while (lines.size() > MAX_LINES) {
             Long oldest = lines.keySet().iterator().next();
@@ -433,23 +333,18 @@ final class MtrKnown {
         }
     }
 
-    /** Every line MTR has reported, the earliest first. */
     List<TransitLine> lines() {
         return List.copyOf(lines.values());
     }
 
-    /** Every station MTR has reported, as places to travel to. */
     List<MtrTransit.Station> stations() {
         return List.copyOf(stations.values());
     }
 
     /**
      * The track of every line that wants its marks, as one network.
-     *
-     * <p>Filtered here rather than when the track was worked out, so that a line's answer applies to
-     * track that was found before the answer was given: a line switched off has its track left out of
-     * the roads and keeps it remembered -- it is still drawn along it -- and switching it back on brings
-     * the road back without a fresh reading.
+     * Filtered here rather than when the track was found, so a line's answer applies to track found
+     * earlier: switched off keeps its track remembered and drawn, and back on brings the road back.
      */
     RoadNetwork marks(LongPredicate wantsMarks) {
         List<RoadNetwork> wanted = new ArrayList<>();
@@ -462,34 +357,25 @@ final class MtrKnown {
     }
 
     /**
-     * The track one line runs along, whether or not its marks are switched on.
-     *
-     * <p>What the map draws the line along. Null when MTR has never sent that line with rails under it,
-     * which is a line whose track is not known rather than a line with no track.
+     * The track one line runs along, whether or not its marks are on -- what the map draws the line
+     * along. Null when MTR never sent that line with rails: unknown, not empty.
      */
     RoadNetwork trackOf(long lineId) {
         return tracks.get(lineId);
     }
 
     /**
-     * The same, as one immutable map, for a reader on another thread.
-     *
-     * <p>This memory belongs to the thread that converts a reading -- see {@code MtrTransit}, which
-     * moved that work off whoever asks for it -- and the map it keeps is written to as readings arrive.
-     * Handing out the map itself would hand out something being written to, so what goes out is a copy
-     * made here: the networks inside it are never mutated once built, so copying the map is copying the
-     * references and nothing else.
+     * The same as one immutable map, for a reader on another thread.
+     * Handing out the map itself would hand out something being written; the networks inside are never
+     * mutated, so the copy is references only.
      */
     Map<Long, RoadNetwork> tracks() {
         return Map.copyOf(tracks);
     }
 
     /**
-     * Several networks as one.
-     *
-     * <p>The ids are the caller's and are unique to a mark across the session, so a plain merge is all
-     * this is: two lines over the same ground each keep their own road, which is what lets one of them be
-     * switched off without the other losing its track.
+     * Several networks as one: ids are unique to a mark across the session, so a plain merge
+     * suffices -- two lines over the same ground each keep their own road.
      */
     static RoadNetwork union(Collection<RoadNetwork> networks) {
         RoadNetwork all = new RoadNetwork();
@@ -515,7 +401,6 @@ final class MtrKnown {
         markCapReported = false;
     }
 
-    /** How much track is remembered, for the log. */
     long markSegments() {
         return markSegments;
     }

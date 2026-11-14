@@ -4,12 +4,7 @@ import bili.dongsz.howtogo.HowToGo;
 import xaero.map.WorldMap;
 import xaero.map.element.MapElementRenderHandler;
 
-/**
- * The one small part of the road layer that names Xaero's classes.
- *
- * <p>Loaded only after {@link RoadLayer} has confirmed the mod is present. Keeping these references
- * here is what lets the rest of the client start without Xaero's World Map.
- */
+/** Names Xaero's types; loaded after RoadLayer's presence check, so the client starts without World Map. */
 final class RoadLayerXaero {
 
     private RoadLayerXaero() {

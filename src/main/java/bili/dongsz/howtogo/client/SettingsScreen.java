@@ -6,7 +6,7 @@ import bili.dongsz.howtogo.store.RoutePreferenceStore;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
-// 1.21.9 bundled mouse coordinates and the button into a record.
+// 1.21.9 bundled the mouse coordinates and the button into a record.
 //? if >=1.21.9 {
 /*import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.MouseButtonInfo;
@@ -24,55 +24,18 @@ import java.util.function.IntConsumer;
 import java.util.function.IntSupplier;
 
 /**
- * The mod's in-game settings: the client config's player-facing half, editable without a file.
- *
- * <h2>What is on it, and what is not</h2>
- * The config file holds every tuning value this mod has, from per-class road colours to the browser
- * map's port. Most of them are answers to questions a player does not ask -- how wide a road has to
- * be drawn before it counts as the one underfoot, how many chunks a scan may read a second -- and a
- * screen listing all of them would be a second config file with a scroll bar. This screen carries
- * the settings a player actually reaches for: how the interface looks, where navigation is drawn,
- * how trips fall back, and which optional map layers are read. The rest stay in the file, and the
- * class's {@code ROWS} list is where the line is drawn.
- *
- * <h2>Why it is drawn rather than built from widgets</h2>
- * Every other screen this mod opens is drawn by hand in {@link UiTheme}'s colours; a column of
- * vanilla sliders would be the one part of the interface that did not belong to either theme. The
- * controls here are therefore the mod's own: a rounded toggle, a chip that cycles a short list, a
- * {@code - value +} stepper, a button that opens another page, and plain {@link PanelButton}s in the
- * footer. A slider is deliberately absent: the numeric settings are coordinates and distances where
- * a step is more useful than a drag, and a track would have to invent a colour role for its own knob.
- *
- * <h2>Saving</h2>
- * Every edit is written and saved at once, through {@link RoadConfig}'s typed setters. There is no
- * "apply" button and no close-time save: a player who changes something and then presses Escape has
- * already persisted it. The one line that matters is {@link #commit()}, which every control that
- * holds a value runs -- the row that opens the category editor changes nothing here and so has
- * nothing to save.
- *
- * <p>The one row that does not go through the config is the straight-through junction switch, which
- * the guidance reads from the preference store rather than from the config; see
- * {@link #buildRows}. Its own setter persists it there, so the row behaves like every other one from
- * the player's side -- and a reset restores the same default the config declares.
- *
- * <h2>Theme</h2>
- * No colour is written down here. Every surface, edge, text rank, control face and state comes from
- * {@link UiTheme}, which resolves the palette on each call -- so the theme row changes the whole
- * screen on the next frame, and a theme that switches with the time of day recolours this screen
- * while it is open.
- *
- * <h2>Motion</h2>
- * Third in the same family as the palette and the text ranks, and for the same reason: the durations
- * and curves come from {@link UiMotion}, never from a number written here. What this screen adds to
- * that vocabulary is the one thing only a list needs -- rows that arrive one after another rather
- * than all at once ({@link UiMotion#stagger}), and a scroll offset that travels instead of jumping.
- *
- * <p>The scroll is the one place where motion touches correctness rather than looks, so it is worth
- * being explicit: {@link #scroll} is the row the wheel asked for and {@link #scrollShown} is where the
- * list actually is. Both the drawing pass and the hit test read the second one, which is why a click
- * during a scroll lands on the row the player can see under the cursor rather than on the row the
- * list is heading towards. A smoothed scroll whose hit test used the target would be a scrolling bug
- * dressed as an animation.
+ * The mod's in-game settings: the player-facing half of the client config, editable without a file.
+ * Carries only the settings players reach for -- interface look, where navigation is drawn, trip
+ * fallbacks, optional map layers; the rest stay in the config file (see the ROWS list for the line).
+ * Controls are this mod's own, drawn in UiTheme colours like every other screen: a toggle, a chip, a
+ * stepper, a page-opening button, PanelButtons in the footer. No sliders: steps suit coordinates
+ * better than drags.
+ * Every edit is persisted immediately through RoadConfig's typed setters via commit(); there is no
+ * apply button and no save on close.
+ * All colours and motion come from UiTheme and UiMotion, so a theme change recolours the open
+ * screen.
+ * scrollShown is the drawn offset, and the hit test reads it too, so a click during a scroll lands
+ * on the row under the cursor.
  */
 final class SettingsScreen extends Screen {
 
@@ -86,21 +49,16 @@ final class SettingsScreen extends Screen {
     private static final int CONTROL_HEIGHT = 14;
     private static final int TOGGLE_WIDTH = 46;
     /**
-     * How wide the action row's control is.
-     *
-     * <p>Not measured from the label: the word is the same "open" in every language this file is
-     * translated into and a translated label that grew would push the control off the panel, so the
-     * label is elided into this width instead of the width following the label.
+     * How wide the action row's control is. Fixed rather than measured: a longer translated label is
+     * elided instead of pushing the control off the panel.
      */
     private static final int ACTION_WIDTH = 62;
     private static final int STEP_BOX = 16;
     private static final int STEP_VALUE_ROOM = 52;
     private static final int DESC_LINES = 3;
     private static final int SCROLL_STEP = 18;
-    /** How long a "saved" acknowledgement stays in the description strip. */
     private static final long STATUS_MILLIS = 2500L;
 
-    /** The screen to go back to: the main menu this was opened from. */
     private final Screen parent;
 
     private final List<Group> groups = new ArrayList<>();
@@ -121,47 +79,31 @@ final class SettingsScreen extends Screen {
     private int scroll;
 
     /**
-     * Where the list is drawn, as opposed to where {@link #scroll} says it is heading.
-     *
-     * <p>A wheel notch is a request, not a place: the row under the cursor has to arrive somewhere
-     * rather than teleport, so the drawn offset chases the target through {@link UiMotion#follow}.
-     * Both the drawing and the hit test read this one value -- the list a player clicks must be the
-     * list they are looking at, and a smoothed scroll whose hit test used the un-smoothed target
-     * would open whichever row was under the cursor a few frames ago.
+     * Where the list is drawn, as opposed to where scroll says it is heading; both drawing and hit test
+     * read this value, so a click during a scroll lands on the visible row. See UiMotion.follow.
      */
     private float scrollShown;
 
-    /** Every row's own hover value, so a tint grows under the cursor instead of appearing. */
     private final UiMotion.Slides rowHovers = new UiMotion.Slides();
 
     /**
-     * The stepper buttons' hover values, in a pool of their own.
-     *
-     * <p>Separate from {@link #rowHovers} because they are keyed by row and side: sharing one pool
-     * would let the second box of one row drive the tint of the next row along.
+     * The stepper buttons' hover values, in a pool of their own: keyed by row and side, so one row's box
+     * cannot drive another's.
      */
     private final UiMotion.Slides boxHovers = new UiMotion.Slides();
 
-    /** The opacity the whole window is drawn at this frame; see {@link #render}. */
     private float open = 1.0F;
 
     /**
-     * The opacity of the dimming and the sheet under the window's content this frame.
-     *
-     * <p>The same number as {@link #open} except during a hand-off to another page, where the
-     * surface is held at full while the content cross-fades -- see
-     * {@link UiMotion.ScreenState#surface()}. A field because the sheet is drawn from
-     * {@link #renderBackground}, which runs before the rest of the frame.
+     * The opacity of the dimming and sheet this frame. Same as open except during a page hand-off, where
+     * the surface stays full while the content cross-fades; see UiMotion.ScreenState.surface.
      */
     private float surface = 1.0F;
 
-    /** The reset button's first press arms it; the second one restores the defaults. */
     private boolean resetArmed;
     private Component status;
     private long statusUntil;
-    /** Whether the window is tall enough to hold the description strip; see {@link #init()}. */
     private boolean descriptionVisible;
-    /** The cursor position the current frame was drawn with; only the stepper boxes read it. */
     private double pointerX;
     private double pointerY;
 
@@ -173,11 +115,9 @@ final class SettingsScreen extends Screen {
 
     @Override
     public boolean isPauseScreen() {
-        // Like the mod's other windows: the world keeps running behind it.
         return false;
     }
 
-    // ------------------------------------------------------------------ content
 
     /** The settings this screen exposes, in the order they are read and reset. */
     private void buildRows() {
@@ -196,18 +136,12 @@ final class SettingsScreen extends Screen {
                         () -> themes.indexOf(RoadConfig.uiTheme()),
                         index -> RoadConfig.setUiTheme(themes.get(index)),
                         themes.indexOf(UiTheme.Mode.AUTO)),
-                // Directly under the theme, because the two are the same kind of decision about the
-                // interface rather than about what it does, and a player who turns the motion off
-                // wants it off from this screen -- which is why the row's own state change is not
-                // animated either once it is off.
                 Row.toggle("howtogo.configuration.ui_animations",
                         "screen.howtogo.settings.ui_animations.desc",
                         RoadConfig::uiAnimations,
                         RoadConfig::setUiAnimations, true),
-                // The third question about how a road reads on the map, and the one the sign card
-                // exists for: a name, a classification sign, or both in the same card. Under the
-                // animations because it is still a decision about how the interface reads rather
-                // than about what it does.
+                // The third question about how a road reads on the map: name, classification sign, or both in the
+                // same card.
                 Row.choice("howtogo.configuration.road_label_style",
                         "screen.howtogo.settings.road_label_style.desc",
                         List.of(label("howtogo.configuration.road_label_style.name"),
@@ -216,22 +150,19 @@ final class SettingsScreen extends Screen {
                         () -> labelStyles.indexOf(RoadConfig.roadLabelStyle()),
                         index -> RoadConfig.setRoadLabelStyle(labelStyles.get(index)),
                         RoadLabelStyle.defaultStyle().ordinal()),
-                // The sign's colour and the word on it are per category, so this row is a door rather
-                // than a value: the page behind it edits the player's own categories.
+                // The sign's colour and word are per category, so this row is a door: the page behind it edits the
+                // player's categories.
                 Row.action("howtogo.configuration.road_categories",
                         "screen.howtogo.settings.road_categories.desc",
                         () -> Screens.set(new RoadCategoryScreen(this))));
 
-        // The compact HUD card only exists while the map half is actually drawn on Xaero's Minimap,
-        // so its three rows follow the effective mode rather than the chosen one: choosing Xaero's
-        // Minimap on an install that cannot provide it falls back to the HUD panel, and the rows
-        // would otherwise look usable while changing nothing.
+        // The compact HUD card exists only while the map half is drawn on Xaero's Minimap, so its rows follow
+        // the effective mode: choosing Xaero on an install that cannot provide it falls back to the HUD panel.
         BooleanSupplier xaeroMode = () -> NavMapMode.effective() == MapDisplayMode.XAERO_MINIMAP;
         Component needsXaero = label("screen.howtogo.settings.needs_xaero");
         group("screen.howtogo.settings.group.hud",
-                // First, because it is the row that decides what this group is about: whether the
-                // navigation map is this mod's own panel or Xaero's Minimap. The compact-card rows
-                // under it only exist for the second answer.
+                // First, because it decides what the group is about: the mod's own panel or Xaero's Minimap; the
+                // compact-card rows exist only for the second.
                 Row.choice("howtogo.configuration.map_display_mode",
                         "screen.howtogo.settings.map_display_mode.desc",
                         List.of(label("howtogo.configuration.map_display_mode.hud"),
@@ -295,20 +226,15 @@ final class SettingsScreen extends Screen {
                         RoadConfig::stationSnapBlocks,
                         RoadConfig::setStationSnapBlocks,
                         1, 256, 4, 32, true),
-                // The one guidance switch on this screen, and the only row here that does not write
-                // the config: the manoeuvre list itself reads the preference store, because that is
-                // where the readouts' other switches live and where this one is persisted, so
-                // writing the config value would be a visible no-op on any install that has a saved
-                // preference file. The row is still here rather than in the picker because what it
-                // changes is what the road ahead is called, which is a navigation setting a player
-                // looks for in this list.
+                // The only row here that does not write the config: the guidance reads it from the preference store,
+                // so writing the config would be a visible no-op on installs with a saved preference file.
                 Row.toggle("howtogo.configuration.straight_announcements",
                         "screen.howtogo.settings.straight_announcements.desc",
                         RoutePreferenceStore::straightAnnouncements,
                         RoutePreferenceStore::setStraightAnnouncements, true));
 
-        // MTR's whole-map reader is only consulted while MTR data is read at all; the row stays
-        // visible and greyed, because the switch above it is the explanation.
+        // MTR's whole-map reader is consulted only while MTR data is read; the row stays visible and greyed,
+        // since the switch above explains it.
         BooleanSupplier mtrMode = RoadConfig::mtrTransit;
         Component needsMtr = label("screen.howtogo.settings.needs_mtr");
         group("screen.howtogo.settings.group.sources",
@@ -354,7 +280,6 @@ final class SettingsScreen extends Screen {
         };
     }
 
-    // ------------------------------------------------------------------- layout
 
     @Override
     protected void init() {
@@ -370,14 +295,14 @@ final class SettingsScreen extends Screen {
         listW = panelW - PAD * 2;
         listY = panelY + PAD + TITLE_HEIGHT + 8;
         listH = Math.max(20, descY - GAP - listY);
-        // A window shorter than the three bands cannot hold the description strip as well; the list
-        // keeps its room and the strip is omitted rather than painted over it.
+        // A window shorter than three bands cannot hold the strip; the list keeps its room and the strip is
+        // omitted.
         descriptionVisible = descY - GAP - listY >= ROW_HEIGHT;
 
         measureContent();
         scroll = clampScroll(scroll);
-        // A resize re-runs init() on the same screen; the drawn offset starts at the target rather
-        // than gliding in from wherever the old geometry left it.
+        // A resize re-runs init(), so the drawn offset starts at the target rather than gliding in from the
+        // old geometry.
         scrollShown = scroll;
         buildButtons();
     }
@@ -391,16 +316,12 @@ final class SettingsScreen extends Screen {
             y += GROUP_HEIGHT;
             for (Row row : group.rows) {
                 row.contentY = y;
-                // The position in the flat list, which is what a stagger and a hover pool are keyed
-                // by: two rows can share a top edge across groups only if the groups overlap, and
-                // the flat order is what the player reads down.
+                // Position in the flat list, which is what the stagger and hover pool are keyed by.
                 row.index = index++;
                 y += ROW_HEIGHT;
             }
             y += GAP;
         }
-        // The gap is between groups, so the last one does not leave a blank strip at the end of the
-        // scroll range.
         contentHeight = Math.max(0, y - GAP);
     }
 
@@ -427,7 +348,6 @@ final class SettingsScreen extends Screen {
                 PanelButton.Kind.NEUTRAL, this::onClose));
     }
 
-    // -------------------------------------------------------------------- input
 
     @Override
     //? if >=1.21.9 {
@@ -444,9 +364,6 @@ final class SettingsScreen extends Screen {
                     return true;
                 }
             }
-            // A press anywhere else takes the reset button out of its armed state: the second press
-            // has to be a second press on the same control, not the next click in the screen, so the
-            // press that disarms it is consumed rather than also editing the row under it.
             if (resetArmed) {
                 resetArmed = false;
                 buildButtons();
@@ -461,9 +378,8 @@ final class SettingsScreen extends Screen {
                     int controlX = controlX(row);
                     int controlY = controlY(rowY);
                     int width = controlWidth(row);
-                    // The controls are what the player sees as clickable, so the hit test is the
-                    // control's own rectangle -- not the whole row, whose label and description are
-                    // text. This is the same rule DestinationScreen's option rows use.
+                    // The hit test is the control's own rectangle, not the whole row: label and description are text.
+                    // Same rule as DestinationScreen's option rows.
                     if (mouseX >= controlX && mouseX < controlX + width
                             && mouseY >= controlY && mouseY < controlY + CONTROL_HEIGHT) {
                         if (row.kind == Kind.TOGGLE) {
@@ -473,8 +389,7 @@ final class SettingsScreen extends Screen {
                             row.stepChoice(1);
                             commit();
                         } else if (row.kind == Kind.BUTTON) {
-                            // A door, not a value: nothing on this screen changed, so there is
-                            // nothing to commit. The page it opens owns whatever it writes.
+                            // A door, not a value: nothing here changed, so there is nothing to commit.
                             row.onAction.run();
                         } else if (mouseX < controlX + STEP_BOX) {
                             row.stepNumber(-1);
@@ -521,7 +436,6 @@ final class SettingsScreen extends Screen {
         Screens.set(parent);
     }
 
-    // ------------------------------------------------------------------ actions
 
     /** One control changed: persist it, then let the mod re-read what it holds. */
     private void commit() {
@@ -532,12 +446,8 @@ final class SettingsScreen extends Screen {
     }
 
     /**
-     * The reset button: first press arms, second press restores.
-     *
-     * <p>Only the settings this screen shows are restored -- a whole-file reset would also wipe the
-     * colour sections, which the file's editor is the right place for. One save for the whole
-     * operation rather than one per row: the rows are a single edit as far as the player is
-     * concerned, and a run of writes would leave the file at a halfway state if one of them failed.
+     * First press arms, second restores. Only the settings this screen shows are restored, and one save
+     * covers the whole operation, so a failure cannot leave the file halfway.
      */
     private void resetClicked() {
         if (!resetArmed) {
@@ -558,7 +468,6 @@ final class SettingsScreen extends Screen {
         scroll = clampScroll(scroll);
     }
 
-    // ------------------------------------------------------------------ drawing
 
     @Override
     //? if >=1.20.2 {
@@ -566,15 +475,11 @@ final class SettingsScreen extends Screen {
     //?} else {
     /*public void renderBackground(GuiGraphics graphics) {
     *///?}
-        // The dimming reaches past the screen's own corners because it is drawn inside the frame that
-        // RISE displaces: a scrim cut exactly to the window would leave an undimmed strip along one
-        // edge for as long as the entrance takes. The sheet below does not need the margin -- it moves
-        // with the frame it is part of.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
                 UiMotion.fade(UiTheme.dim(), surface));
-        // The sheet is rounded like the destination picker's, rather than the square frame the
-        // world map uses: this is a window over the game, not a full-screen workspace.
+        // The sheet is rounded like the destination picker's, not the square world-map frame: this is a
+        // window over the game.
         HudDraw.fillRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
                 UiMotion.fade(UiTheme.panel(), surface));
         HudDraw.outlineRounded(graphics, panelX, panelY, panelX + panelW, panelY + panelH, 5,
@@ -583,21 +488,15 @@ final class SettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The animation state first, before anything is drawn and before the parent is asked for the
-        // background: 1.20.1 calls renderBackground by hand below, 1.20.2 calls it from super.render,
-        // and both have to see this frame's opacity. UiMotion.of is also what pumps a deferred screen
-        // swap, so it is read exactly once per frame.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
         surface = motion.surface();
-        // The whole frame is displaced, not only faded: a window that appears in place reads as a cut.
-        // Pushed before any pixel -- the background 1.20.1 asks for by hand below included -- so the
-        // dimming, the sheet, the rows and the footer buttons travel together as one surface. The pose
-        // is rebuilt by the game every frame, so the pop at the end of this method is the whole of the
-        // bookkeeping: no try/finally, nothing to unwind if a caller skips a frame.
+        // The whole frame is displaced, not only faded: a window appearing in place reads as a cut. Pushed
+        // before any pixel, so dimming, sheet, rows and footer travel as one surface. The game rebuilds the
+        // pose each frame, so the pop at the end is the whole bookkeeping.
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
-        // 1.20.2 is where the game started drawing a screen's background from Screen.render itself.
-        // 1.20.1 has no such call, so a screen that wants the dimming and the sheet asks for it here.
+        // 1.20.2 started drawing a screen's background from Screen.render; 1.20.1 has no such call, so it is
+        // asked for here.
         //? if <1.20.2 {
         /*renderBackground(graphics);
         *///?}
@@ -613,8 +512,7 @@ final class SettingsScreen extends Screen {
         for (PanelButton button : buttons) {
             button.render(graphics, font, mouseX, mouseY);
         }
-        // Nothing is drawn after this point, which is what keeps the pair balanced: every pass above
-        // ran inside the displacement and the pose is back where the game left it.
+        // Nothing is drawn after this, which keeps the push/pop pair balanced.
         UiMotion.popFrame(graphics);
     }
 
@@ -655,9 +553,8 @@ final class SettingsScreen extends Screen {
     private void drawRow(GuiGraphics graphics, Row row, int rowY,
                          int mouseX, int mouseY, boolean hovered) {
         boolean enabled = row.isEnabled();
-        // Two values, not one: how far the row has arrived as part of the list's entrance, and how
-        // far the cursor has moved onto it. They multiply, because a row the cursor is already on
-        // when the window opens still has to arrive before it can be highlighted.
+        // How far the row has arrived in the list's entrance and how far the cursor has moved onto it,
+        // multiplied: a row the cursor is already on when the window opens still has to arrive.
         float arrived = UiMotion.stagger(row.index, open);
         float lit = rowHovers.get(row.index).to(hovered && enabled ? 1.0F : 0.0F).eased();
         if (lit > 0.001F) {
@@ -689,12 +586,8 @@ final class SettingsScreen extends Screen {
     }
 
     /**
-     * The face of a row's control, mixed from its resting face to its lit one by the hover value.
-     *
-     * <p>A mix rather than a switch, because that is the whole of the difference: a toggle that is
-     * on lightens towards the hover face as the cursor arrives, and a choice chip fills from the soft
-     * selection towards the solid one. Both readings are the same two colours the screen always had;
-     * what changed is that the player now sees the states between them.
+     * The face of a row's control, mixed from its resting face to its lit one by the hover value, so the
+     * states between are seen rather than switched.
      */
     private void drawControlFace(GuiGraphics graphics, Row row, int x, int y, int width,
                                  boolean enabled, boolean overControl, float lit, float arrived) {
@@ -709,14 +602,12 @@ final class SettingsScreen extends Screen {
         }
         int face;
         if (row.kind == Kind.TOGGLE) {
-            // A switched-on toggle still has to answer the cursor: buttonHover is the one face both
-            // palettes define as "you are on this", and onButton is its readable label.
+            // A switched-on toggle still answers the cursor: buttonHover means "you are on this", and onButton
+            // is its readable label.
             int resting = row.boolValue() ? UiTheme.buttonOn() : UiTheme.button();
             face = !enabled ? UiTheme.button()
                     : UiMotion.mix(resting, UiTheme.buttonHover(), overControl ? lit : 0.0F);
         } else if (row.kind == Kind.BUTTON) {
-            // The ordinary button face and its hover mix, because that is what the control is: a
-            // button that happens to live in a row instead of in the footer.
             face = !enabled ? UiTheme.button()
                     : UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(),
                             overControl ? lit : 0.0F);
@@ -730,11 +621,8 @@ final class SettingsScreen extends Screen {
     }
 
     /**
-     * Whether the cursor is over one step box.
-     *
-     * <p>The face pass runs before the label pass and has no cursor coordinates of its own; both
-     * boxes read the frame's pointer position from the two fields above, which keeps the dozens of
-     * {@link #drawControlFace} parameters unchanged.
+     * Whether the cursor is over one step box. The face pass has no cursor coordinates of its own, so it
+     * reads the frame's pointer fields, which keeps drawControlFace's parameters unchanged.
      */
     private boolean mouseInBox(int x, int y) {
         return pointerX >= x && pointerX < x + STEP_BOX
@@ -743,9 +631,6 @@ final class SettingsScreen extends Screen {
 
     private void drawStepBox(GuiGraphics graphics, Row row, int box, int x, int y,
                              boolean hovered, float arrived) {
-        // A pool rather than two more fields on the row: the two boxes are the same control drawn
-        // twice, so they are two slides keyed by row and side, and a row that is scrolled out and
-        // back keeps its own value instead of starting from nothing.
         float lit = boxHovers.get(row.index * 2 + box).to(hovered ? 1.0F : 0.0F).eased();
         HudDraw.fillRounded(graphics, x, y, x + STEP_BOX, y + CONTROL_HEIGHT, 3,
                 UiMotion.fade(UiMotion.mix(UiTheme.button(), UiTheme.buttonHover(), lit), arrived));
@@ -770,9 +655,8 @@ final class SettingsScreen extends Screen {
             return;
         }
         if (row.kind == Kind.BUTTON) {
-            // The face is a button's, so the label is a button's too: centred on it, in the colour
-            // that face's text is drawn in, and elided rather than wrapped when a translation is
-            // wider than the control.
+            // The face is a button's, so the label is too: centred, in that face's text colour, and elided rather
+            // than wrapped.
             drawCentred(graphics, PlaceText.ellipsis(font,
                             Component.translatable("howtogo.configuration.open").getString(),
                             width - 6),
@@ -790,8 +674,6 @@ final class SettingsScreen extends Screen {
                     x, width, y + (CONTROL_HEIGHT - 8) / 2, UiMotion.fade(text, arrived));
             return;
         }
-        // The chip's label follows its face: white on the blue it fills into, the darker blue on the
-        // soft one it rests at, and every shade between them while the cursor arrives.
         int text = !enabled ? UiTheme.textFaint()
                 : UiMotion.mix(UiTheme.onSelectionSoft(), UiTheme.onSelection(), lit);
         String current = row.choiceLabel().getString();
@@ -805,11 +687,6 @@ final class SettingsScreen extends Screen {
                 color, false);
     }
 
-    /**
-     * The scrollbar: the track under the thumb, drawn only when the content is taller than the
-     * window. Wheel-only, like every other list in this mod; a 2 px bar is an indicator here, not a
-     * second input surface, which is why no drag state is kept for it.
-     */
     private void drawScrollbar(GuiGraphics graphics) {
         if (contentHeight <= listH) {
             return;
@@ -825,12 +702,8 @@ final class SettingsScreen extends Screen {
     }
 
     /**
-     * The strip under the list: the hovered setting's description, or the reset warning, or the
-     * line that says where saves go.
-     *
-     * <p>A description under the list rather than a tooltip beside the cursor: a tooltip the size of
-     * some of these sentences would cover the values it is describing, and the strip is always in
-     * the same place, so a reader does not have to chase it.
+     * The strip under the list: the hovered setting's description, the reset warning, or where saves go.
+     * A fixed strip rather than a tooltip, which would cover the values it describes.
      */
     private void drawDescription(GuiGraphics graphics, int mouseX, int mouseY) {
         Row hovered = rowAt(mouseX, mouseY);
@@ -841,8 +714,7 @@ final class SettingsScreen extends Screen {
             text = label("screen.howtogo.settings.reset_note");
             color = UiTheme.warn();
         } else if (freshStatus) {
-            // Before the hovered row: an acknowledgement shown only until the cursor leaves the row
-            // that was just edited is an acknowledgement the editor never sees.
+            // Before the hovered row: an acknowledgement the editor never sees is no acknowledgement.
             text = status;
             color = UiTheme.okSoft();
         } else if (hovered != null) {
@@ -859,8 +731,7 @@ final class SettingsScreen extends Screen {
         for (int line = 0; line < lines.size() && line < DESC_LINES; line++) {
             String shown = lines.get(line);
             if (line == DESC_LINES - 1 && lines.size() > DESC_LINES) {
-                // The strip is a fixed three lines; the rest of a longer sentence is elided rather
-                // than silently cut mid-word.
+                // The strip is a fixed three lines; longer text is elided rather than cut mid-word.
                 StringBuilder rest = new StringBuilder(shown);
                 for (int next = line + 1; next < lines.size(); next++) {
                     rest.append(' ').append(lines.get(next));
@@ -872,7 +743,6 @@ final class SettingsScreen extends Screen {
         }
     }
 
-    // ----------------------------------------------------------------- geometry
 
     private int controlWidth(Row row) {
         return switch (row.kind) {
@@ -896,14 +766,12 @@ final class SettingsScreen extends Screen {
                 && mouseY >= listY && mouseY < listY + listH;
     }
 
-    /** The row under the cursor, in content coordinates so the scroll cannot skew the answer. */
     private Row rowAt(double mouseX, double mouseY) {
         if (!insideList(mouseX, mouseY)) {
             return null;
         }
-        // The drawn offset, not the target one: while a scroll is still travelling the row under the
-        // cursor is the row drawn there, and a hit test against where the list is heading would open
-        // a row that has not arrived yet.
+        // The drawn offset, not the target: while a scroll is travelling, the row under the cursor is the one
+        // drawn there, not the one the list is heading for.
         int contentY = (int) (mouseY - listY + Math.round(scrollShown));
         for (Row row : rows) {
             if (contentY >= row.contentY && contentY < row.contentY + ROW_HEIGHT) {
@@ -913,14 +781,11 @@ final class SettingsScreen extends Screen {
         return null;
     }
 
-    // -------------------------------------------------------------------- rows
 
     private enum Kind {
         /** A switch: one boolean, toggled in place. */
         TOGGLE,
-        /** A chip that steps through a short list of named values. */
         CHOICE,
-        /** A stepper: two boxes and a value between them. */
         NUMBER,
         /** A control that opens something else and holds no value of its own. */
         BUTTON
@@ -938,8 +803,8 @@ final class SettingsScreen extends Screen {
     }
 
     /**
-     * One setting: a name, the sentence explaining it, one control, and the two operations every
-     * control needs -- the current value and the way back to the declared default.
+     * One setting: a name, the sentence explaining it, one control, and the operations every control
+     * needs -- current value and way back to the default.
      */
     private static final class Row {
         private final Kind kind;
@@ -965,11 +830,11 @@ final class SettingsScreen extends Screen {
 
         private BooleanSupplier enabledWhen;
         private Component disabledReason;
-        /** The action a {@link Kind#BUTTON} row runs; null on every other kind. */
+        /** The action a BUTTON row runs; null on every other kind. */
         private Runnable onAction;
         private Runnable resetValue;
         private int contentY;
-        /** The row's place in the flat list, which is what its hover slide and stagger are keyed by. */
+        /** The row's place in the flat list, which its hover slide and stagger are keyed by. */
         private int index;
 
         private Row(Kind kind, Component label, Component description) {
@@ -1001,17 +866,6 @@ final class SettingsScreen extends Screen {
             return row;
         }
 
-        /**
-         * A row whose control is a button: the row opens another page rather than holding a value.
-         *
-         * <p>It is a row and not a footer button because what it opens is one of the settings this
-         * screen owns -- the content behind the road-label style -- and it belongs beside that
-         * setting rather than in the row that closes the screen.
-         *
-         * <p>It has no default to restore, which is not a gap in the pattern: the reset button
-         * restores <em>values</em>, and a door has none. Its {@code resetValue} is deliberately a
-         * no-op, so a reset pass can never open a screen as a side effect of being run.
-         */
         private static Row action(String labelKey, String descriptionKey, Runnable action) {
             Row row = new Row(Kind.BUTTON, label(labelKey), label(descriptionKey));
             row.onAction = action;

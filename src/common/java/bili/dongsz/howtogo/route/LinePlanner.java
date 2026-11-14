@@ -21,49 +21,18 @@ import java.util.Set;
 /**
  * Plans a journey over the player's lines: walk to a stop, ride, change lines where two lines meet,
  * ride again, walk to the destination.
- *
- * <h2>The graph</h2>
- * One node per stop position, and two kinds of edge between them:
- * <ul>
- *   <li><b>ride</b> -- between stops that are neighbours <em>on a line</em>. This is what makes the
- *       order in a line mean something: a ride follows the line, so the journey can only get off
- *       where that line actually calls. A line that is being ridden both ways gets both edges, because
- *       a line is a service and a player travelling back along it is riding it rather than breaking
- *       it; a line the player has marked one-way gets only the edge in its own order, because a
- *       journey the line cannot carry is not a journey -- see {@code LineDirection};</li>
- *   <li><b>transfer</b> -- between stops of <em>different</em> lines that stand within
- *       {@link #TRANSFER_RADIUS} blocks of each other. This is the leg the player asked to see: a
- *       change of lines is a short walk between where one line puts you down and where the next one
- *       picks you up, and it is a leg of the journey like any other. Two lines calling at the same
- *       block are the same node, so that change costs nothing and is not a leg at all.</li>
- * </ul>
- *
- * <h2>One search, and why it is one</h2>
- * This used to run twice: first with transfers forbidden, and if that found anything at all it was
- * returned without the second search ever running. The idea was that a direct ride should not be
- * passed over in favour of a longer journey that happens to change lines -- but the answer to that is
- * a price on changing lines, not a veto, and the veto did the opposite of what it intended: it made
- * the best <em>single-line</em> journey the answer whenever one existed, however far around it went,
- * even with a two-ride journey standing next to it that arrived in a third of the time. That is what
- * "the route goes the long way round" was. A transfer now costs the walk between the two platforms
- * plus {@link #TRANSFER_PENALTY_SECONDS}, both searches are one, and the search simply takes the
- * cheapest whole journey.
- *
- * <h2>Why the graph is built before the search</h2>
- * A link's cost is a real route planned by the road router, so it is the expensive part of planning.
- * Those plans used to be made lazily, from inside the search, under a budget -- and when the budget
- * ran out the neighbouring links were silently skipped, which changes the graph underneath a running
- * shortest-path search and leaves it answering a question about a network that never existed. The
- * links are now all planned first, so the search is a plain Dijkstra over a graph that does not move,
- * and the budget can only ever drop the tail of the ride list, once, out loud.
- *
- * <h2>Why the ends are the only walks that are searched</h2>
- * The first and last legs are walks between the player and a stop, and there are as many candidates
- * for those as there are stops. The {@link #WALK_CANDIDATES} nearest at each end are tried: a stop
- * that is not among them cannot be where a sensible journey starts or finishes, and trying every one
- * of them would plan a walk route per stop on every press. The number is well above the three it once
- * was, because three stops sorted by <em>straight-line</em> distance is not three good ways to start a
- * journey: the fourth nearest is often the only one on a line that goes anywhere.
+ * The graph has one node per stop position and two kinds of edge: ride between neighbouring stops of
+ * one line, and transfer between stops of different lines standing within TRANSFER_RADIUS. A ride
+ * follows the line's order; a one-way line gets only its own direction, since a journey the line
+ * cannot carry is not a journey. Two lines calling at the same block are one node, so that change
+ * costs nothing.
+ * One search, not two: a transfer costs the walk between platforms plus TRANSFER_PENALTY_SECONDS, so
+ * a direct ride is not vetoed, only priced -- the old veto made the best single-line journey the
+ * answer however far around it went.
+ * All links are planned before the search, so Dijkstra runs over a graph that does not move; the
+ * budget can then only drop the tail of the ride list, once, and say so.
+ * Only the WALK_CANDIDATES nearest stops at each end are tried; trying every stop would plan a walk
+ * route per stop on every press.
  */
 public final class LinePlanner {
 
@@ -71,35 +40,24 @@ public final class LinePlanner {
     private static final int WALK_CANDIDATES = 12;
 
     /**
-     * How far apart two stops of different lines may stand and still count as one interchange.
-     *
-     * <p>Not zero, because a station a player builds out of two lines is rarely one block: the rail
-     * platform and the bus stop beside it are the same place to travel through and two places to the
-     * data. Not large either, or a change of lines would quietly become a walk across town.
+     * How far apart two stops of different lines may stand and still count as one interchange. Not zero,
+     * because a station built from two lines is rarely one block, and not large or a change of lines
+     * becomes a walk across town.
      */
     private static final double TRANSFER_RADIUS = 24.0;
 
     /**
-     * The same number, for the map.
-     *
-     * <p>Exposed so that the map cannot mark a different set of places from the ones a journey may
-     * change lines at: a stop the planner will transfer at and the map calls two separate stations is
-     * the map arguing with the route, and the marker that outlives the line it belonged to is what that
-     * looks like from the player's side.
+     * The same number, for the map, so it cannot mark a different set of interchange places than the
+     * planner uses.
      */
     public static double transferRadius() {
         return TRANSFER_RADIUS;
     }
 
     /**
-     * Whether a destination is near enough that the walk to it is the whole answer, in blocks.
-     *
-     * <p>Asked by the client when public transport comes back with nothing: a destination inside this
-     * distance is one a player would be told to walk to reach a stop anyway, so the panel says "close
-     * enough to walk" rather than reporting that the lines failed. It is a straight-line question on
-     * purpose -- it is about how near the place is, not about how the streets happen to run -- and it
-     * says nothing about whether a journey exists: the search's own reason for refusing one is the
-     * walk it compared against, in {@link #worthRiding}.
+     * Whether a destination is near enough that walking is the whole answer, in blocks. A straight-line
+     * question about how near the place is, not how the streets run; it says nothing about whether a
+     * journey exists -- worthRiding owns that.
      */
     public static boolean closeEnoughToWalk(double startX, double startZ, double goalX,
                                             double goalZ) {
@@ -107,36 +65,17 @@ public final class LinePlanner {
     }
 
     /**
-     * The cell the transfer pass files a stop under, which is the radius itself.
-     *
-     * <p>Not a constant of its own: nine cells of this size around a stop is exactly the neighbourhood a
-     * transfer may be found in, and a size that did not match the radius would either miss stops that
-     * are within it or search cells that reach further than it does.
+     * The cell the transfer pass files a stop under: the radius itself, so nine cells around a stop are
+     * exactly its neighbourhood.
      */
     private static final double TRANSFER_CELL = TRANSFER_RADIUS;
 
     /**
-     * Ceiling on the number of ride legs planned in one search.
-     *
-     * <p>A safety valve, not a design: each leg is a route planned over some network, so a pathological
-     * one should not hang the client. It is applied while the graph is built, before the search, so
-     * tripping it drops the lines at the end of the list rather than removing edges from a search that
-     * is already running, and it is always reported in the log. It was 48, which a network of five lines
-     * and ten stops each already exceeds -- so on any real network the tail of the graph was being cut
-     * away mid-search and the journey that came out was the best of what happened to have been planned,
-     * not the best there was.
-     *
-     * <p><b>Why it is no longer 512.</b> A ride used to be an A* over every rail in the world at once,
-     * which is what the number was sized for: a handful of lines around the player, each ride searching
-     * a layer that served every line of its kind. A reading that names each line's rails changes what a
-     * ride costs -- it is a search over <em>that line's own track</em> and nothing else, see
-     * {@link RideRoads} -- and a whole railway read from a server is hundreds of lines and thousands of
-     * stops, which is three and a half thousand rides rather than the hundreds a window holds. At 512
-     * the graph was cut off after the first few lines and every journey across the network answered "no
-     * journey", which is the failure this number was meant to be a guard against rather than the cause
-     * of. The per-ride cost is what makes raising it safe, and the check in the regression harness is
-     * what keeps that true: it plans over a hundred and sixty lines and asserts both that a journey
-     * comes out and that the whole plan is quick.
+     * Ceiling on the number of ride legs planned in one search: a safety valve, applied while the graph
+     * is built, so tripping it drops the lines at the end of the list rather than removing edges from a
+     * running search, and it is always reported. It was 48, which a network of five lines already
+     * exceeded; a whole railway read from a server is thousands of rides, and the per-ride cost (a
+     * search over that line's own track) is what makes 20000 safe.
      */
     private static final int MAX_RIDE_PLANS = 20_000;
 
@@ -144,131 +83,82 @@ public final class LinePlanner {
     private static final int MAX_PLANS = 3;
 
     /**
-     * How far the player may be asked to walk to reach a stop, in blocks.
-     *
-     * <p>The nearest stops are the candidates, but only within this. Without a limit the planner will
-     * offer a four-hundred-block walk to a station and call the result public transport; past this the
-     * honest answer is that no stop is near enough for the journey to be worth taking by line.
+     * How far the player may be asked to walk to reach a stop, in blocks. Past this no stop is near
+     * enough for the journey to be worth taking by line.
      */
     private static final double MAX_WALK_TO_STOP = 256.0;
 
     /**
-     * How near a destination has to be for walking to be the whole answer to it, in blocks.
-     *
-     * <p>The same distance the planner will ask a player to walk to reach a stop: a destination a
-     * player could be sent that far to board a line is one they can be sent that far on foot instead.
-     * This is a question about a sentence rather than about a plan -- it decides which reason the
-     * client shows when the public transport mode comes back with the walk -- so it is answered by
-     * {@link #closeEnoughToWalk} and never by the search.
+     * How near a destination has to be for walking to be the whole answer, in blocks: the same distance
+     * the planner would ask a player to walk to board a line. Answered by closeEnoughToWalk, never by the
+     * search.
      */
     private static final double CLOSE_ENOUGH_TO_WALK = MAX_WALK_TO_STOP;
 
     /**
-     * How close two positions have to be before the walk between them is no walk at all.
-     *
-     * <p>A route is a polyline and needs two points, and the builder drops a second point that lands
-     * on the first -- so "how do I get from here to here" had no answer, and a stop standing exactly
-     * where the player is, or exactly on the destination they picked, was skipped as unusable. Picking
-     * a station as the destination is the commonest public transport journey there is.
+     * How close two positions have to be before the walk between them is no walk. A route needs two
+     * points and the builder drops a duplicate, so a stop exactly where the player is -- or exactly on
+     * the destination -- used to be skipped as unusable.
      */
     private static final double STATIONARY_DISTANCE = 1.0E-6;
 
     /**
-     * How long a walk has to be before its falling back to a straight hop is worth a log line.
-     *
-     * <p>Stepping a few blocks off a road is not news. A walk of a hundred blocks that no road could
-     * carry is, and it is the only visible symptom of a road network the router cannot use.
+     * How long a walk has to be before falling back to a straight hop is worth a log line: a few blocks
+     * off a road is not news, a hundred is.
      */
     private static final double SHORT_HOP = 8.0;
 
     /**
-     * Shortest piece of actual track a leg must ride for it to count as public transport, in blocks.
-     *
-     * <p>A ride is two hops onto and off the line plus the stretch between them. When there is no
-     * stretch -- the two stops are close enough that both hops meet at one node -- the leg is a line
-     * between two platforms, not a ride, and it is refused rather than added to the journey.
+     * Shortest piece of actual track a leg must ride to count as public transport, in blocks. A ride is
+     * two hops plus the stretch between them; with no stretch it is a line between two platforms.
      */
     private static final double MIN_RIDE_TRACK = 1.0;
 
     /**
-     * How much closer to the destination a ride has to carry the rider before it is worth taking, in
-     * blocks.
-     *
-     * <p>Measured as the net ground the riding won: the straight-line distance from the first stop
-     * boarded at to the destination, less the same distance from the last stop got off at. It is the
-     * only figure that tells "the line carried me towards where I am going" from "the line moved me
-     * around and put me back", and the second shape is the one a search will hand back with a straight
-     * face when the destination stands near the boarding stop: ride out to the next station, ride the
-     * same line back, and the journey has ridden a line and arrived where it started.
-     *
-     * <p>The bound is the walk between two platforms of one interchange, because that is an amount of
-     * walking this planner already asks a rider to do for nothing: a ride that gains less ground than
-     * that has done the journey no more good than stepping off one platform and onto the next. It is
-     * deliberately small. A ride that gained thirty blocks is not the same thing as no ride at all --
-     * it can be the whole answer where a river or a wall stands between the player and the door -- so
-     * a ride that clears this figure is never second-guessed, and one that does not is only dropped if
-     * the plan is no quicker than the walk that replaces it. See {@link #worthRiding}.
+     * How much closer to the destination a ride has to carry the rider, in blocks, measured as net ground
+     * won: straight-line distance from the first stop boarded at to the destination, less the same from
+     * the last stop got off at. Riding out and back nets nothing however much track it covered. The
+     * bound is the walk between two platforms of one interchange -- walking already asked of a rider for
+     * nothing. Small on purpose: a ride clearing it is never second-guessed, and one below it is only
+     * dropped if the plan is no quicker than the walk that replaces it.
      */
     private static final double MIN_RIDE_GAIN = 24.0;
 
     /**
-     * Ceiling on the walking routes planned for interchanges in one plan, for the same reason as
-     * {@link #MAX_MIXED_WALK_PLANS}: a dense set of platforms must not make a short journey spend
-     * seconds planning walks between them. Past it the old straight hop is used, which is still a
-     * walk -- it just does not follow the station's roads.
+     * Ceiling on the walking routes planned for interchanges in one plan: a dense set of platforms must
+     * not make a short journey spend seconds on walks. Past it the straight hop is used.
      */
     private static final int MAX_TRANSFER_WALK_PLANS = 128;
 
     /**
-     * How far apart two stops of different lines may stand and still be joined by a walk, when
-     * public transport is allowed to mix walking and lines, in blocks.
-     *
-     * <p>An interchange is two stops within {@link #TRANSFER_RADIUS} of each other -- a platform and
-     * the stop beside it. A mixed journey is a different shape: ride one line, walk through the
-     * streets to where another line calls, ride that, and the walk between the two is a leg of the
-     * journey like any other. The bound here is what keeps that from becoming "walk across the
-     * country": past a few hundred blocks the walk is no longer a connection between two lines, it
-     * is a journey on foot with two rides attached.
-     *
-     * <p>The walk itself is planned by the walking router, not drawn as a straight line -- see
-     * {@link Links#mixedWalk}. The middle of a mixed trip is a walking navigation leg, so it follows
-     * the roads the player could actually walk and its time is the time that walk takes.
+     * How far apart two stops of different lines may stand and still be joined by a walk, when public
+     * transport may mix walking and lines, in blocks. Past a few hundred blocks the walk is no longer a
+     * connection between lines but a journey on foot with two rides attached. The walk is planned by the
+     * walking router, not drawn straight, so it follows real roads and takes the time that walk takes.
      */
     private static final double MIXED_WALK_RADIUS = 256.0;
 
-    /**
-     * The cell the mixed walking pass files a stop under: the reach itself, so nine cells around a
-     * stop are exactly its neighbourhood.
-     */
+    /** The cell the mixed walking pass files a stop under: the reach itself. */
     private static final double MIXED_WALK_CELL = MIXED_WALK_RADIUS;
 
     /**
-     * How many stops one stop offers a mixed walking link to: the nearest ones of other lines.
-     *
-     * <p>A cap rather than every stop in the radius. The links are real walking routes, so each one
-     * is a road-router plan, and a stop in a dense interchange could otherwise offer hundreds. The
-     * nearest ones are the only ones a sensible walk would take.
+     * How many stops one stop offers a mixed walking link to: the nearest of other lines. A cap because
+     * each link is a real walking route.
      */
     private static final int MIXED_WALK_CANDIDATES = 8;
 
     /**
-     * How near a walkable road a stop has to stand for a mixed middle leg to be looked for, in blocks.
-     *
-     * <p>A middle leg is a walk through the streets. A stop standing a long way from any road would
-     * make that leg a field crossing with a road at one end -- the direct connection this mode does
-     * not make -- so it is not asked for. The number is the same order as a station's own platform
-     * reach: a stop with no road within it cannot be walked from anyway.
+     * How near a walkable road a stop must stand for a mixed middle leg to be looked for, in blocks. A
+     * stop far from any road would make the leg a field crossing with a road at one end.
      */
     private static final double MIXED_WALK_STOP_REACH = 32.0;
 
     /**
-     * Ceiling on the mixed walking routes planned in one plan, for the same reason as
-     * {@link #MAX_RIDE_PLANS}: a pathological network should not hang the client. Reaching it drops
-     * the tail of the links, and the count is reported once, in the log, rather than kept silent.
+     * Ceiling on the mixed walking routes planned in one plan, for the same reason as MAX_RIDE_PLANS.
+     * Reaching it drops the tail of the links and reports the count once.
      */
     private static final int MAX_MIXED_WALK_PLANS = 256;
 
-    /** Set when the mixed walking budget first runs out, so the warning is said once, not per plan. */
     private static volatile boolean mixedBudgetWarned;
 
     /** The length of the part of a ride that is actually on the line, connectors excluded. */
@@ -279,35 +169,26 @@ public final class LinePlanner {
     private LinePlanner() {
     }
 
-    /** One stop position and every place on a line that calls there. */
     private record Node(LineStop at, List<int[]> calls) {
     }
 
     /**
-     * One way out of a stop: where it leads, what the search pays to take it, and the route that gets
-     * there.
-     *
-     * <p>The seconds are the whole cost of taking it, and the route carries the same cost: a change of
-     * lines costs the walk between the platforms plus the wait for the next service, and both are in
-     * the route's own estimate. The search therefore minimises exactly the number the readout shows,
-     * which is the only way the two can be trusted to agree.
+     * One way out of a stop: where it leads, what the search pays, and the route there. The seconds are
+     * the whole cost and the route carries the same cost, so the search minimises exactly the number the
+     * readout shows.
      */
     private record Link(int target, double seconds, Route route, TravelMode mode, RideInfo info,
                         boolean transfer) {
     }
 
     /**
-     * The line and the two stops one ride link runs between.
-     *
-     * <p>Carried on the link because the search only ever sees costs: without it, the answer is a chain
-     * of routes that cannot say which line was ridden or where it was boarded, and the guidance would
-     * have nothing to name. The stop indices are into the line's own order, so the stops called at on
-     * the way are read off the line rather than guessed from geometry.
+     * The line and the two stops one ride link runs between, carried because the search only sees costs.
+     * The indices are into the line's own order, so the stops called at are read off the line rather
+     * than guessed from geometry.
      */
     private record RideInfo(TransitLine line, int fromStop, int toStop) {
     }
 
-    /** One leg of the answer before its distances are known, which are counted as the chain is walked. */
     private record PendingLeg(Route route, TravelMode mode, RideInfo info) {
     }
 
@@ -334,22 +215,15 @@ public final class LinePlanner {
     }
 
     /**
-     * Everything one journey search needs, built once so the alternative searches can share it.
-     *
-     * <h2>Why the graph is not rebuilt per strategy</h2>
-     * One plan is now planned several times: the recommended journey, one with fewer changes, one
-     * with less walking and one over other lines. The expensive part of a plan is not the Dijkstra --
-     * it is the rides, each of which is a road route, and they are cached in {@link Links} as the
-     * search reaches a stop. A second search over the same {@code Links} reuses every ride the first
-     * one planned and pays only for the stops it explores further, which is what makes several plans
-     * cost less than several plans' worth.
+     * Everything one journey search needs, built once so the alternative searches can share it. The
+     * expensive part is the rides, each a road route cached in Links, so a second search reuses every
+     * ride the first planned; that is what makes several plans cost less than several plans' worth.
      */
     private record Context(List<Node> nodes, Map<Long, Integer> byPosition, Map<String, Route> cache,
                            double serviceWait, String destinationName, RoutePreferences preferences,
                            RoadRouter.Workspace workspace, Links links) {
     }
 
-    /** A journey and the lines it rides, which is what "another set of lines" is asked against. */
     private record Journey(Trip trip, Set<TransitLine> lines) {
 
         static final Journey EMPTY = new Journey(Trip.empty(), Set.of());
@@ -360,18 +234,13 @@ public final class LinePlanner {
     }
 
     /**
-     * What each part of a journey costs one search, so several searches can ask different questions
-     * of one graph.
-     *
-     * <p>A weight is a multiplier on the search's cost and on nothing else: the journey that comes
-     * out still reports the real time it takes, exactly as {@link RoutePreferences#weight} does for a
-     * road route. Asking for fewer changes by making each change three times as expensive finds the
-     * journey with fewer of them without telling the player that journey takes three times as long.
+     * What each part of a journey costs one search, so several searches can ask different questions of
+     * one graph. A weight multiplies the search's cost and nothing else: the journey still reports the
+     * real time it takes.
      */
     private record Weights(double walking, double transfers, double lines,
                            Set<TransitLine> discouraged) {
 
-        /** The recommendation: the journey as it has always been planned. */
         static final Weights NONE = new Weights(1.0, 1.0, 1.0, Set.of());
 
         static Weights fewerTransfers() {
@@ -386,24 +255,20 @@ public final class LinePlanner {
             return new Weights(1.0, 1.0, 4.0, Set.copyOf(lines));
         }
 
-        /** What one link costs this search. */
         double cost(Link link) {
             if (link.info() != null) {
                 return discouraged.contains(link.info().line()) ? link.seconds() * lines
                         : link.seconds();
             }
-            // A walk: an interchange between two platforms, a mixed journey's leg through the
-            // streets, or a hop with no road behind it -- all three are walking, and the two weights
-            // are how "fewer changes" and "less walking" are told apart.
+            // A walk: an interchange, a mixed leg through the streets, or a hop with no road behind it. The two
+            // weights are how "fewer changes" and "less walking" are told apart.
             return link.seconds() * (link.transfer() ? transfers : walking);
         }
     }
 
     /**
-     * The graph and the workspaces one plan's searches share, or null when there are no stops.
-     *
-     * <p>The stop list is the whole of the graph's vertex set: a plan over a network with no stops is
-     * no journey at all, and saying so once here keeps every search below from having to.
+     * The graph and workspaces one plan's searches share, or null when there are no stops. The stop list
+     * is the whole vertex set, and saying so once keeps every search below from having to.
      */
     private static Context prepare(RideRoads roads, List<TransitLine> lines, String destinationName,
                                    RoutePreferences preferences) {
@@ -416,15 +281,13 @@ public final class LinePlanner {
         double wait = RoadConfig.transitWaitSeconds();        // Read once, so one plan cannot mix links from one policy with links from another.
         boolean mixed = RoadConfig.transitMixed();
         RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forWalks());
-        // What a mixed middle leg can stand on: the walking network, filed in a grid so a stop can be
-        // asked cheaply whether a walk from it would touch the roads at all. Without that question a
-        // crowd of nearby stops with no road beside them burns the whole mixed budget planning walks
-        // that are thrown away, and the one connection that could be made is never reached.
+        // What a mixed middle leg can stand on: the walking network filed in a grid, so a stop can be asked
+        // cheaply whether a walk from it would touch the roads. Without that question a crowd of roadless
+        // stops burns the whole mixed budget on plans that are thrown away.
         WalkRoads walkRoads = mixed ? new WalkRoads(roads.forWalks(), preferences) : null;
 
-        // The graph is worked out a stop at a time as the search reaches it. See Links: it is the same
-        // graph, and building all of it first is what a whole-network reading made unaffordable, because
-        // it is every ride of every line however short the journey asked for is.
+        // The graph is worked out a stop at a time as the search reaches it; building all of it first is what
+        // a whole-network reading made unaffordable.
         Links links = new Links(roads, lines, nodes, byPosition, destinationName, preferences, wait,
                 workspace, mixed, walkRoads);
         return new Context(nodes, byPosition, cache, wait, destinationName, preferences, workspace,
@@ -444,24 +307,13 @@ public final class LinePlanner {
     }
 
     /**
-     * The journey planned under several strategies at once, best first, at most
-     * {@link #MAX_PLANS}.
-     *
-     * <p>The questions are asked in the order a picker shows them: the recommendation (the policy in
-     * force), then fewer changes, then less walking, then other lines. A strategy that finds the same
-     * journey again has not found a plan, it has found the same plan, so the result is deduplicated
-     * by what the journey actually does -- which line is boarded where and left where -- and later
-     * questions are only asked while there is still room for the answer.
-     *
-     * <p>A journey that would be beaten by simply walking there is not a plan at all -- see
-     * {@link #worthRiding} -- and the recommendation is asked first so that the other questions are
-     * not paid for when the whole list is going to be empty. Every candidate is put through the same
-     * test, because an alternative strategy can find a shape the recommendation did not, and a list
-     * that offered one of the very journeys the recommendation was refused for would be inconsistent
-     * with itself.
-     *
-     * @return the journeys, best first; empty when no line can carry the trip at all, or when the
-     *         ride found is not worth taking and the walk is the honest answer
+     * The journey planned under several strategies at once, best first, at most MAX_PLANS. Questions are
+     * asked in the order a picker shows them: recommendation, fewer changes, less walking, other lines.
+     * A strategy that finds the same journey again has found the same plan, so results are deduplicated
+     * by what the journey actually does. A journey that walking would beat is not a plan (see
+     * worthRiding), and every candidate goes through the same test.
+     * @return the journeys, best first; empty when no line can carry the trip, or when the ride found is
+     * not worth taking and the walk is the honest answer
      */
     public static List<Trip> alternatives(RideRoads roads, List<TransitLine> lines, double startX,
                                           double startZ, double goalX, double goalZ,
@@ -489,7 +341,6 @@ public final class LinePlanner {
         return journeys;
     }
 
-    /** Adds a journey unless it is not worth taking, or the same one is already offered. */
     private static void addIfNew(Context context, List<Trip> journeys, Journey candidate,
                                  double startX, double startZ, double goalX, double goalZ) {
         if (journeys.size() >= MAX_PLANS
@@ -505,7 +356,6 @@ public final class LinePlanner {
         journeys.add(candidate.trip());
     }
 
-    /** What a journey actually does, for telling two plans apart: which line, boarded where, left where. */
     private static String signatureOf(Trip trip) {
         StringBuilder signature = new StringBuilder();
         for (Trip.Ride ride : trip.rides()) {
@@ -517,43 +367,18 @@ public final class LinePlanner {
 
     /**
      * Whether the journey the search found is worth taking rather than walking the whole way.
-     *
-     * <h2>The shape this refuses</h2>
-     * The search runs over two states per stop -- before the first ride and after it -- and only the
-     * second may finish, so that a walk that happens to be cheaper than any line is not handed back as
-     * the answer to a public transport request. The price of that rule is this: when the destination
-     * stands near the stop the player is already beside, the cheapest way to satisfy "must ride
-     * something" is to ride out to the next station and ride the same line back. The journey has
-     * ridden a line, arrived where it started, and the search reports it as the best journey it knows
-     * because it is the cheapest one that rides anything -- which used to reach the player as "the
-     * destination is over there, so take the line out and take it back".
-     *
-     * <h2>Why the ride is judged by the ground it wins, not by the line it is on</h2>
-     * "Riding the same line back is silly" is not a rule this planner can state: a two-way line is a
-     * service rather than a direction, the order of its stops alone says nothing about which way a
-     * rider may go, and a player crossing a river on a ferry legitimately rides a line whose two stops
-     * stand close together. (A one-way line has already been kept out of the shape this paragraph is
-     * about: there is no ride back along it to be silly about, because the search never offered one --
-     * see {@code LineDirection}.) What is a rule is what the ride did for the journey.
-     * {@link #rideGain} measures exactly that -- how much closer to the destination the last stop got
-     * off at stands than the first one boarded at -- and {@link #MIN_RIDE_GAIN} is the amount below
-     * which the line has not moved the rider any closer in any way that matters. A ride that clears it
-     * is kept without a second look, whatever shape it has.
-     *
-     * <h2>And why a small gain is not refused on its own</h2>
-     * Because the walk has to be a real answer before the ride is taken away. The destination may be
-     * on the other side of a wall the ride is the only way through, in which case the gain is small
-     * and the journey is still the only plan that arrives. So the walk from the player to the
-     * destination is planned -- the walking navigation's own walk, not the straight hop
-     * {@link #walk} falls back to where no road route exists -- and the journey is refused only when
-     * that walk exists and is at least as quick. A ride that gains nothing but still beats a long way
-     * round on foot is still the answer; a ride that gains nothing and is slower than walking the
-     * short way is exactly the circle this exists to stop.
-     *
-     * <p>The walk is planned only for the suspicious shape, and through the plan's own cache: a
-     * journey whose ride cleared {@link #MIN_RIDE_GAIN} -- which is nearly every journey over a real
-     * network -- returns before any route is asked for, so the common plan pays nothing for this
-     * check.
+     * The search runs two states per stop -- before the first ride and after it -- and only the second
+     * may finish, so a cheaper walk is not handed back as public transport. The price is that a
+     * destination near the stop the player is beside answers with "ride out to the next station and
+     * back", the cheapest journey that rides anything.
+     * The ride is judged by the ground it wins, not the line it is on: a two-way line is a service, and
+     * a ferry across a river legitimately rides between close stops. rideGain is that measure, and
+     * MIN_RIDE_GAIN the amount below which the line has not moved the rider closer in any way that
+     * matters.
+     * A small gain is not refused on its own: the destination may be behind a wall the ride is the only
+     * way through. The walk to the destination is planned -- a real walking route, not the straight hop
+     * -- and the journey is refused only when that walk exists and is at least as quick. The walk is
+     * planned only for the suspicious shape and through the plan's cache.
      */
     private static boolean worthRiding(Context context, Journey journey, double startX,
                                        double startZ, double goalX, double goalZ) {
@@ -567,14 +392,12 @@ public final class LinePlanner {
         }
         Route onFoot = pureWalk(context, startX, startZ, goalX, goalZ);
         if (!onFoot.isPresent()) {
-            // Nothing to walk: the ride, however odd the shape, is the only way to the destination.
             return true;
         }
         boolean worth = trip.estimatedSeconds() < onFoot.estimatedSeconds();
         if (!worth) {
-            // Said when it happens, because "public transport reports no journey" is otherwise a
-            // statement about the network rather than about the plan that was refused, and this is
-            // the only line that knows which of the two it was.
+            // Said when it happens, because "public transport reports no journey" otherwise says nothing about
+            // whether the network or the refused plan is the reason.
             HowToGo.diagnostic("[HowToGo] public transport: the ride gains {} blocks towards the "
                             + "destination, the journey is {} s and walking is {} s -- the walk is "
                             + "the answer", Math.round(gain), Math.round(trip.estimatedSeconds()),
@@ -584,17 +407,9 @@ public final class LinePlanner {
     }
 
     /**
-     * How much closer to the destination the riding carried the rider, in blocks.
-     *
-     * <p>From the first stop a ride is boarded at to the last stop one is got off at, along the
-     * straight line to the destination -- the net ground, not the distance ridden. Riding a line out
-     * and back nets nothing however much track it covered, and that is the point: the question is
-     * what the riding did for the journey, and a ride that returns the rider to where it found them
-     * did nothing.
-     *
-     * <p>Positive infinity for a journey that rides nothing or whose rides name no stops: neither
-     * shape is one this filter has an opinion about, and answering "worth taking" leaves such a
-     * journey untouched rather than silently removing it.
+     * How much closer to the destination the riding carried the rider, in blocks: from the first stop
+     * boarded at to the last got off at, along the straight line to the destination. Positive infinity
+     * for a journey that rides nothing, so the filter has no opinion on it.
      */
     private static double rideGain(Trip trip, double goalX, double goalZ) {
         List<Trip.Ride> rides = trip.rides();
@@ -613,17 +428,10 @@ public final class LinePlanner {
     }
 
     /**
-     * The walk from the player to the destination, planned by the walking router and cached for the
-     * plan.
-     *
-     * <p>Deliberately not {@link #walk}: that helper falls back to a straight hop where no road route
-     * exists, and a straight hop is not a walk the navigation can be asked to give. The comparison
-     * here decides whether a public transport request is answered with the walk instead, so it has to
-     * be made against a walk that exists -- a destination the walker cannot reach leaves the ride
-     * alone, which is the one case where refusing it would leave the player with nothing at all.
-     *
-     * <p>Cached under its own key in the plan's route cache, so the several journeys of one plan's
-     * alternatives share one walking route rather than planning the same walk for each of them.
+     * The walk from the player to the destination, planned by the walking router and cached for the plan.
+     * Deliberately not the straight-hop helper: the comparison decides whether the request is answered
+     * with the walk instead, so it must be made against a walk that exists. Cached so several journeys
+     * of one plan share one walking route.
      */
     private static Route pureWalk(Context context, double startX, double startZ, double goalX,
                                   double goalZ) {
@@ -634,8 +442,6 @@ public final class LinePlanner {
         }
         Route planned;
         if (Math.hypot(goalX - startX, goalZ - startZ) <= STATIONARY_DISTANCE) {
-            // Already there: the walk that says so is a route with nothing to walk, the same shape
-            // the search uses for a stop the player is standing on.
             planned = stationary(startX, startZ, context.destinationName());
         } else {
             planned = RoadRouter.findRoute(context.workspace(), startX, startZ, goalX, goalZ,
@@ -649,11 +455,8 @@ public final class LinePlanner {
     }
 
     /**
-     * One Dijkstra over the stop graph, with what each part of a journey costs set by {@code weights}.
-     *
-     * <p>Split out of {@link #search} so the graph behind it can be shared: the recommendation and
-     * the alternatives are the same search asked different questions, and rebuilding the rides for
-     * each question would cost several times a plan for an answer about one.
+     * One Dijkstra over the stop graph, with the cost of each part set by weights. Split out so the graph
+     * can be shared between the recommendation and the alternatives.
      */
     private static Journey searchOnce(Context context, double startX, double startZ, double goalX,
                                       double goalZ, Weights weights) {
@@ -667,13 +470,9 @@ public final class LinePlanner {
         RoadRouter.Workspace workspace = context.workspace();
         int count = nodes.size();
 
-        // The search runs over two copies of the stop graph: reaching a stop before the first ride
-        // (state 0) and after any ride (state 1). A public transport journey has to ride something, so
-        // only the second state is allowed to finish, and a walk route that happens to be cheaper than
-        // any line is then not the answer -- it cannot finish at all. Without the split the search
-        // found the cheapest path overall and refused it for having no ride on it, which reported "no
-        // journey" in exactly the case the mode exists for: a stop near the destination made walking
-        // to it cheaper than riding anywhere.
+        // Two copies of the stop graph: reaching a stop before the first ride (state 0) and after any ride
+        // (state 1). Only state 1 may finish, so a walk cheaper than any line cannot be the answer; without
+        // the split the search found the cheapest path and refused it for having no ride.
         int states = count * 2;
         double[] dist = new double[states];
         int[] fromState = new int[states];
@@ -684,9 +483,9 @@ public final class LinePlanner {
         Arrays.fill(dist, Double.MAX_VALUE);
         Arrays.fill(fromState, -1);
 
-        // Boarding: a walk from the player to one of the nearest stops, plus the wait for the first
-        // service. Pushed on the same queue the links are, so a stop reached on foot and a stop
-        // reached by riding compete on one footing. These are the state before the first ride.
+        // Boarding: a walk from the player to one of the nearest stops plus the wait for the first service,
+        // pushed on the same queue as the links so foot and ride compete on one footing. State before the
+        // first ride.
         PriorityQueue<double[]> frontier =
                 new PriorityQueue<>(Comparator.comparingDouble(entry -> entry[0]));
         for (int index : nearest(nodes, startX, startZ)) {
@@ -706,10 +505,8 @@ public final class LinePlanner {
             }
         }
 
-        // The stops a journey may finish at, which is where the search learns how well it is doing: the
-        // destination is not one of the graph's stops, so the cost of getting off has to be added to a
-        // stop's own cost to make a whole journey, and until that has been done there is nothing for the
-        // search to stop at.
+        // The stops a journey may finish at: the destination is not a graph node, so the cost of getting off
+        // must be added before there is anything for the search to stop at.
         List<Integer> alighting = nearest(nodes, goalX, goalZ);
         boolean[] mayAlight = new boolean[count];
         for (int index : alighting) {
@@ -719,22 +516,11 @@ public final class LinePlanner {
         double bestTotal = Double.MAX_VALUE;
         Route bestFinish = null;
 
-        // Dijkstra over the stops, ended as soon as nothing left could beat the best journey already
-        // found.
-        //
-        // <h2>Why the early end is not an optimisation</h2>
-        // This used to run the queue to exhaustion and work the alighting out afterwards, which settles
-        // every stop the network can reach however short the journey is. That is invisible on a handful
-        // of lines and it is the whole of the cost on a whole railway: measured against a network of
-        // four hundred lines, a journey two stops long settled all sixteen hundred stations and planned
-        // three thousand two hundred rides, exactly as many as a journey clean across it. "It is slow
-        // even though the distance is small" is this loop, and building the graph a stop at a time
-        // underneath it cannot help while the search visits every stop anyway.
-        //
-        // The queue is ordered by cost, so the cheapest unsettled stop is a lower bound on the cost of
-        // every journey through any of them -- including the walk off at the far end, which only ever
-        // adds. Once that bound reaches the best journey already found, nothing further can improve it,
-        // and the rest of the queue is stops the answer does not go through.
+        // Dijkstra over the stops, ended as soon as nothing left could beat the best journey found.
+        // Running the queue to exhaustion settles every reachable stop however short the journey is: on a
+        // 400-line network a two-stop journey settled all 1600 stations. The queue is ordered by cost, so the
+        // cheapest unsettled stop bounds every journey through it; once that bounds the best found, the rest
+        // cannot improve.
         while (!frontier.isEmpty()) {
             double[] next = frontier.poll();
             int current = (int) next[1];
@@ -748,9 +534,8 @@ public final class LinePlanner {
             int stop = stopOf(current);
             boolean ridden = hasRidden(current);
             if (ridden && mayAlight[stop]) {
-                // Getting off here: the walk from this stop to the destination, which is the same walk
-                // the alighting pass used to make from every candidate at the end. Asked only after a
-                // ride, because a journey that rides nothing is not a public transport journey.
+                // Getting off here: the walk from this stop to the destination, the same walk the alighting pass used
+                // to make. Asked only after a ride, because a journey that rides nothing is not public transport.
                 Node node = nodes.get(stop);
                 Route walk = walk(workspace, node.at().x(), node.at().z(), goalX, goalZ,
                         destinationName, preferences, cache);
@@ -778,16 +563,12 @@ public final class LinePlanner {
             }
         }
 
-        // The valve is about the graph the search was over, and every answer below -- including "no
-        // journey" -- was reached on that graph.
         links.reportUnplanned();
         if (bestEnd < 0) {
             return Journey.EMPTY;
         }
 
         List<PendingLeg> reversed = new ArrayList<>();
-        // Bounded by the number of states: a Dijkstra chain cannot loop, and this is here so that a
-        // malformed one is a refused journey rather than a hang.
         int guard = states + 1;
         for (int at = bestEnd; at >= 0 && guard-- > 0; at = fromState[at]) {
             Link link = fromLink[at];
@@ -797,14 +578,10 @@ public final class LinePlanner {
         java.util.Collections.reverse(reversed);
         reversed.add(new PendingLeg(bestFinish, TravelMode.WALK, null));
 
-        // The legs are rebuilt in travelling order with what each one rides, and the distance each
-        // ride's stops stand at is counted as the chain is walked: only here is it known how much of
-        // the journey comes before a ride, which is what every stop's own distance is measured from.
-        //
-        // The planner's ride edges run between neighbouring stops, so a rider who stays on through
-        // three stations is three legs -- and one ride. The run is what the announcements are about:
-        // "get on at A, three stops to D" is not three boardings. Every leg of a run therefore carries
-        // the same ride, and {@link Trip#rides()} reads a run as the one ride it is.
+        // The legs rebuilt in travelling order with what each rides, and each ride's stop distances counted as
+        // the chain is walked -- only here is it known how much of the journey comes before a ride.
+        // Ride edges run between neighbouring stops, so a rider staying on through three stations is three
+        // legs and one ride; every leg of a run carries the same ride, and Trip.rides() reads the run as one.
         List<Double> offsets = new ArrayList<>(reversed.size());
         double travelled = 0;
         for (PendingLeg leg : reversed) {
@@ -830,17 +607,14 @@ public final class LinePlanner {
             at = end + 1;
         }
 
-        // The first and last stops of the chain, which are where the player boards and gets off. The
-        // legs before and after them are walks, so the chain's ends are exactly the stations. The
-        // chain's links are states, so what it starts and ends at are states too; a stop is what its
-        // index names, either way round.
+        // The first and last stops of the chain, where the player boards and gets off. The links are states,
+        // so a stop is what its index names either way round.
         int first = bestEnd;
         while (fromState[first] >= 0) {
             first = fromState[first];
         }
-        // The lines the journey actually rides, kept with it: the alternative that asks for another
-        // set of lines needs to know which ones were in the way, and a ride's label cannot be turned
-        // back into the line object that carries its stops.
+        // The lines the journey actually rides, kept because the "other lines" alternative needs them and a
+        // ride's label cannot be turned back into its line object.
         Set<TransitLine> ridden = new java.util.HashSet<>();
         for (PendingLeg leg : reversed) {
             if (leg.info() != null) {
@@ -851,28 +625,21 @@ public final class LinePlanner {
                 nodes.get(stopOf(bestEnd)).at().label()), ridden);
     }
 
-    /** The search state for a stop: reached before the first ride, or after one. */
     private static int stateOf(int stop, boolean ridden) {
         return stop * 2 + (ridden ? 1 : 0);
     }
 
-    /** The stop a search state belongs to. */
     private static int stopOf(int state) {
         return state / 2;
     }
 
-    /** Whether a search state has ridden at least one line. */
     private static boolean hasRidden(int state) {
         return (state & 1) == 1;
     }
 
     /**
-     * Whether the second leg is the first one continued: one line, one way along it, and the very next
-     * stop.
-     *
-     * <p>A change of line breaks the run, and so does a change of direction -- riding out to the end of
-     * a line and back is two rides however much the line is one, because the rider has to be told twice
-     * which way the vehicle is going.
+     * Whether the second leg continues the first: one line, one way along it, and the very next stop. A
+     * change of line or direction breaks the run, because the rider has to be told which way to go.
      */
     private static boolean continues(PendingLeg here, PendingLeg next) {
         RideInfo before = here.info();
@@ -888,18 +655,10 @@ public final class LinePlanner {
     }
 
     /**
-     * The ride a run of hops is, or null for a run that goes nowhere.
-     *
-     * <p>Every hop runs between neighbouring stops of the line, so the stops of the run are exactly its
-     * ends: the first stop it is boarded at and, after each hop, the stop that hop arrives at. Their
-     * distances are therefore the legs' own offsets, exactly -- no projecting of platform corners onto
-     * a polyline, and nothing that can drift from the distance the navigation measures along the
-     * flattened route.
-     *
-     * <p>The direction is the line's own order: the terminus named is the end of the line this run is
-     * travelling towards, which is what "towards such-and-such" means and is the opposite end for the
-     * ride back.
-     *
+     * The ride a run of hops is, or null for a run that goes nowhere. The stops of the run are its ends;
+     * their distances are the legs' own offsets, so nothing can drift from the distance the navigation
+     * measures. The direction is the line's own order, and the terminus named is the end being
+     * approached.
      * @param legs    every leg of the journey, in travelling order
      * @param from    the first leg of the run
      * @param to      the last leg of the run
@@ -933,15 +692,10 @@ public final class LinePlanner {
                 line.stops().get(last.toStop()).label(), stops);
     }
 
-    // ------------------------------------------------------------------- graph
 
     /**
-     * Every way out of every stop, planned before the search runs.
-     *
-     * <p>Rides first, then transfers: the rides are the expensive plans, and if the ride budget is
-     * going to bite it should bite a ride rather than leave the journey with no way to change lines at
-     * all -- a network whose rides have all been planned but whose transfers have not answers every
-     * journey with a single-line detour, which is the failure this class was rewritten to remove.
+     * Every way out of every stop, planned before the search runs. Rides first, then transfers: if the
+     * budget bites it should bite a ride rather than leave the journey no way to change lines.
      */
     private static List<List<Link>> buildLinks(RideRoads roads,
                                                List<TransitLine> lines, List<Node> nodes,
@@ -961,15 +715,12 @@ public final class LinePlanner {
                 TransitLine line = lines.get(call[0]);
                 int at = call[1];
                 TravelMode mode = rideMode(line.kind());
-                // The line's own class and nothing else. A mode is a set of classes, so the mode alone
-                // would let a water line's ride come back along a rail; the policy is what makes the
-                // type a player chose for a line mean something.
+                // The line's own class and nothing else: a mode is a set of classes, so the mode alone would let a
+                // water line's ride come back along a rail.
                 RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
-                // And the network the line asked for: this is where a line with its marks switched off
-                // is kept off them, rather than merely not adding a layer another line has added.
+                // The network the line asked for, which is how a line with its marks switched off is kept off them.
                 RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
-                // The same rule as Links.ridesFrom, in the eager form of it that this method was:
-                // a one-way line has no edge back towards the stop before this one.
+                // The same rule as Links.ridesFrom, in this eager form: a one-way line has no edge back.
                 for (int step = -1; step <= 1; step += 2) {
                     if (step < 0 && line.oneWay()) {
                         continue;
@@ -983,9 +734,8 @@ public final class LinePlanner {
                     if (target == null || target == index) {
                         continue;
                     }
-                    // Keyed by direction, and planned from the end being travelled from: a stretch
-                    // ridden the other way is not the same route reversed, because its turn-by-turn
-                    // instructions have to point the way the rider is actually going.
+                    // Keyed by direction and planned from the end being travelled from: a stretch ridden the other way is
+                    // not the same route reversed, because its instructions must point the way the rider is going.
                     String key = "R|" + line.id() + "|" + at + "|" + next;
                     Route ride = cache.get(key);
                     if (ride == null) {
@@ -998,17 +748,14 @@ public final class LinePlanner {
                         ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(),
                                 destinationName, mode, ridePolicy);
                         if (ride.isPresent() && trackLength(ride) < MIN_RIDE_TRACK) {
-                            // Nothing but the two hops onto and off the track: there is no riding in
-                            // this leg, and calling it public transport would be a straight line
-                            // between two platforms dressed up as a train. Refused, and the journey
-                            // planner will look for another way or report none.
+                            // Nothing but the two hops onto and off the track: there is no riding in this leg, and calling it
+                            // public transport would be a straight line between two platforms dressed up as a train.
                             ride = Route.empty();
                         }
                         cache.put(key, ride);
                         if (!ride.isPresent()) {
-                            // Named, because "no journey over 1 line(s)" cannot say which stretch of
-                            // which line is the one that could not be ridden, and that is the only
-                            // question worth asking.
+                            // Named, because "no journey over 1 line(s)" cannot say which stretch is the one that could not be
+                            // ridden.
                             HowToGo.diagnostic(
                                     "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
                                     from.label(), to.label(), line.kind().name());
@@ -1033,57 +780,24 @@ public final class LinePlanner {
 
     /**
      * Every way out of a stop, worked out when the search reaches it rather than before it starts.
-     *
-     * <h2>Why this is not done up front</h2>
-     * It was, and the reason was sound while a plan ran over a handful of lines: the links are the
-     * expensive part, planning them all first makes the search a plain Dijkstra over a graph that does
-     * not move, and the budget that used to guard the planning could then only ever drop the tail of
-     * the list rather than remove edges from a search already running.
-     *
-     * <p>What a reading of a whole railway changed is the arithmetic. The graph is every neighbouring
-     * pair of stops of every line, in both directions, and it has nothing to do with the journey asked
-     * for: a two-hundred-block trip across a network of three hundred lines plans twelve thousand rides,
-     * every one of them a route the road router has to work out, and the player sees the map freeze
-     * while it happens. Journey length not mattering was the symptom, and this is the cause.
-     *
-     * <p>Dijkstra does not need the whole graph. It needs the edges out of each stop at the moment it
-     * settles that stop, because an edge is only ever relaxed from a settled node. So a stop's links are
-     * planned when it is settled and kept for the one time they are asked for, and a short journey plans
-     * the stops it actually reaches -- which is bounded by the cost of the answer rather than by the
-     * size of the railway.
-     *
-     * <p>This is sound in a way the old lazy attempt was not: nothing here is capped per stop, so a
-     * stop's links are always all of them, and the graph a running search sees never changes underneath
-     * it. What is left of the budget is a budget on the whole plan, reported out loud if it is ever
-     * reached, and reaching it now means a search that genuinely explored the network rather than one
-     * that was asked a short question about it.
+     * Building all of it up front was sound on a handful of lines, but the graph is every neighbouring
+     * pair of stops of every line: a two-hundred-block trip across three hundred lines plans twelve
+     * thousand rides, and the map froze. Dijkstra needs only the edges out of each stop when it settles
+     * that stop, so a short journey plans only what it reaches. Nothing is capped per stop, so the graph
+     * a running search sees never changes underneath it; the remaining budget is on the whole plan and
+     * is reported.
      */
     /**
-     * The walking network filed in a grid, to answer one cheap question: does a stop stand near a
-     * walkable road?
-     *
-     * <h2>Why the question is asked before any route is planned</h2>
-     * A mixed middle leg is a real walking route, so planning one is the expensive part of the mixed
-     * graph. Asking the router first for two stops that have no road within a station's reach plans
-     * a leg that is thrown away (it would be a straight connector), and a transit network can easily
-     * hold a crowd of stops that stand near each other but in open country -- a dead-end line beside
-     * a real one is enough. Those stops used to burn the whole mixed budget before the search reached
-     * the one pair of stops the roads actually join, so the journey the feature exists for was
-     * reported as "no journey". The grid makes "is there a road near this stop" a cell lookup, and
-     * only stops that pass it are offered to the router.
-     *
-     * <p>Walkable classes only: a stop on a rail is not near a road because the rail is there, and
-     * the classes the player has asked to avoid do not count either. An edge is filed in every cell
-     * its own samples land in -- sampled along its length, because a road drawn as one long piece
-     * between two clicks has no vertices in the middle -- and a query reads the three-by-three cells
-     * around the stop, which is enough because the cell is larger than the reach plus the sampling
-     * gap.
+     * The walking network filed in a grid, to answer one cheap question: does a stop stand near a walkable
+     * road? A mixed middle leg is a real walking route, so planning for two roadless stops is wasted, and
+     * a dead-end line beside a real one is enough to burn the whole mixed budget. The grid makes it a cell
+     * lookup, and only stops that pass are offered to the router.
+     * Walkable classes only, and avoided classes do not count. An edge is filed in every cell its samples
+     * land in, sampled along its length, and a query reads the nine cells around the stop.
      */
     private static final class WalkRoads {
 
-        /** The grid's cell, larger than the reach plus half a sample so three-by-three covers it. */
         private static final double CELL = 64.0;
-        /** How often a long edge is sampled into cells, in blocks. */
         private static final double SAMPLE = 16.0;
 
         private final Map<Long, List<double[]>> cells = new HashMap<>();
@@ -1115,7 +829,6 @@ public final class LinePlanner {
             }
         }
 
-        /** Whether a walkable road passes within {@link #MIXED_WALK_STOP_REACH} of the point. */
         boolean near(double x, double z) {
             int cx = (int) Math.floor(x / CELL);
             int cz = (int) Math.floor(z / CELL);
@@ -1136,7 +849,6 @@ public final class LinePlanner {
             return false;
         }
 
-        /** Squared distance from a point to one edge, the same arithmetic the router uses. */
         private static double distanceSq(double x, double z, double[] edge) {
             double ex = edge[2] - edge[0];
             double ez = edge[3] - edge[1];
@@ -1161,28 +873,17 @@ public final class LinePlanner {
         private final String destinationName;
         private final RoutePreferences preferences;
         private final double wait;
-        /** The walking side of the plan, for a mixed journey's middle leg. */
         private final RoadRouter.Workspace walkWorkspace;
-        /** Whether walking may join stops that are not one interchange. */
         private final boolean mixed;
-        /** The walking network as a grid, for asking whether a stop stands near a road at all. */
         private final WalkRoads walkRoads;
-        /** Per stop: 1 when it stands near a walkable road, 2 when it does not, 0 not yet asked. */
         private final byte[] stopNearRoad;
 
-        /** The stops of the network filed by cell, for the transfer neighbourhood query. */
         private final Map<Long, List<Integer>> cells = new HashMap<>();
-        /** The same, at the mixed walking reach: see {@link #mixedWalksFrom}. */
         private final Map<Long, List<Integer>> mixedCells = new HashMap<>();
-        /** Which lines call at each stop, for deciding whether a walk could change anything. */
         private final List<Set<Integer>> lineSets = new ArrayList<>();
-        /** The mixed walking routes already planned, by ordered pair of stops. */
         private final Map<String, Route> mixedWalks = new HashMap<>();
-        /** The interchange walks already planned, by ordered pair of stops. */
         private final Map<String, Route> transferWalks = new HashMap<>();
-        /** The rides already planned, by line and direction, so a pair is planned once. */
         private final Map<String, Route> rides = new HashMap<>();
-        /** One entry per stop: its links once worked out, or null while they have not been. */
         private final List<List<Link>> planned;
         private int budget = MAX_RIDE_PLANS;
         private int mixedBudget = MAX_MIXED_WALK_PLANS;
@@ -1224,14 +925,10 @@ public final class LinePlanner {
         }
 
         /**
-         * Every way out of one stop: a ride to each neighbour on each line calling there, a walk to
-         * every other stop of a different line that stands near enough to be the same interchange,
-         * and -- when public transport is allowed to mix walking and lines -- a walked leg to the
-         * nearest stops of other lines within {@link #MIXED_WALK_RADIUS}.
-         *
-         * <p>Worked out once per stop, because the same list serves the search's two states (one
-         * before the first ride and one after it). The lists are not pruned against a search's
-         * numbers for that reason: a link that could not help one state may still help the other.
+         * Every way out of one stop: a ride to each neighbour on each line calling there, a walk to every other
+         * stop of a different line within the interchange radius, and -- when mixing is allowed -- a walked leg
+         * to the nearest stops of other lines. Worked out once per stop because the same list serves both
+         * search states, so the lists are not pruned against one search's numbers.
          */
         List<Link> outgoing(int index) {
             List<Link> known = planned.get(index);
@@ -1248,24 +945,18 @@ public final class LinePlanner {
             return links;
         }
 
-        /** The rides: one per direction the line allows, per line calling at this stop. */
         private void ridesFrom(int index, List<Link> links) {
             for (int[] call : nodes.get(index).calls()) {
                 TransitLine line = lines.get(call[0]);
                 int at = call[1];
                 TravelMode mode = rideMode(line.kind());
-                // The line's own class and nothing else. A mode is a set of classes, so the mode alone
-                // would let a water line's ride come back along a rail; the policy is what makes the
-                // type a player chose for a line mean something.
+                // The line's own class and nothing else: a mode alone would let a water line's ride use a rail.
                 RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
-                // And the network the line asked for: this is where a line with its marks switched off
-                // is kept off them, rather than merely not adding a layer another line has added.
+                // The network the line asked for; this keeps a line with its marks switched off off them.
                 RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
-                // A two-way line is ridden either way round -- it is a service, and a player travelling
-                // back along it is riding it rather than breaking it. A one-way line is ridden in its
-                // own order and nowhere else, so the edge back towards the previous stop is not in the
-                // graph at all: this is what makes "a one-way loop cannot be ridden the wrong way"
-                // true of the journey the search returns rather than a rule applied to it afterwards.
+                // A two-way line is ridden either way round -- it is a service. A one-way line is ridden in its own
+                // order and nowhere else, so the edge back is not in the graph at all: the rule is true of the
+                // journey returned, not applied afterwards.
                 for (int step = -1; step <= 1; step += 2) {
                     if (step < 0 && line.oneWay()) {
                         continue;
@@ -1279,9 +970,8 @@ public final class LinePlanner {
                     if (target == null || target == index) {
                         continue;
                     }
-                    // Keyed by direction, and planned from the end being travelled from: a stretch
-                    // ridden the other way is not the same route reversed, because its turn-by-turn
-                    // instructions have to point the way the rider is actually going.
+                    // Keyed by direction and planned from the end travelled from, because the instructions have to point
+                    // the way the rider is going.
                     String key = "R|" + line.id() + "|" + at + "|" + next;
                     Route ride = rides.get(key);
                     if (ride == null) {
@@ -1295,9 +985,7 @@ public final class LinePlanner {
                                 destinationName, mode, ridePolicy);
                         rides.put(key, ride);
                         if (!ride.isPresent()) {
-                            // Named, because "no journey over 1 line(s)" cannot say which stretch of
-                            // which line is the one that could not be ridden, and that is the only
-                            // question worth asking.
+                            // Named, because "no journey over 1 line(s)" cannot say which stretch failed.
                             HowToGo.diagnostic(
                                     "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
                                     from.label(), to.label(), line.kind().name());
@@ -1314,28 +1002,12 @@ public final class LinePlanner {
 
         /**
          * The transfers out of one stop: a walk to every other stop of the interchange it is in.
-         *
-         * <h2>Why the walk between two lines is planned</h2>
-         * A transfer is a change of lines at one interchange, and an interchange is by definition two
-         * stops within {@link #TRANSFER_RADIUS} of each other -- a platform and the stop beside it. It
-         * used to be measured as a straight hop, on the argument that there are no roads inside a
-         * station. Two stops of different lines are not always inside one station, though: they are
-         * often two platforms either side of a street, and then the walk between them is a walk like
-         * any other and drawing it as a straight line is a connection the roads do not have. So the
-         * pairs whose lines differ are asked of the walking router, and the hop is only the fallback
-         * for a pair no road route joins (or for a plan that has spent its walking budget).
-         *
-         * <p>Two stops of the same line keep the hop: the line itself is the link between them, the
-         * walk is only there for the case a ride could not be planned, and planning a route for every
-         * stop of a long line's interchange group would be the very cost this lazy graph removed.
-         *
-         * <h2>And why the near stops are found through a grid</h2>
-         * A transfer is two stops within the radius, so the pairs that could be one are a neighbourhood
-         * question, and asking it of every pair was the square of the network: invisible on the handful of
-         * lines MTR's own client data can produce, and most of a second on the thousands a whole-network
-         * reading brings. The grid is the same trick the road network's own spatial index uses, for the
-         * same reason -- the pairs worth measuring are the pairs that are near each other, and finding
-         * them should not cost the size of the world.
+         * A transfer is a change at one interchange -- two stops within TRANSFER_RADIUS -- and it used to be a
+         * straight hop on the argument that station floors have no roads. Two stops of different lines are
+         * often two platforms either side of a street, so the walk is planned by the walking router, with the
+         * hop as fallback where no road route exists or the budget is spent. Same-line stops keep the hop:
+         * the line itself is the link. Near stops are found through a grid, because asking every pair was the
+         * square of the network.
          */
         private void transfersFrom(int index, List<Link> links) {
             Node node = nodes.get(index);
@@ -1346,14 +1018,12 @@ public final class LinePlanner {
                 Node target = nodes.get(other);
                 Route hop = null;
                 if (!sharesLine(index, other)) {
-                    // Two lines meeting here: the walk between their platforms is a walking route.
                     hop = interchangeWalk(node, target);
                     if (!hop.isPresent()) {
                         hop = null;
                     }
                 }
                 if (hop == null) {
-                    // The same shape, the same pace, and no search of the world to arrive at it.
                     hop = straightWalk(node.at().x(), node.at().z(), target.at().x(),
                             target.at().z(), destinationName);
                 }
@@ -1365,18 +1035,15 @@ public final class LinePlanner {
             }
         }
 
-        /** Whether the two stops are called at by any of the same lines. */
         private boolean sharesLine(int a, int b) {
             return !java.util.Collections.disjoint(lineSets.get(a), lineSets.get(b));
         }
 
         /**
-         * The walk between two platforms of different lines, planned by the walking router.
-         *
-         * <p>Cached by ordered pair and budgeted like the mixed walks: a station with many lines would
-         * otherwise plan the same route again for every platform it is asked about, and a dense set of
-         * them would spend the plan's time on walks a rider is unlikely to be offered. A pair with no
-         * route, or a plan past its budget, answers empty and the caller falls back to the hop.
+         * The walk between two platforms of different lines, planned by the walking router and cached by
+         * ordered pair. A station with many lines would otherwise plan the same route again for every
+         * platform; a pair with no route, or a spent budget, answers empty and the caller falls back to the
+         * hop.
          */
         private Route interchangeWalk(Node from, Node to) {
             String key = "X|" + from.at().x() + "," + from.at().z() + "|"
@@ -1401,23 +1068,13 @@ public final class LinePlanner {
 
         /**
          * The mixed mode's walking legs: a real walking route to the nearest stops of other lines.
-         *
-         * <h2>Why this is not a transfer</h2>
-         * A transfer is a change at one interchange, a platform and the stop beside it, and its walk
-         * is a few blocks of station floor -- measured as a straight hop because a station has no
-         * roads. A mixed journey's walk is a leg through the streets: the rider gets off one line,
-         * walks to where another line calls, and gets on it. That walk is planned by the walking
-         * router, so it follows the roads a player on foot would follow and takes the time that walk
-         * takes; a straight line between the two stops would be a connection the roads do not have.
-         *
-         * <p>Only stops whose lines differ are offered: a walk between two stops of the same line is
-         * a ride the line already provides. The nearest few are kept, because each link is a real
-         * route and a dense interchange would otherwise offer one per stop in the radius.
+         * Not a transfer: this is a leg through the streets, so it follows the roads a player on foot would
+         * follow. Only stops whose lines differ are offered, and only the nearest few, since each link is a
+         * real route.
          */
         private void mixedWalksFrom(int index, List<Link> links) {
-            // A middle leg is a walk through the streets, so both of its ends have to stand on the
-            // walking network. Asking that first is what stops a crowd of nearby stops with no road
-            // beside them from spending the whole budget on walks that are dropped.
+            // A middle leg is a walk through the streets, so both ends must stand on the walking network; asking
+            // that first stops roadless stops from burning the budget.
             if (!nearRoad(index)) {
                 return;
             }
@@ -1432,8 +1089,6 @@ public final class LinePlanner {
                     continue;
                 }
                 if (interchange.contains(other)) {
-                    // One interchange already: the short transfer above is the link, and walking
-                    // through the streets to the stop beside it is not a second leg.
                     continue;
                 }
                 Route walk = mixedWalk(node, nodes.get(other));
@@ -1445,7 +1100,6 @@ public final class LinePlanner {
             }
         }
 
-        /** Whether the stop stands near enough to a walkable road for a middle leg to use one. */
         private boolean nearRoad(int index) {
             byte known = stopNearRoad[index];
             if (known != 0) {
@@ -1458,7 +1112,6 @@ public final class LinePlanner {
             return near;
         }
 
-        /** The nearest stops of other lines within {@link #MIXED_WALK_RADIUS}, nearest first. */
         private List<Integer> mixedNeighboursOf(int index) {
             Node node = nodes.get(index);
             int cellX = (int) Math.floor(node.at().x() / MIXED_WALK_CELL);
@@ -1481,15 +1134,11 @@ public final class LinePlanner {
                         Node target = nodes.get(other);
                         double dSq = apart(node, target);
                         if (dSq > maxSq || dSq <= interchangeSq) {
-                            // Too far to be a connection, or near enough that the interchange pass
-                            // already owns the pair.
                             continue;
                         }
                         if (lineSets.get(other).equals(mine)) {
                             continue;
                         }
-                        // A line calling at both stops already carries the rider between them;
-                        // a walk there is a worse ride, not a mixed journey.
                         if (!java.util.Collections.disjoint(mine, lineSets.get(other))) {
                             continue;
                         }
@@ -1514,7 +1163,6 @@ public final class LinePlanner {
             return nearest;
         }
 
-        /** Square of the horizontal distance between two stops. */
         private double apart(Node a, Node b) {
             double dx = a.at().x() - b.at().x();
             double dz = a.at().z() - b.at().z();
@@ -1522,13 +1170,9 @@ public final class LinePlanner {
         }
 
         /**
-         * One mixed walking leg, planned by the walking router and cached for the plan.
-         *
-         * <p>A route that used no road at all is dropped rather than used: that is the straight
-         * connector the walker's fallback produces when there is no road to follow, and putting it
-         * in the middle of a public transport journey is the direct connection this mode explicitly
-         * does not make. The two stops are then not joined on foot, and no mixed journey goes
-         * through them.
+         * One mixed walking leg, planned by the walking router and cached. A route that used no road at all is
+         * dropped: that is the straight connector the walker's fallback produces, the direct connection this
+         * mode does not make.
          */
         private Route mixedWalk(Node from, Node to) {
             String key = "M|" + from.at().x() + "," + from.at().z() + "|"
@@ -1553,20 +1197,10 @@ public final class LinePlanner {
 
         /**
          * Every stop of the interchange this one stands in, itself included.
-         *
-         * <h2>Why a group rather than the stops within the radius</h2>
-         * "Within the radius" is not a statement about a place, it is a statement about a pair, and a
-         * place is what an interchange is. A platform, the stop beside it and the stop beside that are
-         * one place to walk through even when the two ends of it are more than the radius apart, which is
-         * why the map draws one orange marker for them rather than two -- see
-         * {@code TransitInterchanges}, which grows its groups the same way. The planner used to allow
-         * only the pairs that were directly within the radius, so a journey could change lines onto the
-         * middle stop of such a place and then not onto the far one, while the map went on drawing the
-         * whole of it as a single place to change at. The two now answer the same question the same way.
-         *
-         * <p>Started from a stop and grown while it keeps finding stops near one already in: the same
-         * walk the map does, and only over the stops the budget below cares about -- the grid keeps it to
-         * the neighbourhood rather than to every pair of stops on the railway.
+         * An interchange is a place, not a pair: a platform, the stop beside it and the stop beside that are
+         * one place even when the ends are more than the radius apart, which is why the map draws one marker
+         * for them -- see TransitInterchanges, which grows its groups the same way. Started from a stop and
+         * grown while it keeps finding stops near one already in, using the same walk the map does.
          */
         private List<Integer> interchangeGroup(int index) {
             Map<Integer, List<Integer>> groups = interchangeGroups();
@@ -1575,11 +1209,9 @@ public final class LinePlanner {
         }
 
         /**
-         * The stops of this network grouped into interchanges, worked out once per plan.
-         *
-         * <p>Lazily, because a plan that never asks for a transfer out of a stop never needs it, and
-         * built in one pass rather than per stop: the growth is a walk over the whole group, so doing it
-         * per stop would make a hub of a hundred stops cost a hundred walks of a hundred.
+         * The stops of this network grouped into interchanges, worked out once per plan. Lazily, because a
+         * plan that never asks for a transfer never needs it, and in one pass because doing it per stop would
+         * make a hundred-stop hub cost a hundred walks.
          */
         private Map<Integer, List<Integer>> interchangeGroups() {
             if (interchangeGroups != null) {
@@ -1612,7 +1244,6 @@ public final class LinePlanner {
             return built;
         }
 
-        /** The stops one stop could change lines at: near enough, and call at another line. */
         private List<Integer> neighboursOf(int index) {
             Node node = nodes.get(index);
             int cellX = (int) Math.floor(node.at().x() / TRANSFER_CELL);
@@ -1629,9 +1260,8 @@ public final class LinePlanner {
                             continue;
                         }
                         Node target = nodes.get(other);
-                        // The distance first, because it is two subtractions and it is what most pairs
-                        // fail: the call lists are only worth reading once the two stops are close
-                        // enough to be one interchange at all.
+                        // The distance first, because it is two subtractions and is what most pairs fail; the call lists are
+                        // only worth reading once the stops are close enough to be one interchange.
                         double dx2 = target.at().x() - node.at().x();
                         double dz2 = target.at().z() - node.at().z();
                         if (dx2 * dx2 + dz2 * dz2 > TRANSFER_RADIUS * TRANSFER_RADIUS
@@ -1645,10 +1275,8 @@ public final class LinePlanner {
             return found;
         }
 
-        /** The interchanges, worked out the first time a transfer is asked for. */
         private Map<Integer, List<Integer>> interchangeGroups;
 
-        /** Says so, once, if the plan ever asked for more rides than the valve allows. */
         void reportUnplanned() {
             if (unplanned > 0) {
                 HowToGo.LOGGER.warn("[HowToGo] ride budget of {} plans exhausted: {} ride leg(s) were "
@@ -1657,10 +1285,8 @@ public final class LinePlanner {
                         MAX_RIDE_PLANS, unplanned);
             }
             if (mixedUnplanned > 0 && !mixedBudgetWarned) {
-                // Warned once rather than per plan: with a whole railway read from a server this can
-                // fire on every plan, and a line of log per button press is noise. It is a real
-                // finding, though -- some lines could not be joined on foot -- so it is not hidden
-                // behind the debug switch.
+                // Warned once rather than per plan: with a whole railway this can fire on every plan. It is a real
+                // finding -- some lines could not be joined on foot -- so it is not hidden behind the debug switch.
                 mixedBudgetWarned = true;
                 HowToGo.LOGGER.warn("[HowToGo] mixed walking budget of {} plans exhausted: {} "
                                 + "walking link(s) were not planned, so some lines could not be joined "
@@ -1668,9 +1294,8 @@ public final class LinePlanner {
                         MAX_MIXED_WALK_PLANS, mixedUnplanned);
             }
             if (transferUnplanned > 0) {
-                // Diagnostic, not a warning: a transfer that falls back to a straight hop is still a
-                // platform walk, and the only thing lost is that it does not follow the station's
-                // roads. That is worth knowing while investigating, not worth a line per plan.
+                // Diagnostic, not a warning: a transfer that falls back to a hop is still a platform walk, and only
+                // loses the station's roads.
                 HowToGo.diagnostic("[HowToGo] interchange walking budget of {} plans exhausted: {} "
                                 + "platform walk(s) were drawn as straight hops",
                         MAX_TRANSFER_WALK_PLANS, transferUnplanned);
@@ -1679,24 +1304,19 @@ public final class LinePlanner {
     }
 
     /**
-     * The cell a stop is filed under for the transfer pass.
-     *
-     * <p>The size is the transfer radius, so looking at the nine cells around a stop reaches every stop
-     * within it and no further: one cell size smaller would miss the corners of the neighbourhood, and
-     * one larger would put stops in the same cell that are further apart than any transfer.
+     * The cell a stop is filed under for the transfer pass. The size is the radius, so the nine cells
+     * around a stop reach every stop within it and no further.
      */
     private static long cellOf(Node node) {
         return cellKey((int) Math.floor(node.at().x() / TRANSFER_CELL),
                 (int) Math.floor(node.at().z() / TRANSFER_CELL));
     }
 
-    /** The same, in the grid the mixed walking pass uses. */
     private static long mixedCellOf(Node node) {
         return cellKey((int) Math.floor(node.at().x() / MIXED_WALK_CELL),
                 (int) Math.floor(node.at().z() / MIXED_WALK_CELL));
     }
 
-    /** A grid cell as one key. */
     private static long cellKey(int x, int z) {
         return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
     }
@@ -1704,9 +1324,8 @@ public final class LinePlanner {
     private static Route walk(RoadRouter.Workspace workspace, double startX, double startZ,
                               double goalX, double goalZ, String destinationName,
                               RoutePreferences preferences, Map<String, Route> cache) {
-        // Exact rather than rounded: a rounded key would answer a query about one position with a
-        // route planned to another half a block away, and the trip's own geometry is built from the
-        // route's points.
+        // Exact rather than rounded: a rounded key would answer with a route planned to another half a block
+        // away, and the trip's geometry is built from the route's points.
         String key = "T|" + startX + "," + startZ + "|" + goalX + "," + goalZ;
         Route cached = cache.get(key);
         if (cached != null) {
@@ -1714,43 +1333,33 @@ public final class LinePlanner {
         }
         double straight = Math.hypot(goalX - startX, goalZ - startZ);
         if (straight <= STATIONARY_DISTANCE) {
-            // Standing on the stop, or bound for the stop one is standing on. There is nothing to
-            // walk, and the route that says so still needs two points to be a route.
             Route still = stationary(startX, startZ, destinationName);
             cache.put(key, still);
             return still;
         }
         Route planned = RoadRouter.findRoute(workspace, startX, startZ, goalX, goalZ, destinationName,
                 TravelMode.WALK, preferences);
-        // A planned walk is the walk, however far round the roads it goes: a walking leg drawn as a
-        // straight line over the fields is not the route walking navigation would give, and players
-        // read it as the mod not having planned the leg at all. Only a walk the router cannot find at
-        // all becomes the straight connector it is at the ends of a walker's own trip.
+        // A planned walk is the walk, however far round the roads it goes: a leg drawn straight over the
+        // fields is not what walking navigation would give. Only a walk the router cannot find becomes a
+        // straight connector.
         if (!planned.isPresent()) {
-            // The straight hop is walking off-road, and walking's first and last hop is always
-            // allowed -- see TravelMode. What bounds it here is how far a stop may be from the player
-            // at all (MAX_WALK_TO_STOP, which the candidates already obey): a journey whose boarding
-            // is a four-hundred-block beeline is not public transport, and that is a question about
-            // which stop was offered, asked before this method is reached.
+            // The straight hop is walking off-road, and walking's first and last hop is always allowed. What
+            // bounds it is how far a stop may be at all (MAX_WALK_TO_STOP, which the candidates already obey).
             if (straight > MAX_WALK_TO_STOP) {
                 planned = Route.empty();
                 cache.put(key, planned);
                 return planned;
             }
             if (straight > SHORT_HOP) {
-                // Said out loud, because this is the one place a broken road network admits itself.
-                // A public transport journey whose walking legs are straight lines still draws and
-                // still gives a time, so a network the router cannot walk at all looks like a working
-                // journey here -- while the same network in walking mode answers "no route". If the
-                // log is full of these, the roads are what is wrong, not the lines.
+                // Said out loud, because this is the one place a broken road network admits itself: a public transport
+                // journey with straight-line walking legs still draws and still gives a time, while the same network
+                // in walking mode answers "no route".
                 HowToGo.diagnostic("[HowToGo] no road route to walk from ({}, {}) to ({}, {}); the "
                                 + "{} block walk is drawn as a straight hop",
                         Math.round(startX), Math.round(startZ), Math.round(goalX), Math.round(goalZ),
                         Math.round(straight));
             }
             Route hop = straightWalk(startX, startZ, goalX, goalZ, destinationName);
-            // Taken only if it is a usable route. A refusal here must never turn a journey that could be
-            // ridden into no journey at all, which is the one way this fallback could make things worse.
             if (hop.isPresent()) {
                 planned = hop;
             }
@@ -1760,11 +1369,9 @@ public final class LinePlanner {
     }
 
     /**
-     * The walk between a point and itself: nothing to walk, nothing to draw, no time.
-     *
-     * <p>The second point is a thousandth of a block from the first, which is under every tolerance in
-     * the mod and over the builder's duplicate test -- so the route is a dot rather than a gap, and the
-     * journey through the stop it was planned to is a journey at all.
+     * The walk between a point and itself: nothing to walk, nothing to draw, no time. The second point is
+     * a thousandth of a block away -- under every tolerance and over the builder's duplicate test -- so
+     * the route is a dot rather than a gap.
      */
     private static Route stationary(double x, double z, String destinationName) {
         Route.Builder builder = new Route.Builder();
@@ -1778,11 +1385,8 @@ public final class LinePlanner {
     }
 
     /**
-     * The walk with nothing to follow: a straight hop at connector pace.
-     *
-     * <p>The same shape the first and last hop of every trip already has, built the same way the router
-     * builds it, so that a refused road walk is still a route the map can draw and the estimate can time
-     * rather than a gap.
+     * The walk with nothing to follow: a straight hop at connector pace, built the way the router builds
+     * it, so a refused road walk is still a route the map can draw and the estimate can time.
      */
     private static Route straightWalk(double startX, double startZ, double goalX, double goalZ,
                                       String destinationName) {
@@ -1797,33 +1401,23 @@ public final class LinePlanner {
         return builder.build();
     }
 
-    // ------------------------------------------------------------------ shape
 
     /**
-     * The mode a ride on this kind of line is planned with.
-     *
-     * <p>A road line is driven and the other three are ridden. Which classes are actually travelled
-     * on is not this method's business: a mode is a set of classes, so the restriction to the line's
-     * own class is made by {@link #ridePreferences}.
+     * The mode a ride on this kind of line is planned with. A road line is driven and the other three are
+     * ridden; the restriction to the line's own class is made by ridePreferences.
      */
     public static TravelMode rideMode(RoadClass kind) {
         return kind == RoadClass.ROAD ? TravelMode.DRIVE : TravelMode.TRANSIT;
     }
 
     /**
-     * The routing policy for a ride on a line of this kind: everything except that kind is avoided.
-     *
-     * <p>This is what makes a line's declared type real. Avoiding a class keeps it out of the graph
-     * exactly as if the mode had disallowed it, so a ride on a water line is planned over water and
-     * cannot take a rail that happens to be shorter, and a ride on an ice line is planned over ice.
-     * A road line allows the highway as well as the road, because those are the same vehicle on a
-     * wider surface rather than two different services.
-     *
-     * <p>The player's own avoidances are deliberately not merged in. They were asked for by someone
-     * who then built a line of that kind and chose to travel on it; letting a global "avoid rails"
-     * cancel a rail ride would make the line silently unusable rather than routing it. The rest of
-     * the policy -- the metric, and whether minor roads are discouraged -- is kept, because those say
-     * how to choose between routes rather than which routes exist.
+     * The routing policy for a ride on a line of this kind: everything except that kind is avoided. This
+     * is what makes a line's declared type real -- a ride on a water line cannot take a rail that happens
+     * to be shorter. A road line allows the highway as well as the road, since those are the same vehicle
+     * on a wider surface.
+     * The player's own avoidances are deliberately not merged in: someone who built a line of that kind
+     * chose to travel on it, and a global "avoid rails" would make the line silently unusable. The metric
+     * and minor-road policy are kept because they say how to choose between routes.
      */
     public static RoutePreferences ridePreferences(RoadClass kind, RoutePreferences base) {
         Set<RoadClass> allowed = kind == RoadClass.ROAD
@@ -1838,7 +1432,6 @@ public final class LinePlanner {
         return new RoutePreferences(base.metric(), avoided, base.preferMajorRoads());
     }
 
-    /** Whether the two stops are called at by different lines, which is what makes a change a change. */
     private static boolean touchesOtherLine(Node a, Node b) {
         for (int[] left : a.calls()) {
             for (int[] right : b.calls()) {
@@ -1850,7 +1443,6 @@ public final class LinePlanner {
         return false;
     }
 
-    /** One node per stop position, carrying every line that calls there. */
     private static List<Node> buildNodes(List<TransitLine> lines) {
         List<Node> nodes = new ArrayList<>();
         Map<Long, Integer> byPosition = new HashMap<>();
@@ -1872,7 +1464,6 @@ public final class LinePlanner {
         return nodes;
     }
 
-    /** Where each stop position ended up, so finding the node for a stop is a lookup. */
     private static Map<Long, Integer> positions(List<Node> nodes) {
         Map<Long, Integer> byPosition = new HashMap<>();
         for (int i = 0; i < nodes.size(); i++) {
@@ -1882,12 +1473,10 @@ public final class LinePlanner {
         return byPosition;
     }
 
-    /** A block position as one key. Two stops are the same stop when they share both coordinates. */
     private static long positionKey(int x, int z) {
         return ((long) x << 32) | (z & 0xFFFFFFFFL);
     }
 
-    /** The indices of the {@link #WALK_CANDIDATES} nodes nearest to a point. */
     private static List<Integer> nearest(List<Node> nodes, double x, double z) {
         List<Integer> order = new ArrayList<>(nodes.size());
         for (int i = 0; i < nodes.size(); i++) {

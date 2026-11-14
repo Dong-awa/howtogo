@@ -17,35 +17,20 @@ import java.nio.file.Path;
 
 /**
  * Keeps MTR Map Overlay's two world-map toggle buttons where the player left them.
- *
- * <h2>The problem</h2>
- * The overlay draws its route lines and its track layer over Xaero's world map, and it puts two
- * toggle buttons in the map's corner to switch them off. Its two settings are
- * {@code ModConfigSpec.BooleanValue}s, and the buttons only {@code set()} them at runtime -- nothing
- * ever writes that back to the TOML -- so every session starts with both layers drawn again. A
- * player who turned them off to see this mod's markers has to do it again every time they launch
- * the game.
- *
- * <h2>The answer</h2>
- * This class remembers the two switches itself. It reads the overlay's values (reflectively: the
- * overlay is optional and not a dependency), writes the pair to its own file when the player changes
- * them, and puts the remembered pair back once a world is open in the next session. The overlay's
- * own config file is not touched, so uninstalling this mod leaves the overlay exactly as it was.
- *
- * <h2>What is remembered is not a preference of this mod's</h2>
- * No key is added to this mod's config and nothing is decided here about which layers are useful:
- * the values saved are the ones the player clicked, including "both on" if that is where they left
- * them. The file exists only so that a click survives the game closing.
+ * The overlay's buttons only set() its BooleanValues at runtime and never write the TOML, so every
+ * session starts with both layers drawn again. This class reads the overlay's values reflectively
+ * (optional, not a dependency), saves the pair when the player changes them, and restores it once a
+ * world is open next session. The overlay's config file is not touched.
+ * No preference of this mod's: the values saved are the ones the player clicked; the file exists
+ * only so a click survives the game closing.
  */
 public final class MtrOverlayToggles {
 
-    /** MTR Map Overlay's mod id. */
     private static final String MOD_ID = "mtrmap";
 
-    /** Its config holder: a singleton with one {@code BooleanValue} field per map layer. */
+    /** Its config holder: a singleton with one BooleanValue field per map layer. */
     private static final String CONFIG = "com.lx862.mtrmap.config.MTRMapConfig";
 
-    /** This class' own file, beside the map filter rather than in the overlay's config. */
     private static final String FILE_NAME = "mtr_overlay_toggles.json";
 
     private static final Gson GSON = new GsonBuilder()
@@ -53,7 +38,6 @@ public final class MtrOverlayToggles {
             .disableHtmlEscaping()
             .create();
 
-    // ---------------------------------------------------------------- reflection
 
     private static boolean resolved;
     private static boolean available;
@@ -65,17 +49,14 @@ public final class MtrOverlayToggles {
     private static Method getMethod;
     private static Method setMethod;
 
-    // ------------------------------------------------------------------- state
 
     private static boolean loaded;
     private static boolean restored;
     private static boolean failed;
 
-    /** The last values this class saw or wrote, so only a player's own change is saved. */
     private static Boolean lastRoute;
     private static Boolean lastTrack;
 
-    /** What the file held when it was read, before it was applied. */
     private static Boolean savedRoute;
     private static Boolean savedTrack;
 
@@ -84,11 +65,8 @@ public final class MtrOverlayToggles {
 
     /**
      * One client tick: restores the pair on the first tick with a world, then watches for changes.
-     *
-     * <p>Waits for a world because the overlay's config is only fully loaded by then, and because
-     * the values cannot matter before there is a map to draw them on. The two reads per tick are
-     * field reads on an object that is already in memory, so this is cheaper than the check for
-     * whether a world is loaded.
+     * The overlay's config is only fully loaded by then, and the two reads per tick cost less than the
+     * world check.
      */
     public static void tick() {
         if (!resolve()) {
@@ -127,12 +105,10 @@ public final class MtrOverlayToggles {
         }
     }
 
-    /** Whether the overlay is installed and its two toggles could be bound. */
     static boolean available() {
         return resolve();
     }
 
-    /** Whether the overlay's config class is on the classpath at all, asked without initialising it. */
     static boolean classesPresent() {
         try {
             Class.forName(CONFIG, false, MtrOverlayToggles.class.getClassLoader());
@@ -144,11 +120,8 @@ public final class MtrOverlayToggles {
 
     /**
      * Whether the shapes this reads are the overlay's, checked without a game or its config.
-     *
-     * <p>For the regression harness: the class is loaded but not initialised, so the only thing
-     * looked at is the field and method names, and a renamed field reports itself here rather than as
-     * a quiet "nothing remembered". False also when the overlay is not on the classpath at all --
-     * the caller asks {@link #classesPresent()} first if it needs to tell those apart.
+     * For the regression harness: the class is loaded but not initialised, so only names are looked at,
+     * and a renamed field reports itself here. False also when the overlay is absent.
      */
     static boolean shapeReadable() {
         try {
@@ -167,9 +140,7 @@ public final class MtrOverlayToggles {
 
     /**
      * Looks up the overlay's config singleton and its two values once.
-     *
-     * <p>Class loading without initialising first is what lets the harness check the names against a
-     * real overlay jar: this needs the shapes, not the session's config.
+     * Loading without initialising is what lets the harness check the names against a real overlay jar.
      */
     private static boolean resolve() {
         if (resolved) {
@@ -190,8 +161,7 @@ public final class MtrOverlayToggles {
             routeField = config.getField("routeLinesEnabled");
             trackField = config.getField("trackLinesEnabled");
             getMethod = routeField.getType().getMethod("get");
-            // ConfigValue.set(T) erases to set(Object), which is the same method on every release of
-            // the config library this mod was built against.
+            // ConfigValue.set(T) erases to set(Object), the same method on every release of the config library.
             setMethod = routeField.getType().getMethod("set", Object.class);
             available = true;
         } catch (ReflectiveOperationException | LinkageError | RuntimeException failed) {
@@ -201,7 +171,6 @@ public final class MtrOverlayToggles {
         return available;
     }
 
-    // ------------------------------------------------------------------- values
 
     private static Boolean read(Field field) {
         if (field == null || instance == null || getMethod == null) {
@@ -235,9 +204,7 @@ public final class MtrOverlayToggles {
         }
     }
 
-    // ------------------------------------------------------------------- storage
 
-    /** Writes the pair, so the next session can put it back. */
     private static void save(boolean route, boolean track) {
         savedRoute = route;
         savedTrack = track;
@@ -259,7 +226,6 @@ public final class MtrOverlayToggles {
         }
     }
 
-    /** Reads the pair this class last saved, if there is one. */
     private static void load() {
         Path file = file();
         if (file == null || !Files.isRegularFile(file)) {
@@ -277,20 +243,17 @@ public final class MtrOverlayToggles {
         }
     }
 
-    /** Client-wide: the two buttons are about an interface, not about a world. */
     private static Path file() {
         Path config = bili.dongsz.howtogo.GamePaths.configDir();
         return config == null ? null : config.resolve(HowToGo.MODID).resolve(FILE_NAME);
     }
 
-    /** Field names are the on-disk contract, so they are deliberately terse and stable. */
     private static final class ToggleDto {
         int version;
         boolean routeLines;
         boolean trackLines;
     }
 
-    // ------------------------------------------------------------------ helpers
 
     private static boolean modLoaded() {
         try {
@@ -305,7 +268,6 @@ public final class MtrOverlayToggles {
         }
     }
 
-    /** Reports a failure once, then stays quiet. */
     private static void warnUnavailable(Throwable cause) {
         if (warned) {
             return;

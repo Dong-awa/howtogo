@@ -17,22 +17,8 @@ import java.util.List;
 
 /**
  * Reads and writes the player's lines as JSON.
- *
- * <h2>Why this is a file of its own</h2>
- * Lines could have been a field on the road network, and that is exactly what would have made the
- * addition dangerous: the road file is the only copy of every place, station and road a player has
- * ever drawn, and a field added to it is a field that a bug can lose them through. Keeping lines in
- * their own file means this class never opens the road file at all, so no route through it can
- * damage one.
- *
- * <p>That also makes the addition backward compatible by construction rather than by care. A world
- * saved before lines existed has no lines file; a missing file loads as no lines, which is the truth
- * about it. Nothing is migrated, and nothing has to be.
- *
- * <h2>What a stop is stored as</h2>
- * A position, always, plus the id of the place it stands on when there is one. See {@link LineStop}
- * for why both: the position is the only identity a station Create reports has, and the id is what
- * lets a marked place be renamed without the line forgetting which stop it was.
+ * A file of its own because the road file is the only copy of every place, station and road a player has drawn, and a field added to it is a field a bug can lose them through; this class never opens the road file. A world saved before lines existed has no lines file and loads as no lines, so the addition is backward compatible by construction.
+ * A stop is stored as a position plus, when there is one, the id of the place it stands on: the position is the only identity a station Create reports, and the id lets a renamed place stay the same stop.
  */
 public final class TransitLineStorage {
 
@@ -65,30 +51,20 @@ public final class TransitLineStorage {
             }
             for (LineDto l : dto.lines) {
                 if (l == null) {
-                    // Gson hands over a null element for a null entry in the array rather than
-                    // refusing the file, and dereferencing it threw a NullPointerException that the
-                    // catch below -- IOException and a syntax error, not this -- let through. See the
-                    // same guard in RoadStorage: a file that half-parses must not take the client
-                    // down, and must not be overwritten with nothing either.
+                    // Gson hands over a null element for a null entry in the array rather than refusing the file, and dereferencing it threw a NullPointerException that the IOException catch below let through. A file that half-parses must not take the client down nor be overwritten with nothing.
                     continue;
                 }
                 TransitLine line = new TransitLine(l.id, l.name, parseClass(l.kind));
-                // An absent or unreadable colour is a line without one of its own, which is what a
-                // file written before lines had colours means: it keeps following its kind's colour.
+                // An absent or unreadable colour is a line without one of its own, which is what a file written before lines had colours means: it keeps following its kind's colour.
                 line.setColor(ColorHex.parseOrNull(l.color));
-                // The same rule for the direction: a file written before lines had one is a file of
-                // lines that were ridden both ways, so an absent field is two-way rather than an error
-                // -- see LineDirection.byId, which is also what a value this build does not know reads
-                // as, for the same reason.
+                // Same rule for direction: an absent field is two-way, as a file written before lines had directions means, and an unknown value reads the same way; see LineDirection.byId.
                 line.setDirection(LineDirection.byId(l.direction));
                 if (l.stops != null) {
                     for (StopDto s : l.stops) {
                         if (s == null) {
                             continue;
                         }
-                        // A stop already at that block is refused by the line, so a file that lists
-                        // one twice -- hand-edited, or written by a version that allowed it -- loads
-                        // as a line that calls there once.
+                        // A stop already at that block is refused by the line, so a file listing one twice loads as a line that calls there once.
                         line.addStop(new LineStop(s.node == null ? LineStop.NO_NODE : s.node, s.name,
                                 s.x, s.z));
                     }
@@ -98,17 +74,9 @@ public final class TransitLineStorage {
             HowToGo.LOGGER.info("[HowToGo] loaded {} line(s) from {}", lines.size(),
                     file.getFileName());
         } catch (IOException | RuntimeException e) {
-            // RuntimeException rather than JsonSyntaxException alone, because a file can be malformed
-            // in ways the parser accepts and the reader does not -- a null element in an array is one,
-            // and it threw a NullPointerException straight out of load() and past every guard. A file
-            // that cannot be read is a file that must be set aside, whatever the reason turned out to
-            // be.
+            // RuntimeException rather than JsonSyntaxException alone: a file can be malformed in ways the parser accepts -- a null array element is one and used to throw straight out of load() past every guard. A file that cannot be read must be set aside whatever the reason.
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting with no lines", file, e);
-            // Starting with no lines is the only thing to be done with a file that does not parse, but
-            // it must not also be the end of that data: the store autosaves three seconds after any
-            // edit, and would write the empty list over the top of a file whose lines are still in
-            // there, in part. Moving it aside keeps the salvageable remainder. The road network has done
-            // this from the start; lines are the same kind of hand-entered work and were not.
+            // Starting with no lines is all that can be done with a file that does not parse, but the store autosaves three seconds after any edit and would write the empty list over it; moving it aside keeps the salvageable remainder. Lines are the same kind of hand-entered work as the road network.
             quarantine(file);
         }
         return lines;
@@ -142,15 +110,11 @@ public final class TransitLineStorage {
                 l.id = line.id();
                 l.name = line.name();
                 l.kind = line.kind().name();
-                // Written as the six-digit text a player typed rather than as the ARGB integer: the
-                // file is hand-editable and every other colour this mod stores is written that way,
-                // and a line without a colour writes no field at all.
+                // Written as the six-digit text a player typed, like every other colour this mod stores, rather than as an ARGB integer; a line without a colour writes no field at all.
                 if (line.hasColor()) {
                     l.color = line.colorHex();
                 }
-                // Always written, including for a two-way line: the file says what the line is rather
-                // than leaving the reader to infer it from an absence, and an older build ignores the
-                // field it does not know exactly as this one ignores a field a later build adds.
+                // Always written, even for a two-way line: the file states what the line is rather than leaving the reader to infer it, and an older build ignores the unknown field as this one ignores a later addition.
                 l.direction = line.direction().id();
                 l.stops = new ArrayList<>(line.stopCount());
                 for (LineStop stop : line.stops()) {
@@ -170,9 +134,7 @@ public final class TransitLineStorage {
                 Files.move(partial, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                         java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
-                // Atomic moves are a filesystem capability rather than a guarantee; a network share
-                // can refuse one. The plain replace is the honest fallback on those, and is still no
-                // worse than what this did before.
+                // Atomic moves are a filesystem capability rather than a guarantee: a network share can refuse one. The plain replace is the honest fallback and no worse than before.
                 Files.move(partial, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             return true;
@@ -188,11 +150,7 @@ public final class TransitLineStorage {
     }
 
     /**
-     * A line's kind, kept to the kinds a line may actually be built as.
-     *
-     * <p>Anything else -- a name that is not a class at all, or a class that is a road but not one a
-     * public transport vehicle runs on -- becomes a road line rather than being refused, so a file
-     * somebody edited by hand costs them a type instead of the whole line.
+     * A line's kind, kept to the kinds a line may actually be built as. Anything else -- not a class, or a road no public transport vehicle runs on -- becomes a road line rather than being refused, so a hand edit costs a type instead of the whole line.
      */
     private static RoadClass parseClass(String raw) {
         if (raw != null) {
@@ -208,7 +166,6 @@ public final class TransitLineStorage {
         return RoadClass.ROAD;
     }
 
-    // ------------------------------------------------------------------- DTOs
 
     private static final class LinesDto {
         int version;
@@ -220,19 +177,11 @@ public final class TransitLineStorage {
         String name;
         String kind;
         /**
-         * The line's own colour, {@code #RRGGBB}, or absent.
-         *
-         * <p>Optional like every field of this file: a line file written before lines had colours
-         * reads back with none, which is the truth about those lines rather than an error, and a
-         * value that is not a colour is treated the same way.
+         * The line's own colour, #RRGGBB, or absent. Optional like every field here: absent or unusable reads as no colour, which is the truth about lines written before colours existed.
          */
         String color;
         /**
-         * Which way along its stops the line may be ridden: {@link LineDirection}'s id, or absent.
-         *
-         * <p>Optional like every field of this file: a line file written before lines had directions
-         * reads back as two-way, which is the truth about those lines rather than an error, and a value
-         * that is not a direction is treated the same way.
+         * Which way along its stops the line may be ridden: LineDirection's id, or absent. Optional like every field here: absent or unusable reads as two-way.
          */
         String direction;
         List<StopDto> stops;
@@ -240,8 +189,7 @@ public final class TransitLineStorage {
 
     private static final class StopDto {
         /**
-         * Boxed, so that a file that leaves it out reads as "not a place" rather than as the place
-         * with id zero -- an id that a real node may well have.
+         * Boxed, so a file that leaves it out reads as not a place rather than as the place with id zero -- an id a real node may well have.
          */
         Integer node;
         String name;

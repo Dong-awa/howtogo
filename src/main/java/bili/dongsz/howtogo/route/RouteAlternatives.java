@@ -10,102 +10,37 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Plans one trip several ways, so the player can compare before committing to a line.
- *
- * <h2>What "several ways" means here</h2>
- * Same starting point, same destination, same mode of travel -- different <em>strategy</em>. That is
- * the shape every map app offers: a driving trip comes back as "fastest", "shortest", "avoid the
- * motorway" and "another way round", not as a walk, a drive and a train. The mode is chosen first and
- * is the promise about how the trip is made; the strategies are preferences within it, so a plan list
- * never mixes a route a car may take with one only a walker may.
- *
- * <p>For a public transport trip the strategies are the journey's own: the recommendation, one with
- * fewer changes and one with less walking -- see {@link LinePlanner#alternatives}. For a walk or a
- * drive they are the three questions the road router can be asked cheaply: the policy in force, the
- * other metric, and a different taste; then, if the list still has room, one genuinely different way
- * round made by putting a toll on the roads the recommendation uses.
- *
- * <h2>Why the plans are checked rather than trusted</h2>
- * Three strategies are three questions, not three guarantees: on a network with one road they all
- * find the same line, and a list of the same plan three times is worse than a list of one. Every
- * candidate is therefore compared with the plans already kept and dropped when it draws the same
- * line, and a candidate that is much slower than the recommendation is dropped too -- a "different
- * way round" that doubles the trip is not an alternative, it is a mistake. What is never done is
- * inventing a plan to fill the third row: fewer plans is an honest answer.
- *
- * <h2>The way round is judged by its own rule</h2>
- * The fourth plan -- the road router asked to keep off the recommendation's own middle roads -- is the
- * one plan that is asked for <em>because</em> it is different, and it used to be judged by the bound
- * the first three are held to: no more than four fifths slower than the recommendation. That bound is
- * right for a second metric or a second taste, which are meant to be nearly as good as the
- * recommendation; it is wrong for a way round, which a driver takes for being another road, and which
- * on a hand-drawn network is often the long way round the edge of the town. Walking never showed the
- * fault because a walker's alternatives are cheap street variants inside the old bound; a driving
- * one is not, so a driving trip came back as the fastest and the shortest and nothing else. The way
- * round therefore has its own bound, {@link #ALTERNATIVE_MAX_SLOWDOWN}: a line up to two and a half
- * times the recommendation is still a line a player might choose, and past it the list says fewer
- * plans rather than offer one nobody would take.
- *
- * <h2>Where the third row comes from</h2>
- * The strategies before the way round are asked in the order a player would rank them, and a
- * candidate that runs within forty blocks of a plan already kept for most of its length is that plan
- * seen twice -- two streets a lane apart are one way round the town -- so it does not earn a row. That
- * is what leaves one for the way round when the fastest and the shortest are the same street with a
- * different corner: the near-duplicate is not offered as a separate choice, and the third row goes to
- * a line that actually leaves the others. A genuinely different candidate is never displaced, because
- * the way round is only asked for while a row is left for it, and a row full of genuinely different
- * plans leaves none. Picking the three most different candidates instead was rejected: "different"
- * would have to be a score this class invented, and a score can always be argued with -- it could also
- * let a way round push out a shortest way that was genuinely another route. Priority order plus a
- * rule against near-duplicates says the same thing with no number to defend.
+ * Plans one trip several ways so the player can compare before committing.
+ * Same start, destination and mode; different strategy. The mode is chosen first and is the promise
+ * about how the trip is made, so a list never mixes a drive with a walk.
+ * Candidates are checked, not trusted: duplicates and plans too much slower are dropped, and a plan
+ * is never invented to fill the third row. The way round has its own bound,
+ * ALTERNATIVE_MAX_SLOWDOWN, and near-duplicates are not offered as separate choices.
  */
 public final class RouteAlternatives {
 
-    /** How many plans a trip is offered. Three is what a map app shows, and what the screen can list. */
+    /** How many plans a trip is offered: three is what a map app shows, and what the screen can list. */
     public static final int MAX_PLANS = 3;
 
     /**
      * How much more the recommendation's own roads cost a plan that wants another way round.
-     *
-     * <p>High enough that a genuinely different line wins, low enough that the roads stay usable: a
-     * ban would answer "no route" on a network whose only way through is that street, and an
-     * alternative list that collapses to one entry there is worse than a slower way round it.
+     * High enough that a different line wins, low enough that the roads stay usable: a ban would
+     * answer "no route" where that street is the only way through.
      */
     private static final double DETOUR_TOLL = 2.5;
 
     /**
      * The slowest a plan answering a slightly different question may be, as a ratio.
-     *
-     * <p>This is the bound for the second metric and the second taste. Both are the same trip asked a
-     * little differently -- "the shorter line", "the bigger road" -- so a plan far behind the
-     * recommendation is not a choice the player would make, it is a question that found the wrong
-     * road. It deliberately does not apply to the way round; see the class comment.
+     * The bound for the second metric and the second taste; it deliberately does not apply to the
+     * way round (see the class comment).
      */
     private static final double MAX_SLOWDOWN = 1.8;
 
     /**
-     * The slowest a way round may be relative to the recommendation and still be offered, as a ratio.
-     *
-     * <h2>Why its own number, and not {@link #MAX_SLOWDOWN}</h2>
-     * A way round is the one plan on the list chosen for being different rather than for being nearly
-     * as good, and in a hand-drawn network the different road is often the long way round the edge of
-     * the town: a driver's alternatives are exactly the plans the four-fifths bound used to throw
-     * away, while a walker's cheaper variants stayed inside it. Judging both by that bound is what
-     * made "another way round" a plan only walking ever offered.
-     *
-     * <h2>Why two and a half</h2>
-     * Two and a half is where the row stops being a choice: the recommendation is on the list beside
-     * it, and a trip that takes two and a half times as long is a different journey rather than
-     * another way round the same one. It is a multiple of the trip rather than an absolute number of
-     * minutes because hand-drawn trips run from a few seconds to many minutes, and ten extra minutes
-     * is enormous for a walk across a village and almost nothing for a drive across a continent.
-     *
-     * <p>It is also the same multiple {@link #DETOUR_TOLL} makes the recommendation's roads cost, but
-     * the two are not the same number in disguise: the search charges in whichever metric is in force
-     * while this bound is in the seconds the player reads, so a trip planned under "shortest distance"
-     * can come back a third again slower than the toll alone would suggest. That is why the way round
-     * needs an admission rule of its own instead of inheriting the search's arithmetic, and why the
-     * bound is checked against the estimate rather than against what the search paid.
+     * The slowest a way round may be relative to the recommendation, as a ratio.
+     * A way round is chosen for being different, and the different road is often the long way round the
+     * edge of town. Two and a half is where the row stops being a choice; a multiple rather than
+     * minutes because trips range from seconds to hours.
      */
     private static final double ALTERNATIVE_MAX_SLOWDOWN = 2.5;
 
@@ -114,15 +49,11 @@ public final class RouteAlternatives {
     private static final double SAME_PATH_DISTANCE = 15.0;
 
     /**
-     * How far a candidate may run from a plan already kept and still be that plan seen twice, and for
-     * how many of {@link #SAME_PATH_SAMPLES} samples.
-     *
-     * <p>Wider and stricter than {@link #SAME_PATH_DISTANCE} on purpose: two plans a lane apart are
-     * two different drawn lines, so the dedupe above cannot see them, but they are one way round the
-     * town for the purpose of a picker. Nine of twelve samples within forty blocks is the rule that
-     * keeps such a near-duplicate from taking a row, while a candidate that leaves the kept plan for
-     * about a quarter of the trip still counts as a plan of its own: a different bridge or a
-     * different cut-through is a different way even when most of the trip is shared.
+     * How far, and for how many samples, a candidate may run from a kept plan and still be that
+     * plan seen twice.
+     * Wider than SAME_PATH_DISTANCE on purpose: two streets a lane apart are different drawn lines
+     * but one way round the town for a picker. A candidate leaving the kept plan for about a quarter
+     * of the trip still counts as a plan of its own.
      */
     private static final double ALONGSIDE_DISTANCE = 40.0;
     private static final int ALONGSIDE_SAMPLES = 9;
@@ -132,7 +63,6 @@ public final class RouteAlternatives {
 
     /**
      * The plans for one trip by road, at most three, quickest first.
-     *
      * @return the plans, or an empty list when the mode cannot reach the destination at all
      */
     public static List<RouteOption> roads(RoadNetwork network, double startX, double startZ,
@@ -142,7 +72,6 @@ public final class RouteAlternatives {
                 mode, preferences);
     }
 
-    /** The same, on a workspace the caller owns: see {@link RoadRouter.Workspace}. */
     public static List<RouteOption> roads(RoadRouter.Workspace workspace, double startX,
                                           double startZ, double goalX, double goalZ,
                                           String destinationName, TravelMode mode,
@@ -157,8 +86,7 @@ public final class RouteAlternatives {
         plans.add(new RouteOption(recommended, null, mode,
                 shortestFirst ? RouteStrategy.SHORTEST : RouteStrategy.FASTEST));
 
-        // The other metric, which is the cheapest different question there is: one more search over
-        // the same graph and a route that is genuinely chosen differently when the two disagree.
+        // The other metric, the cheapest different question there is: one more search over the same graph.
         RoutePreference otherMetric = shortestFirst ? RoutePreference.FASTEST_TIME
                 : RoutePreference.SHORTEST_DISTANCE;
         RoutePreferences byOtherMetric = new RoutePreferences(otherMetric,
@@ -167,8 +95,7 @@ public final class RouteAlternatives {
                         byOtherMetric), mode,
                 shortestFirst ? RouteStrategy.FASTEST : RouteStrategy.SHORTEST);
 
-        // A different taste. The player's own switch is honoured rather than overridden: if they have
-        // already asked for the major roads, the alternative is the one that leaves the highway out.
+        // A different taste -- the player's own switch is honoured: if they already prefer major roads, the alternative leaves the highway out.
         RoutePreferences taste = tasteAlternative(mode, preferences);
         if (taste != null) {
             addIfNew(plans, find(workspace, startX, startZ, goalX, goalZ, destinationName, mode, taste),
@@ -176,7 +103,6 @@ public final class RouteAlternatives {
                             : RouteStrategy.MAJOR_ROADS);
         }
 
-        // And, while there is a row left, a way round the recommendation's own roads.
         if (plans.size() < MAX_PLANS) {
             Set<Integer> used = middleRoads(recommended);
             if (!used.isEmpty()) {
@@ -189,20 +115,9 @@ public final class RouteAlternatives {
 
     /**
      * The plans for one trip by public transport, at most three, quickest first.
-     *
-     * <p>The journeys come from {@link LinePlanner#alternatives}, which asks the same stop graph
-     * several questions; flattening each one here rather than there keeps the route package's two
-     * halves where they belong -- the planner knows journeys, this class knows what a plan is.
-     *
-     * <p>When the planner answers that no line is worth riding -- no line can carry the trip, or the
-     * only journey the lines could offer is one the walk would beat, see {@link
-     * LinePlanner#alternatives} -- the list would otherwise be empty, and an empty list reads as the
-     * mode failing rather than as the walk being the answer. So one plan is offered instead: the walk
-     * itself, labelled as such. It is not a public transport journey (its trip is null, it rides
-     * nothing) and the mode it is handed to the picker under stays public transport on purpose: the
-     * player asked to go by line, and the answer is that there is no line to take rather than that
-     * they chose to walk. The navigation keeps that mode and arrives at the same walk through its own
-     * fallback, so the row and the trip it starts are one plan.
+     * Journeys come from LinePlanner#alternatives. When no line is worth riding, the walk itself is
+     * offered, labelled as such but handed over under the transit mode: the player asked to go by line,
+     * and the answer is that there is none.
      */
     public static List<RouteOption> transit(RideRoads roads, List<TransitLine> lines, double startX,
                                             double startZ, double goalX, double goalZ,
@@ -225,11 +140,8 @@ public final class RouteAlternatives {
 
     /**
      * The walk offered where no line is worth riding, as the one plan there is.
-     *
-     * <p>Planned over the walking side of the network -- the same one every walking leg of a journey
-     * is planned on -- and with no straight-hop fallback of its own: a plan draws a line the player
-     * is meant to follow, so a walk that only exists as a line over the fields is not one.
-     *
+     * Planned over the walking side of the network, with no straight-hop fallback: a plan draws a
+     * line the player is meant to follow.
      * @return one plan, or an empty list when the destination cannot be walked to either
      */
     private static List<RouteOption> walkInstead(RideRoads roads, double startX, double startZ,
@@ -243,7 +155,6 @@ public final class RouteAlternatives {
         return List.of(new RouteOption(walk, null, TravelMode.TRANSIT, RouteStrategy.WALK));
     }
 
-    /** One search under one policy, so the strategies below are three lines of composition and no more. */
     private static Route find(RoadRouter.Workspace workspace, double startX, double startZ,
                               double goalX, double goalZ, String destinationName, TravelMode mode,
                               RoutePreferences preferences) {
@@ -252,8 +163,8 @@ public final class RouteAlternatives {
     }
 
     /**
-     * The policy of the third question: the other end of the player's own taste, or null when there is
-     * no other end to try.
+     * The policy of the third question: the other end of the player's own taste, or null when there
+     * is no other end to try.
      */
     private static RoutePreferences tasteAlternative(TravelMode mode, RoutePreferences preferences) {
         if (!preferences.preferMajorRoads()) {
@@ -268,13 +179,9 @@ public final class RouteAlternatives {
     }
 
     /**
-     * Keeps a candidate for the second metric or the second taste, if it is a plan of its own.
-     *
-     * <p>The slowest plan is compared with the recommendation, which is the first one offered and the
-     * one the policy in force says is best. A candidate that is genuinely slower is still offered --
-     * that is what an alternative is -- but one eight tenths slower again is not a choice, it is a
-     * line the strategy happened to find. A candidate that draws a line already kept, or that runs
-     * along one, earns no row: see {@link #earnsARow}.
+     * Keeps a candidate for the second metric or second taste, if it is a plan of its own.
+     * Slower than the recommendation is fine -- that is what an alternative is -- but one
+     * max-slowdown worse is not a choice. Duplicates and plans running alongside earn no row.
      */
     private static void addIfNew(List<RouteOption> plans, Route candidate, TravelMode mode,
                                  RouteStrategy strategy) {
@@ -292,12 +199,9 @@ public final class RouteAlternatives {
     }
 
     /**
-     * Offers the way round, if it earned a row: different roads, and no slower than a real choice.
-     *
-     * <p>Its own bound rather than {@link #MAX_SLOWDOWN} -- see {@link #ALTERNATIVE_MAX_SLOWDOWN} and
-     * the class comment -- and the same test for being a plan of its own as every other candidate: a
-     * search asked to keep off the recommendation's roads can come back with a line that was already
-     * on the list, or one that runs along the recommendation, and neither is a way round.
+     * Offers the way round if it earned a row: different roads, and no slower than a real choice.
+     * Its own bound rather than MAX_SLOWDOWN, and the same "plan of its own" test as every other
+     * candidate -- a search keeping off the recommendation's roads can still come back with one.
      */
     private static void addAlternative(List<RouteOption> plans, Route candidate, TravelMode mode) {
         if (!candidate.isPresent() || plans.size() >= MAX_PLANS) {
@@ -314,12 +218,9 @@ public final class RouteAlternatives {
     }
 
     /**
-     * Whether a candidate is a plan of its own rather than a plan already kept, seen again.
-     *
-     * <p>Two tests, and the second is the room rule: it must not draw a line already kept
-     * ({@link #samePath}), and it must not run along one ({@link #runsAlongside}). The second is what
-     * keeps a near-duplicate from taking the row a genuinely different way round could use, and it is
-     * the only test that costs a sample walk, so it is asked last.
+     * Whether a candidate is a plan of its own rather than one already kept, seen again.
+     * It must not draw a kept line (samePath) and not run along one (runsAlongside); the second is
+     * the room rule and the only test that costs a sample walk, so it is asked last.
      */
     private static boolean earnsARow(List<RouteOption> plans, Route candidate) {
         for (RouteOption kept : plans) {
@@ -331,14 +232,10 @@ public final class RouteAlternatives {
     }
 
     /**
-     * Whether a route stays on the shoulder of an already-kept plan for most of its length.
-     *
-     * <p>Sampled at fixed fractions of the candidate's own length and measured against the kept
-     * route's whole polyline, so a candidate a little shorter or longer over the same streets still
-     * counts. The tolerance is wider than {@link #samePath}'s because the question is not "is this
-     * the same line" but "is this the same way round": two streets a lane apart are the same way, and
-     * listing both spends a row on a choice the map cannot show. A candidate only has to leave the
-     * kept plan for about a quarter of the trip to be a way round of its own.
+     * Whether a route stays on the shoulder of a kept plan for most of its length.
+     * Sampled at fixed fractions of the candidate's own length against the kept polyline; the
+     * tolerance is wider than samePath's because the question is "same way round", not "same line".
+     * A candidate only has to leave the kept plan for about a quarter of the trip.
      */
     private static boolean runsAlongside(Route kept, Route candidate) {
         List<double[]> points = samples(candidate);
@@ -351,7 +248,6 @@ public final class RouteAlternatives {
         return close >= ALONGSIDE_SAMPLES;
     }
 
-    /** Distance from a point to the nearest point of a route's drawn line, in blocks. */
     private static double distanceToRoute(Route route, double x, double z) {
         List<double[]> points = route.points();
         double nearest = Double.MAX_VALUE;
@@ -368,20 +264,15 @@ public final class RouteAlternatives {
         return nearest;
     }
 
-    /** Quickest first: the order a results list is read in, whatever strategy produced each plan. */
     private static List<RouteOption> ranked(List<RouteOption> plans) {
         plans.sort(java.util.Comparator.comparingDouble(RouteOption::seconds));
         return plans;
     }
 
     /**
-     * The roads the middle of a route travels, which is what a detour plan is asked to keep off.
-     *
-     * <p>The ends are left out on purpose: every route between two places uses the roads nearest its
-     * own ends, so tolling them would make the alternative plan drive round the start and the
-     * destination instead of round the middle, which is not a different way to the destination -- it
-     * is a detour at both ends of the same way. The middle is what makes the two plans genuinely
-     * different roads rather than different turnings.
+     * The roads the middle of a route travels, which a detour plan is asked to keep off.
+     * The ends are left out because every route uses the roads nearest its ends; tolling them
+     * would produce a detour at both ends of the same way, not a different way.
      */
     private static Set<Integer> middleRoads(Route route) {
         int[] keys = route.roadKeys();
@@ -405,12 +296,8 @@ public final class RouteAlternatives {
 
     /**
      * Whether two routes draw the same line.
-     *
-     * <p>Sampled at fixed fractions of each route's length, so two plans of slightly different
-     * lengths are still comparable, and compared point by point with a tolerance wide enough for the
-     * anchoring splits (the same road split at a different place is the same road). Twelve samples
-     * across a trip is enough to tell "the same line" from "a different way round": the two differ
-     * for whole stretches, not by a rounding.
+     * Sampled at fixed fractions so plans of slightly different lengths compare, with a tolerance
+     * wide enough for anchoring splits (a road split at a different place is the same road).
      */
     private static boolean samePath(Route a, Route b) {
         if (!a.isPresent() || !b.isPresent()) {
@@ -431,7 +318,6 @@ public final class RouteAlternatives {
         return true;
     }
 
-    /** Points at fixed fractions along a route, including both ends. */
     private static List<double[]> samples(Route route) {
         List<double[]> points = route.points();
         List<double[]> samples = new ArrayList<>(SAME_PATH_SAMPLES);

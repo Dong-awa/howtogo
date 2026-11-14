@@ -2,15 +2,7 @@
 package bili.dongsz.howtogo.mtr;
 
 /**
- * The one door the rest of the mod knocks on for the MTR sync, whichever loaders this node builds for.
- *
- * <h2>Why a facade exists</h2>
- * The feature is implemented for a version range and both loaders, while the rest of the mod compiles
- * for twenty-one nodes. Rather than a condition at every call site -- and Stonecutter's comment-based
- * conditions do not nest, so a version condition inside a loader arm is not available anyway -- the
- * call sites talk to this class, and this file is written twice: the arm below forwards to
- * {@link MtrNet} where the feature exists, the other arm does nothing where it does not. Call sites
- * therefore never need to know either the loader or the version.
+ * Single facade for the MTR sync: call sites compile for twenty-one nodes and two loaders, Stonecutter conditions do not nest, so one arm forwards to MtrNet and the other does nothing. Call sites never need to know loader or version.
  */
 public final class MtrSync {
 
@@ -27,7 +19,7 @@ public final class MtrSync {
         MtrNet.registerServer();
     }
 
-    /** "I am here and I understand the snapshot payloads; send them." */
+    /** Announce that this side understands the snapshot payloads and wants them. */
     public static void sendHello() {
         MtrNet.sendHello();
     }

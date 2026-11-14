@@ -4,10 +4,8 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * A polyline between two {@link RoadNode}s.
- *
- * <p>Vertices are absolute block coordinates. The polyline always starts at the position of
- * {@link #fromNode()} and ends at {@link #toNode()}, but intermediate vertices are free.
+ * A polyline between two RoadNodes. Vertices are absolute block coordinates; the polyline starts at
+ * fromNode and ends at toNode, intermediate vertices are free.
  */
 public final class RoadSegment {
 
@@ -15,40 +13,28 @@ public final class RoadSegment {
     public static final int NO_SEGMENT = -1;
 
     /**
-     * How many times any segment's direction has been set, over the life of this program run.
-     *
-     * <p>A direction is not geometry, so {@link RoadNetwork#revision()} deliberately does not move for
-     * one -- but it is not nothing either: it decides which of a segment's two ends a traveller may set
-     * off from, which is exactly what a routing graph is built out of. A cache that reads a graph has to
-     * be able to tell that the answer has changed, and the segment is where the change happens and the
-     * only place that knows about it, so the count is kept here.
-     *
-     * <p>Whole-program rather than per-network, because a segment is handed out without a reference to
-     * the network holding it and the editor writes through the segment. A count that occasionally moves
-     * for a reason the reader did not care about costs one rebuilt graph and nothing else, which is the
-     * right side to err on: a count that failed to move serves a route along a one-way street the wrong
-     * way. {@code RoadRouter} is the reader that needs it.
+     * Count of direction sets over the program run. RoadNetwork.revision() ignores a direction change,
+     * but a routing graph cache must see it; whole-program because a segment has no reference to its
+     * network. Read by RoadRouter.
      */
     private static int directionChanges;
 
-    /** @see #directionChanges */
+    /**
+     * @see #directionChanges
+     */
     public static int directionChanges() {
         return directionChanges;
     }
 
     /**
-     * How many times any segment's class or name has been set, over the life of this program run.
-     *
-     * <p>Neither is geometry, so {@link RoadNetwork#revision()} does not move for one -- but both
-     * decide how a road is drawn: the class picks the colour and width, and the name is what a
-     * display-only chain may join on. A cache that groups segments into strokes has to be able to
-     * tell that the answer has changed, and this is the cheap counter that says so. Whole-program
-     * rather than per-network for the same reason as {@link #directionChanges}: the segment is
-     * handed out without a reference to the network holding it.
+     * Count of class or name sets over the program run; both affect drawing but not geometry, so they
+     * need a counter of their own. Same shape and reason as directionChanges.
      */
     private static int appearanceChanges;
 
-    /** @see #appearanceChanges */
+    /**
+     * @see #appearanceChanges
+     */
     public static int appearanceChanges() {
         return appearanceChanges;
     }
@@ -61,75 +47,47 @@ public final class RoadSegment {
     private String name;
 
     /**
-     * What kind of road this is below its class: a national highway against a provincial one, a
-     * trunk street against a side street.
-     *
-     * <p>Never null and always a category of {@link #roadClass}: {@link #setRoadClass} moves the
-     * category with the class, because a category belongs to one class and a provincial-highway sign
-     * on a footpath would be a lie the map repeats. See {@link RoadCategory}.
+     * Category below the class. Never null and always a category of roadClass: setRoadClass moves it
+     * along.
      */
     private RoadCategory category;
 
     /**
-     * The road's number, as the player types it: "G318", "S12", "3", or whatever their world calls
-     * it.
-     *
-     * <p>A string rather than a number on purpose. Real roads are not numbered with an integer alone
-     * -- national highways carry a letter prefix, a ring road may be "一环", and a world that names
-     * its roads after its own things is exactly what this mod is for -- so the field enforces nothing
-     * and the map prints whatever is in it. Null or blank means "no sign".
+     * Road number as typed ("G318", "S12", "3"), or null/blank when there is no sign. A string because
+     * real numbering is not an integer.
      */
     private String number;
 
     /**
-     * Which storey of the world this road is on: 0 is the surface, positive is above it and negative
-     * below.
-     *
-     * <p>The thing a flat map cannot show and a router must know. Two roads that cross on the screen
-     * are not necessarily two roads that meet -- a bridge over a road, a tunnel under one, a viaduct
-     * through a station -- and the height in {@link #y()} cannot answer it, because that is whatever
-     * the ground was under each click: two ends of one road across a slope differ by more than a
-     * bridge differs from the road beneath it. A storey is a statement the player makes rather than a
-     * measurement, so it is a field of its own.
-     *
-     * <p>What it decides is only what happens where there is no node. Two roads that share a node are
-     * joined, whatever storey either is on: that is what building the junction means. Two roads whose
-     * ends are close enough to be read as one place are one place only when they are on the same storey,
-     * which is what keeps a bridge from being read as a crossroads. See
-     * {@link bili.dongsz.howtogo.route.RoadRouter}.
+     * Storey of the world: 0 surface, positive above, negative below. Y cannot answer this because it
+     * is ground-dependent; a storey is the player's statement. Shared nodes join regardless; otherwise
+     * only same-storey ends are joined. See RoadRouter.
      */
     private int layer;
 
     /**
-     * A smoothed display line for this segment, or null when there is none.
-     *
-     * <p>Presentation only: see {@link RoadCurve}. Routing, length and every hit test stay on the
-     * integer vertices above, so a curve cannot change what connects to what or how far a trip is.
+     * Smoothed display line, or null. Presentation only: routing, length and hit tests stay on the
+     * integer vertices.
      */
     private RoadCurve curve;
 
-    /** The lowest storey a road may be on. */
     public static final int MIN_LAYER = -32;
 
-    /** The highest storey a road may be on. */
     public static final int MAX_LAYER = 32;
 
     /**
-     * How many times any segment's layer has been set, over the life of this program run.
-     *
-     * <p>Kept for the same reason and in the same shape as {@link #directionChanges}: a storey is not
-     * geometry, so {@link RoadNetwork#revision()} does not move for one, but it decides which joins
-     * exist, which is exactly what a routing graph is made of. A cache that reads a graph has to be
-     * able to tell that the answer has changed.
+     * Count of layer sets; same reason and shape as directionChanges, because a storey decides which
+     * joins exist.
      */
     private static int layerChanges;
 
-    /** @see #layerChanges */
+    /**
+     * @see #layerChanges
+     */
     public static int layerChanges() {
         return layerChanges;
     }
 
-    /** The storey this road is on, clamped to what a road may be. */
     public int layer() {
         return layer;
     }
@@ -142,7 +100,6 @@ public final class RoadSegment {
         }
     }
 
-    /** The smoothed display line, or null when this road is drawn from its vertices. */
     public RoadCurve curve() {
         return curve;
     }
@@ -199,10 +156,8 @@ public final class RoadSegment {
     public void setRoadClass(RoadClass roadClass) {
         if (roadClass != this.roadClass) {
             this.roadClass = roadClass;
-            // The category belongs to the class it was chosen under, so a re-class takes it along to
-            // the new class's "not classified" rather than leaving a provincial sign on a footpath.
-            // The number survives: it names the road, not the category, and the panel is where a
-            // number is cleared when a road stops carrying a plate.
+            // A category belongs to its class, so a re-class moves it to the new class's unclassified; the
+            // number survives since it names the road.
             if (category == null || category.roadClass() != roadClass) {
                 this.category = RoadCategory.none(roadClass);
             }
@@ -210,19 +165,13 @@ public final class RoadSegment {
         }
     }
 
-    /** The category this road is classified as; never null. */
     public RoadCategory category() {
         return category;
     }
 
     /**
-     * Classifies this road, clamped to a category of its own class.
-     *
-     * <p>A null or a category from another class falls back to this class's "not classified", which
-     * is the same tolerance {@link RoadStorage} applies when a file names a category that does not
-     * exist: what a road is drawn as must never depend on a value somebody typed. Whether the id
-     * names a category that exists is the store's question, not this one -- the segment only carries
-     * the reference.
+     * Classifies this road; null or a foreign-class category falls back to this class's unclassified.
+     * Whether the id exists is the store's question.
      */
     public void setCategory(RoadCategory category) {
         RoadCategory next = category == null || category.roadClass() != roadClass
@@ -234,12 +183,10 @@ public final class RoadSegment {
         }
     }
 
-    /** The road's number as typed, or null when it has none. */
     public String number() {
         return number;
     }
 
-    /** Sets the road's number; null and blank both mean "no number". */
     public void setNumber(String number) {
         String next = number == null || number.isBlank() ? null : number.trim();
         if (!Objects.equals(next, this.number)) {
@@ -249,12 +196,8 @@ public final class RoadSegment {
     }
 
     /**
-     * Whether this road wears a sign: a number is what goes inside the card, and a number only means
-     * something under a category -- an unclassified road has no plate to print one on.
-     *
-     * <p>So both are required: a road in the class's "not classified" category wears no sign however
-     * much text is stored beside it, which is what makes switching a road back to 未分类 remove its
-     * plate from the map without the number having to be found and deleted first.
+     * Whether this road wears a sign: needs a number and a category that is not unclassified, so a
+     * switch back to unclassified removes the plate while keeping the number.
      */
     public boolean hasSign() {
         return number != null && category != null && !category.isNone();
@@ -284,12 +227,7 @@ public final class RoadSegment {
         this.y = y;
     }
 
-    /**
-     * Which way travel is allowed along this piece of road.
-     *
-     * <p>Read from the segment's own two endpoints rather than from anything about how it was drawn: see
-     * {@link RoadDirection}.
-     */
+    /** Which way travel is allowed; read from the segment's endpoints. See RoadDirection. */
     public RoadDirection direction() {
         return direction;
     }
@@ -302,19 +240,13 @@ public final class RoadSegment {
         }
     }
 
-    /** Whether travel is restricted to one direction, in either sense. */
     public boolean oneWay() {
         return direction.isOneWay();
     }
 
     /**
-     * Whether a traveller at the given node of this segment may set off along it.
-     *
-     * <p>The whole of the one-way rule, in one place: a router asks this once per direction it is
-     * considering rather than reasoning about the two ends itself, so the graph and the map's arrows
-     * cannot disagree about which way a road runs.
-     *
-     * @param startNodeId the node the traveller is standing at, either end of the segment
+     * Whether a traveller at startNodeId may set off along this segment; the one-way rule in one place,
+     * so the graph and the map's arrows agree.
      */
     public boolean allowsTravelFrom(int startNodeId) {
         if (!direction.isOneWay()) {
@@ -329,7 +261,6 @@ public final class RoadSegment {
         return false;
     }
 
-    /** Player-facing road name, or null when unnamed. */
     public String name() {
         return name;
     }
@@ -342,7 +273,6 @@ public final class RoadSegment {
         }
     }
 
-    /** Midpoint of the polyline, used to anchor the name label. */
     public double[] midpoint() {
         if (vertexCount == 0) {
             return new double[]{0, 0};
@@ -377,7 +307,6 @@ public final class RoadSegment {
         return zs[i];
     }
 
-    /** Total polyline length in blocks. */
     public double length() {
         double total = 0.0;
         for (int i = 1; i < vertexCount; i++) {
@@ -386,7 +315,6 @@ public final class RoadSegment {
         return total;
     }
 
-    /** Overwrites this segment's vertices with {@code count} vertices from the given arrays. */
     public void replaceVertices(int[] newXs, int[] newZs, int count) {
         if (count > xs.length) {
             xs = new int[count];
@@ -397,7 +325,6 @@ public final class RoadSegment {
         vertexCount = count;
     }
 
-    /** Moves the vertex at {@code index} to the given horizontal position. */
     public void moveVertex(int index, int x, int z) {
         if (index < 0 || index >= vertexCount) {
             return;
@@ -406,7 +333,6 @@ public final class RoadSegment {
         zs[index] = z;
     }
 
-    /** Inserts a vertex at {@code index}, shifting the rest along. */
     public void insertVertex(int index, int x, int z) {
         if (vertexCount == xs.length) {
             int newCap = Math.max(4, xs.length * 2);

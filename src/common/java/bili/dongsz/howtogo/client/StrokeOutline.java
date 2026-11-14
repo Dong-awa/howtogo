@@ -2,76 +2,20 @@ package bili.dongsz.howtogo.client;
 
 /**
  * The outline of one road stroke: a screen-space polyline in, quads out.
- *
- * <h2>Why the arithmetic lives in its own class</h2>
- * The world map draws a road as a thick line, and the shape of that line -- where the two sides go,
- * how two edges meet at a bend, what happens past the two ends -- used to be worked out inside the
- * method that also wrote the vertices. Nothing that writes vertices can be checked without a game,
- * and the shape had a bug a check would have caught, so the arithmetic is here: the renderer
- * transforms a road to screen coordinates, hands the points over, and writes whatever quads come
- * back. The harness measures these quads directly (see {@code StrokeOutlineCheck}).
- *
- * <h2>The invariant: one width, painted once</h2>
- * Every point within {@code halfWidth} of the line is painted, and painted once. Neither a bend, nor
- * a joint, nor an end may thin the stroke, and no piece of it may be painted twice: road colours can
- * be configured translucent, and a doubled pixel of the same colour reads as a brighter or darker
- * bead. That second half is why a mitred joint shares one offset between its two edges -- they meet
- * along a common edge instead of overlapping -- and why every fan piece below is a triangle written so
- * that it covers its ground exactly once.
- *
- * <h2>One side of the road, for the whole road</h2>
- * A vertex offset is always taken as the same side of the direction of travel -- the same side of
- * the road, in other words. That sounds like a formality and was the bug: an end vertex used to take
- * the perpendicular of the <em>reversed</em> outgoing direction, which is the same line but the
- * opposite side of it. Paired with the mitre of the vertex before it, that made the final quad of
- * every segment a bow-tie, and a bow-tie drawn through a {@code QUADS} buffer as its two triangles
- * leaves roughly half of that edge unpainted -- read on the map as the road suddenly narrowing a
- * little before every junction.
- *
- * <h2>Joints</h2>
- * An ordinary bend shares one offset between its two edges -- the mitre, {@code halfWidth /
- * cos(turn/2)} long, longer than the half width so the outside of the bend stays square. Two edges
- * too sharp for that (past {@link #MITER_LIMIT}) are given a cross-section each, along their own
- * perpendiculars, and the ground they leave uncovered -- the circular sector between their two outer
- * cross-section rays -- is painted as a fan. A mitre at such an angle would be a spike several
- * widths long, and forcing a shared cross-section from either edge would leave the other edge
- * measured across its own length, which is the sliver the old code drew at hairpins.
- *
- * <p>The sector, not a whole disc: a disc is the ground a round pen covers, but most of that ground
- * is already under the two edges' quads, and a translucent road mixed twice is exactly the brighter
- * bead this class exists to prevent. The sector is bounded by the very cross-sections the quads end
- * on, so the join and the edges share an edge instead of overlapping, the same argument as for the
- * mitre. Where a pen doubles back this sharply, the two edges' own bands can still meet by a pixel or
- * two on the inside of the turn; that is the shape of a pen at a hairpin, not a doubled fan, and the
- * round join adds only the ground the bands leave uncovered -- never paint on top of paint.
- *
- * <h2>Ends, and the joints between strokes</h2>
- * Each road segment is its own map element, so it has two butt ends that another stroke meets. The
- * ends are capped with a semicircle pointing outward, never a full disc: a full one would lie half
- * on top of its own stroke, and that overlap was the line of darker beads a translucent road used to
- * have. A half disc only adds the ground past the end, so within one stroke every pixel a cap paints
- * is painted once; the two of them at a joint cover the wedge on the outside of it, and where two
- * strokes meet there the caps do overlap -- that overlap is the junction itself.
- *
- * <h2>Coordinates</h2>
- * Everything here is in the renderer's local screen space: the points are where the road lands on the
- * map, and {@code halfWidth} is the same unit. A quad is four corners in the winding a {@code QUADS}
- * buffer triangulates as {@code (0,1,2)} and {@code (0,2,3)}; a triangle is written as a degenerate
- * quad whose <em>third</em> corner is repeated, so that the second triangle has no area. Repeating the
- * second corner instead -- which is the same four numbers in a different order -- fills the triangle
- * once forwards and once backwards, and a translucent road is then mixed twice over the whole fan:
- * that is what made the half-disc ends of the self-drawn maps read as a bright semicircle.
+ * Invariant: every point within halfWidth of the line is painted exactly once. Neither a bend, a
+ * joint nor an end may thin the stroke, and no piece may be painted twice -- translucent colours
+ * make a doubled pixel a brighter bead. A mitred joint shares one offset between its edges; every
+ * fan piece covers its ground once.
+ * A vertex offset always takes the same side of the direction of travel; the reversed perpendicular
+ * made the last quad of every segment a bow-tie and left that edge half unpainted.
+ * Screen space throughout; a triangle is a degenerate quad with the third corner repeated.
  */
 public final class StrokeOutline {
 
     /**
      * How far a mitred joint may reach past the half width, as a multiple of it.
-     *
-     * <p>Two, not four. A mitre is {@code halfWidth / cos(turn/2)} long, so at a hundred and forty
-     * degrees it already reaches nearly three half widths past the centre of the road -- a point a road
-     * and a half long, which is the spike a sharp bend in the road data becomes once the map is zoomed
-     * in far enough for the stroke to be at its full capped width. Past this limit the joint is rounded
-     * instead, which is a shape a road can have; a spike is not.
+     * Two, not four: a mitre grows as halfWidth / cos(turn/2), reaching nearly three half widths at
+     * 140 degrees, which reads as a spike once zoomed in. Past this limit the joint is rounded.
      */
     public static final double MITER_LIMIT = 2.0;
 
@@ -82,13 +26,13 @@ public final class StrokeOutline {
     /** How many segments a round join's arc is drawn with. */
     private static final int JOIN_SEGMENTS = 6;
 
-    /** The most points {@link #roundJoinWedge} writes: one per arc end, plus the arc's own pieces. */
+    /** The most points roundJoinWedge writes: one per arc end, plus the arc's own pieces. */
     public static final int MAX_JOIN_POINTS = JOIN_SEGMENTS + 1;
 
     /** How many segments an end cap is drawn with. */
     private static final int DISC_SEGMENTS = 10;
 
-    /** A joint whose mitre would reach past {@link #MITER_LIMIT} is joined round instead. */
+    /** A joint whose mitre would reach past MITER_LIMIT is joined round instead. */
     private static final double SHARP_JOINT = 1.0 / MITER_LIMIT;
 
     /** Below this a length is rounding noise rather than an edge, and is skipped. */
@@ -98,9 +42,8 @@ public final class StrokeOutline {
     private int quads;
 
     // Per-vertex offsets into the scratch arrays: the cross-section of the edge arriving at the
-    // vertex, and of the edge leaving it. They are equal at every joint a mitre can serve, and the
-    // two differ only at a joint too sharp to mitre. Render-thread only, like the arrays they are
-    // filled from; grown rather than reallocated when a longer road comes along.
+    // vertex and of the edge leaving it. Equal wherever a mitre can serve; render-thread only, and
+    // grown rather than reallocated when a longer road comes along.
     private double[] arrivingX = new double[64];
     private double[] arrivingY = new double[64];
     private double[] leavingX = new double[64];
@@ -110,27 +53,20 @@ public final class StrokeOutline {
     private final double[] joinXs = new double[MAX_JOIN_POINTS];
     private final double[] joinYs = new double[MAX_JOIN_POINTS];
 
-    /** The quads this outline consists of: {@link #quadCount()} of them, {@link #VALUES_PER_QUAD} each. */
+    /** The quads this outline consists of: quadCount() of them, VALUES_PER_QUAD each. */
     public double[] coordinates() {
         return values;
     }
 
-    /** How many quads the last {@link #build} produced. */
+    /** How many quads the last build produced. */
     public int quadCount() {
         return quads;
     }
 
     /**
      * Builds the outline of one stroke.
-     *
-     * <p>The point arrays are read, never written, and must have at least {@code count} entries in
-     * each. A second call replaces the previous outline: the class is one scratch pad for one road
-     * at a time, because the map redraws the same roads every frame and allocating an outline per
-     * road would be garbage the frame does not need.
-     *
-     * @param xs        screen x of each point
-     * @param zs        screen y of each point
-     * @param count     how many points of the arrays belong to this stroke
+     * The point arrays are read, never written, and must have at least count entries. A second call
+     * replaces the previous outline: one scratch pad per frame avoids garbage the frame does not need.
      * @param halfWidth half the width to paint, in the same unit as the points
      */
     public void build(double[] xs, double[] zs, int count, double halfWidth) {
@@ -194,8 +130,8 @@ public final class StrokeOutline {
     }
 
     /**
-     * The cross-section at one interior vertex: the mitre of the two edges when it can serve both,
-     * or one along each edge's own perpendicular plus a round join when it cannot.
+     * The cross-section at one interior vertex: the mitre of both edges when it can serve, or one
+     * along each edge's own perpendicular plus a round join when it cannot.
      */
     private void jointAt(double[] xs, double[] zs, int vertex, double halfWidth) {
         double previousX = xs[vertex] - xs[vertex - 1];
@@ -229,8 +165,8 @@ public final class StrokeOutline {
         double sumY = normalPreviousY + normalNextY;
         double sumLength = Math.hypot(sumX, sumY);
         if (sumLength >= 1.0E-6) {
-            // The mitre direction is the bisector of the two normals; the length that puts it on both
-            // edges' outer side is the half width divided by the cosine of half the turn.
+            // The mitre direction is the bisector of the two normals; its length is the half width over the
+            // cosine of half the turn.
             double mitreX = sumX / sumLength;
             double mitreY = sumY / sumLength;
             double cosine = mitreX * normalNextX + mitreY * normalNextY;
@@ -243,9 +179,8 @@ public final class StrokeOutline {
                 return;
             }
         }
-        // Too sharp to mitre: each edge keeps its own perpendicular, and the wedge between them is
-        // filled by a round join. This is also the exact-reversal case, where the two normals are the
-        // same line and no bisector exists at all.
+        // Too sharp to mitre: each edge keeps its own perpendicular, and the wedge is filled by a round
+        // join -- also the exact-reversal case, where the normals are the same line and no bisector exists.
         arrivingX[vertex] = normalPreviousX * halfWidth;
         arrivingY[vertex] = normalPreviousY * halfWidth;
         leavingX[vertex] = normalNextX * halfWidth;
@@ -259,9 +194,8 @@ public final class StrokeOutline {
         int points = roundJoinWedge(cx, cy, previousX, previousY, nextX, nextY, halfWidth,
                 joinXs, joinYs);
         for (int i = 0; i + 1 < points; i++) {
-            // A triangle as a degenerate quad with the third corner repeated: the second triangle has
-            // no area, so the piece is painted once. Repeating the second corner instead is the same
-            // four numbers in a different order and fills the triangle twice.
+            // A triangle as a degenerate quad with the third corner repeated: the second triangle has no
+            // area, so the piece is painted once.
             quad(cx, cy, joinXs[i], joinYs[i], joinXs[i + 1], joinYs[i + 1],
                     joinXs[i + 1], joinYs[i + 1]);
         }
@@ -269,27 +203,13 @@ public final class StrokeOutline {
 
     /**
      * The boundary of the ground a joint too sharp to mitre leaves uncovered.
-     *
-     * <p>At such a joint the stroke has a cross-section of its own along each edge, and between the
-     * two cross-sections there is a circular sector of radius {@code halfWidth} that neither edge's
-     * quad covers. That sector -- not a whole disc -- is what the round join has to paint: a disc
-     * would also cover the ground under both quads, and a translucent road mixed twice is a bead.
-     *
-     * <p>The sector starts on the arriving edge's outer cross-section, ends on the leaving edge's, and
-     * is swept by the turn itself: anticlockwise round a left turn, clockwise round a right one. At an
-     * exact reversal the two cross-sections are the same line and the sweep is half a turn, which is
-     * the round end a hairpin needs; it goes round the side the road arrived from, which is where the
-     * road's own ground ends.
-     *
-     * <p>Points are written to the caller's arrays, so a caller that redraws a road every frame can
-     * hand in the same two arrays each time; nothing escapes.
-     *
-     * @param cx,cy     the joint, in the same screen-space unit as the rest of the stroke
-     * @param previousX,previousY direction of the edge arriving at the joint, unnormalised
-     * @param nextX,nextY         direction of the edge leaving it, unnormalised
-     * @param halfWidth           the stroke's half width, and the sector's radius
-     * @param outXs,outYs         arrays of at least {@link #MAX_JOIN_POINTS} doubles each
-     * @return how many points were written, in fan order; fan them from {@code (cx, cy)}
+     * A circular sector of radius halfWidth between the two cross-sections, not a whole disc: a disc
+     * would cover ground already under both quads, and a translucent road mixed twice is a bead. It is
+     * swept by the turn -- anticlockwise left, clockwise right -- and at an exact reversal the sweep is
+     * half a turn. Points are written to the caller's arrays.
+     * @param halfWidth the stroke's half width, and the sector's radius
+     * @param outXs,outYs arrays of at least MAX_JOIN_POINTS doubles each
+     * @return how many points were written, in fan order; fan them from (cx, cy)
      */
     public static int roundJoinWedge(double cx, double cy,
                                      double previousX, double previousY,
@@ -305,9 +225,8 @@ public final class StrokeOutline {
         double nextUnitX = nextX / nextLength;
         double nextUnitY = nextY / nextLength;
         double turn = previousUnitX * nextUnitY - previousUnitY * nextUnitX;
-        // The side the corner falls away from: the cross-section rays on the outer side are the ones
-        // the stroke's own quads are not on, which is the opposite side from the normals the quads
-        // use for a left turn and the same side for a right one.
+        // The side the corner falls away from: the outer cross-section rays, opposite the quad normals
+        // for a left turn and the same side for a right one.
         double side = turn >= 0.0 ? -1.0 : 1.0;
         double startX = side * -previousUnitY;
         double startY = side * previousUnitX;
@@ -345,11 +264,9 @@ public final class StrokeOutline {
     }
 
     /**
-     * A semicircular cap at one end of the stroke, pointing outward along (dx, dy).
-     *
-     * <p>Half a disc, not a whole one: the cap owns only the ground past the end, so it never doubles
-     * up on the stroke it belongs to. At a joint the two ends' caps are the two halves of one round
-     * cap, which is exactly what a line drawn end to end looks like.
+     * A semicircular cap at one end, pointing outward along (dx, dy).
+     * Half a disc, not a whole one: the cap owns only the ground past the end, so it never doubles up
+     * on its own stroke; at a joint the two caps are the two halves of one round cap.
      */
     private void cap(double x, double y, double dx, double dy, double halfWidth) {
         double length = Math.hypot(dx, dy);
@@ -364,8 +281,7 @@ public final class StrokeOutline {
             double y0 = y + Math.sin(from) * halfWidth;
             double x1 = x + Math.cos(to) * halfWidth;
             double y1 = y + Math.sin(to) * halfWidth;
-            // The third corner repeated: one triangle, painted once. See the class note on degenerate
-            // quads for why repeating the second one is not the same thing.
+            // The third corner repeated: one triangle, painted once -- repeating the second fills it twice.
             quad(x, y, x0, y0, x1, y1, x1, y1);
         }
     }

@@ -7,10 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The road graph of a single dimension.
- *
- * <p>Nodes and segments are stored separately and reference each other by id, which keeps
- * topology edits (splitting, merging, snapping) cheap.
+ * The road graph of a single dimension. Nodes and segments are stored separately and reference each other by id, which keeps topology edits cheap.
  */
 public final class RoadNetwork {
 
@@ -20,63 +17,38 @@ public final class RoadNetwork {
     private int nextSegmentId = 1;
 
     /**
-     * Bumped whenever a node or a segment is added, removed or moved.
-     *
-     * <p>For anything that caches a reading of the geometry -- a spatial index, a chain grouping --
-     * so that it can tell "the same network object" from "the same network, unchanged". An identity
-     * check is not enough on its own: the editor mutates one network in place for the whole session,
-     * so a cache keyed on the reference alone would serve a reading of roads that have since moved.
-     *
-     * <p>Deliberately not bumped for a change that cannot move geometry and cannot change any reading
-     * of it: a rename, or a one-way flag -- the latter has its own counter, on the segment, because a
-     * cached graph has to know the direction changed. A <em>re-class</em> is not in that list even
-     * though it moves nothing: which pieces of road count as one road is a question about their class,
-     * so a class change is a change to a grouping and to the graph built from it, and both are cached
-     * against this counter.
+     * Bumped whenever a node or segment is added, removed or moved, so a geometry cache can tell the same network object from the same network, unchanged.
+     * Not bumped for changes that cannot alter a reading: a rename, or a one-way flag (the segment keeps its own counter). A re-class does bump it -- which pieces count as one road is a grouping cached against this counter.
      */
     private int revision;
 
-    /** @see #revision */
     public int revision() {
         return revision;
     }
 
     /**
-     * Marks the geometry as changed, for a mutation made through an object this network handed out.
-     *
-     * <p>A segment's vertices are moved through the segment itself -- the router splits a road and the
-     * editor drags a node by writing vertices -- so the network cannot see those writes. Anything that
-     * does one is expected to say so; {@link #revision} is what keeps a spatial index from serving a
-     * reading of where the roads used to be.
+     * Marks the geometry as changed, for a mutation made through an object this network handed out. Vertex moves go through the segment (router splits, editor drags), so the network cannot see them.
      */
     public void touch() {
         revision++;
     }
 
     /**
-     * Live view of the nodes. <b>Do not add or remove while iterating</b> -- this is the backing
-     * map's value view and structural changes during iteration throw
-     * {@link java.util.ConcurrentModificationException}. Take {@link #nodesSnapshot()} first if the
-     * loop needs to mutate.
+     * Live view of the nodes. Do not add or remove while iterating -- structural changes throw ConcurrentModificationException; use nodesSnapshot() when the loop mutates.
      */
     public Collection<RoadNode> nodes() {
         return nodes.values();
     }
 
-    /**
-     * Live view of the segments. <b>Do not add or remove while iterating</b> -- see
-     * {@link #nodes()} for why, and use {@link #segmentsSnapshot()} when mutation is needed.
-     */
+    /** Live view of the segments. Same iteration rule as nodes(); use segmentsSnapshot() when mutating. */
     public Collection<RoadSegment> segments() {
         return segments.values();
     }
 
-    /** Copy of the nodes, safe to iterate while modifying the network. */
     public List<RoadNode> nodesSnapshot() {
         return new ArrayList<>(nodes.values());
     }
 
-    /** Copy of the segments, safe to iterate while modifying the network. */
     public List<RoadSegment> segmentsSnapshot() {
         return new ArrayList<>(segments.values());
     }
@@ -122,7 +94,7 @@ public final class RoadNetwork {
         return removed;
     }
 
-    /** Finds the node nearest to {@code (x, z)} within {@code maxDistance} blocks, or null. */
+    /** Node nearest to (x, z) within maxDistance blocks, or null. */
     public RoadNode nearestNode(double x, double z, double maxDistance) {
         double bestSq = maxDistance * maxDistance;
         RoadNode best = null;
@@ -144,21 +116,19 @@ public final class RoadNetwork {
         return segments.size();
     }
 
-    /** Inserts a pre-built node, keeping the id counter ahead of it. */
     public void putNode(RoadNode node) {
         nodes.put(node.id(), node);
         nextNodeId = Math.max(nextNodeId, node.id() + 1);
         revision++;
     }
 
-    /** Inserts a pre-built segment, keeping the id counter ahead of it. */
     public void putSegment(RoadSegment segment) {
         segments.put(segment.id(), segment);
         nextSegmentId = Math.max(nextSegmentId, segment.id() + 1);
         revision++;
     }
 
-    /** Deep copy. The editor keeps these on an undo stack, so it must not share state. */
+    /** Deep copy. The editor keeps these on an undo stack, so no state may be shared. */
     public RoadNetwork deepCopy() {
         RoadNetwork c = new RoadNetwork();
         c.nextNodeId = nextNodeId;
@@ -172,7 +142,6 @@ public final class RoadNetwork {
         return c;
     }
 
-    /** Replaces this network's contents with a deep copy of {@code other}. */
     public void replaceWith(RoadNetwork other) {
         nodes.clear();
         segments.clear();
@@ -188,13 +157,12 @@ public final class RoadNetwork {
     }
 
     /**
-     * Builds a small test pattern so P0 can be verified visually without any editing UI.
-     * Centred on the given world position.
+     * Builds a small test pattern centred on the given world position, so P0 can be verified visually without any editing UI.
      */
     public static RoadNetwork demo(int centerX, int centerZ) {
         RoadNetwork net = new RoadNetwork();
 
-        // A square "ring road" plus a diagonal cross, all centred on the player.
+        // A square ring road plus a diagonal cross, all centred on the player.
         int r = 120;
         RoadNode nw = net.addNode(centerX - r, 64, centerZ - r, RoadNode.Type.JUNCTION, "NW");
         RoadNode ne = net.addNode(centerX + r, 64, centerZ - r, RoadNode.Type.JUNCTION, "NE");
@@ -209,8 +177,7 @@ public final class RoadNetwork {
         addLink(net, nw, se, RoadClass.PATH);
         addLink(net, ne, sw, RoadClass.PATH);
 
-        // A straight highway running exactly EAST so its length can be measured against Xaero's
-        // coordinate readout: it ends precisely 1000 blocks east of the centre.
+        // A straight highway running exactly EAST, ending 1000 blocks east of the centre, so its length can be checked against Xaero's coordinate readout.
         RoadSegment highway = RoadSegment.of(net.nextSegmentId++, RoadClass.HIGHWAY, 64,
                 centerX, centerZ,
                 centerX + 250, centerZ,
@@ -220,7 +187,7 @@ public final class RoadNetwork {
         highway.setFromNode(center.id());
         net.addSegment(highway);
 
-        // Reference marker exactly at the centre so misalignment is obvious.
+        // Reference marker exactly at the centre, so misalignment is obvious.
         RoadSegment mark = RoadSegment.of(net.nextSegmentId++, RoadClass.ICE, 64,
                 centerX - 8, centerZ, centerX + 8, centerZ);
         mark.setFromNode(center.id());

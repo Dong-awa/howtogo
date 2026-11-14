@@ -15,9 +15,9 @@ import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 // The config screen is registered here only where it exists. Three arms, not two, because the two
 // pieces of it arrived at different versions:
 //
-//   1.20.4   neither IConfigScreenFactory nor ConfigurationScreen
-//   1.20.6   IConfigScreenFactory only -- the interface landed a release before the screen
-//   1.21.1+  both, which is the shape used here
+// 1.20.4   neither IConfigScreenFactory nor ConfigurationScreen
+// 1.20.6   IConfigScreenFactory only -- the interface landed a release before the screen
+// 1.21.1+  both, which is the shape used here
 //
 // The 1.20.6 arm therefore registers the config and no screen: there is nothing to pass as the
 // factory. This is measured, not assumed -- the classes were checked in each node's own NeoForge jar.
@@ -51,8 +51,7 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 
-// 1.21.1 through 1.21.11. See the first arm of this file for why this is a helper and why the
-// config screen is only registered where both halves of it exist.
+// 1.21.1 through 1.21.11. See the first arm of this file for why this is a helper.
 final class HowToGoConfig {
 
     private HowToGoConfig() {
@@ -60,13 +59,7 @@ final class HowToGoConfig {
 
     static void registerClient(ModContainer container) {
         container.registerConfig(ModConfig.Type.CLIENT, RoadConfig.SPEC);
-        // The config screen: the button beside this mod in the mods list. NeoForge's own editor
-        // reads the very SPEC the file is written from -- the same sections, defaults, comments and
-        // ranges -- so nothing here is a second copy of the settings that could drift from the file.
-        // Without this no screen is offered at all, which is why the colour sections would otherwise
-        // only be editable by hand in the TOML. This arm covered the whole 1.20.5..26.1 range until
-        // the screen registration was split out; leaving it out is what made the Config button
-        // vanish on the 1.21.x nodes.
+        // The config screen: the button beside this mod in the mods list. NeoForge's editor reads the same SPEC the file is written from, so there is no second copy of the settings to drift. Without this no screen is offered.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
     }
 }

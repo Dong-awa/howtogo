@@ -22,34 +22,16 @@ import java.util.Map;
 
 /**
  * Reads and writes the place-detail store as JSON.
- *
- * <h2>Why its own file</h2>
- * The details could have ridden in the road network's file -- a place is a node, and the node's
- * detail is a field on it -- but three of the five place sources are not in that file at all: an MTR
- * station, a waypoint and a generated structure are read out of another mod and never written by
- * this one. A separate file is the only shape that holds notes about all of them, and it is also
- * what the archive already carries: export packs every {@code .json} in the world directory, so the
- * details travel with the map without a line of code in the archive.
- *
- * <h2>Why the format is so forgiving</h2>
- * A detail is a note; it is never worth refusing a world over. A missing file, a missing field, an
- * unknown field, an entry with no id -- all of those read as "less detail" rather than as an error,
- * because the alternative is a player whose roads load and whose notes do not. A file that does not
- * parse at all is moved aside rather than deleted, for the same reason the road network's is: the
- * next save would otherwise silently destroy what is left of it.
- *
- * <h2>What makes it a stable format</h2>
- * The version field, and the rule that an unknown field is ignored rather than rejected: a newer
- * build may add a field, and an older build reading that file must still load the details it knows.
- * Everything is keyed on {@link PlaceKey}, so a record that names no dimension, source or id is not
- * a record -- it is dropped and counted, exactly as the road storage drops an entry with no id.
+ * A separate file because three of the five place sources (MTR stations, waypoints, generated structures) are read from other mods and never written by this one; export packs every .json in the world directory, so details travel with the map.
+ * The format is deliberately forgiving: a missing file, missing field, unknown field or id-less entry reads as less detail, never as an error. A file that does not parse is moved aside rather than deleted, so the next save cannot destroy it.
+ * The version field plus the rule that unknown fields are ignored is what makes it stable; records are keyed on PlaceKey and an entry naming no dimension, source or id is dropped and counted.
  */
 public final class PlaceStorage {
 
     /** Bumped only when a field's meaning changes, not when one is added. */
     public static final int FORMAT_VERSION = 1;
 
-    /** Suffix of the file written before it replaces the real one; see {@link #save}. */
+    /** Suffix of the file written before it replaces the real one; see save. */
     private static final String PARTIAL_SUFFIX = ".part";
 
     private static final Gson GSON = new GsonBuilder()
@@ -62,7 +44,6 @@ public final class PlaceStorage {
 
     /**
      * Reads a store, or an empty one when the file is absent or unreadable.
-     *
      * @return the records found, in file order; never null
      */
     public static Map<PlaceKey, PlaceDetails> load(Path file) {
@@ -76,9 +57,7 @@ public final class PlaceStorage {
                 return details;
             }
             if (dto.version > FORMAT_VERSION) {
-                // Written by something newer. Its fields are still the ones this build reads -- the
-                // version exists for a change of meaning, not for a plain addition -- so it is read
-                // and the next save writes only what this build understands.
+                // Written by something newer. Its fields are still the ones this build reads -- the version marks a change of meaning, not an addition -- so it is read, and the next save writes only what this build understands.
                 HowToGo.LOGGER.warn("[HowToGo] {} says version {} and this build writes {}; reading "
                         + "the fields it knows", file.getFileName(), dto.version, FORMAT_VERSION);
             }
@@ -88,8 +67,7 @@ public final class PlaceStorage {
                 for (DetailsDto entry : dto.details) {
                     if (entry == null || isBlank(entry.dimension) || isBlank(entry.source)
                             || isBlank(entry.id)) {
-                        // Not a place: without all three parts there is nothing this record can be
-                        // found by, and keeping it would only make the "unlinked" count lie.
+                        // Not a place: without all three parts nothing can find this record, and keeping it would only make the unlinked count lie.
                         rejected++;
                         continue;
                     }
@@ -110,22 +88,14 @@ public final class PlaceStorage {
             }
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting with no place details", file, e);
-            // Starting empty is the only thing that can be done with a file that does not parse, but
-            // it must not also be the end of that data: the next save writes over it, and a file
-            // truncated by a kill still holds most of a player's notes. Moving it aside keeps the
-            // salvageable remainder and costs a name in the world's folder.
+            // Starting empty is all that can be done with a file that does not parse, but the next save writes over it, and a file truncated by a kill still holds most of a player's notes. Moving it aside keeps the salvageable remainder.
             quarantine(file);
         }
         return details;
     }
 
     /**
-     * Writes the store, replacing the file in one step.
-     *
-     * <p>The same reason as the road network's save: a save is a stream of writes and a stream can be
-     * cut in half, and a player's notes are not worth losing to a power cut. The bytes go to a
-     * neighbouring {@code .part} file and the target is replaced by a rename.
-     *
+     * Writes the store, replacing the file in one step: the bytes go to a neighbouring .part file and the target is replaced by a rename, so a cut save cannot lose a player's notes.
      * @return whether the file was written
      */
     public static boolean save(Path file, Map<PlaceKey, PlaceDetails> details) {
@@ -143,8 +113,7 @@ public final class PlaceStorage {
                     PlaceKey key = entry.getKey();
                     PlaceDetails value = entry.getValue();
                     if (key == null || value == null || value.isEmpty()) {
-                        // An empty detail is the same as no detail, and writing it would make the
-                        // file grow a row per place that was opened and closed without typing.
+                        // An empty detail is no detail; writing it would add a row per place opened and closed without typing.
                         continue;
                     }
                     DetailsDto out = new DetailsDto();
@@ -159,10 +128,7 @@ public final class PlaceStorage {
                         out.tags = new ArrayList<>(value.tags());
                     }
                     if (!value.category().isBlank()) {
-                        // Absent rather than empty when there is no category, so a record written by
-                        // this build and one written before the field existed are the same bytes.
-                        // JsonPrimitive rather than a String field because the reader tolerates a
-                        // hand-edited value of any JSON type; see #categoryOf.
+                        // Absent rather than empty when there is no category, so a record written by this build and one written before the field existed are the same bytes. JsonElement rather than String because the reader tolerates a hand-edited value of any JSON type; see categoryOf.
                         out.category = new JsonPrimitive(value.category());
                     }
                     if (value.favorite()) {
@@ -186,7 +152,7 @@ public final class PlaceStorage {
         }
     }
 
-    /** Gives {@code partial} the target's name, atomically where the filesystem allows it. */
+    /** Gives partial the target's name, atomically where the filesystem allows it. */
     private static void replace(Path partial, Path file) throws IOException {
         try {
             Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING,
@@ -228,15 +194,8 @@ public final class PlaceStorage {
     }
 
     /**
-     * One record's category, read as text, or {@code ""} when the file's value is not text.
-     *
-     * <p>Read through a {@link JsonElement} rather than straight into a {@code String} for a reason
-     * that is only visible in the failure: Gson would coerce a JSON number or boolean into its text
-     * form ("3", "true") -- a category nobody typed -- and a JSON object or array would make the
-     * <em>whole file</em> fail to parse, so one mangled field would quarantine every note in it. The
-     * rule stated in the class comment is that a missing or unusable field reads as "less detail",
-     * never as an error, and this is the shape that keeps that true for a value whose type a player
-     * can edit by hand.
+     * One record's category, read as text, or "" when the file's value is not text.
+     * Read through a JsonElement because Gson would coerce a number or boolean into a fake category and a JSON object or array would fail the whole file, quarantining every note: an unusable field must read as less detail.
      */
     private static String categoryOf(JsonElement element) {
         if (element == null || element.isJsonNull() || !element.isJsonPrimitive()) {
@@ -250,7 +209,6 @@ public final class PlaceStorage {
         return text == null || text.isBlank();
     }
 
-    // ------------------------------------------------------------------- DTOs
 
     private static final class StoreDto {
         int version;
@@ -258,13 +216,7 @@ public final class PlaceStorage {
     }
 
     /**
-     * One record on disk.
-     *
-     * <p>Every field is optional and read tolerantly: a record written before a field existed is a
-     * record with the default for it, which is exactly the reading that makes the format additive.
-     * Empty values are not written at all, so a detail that is only a favourite is a few fields
-     * rather than a row of blanks -- and a missing field and an empty one mean the same thing by
-     * construction.
+     * One record on disk. Every field is optional and read tolerantly, so a record written before a field existed just gets its default. Empty values are not written, so a detail that is only a favourite stays a few fields rather than a row of blanks.
      */
     private static final class DetailsDto {
         String dimension;
@@ -273,12 +225,7 @@ public final class PlaceStorage {
         String description;
         List<String> tags;
         /**
-         * The place's type or resource type, absent when it has none.
-         *
-         * <p>{@link JsonElement} rather than {@code String} so that a hand-edited value of the wrong
-         * JSON type reads as "no category" instead of as a broken file -- see {@link #categoryOf}.
-         * It is written as a JSON string, so the file is still the plain {@code "category": "药房"}
-         * a player would expect.
+         * The place's type or resource type, absent when it has none. JsonElement so a hand-edited value of the wrong JSON type reads as no category; written as a JSON string.
          */
         JsonElement category;
         boolean favorite;

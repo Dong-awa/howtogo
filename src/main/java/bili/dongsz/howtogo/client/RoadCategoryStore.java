@@ -25,46 +25,26 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The player's own road categories: which exist, what they are called, and what colour their sign is.
- *
- * <h2>What a player owns, and what they do not</h2>
- * Every road class has exactly one category that is not the player's: {@link #noneOf the "not
- * classified" one}, which is what a road is until it is classified. It cannot be renamed, recoloured
- * or removed -- it is the answer every unclassified road gives, so a player could not make it mean
- * anything else. Everything else is theirs: a class starts with no other categories at all, and
- * {@link #add} / {@link #remove} create and delete them. A category deleted while roads carry it
- * leaves those roads pointing at an id nothing defines; {@link #has} says so, and every reader draws
- * and edits such a road as "not classified".
- *
- * <h2>Why the definitions are here and not on the roads</h2>
- * A road stores only the category's opaque id; this store owns the name and colour. That is what
- * makes renaming a category repaint every road wearing it without touching the save file, and what
- * lets the same road look different in two players' games -- a category is presentation, like the
- * road class colours, not world data.
- *
- * <h2>File</h2>
- * {@code config/howtogo/road-categories.json}, read lazily on first use and written immediately on a
- * change -- a colour is changed by dragging a picker and the result has to survive the screen closing.
- * Only player-made categories are written; the built-in one is implicit, so a file is empty until the
- * player makes their first category.
+ * The player's own road categories: which exist, their names, and their sign colours.
+ * The built-in "not classified" one cannot be renamed, recoloured or removed; all others are
+ * created and deleted here. A road keeps only the category id, so renaming repaints every road
+ * without touching the save.
+ * File: config/howtogo/road-categories.json, read lazily and written on every change.
  */
 public final class RoadCategoryStore {
 
     private static final String FILE_NAME = "road-categories.json";
     private static final int FORMAT_VERSION = 2;
 
-    /** What the built-in category is called and drawn as; neither is the player's to change. */
+    /** What the built-in category is called; neither name nor colour is the player's to change. */
     private static final String NONE_NAME_KEY = "howtogo.road_category.none";
     private static final int NONE_COLOR = 0xFF7A7F87;
     /** The name a freshly added category starts with; the player renames it in the editor. */
     private static final String NEW_NAME_KEY = "howtogo.road_category.new";
 
     /**
-     * The colours a new category is given, in turn, and the presets the picker offers.
-     *
-     * <p>Road-sign colours rather than a rainbow: the palette exists so that a player who adds three
-     * categories gets three that are easy to tell apart on a map, not so that every possible colour
-     * is one of them -- the picker takes any colour, these are only the starting points.
+     * Colours a new category is given in turn, and the presets the picker offers.
+     * Road-sign colours, so a few categories stay distinguishable; the picker accepts any colour.
      */
     public static final int[] PALETTE = {
             0xFFC0392B, 0xFFE8A33D, 0xFF2E86C1, 0xFF27AE60, 0xFF8E44AD, 0xFFD35400,
@@ -88,16 +68,10 @@ public final class RoadCategoryStore {
     private RoadCategoryStore() {
     }
 
-    /**
-     * One player-made category: its id (which roads carry) and everything about how it looks.
-     *
-     * <p>A record rather than a {@link RoadCategory} because the category value deliberately knows
-     * nothing about presentation -- see that class for why. The two are joined by the id.
-     */
+    /** One player-made category: id and appearance, separate from RoadCategory and joined by id. */
     private record Definition(String id, String name, int color) {
     }
 
-    // ---------------------------------------------------------------- reading
 
     /** The categories of one class, the built-in "not classified" one first. */
     public static List<RoadCategory> ofClass(RoadClass roadClass) {
@@ -118,14 +92,7 @@ public final class RoadCategoryStore {
         return RoadCategory.none(roadClass == null ? RoadClass.ROAD : roadClass);
     }
 
-    /**
-     * Whether this category exists: the built-in one always does, a player-made one only while its
-     * definition is in the store.
-     *
-     * <p>A road may carry an id this answers false for -- its category was deleted while it was
-     * classified. Every reader treats that as the built-in category; this is the one question they
-     * ask to find out.
-     */
+    /** Whether this category exists; a road may carry a deleted id, treated as unclassified. */
     public static boolean has(RoadCategory category) {
         if (category == null) {
             return false;
@@ -142,7 +109,7 @@ public final class RoadCategoryStore {
         return false;
     }
 
-    /** The category itself when it exists, and the class's built-in one when it does not. */
+    /** The category itself when it exists, else the class's built-in one. */
     public static RoadCategory normalise(RoadCategory category) {
         if (category == null) {
             return noneOf(null);
@@ -150,18 +117,12 @@ public final class RoadCategoryStore {
         return has(category) ? category : noneOf(category.roadClass());
     }
 
-    /** Whether a category's name and colour are the player's to change; false only for the built-in one. */
+    /** Whether name and colour are the player's to change; false only for the built-in one. */
     public static boolean isEditable(RoadCategory category) {
         return category != null && !category.isNone();
     }
 
-    /**
-     * The name a category is shown under.
-     *
-     * <p>The built-in one is translated every time, so it follows the language in force; a
-     * player-made one is the text the player wrote, with the store's own default standing in for a
-     * file somebody cleared by hand.
-     */
+    /** The shown name; built-in translated, player-made with the store default as fallback. */
     public static Component displayName(RoadCategory category) {
         if (category == null || category.isNone()) {
             return Component.translatable(NONE_NAME_KEY);
@@ -179,13 +140,7 @@ public final class RoadCategoryStore {
         return displayName(category).getString();
     }
 
-    /**
-     * The colour a category's sign is drawn in.
-     *
-     * <p>The built-in category's grey is fixed; a player-made category's colour is theirs, and a
-     * category that no longer exists answers with the built-in grey so a deleted category's roads
-     * still draw as something until they are cleaned up.
-     */
+    /** The sign colour; built-in grey fixed, deleted categories draw in it too. */
     public static int color(RoadCategory category) {
         if (category == null || category.isNone()) {
             return NONE_COLOR;
@@ -195,15 +150,11 @@ public final class RoadCategoryStore {
         return definition == null ? NONE_COLOR : definition.color();
     }
 
-    // ---------------------------------------------------------------- writing
 
     /**
      * Makes a new category for a class and returns it.
-     *
-     * <p>Starts with another palette colour and a placeholder name the player renames in the editor;
-     * both are written at once, so a crash between adding and renaming loses nothing. The id is taken
-     * from a per-class counter that is never reset, which is what keeps a deleted category's roads
-     * from silently adopting the next one that is made.
+     * Starts with the next palette colour and a placeholder name, written at once; the per-class id
+     * counter is never reset, so a deleted id is never reused.
      */
     public static RoadCategory add(RoadClass roadClass) {
         ensureLoaded();
@@ -219,11 +170,9 @@ public final class RoadCategoryStore {
     }
 
     /**
-     * Deletes a player-made category.
-     *
-     * <p>The built-in category is not deletable and answers false. Roads that carry the deleted one
-     * are the caller's to put back to "not classified" -- the network is not this store's business --
-     * and until they are, {@link #has} makes every reader treat them as unclassified anyway.
+     * Deletes a player-made category; the built-in one answers false.
+     * Roads carrying the deleted id are the caller's to reset; until then has treats them as
+     * unclassified.
      */
     public static boolean remove(RoadCategory category) {
         if (!isEditable(category)) {
@@ -238,7 +187,7 @@ public final class RoadCategoryStore {
         return removed;
     }
 
-    /** Renames a player-made category; the built-in one cannot be renamed and ignores this. */
+    /** Renames a player-made category; the built-in one ignores this. */
     public static void setName(RoadCategory category, String name) {
         if (!isEditable(category)) {
             return;
@@ -260,7 +209,7 @@ public final class RoadCategoryStore {
         }
     }
 
-    /** Recolours a player-made category; the built-in one cannot be recoloured and ignores this. */
+    /** Recolours a player-made category; the built-in one ignores this. */
     public static void setColor(RoadCategory category, int argb) {
         if (!isEditable(category)) {
             return;
@@ -281,7 +230,6 @@ public final class RoadCategoryStore {
         }
     }
 
-    // ------------------------------------------------------------------ file
 
     private static List<Definition> definitions(RoadClass roadClass) {
         if (roadClass == null) {
@@ -321,8 +269,7 @@ public final class RoadCategoryStore {
                     }
                     List<Definition> definitions = definitions(roadClass);
                     for (EntryDto value : entry.getValue()) {
-                        // A row without an id, or with the reserved one, is not a category: dropped
-                        // rather than reported, like every other hand-edited value in this mod.
+                        // A row without an id, or with the reserved one, is dropped rather than reported.
                         if (value == null || value.id == null || value.id.isBlank()
                                 || RoadCategory.NONE_ID.equalsIgnoreCase(value.id.trim())) {
                             continue;
@@ -343,8 +290,7 @@ public final class RoadCategoryStore {
                     }
                 }
             }
-            // A hand-edited file may have lost the counter: start past every id it holds so a new
-            // category cannot adopt an id that is already in use.
+            // A hand-edited file may have lost the counter: start past every id it holds.
             for (RoadClass roadClass : RoadClass.values()) {
                 int next = nextIds.getOrDefault(roadClass, 0);
                 for (Definition definition : definitions(roadClass)) {
@@ -376,7 +322,7 @@ public final class RoadCategoryStore {
         return null;
     }
 
-    /** Writes immediately: a value the player just changed, in a file small enough to rewrite whole. */
+    /** Writes immediately: a value the player just changed, in a small file rewritten whole. */
     private static void save() {
         Path file = file();
         if (file == null) {
@@ -414,7 +360,7 @@ public final class RoadCategoryStore {
         }
     }
 
-    /** Gives {@code partial} the target's name, atomically where the filesystem allows it. */
+    /** Gives partial the target's name, atomically where the filesystem allows it. */
     private static void replace(Path partial, Path file) throws IOException {
         try {
             Files.move(partial, file, StandardCopyOption.REPLACE_EXISTING,
@@ -439,7 +385,7 @@ public final class RoadCategoryStore {
     private static final class EntryDto {
         String id;
         String name;
-        /** A colour in {@link ColorHex}'s spelled form. */
+        /** A colour in ColorHex's spelled form. */
         String color;
     }
 }

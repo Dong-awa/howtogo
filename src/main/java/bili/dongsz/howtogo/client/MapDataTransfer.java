@@ -18,49 +18,25 @@ import java.util.stream.Stream;
 
 /**
  * Moving one world's map between machines: pack it, find packs to import, and put one back.
+ * Data lives in config/howtogo, not the save folder, because a server's client cannot read the save.
+ * An export writes one .zip into exports; an import reads one from imports, exports, or a drop.
  *
- * <h2>Why the files live where they do</h2>
- * A world's data directory is under {@code config/howtogo} rather than in the save folder, because on
- * a server the client cannot read the save at all -- so the thing players have to hand each other is
- * that directory. Sending a folder, or zipping it by hand and explaining which one to unpack, is the
- * friction this removes: an export writes one {@code .zip} into {@code config/howtogo/exports}, and an
- * import reads any {@code .zip} out of {@code config/howtogo/imports}, {@code exports}, or simply one
- * dropped onto the screen. The archive is the unit players already know how to send.
- *
- * <h2>Why the archive's name does not choose the world</h2>
- * An export is named after the world it came from, and zipping a folder by hand puts that folder's
- * name inside every entry too. Both are the <em>sender's</em> world. The player importing is in a
- * world of their own, and that is where the map has to go -- so the name of the archive and the names
- * inside it are ignored, and {@link WorldArchive#importFrom} writes into the directory
- * {@link WorldFiles#currentWorldKey()} resolves. The confirmation screen says so before anything is
- * replaced; see {@link MapImportScreen}.
- *
- * <h2>What "replace" costs, and what is kept</h2>
- * An import replaces the world's whole data directory, because a map from another world is a map
- * rather than a patch. That is destructive, so two things happen first: everything in memory is
- * flushed to disk (the debounced autosaves may be holding the last few edits), and the current
- * directory is written to {@code config/howtogo/backups} as an archive of its own, which can be
- * imported back the same way. The import itself is then loaded afresh into the stores that hold the
- * current dimension.
+ * An import replaces the whole data directory: in-memory stores are flushed first and the current
+ * directory is archived to backups. The archive's name does not choose the destination --
+ * WorldFiles#currentWorldKey() does.
  */
 public final class MapDataTransfer {
 
-    /** Where exports are offered back to the player; inside the transfer screen and on disk. */
     public static final String EXPORTS = "exports";
 
-    /** Where a player drops an archive received from somebody else. */
     public static final String IMPORTS = "imports";
 
-    /** Automatic copies of a world's data, taken immediately before an import overwrites it. */
     public static final String BACKUPS = "backups";
 
     /** Which of the three folders an archive came from, so a backup can say so in the list. */
     public enum Origin {
-        /** The imports folder: a file this player put there. */
         IMPORTS("screen.howtogo.mapdata.origin_imports"),
-        /** The exports folder: a map this player exported earlier. */
         EXPORTS("screen.howtogo.mapdata.origin_exports"),
-        /** The backups folder: an automatic copy taken just before an import. */
         BACKUP("screen.howtogo.mapdata.origin_backup");
 
         final String translation;
@@ -75,9 +51,9 @@ public final class MapDataTransfer {
         public final Path file;
         public final long bytes;
         public final long modified;
-        /** What the archive says about itself; null when it has no manifest this mod understands. */
+        /** What the archive says about itself; null when no manifest is understood. */
         public final WorldArchive.Manifest manifest;
-        /** Where it was found: the one thing that says a backup is a backup rather than a map. */
+        /** Where it was found; says a backup is a backup rather than a map. */
         public final Origin origin;
 
         private Candidate(Path file, long bytes, long modified, WorldArchive.Manifest manifest,
@@ -102,7 +78,6 @@ public final class MapDataTransfer {
         }
     }
 
-    /** What the current world's map directory holds, for the transfer screen's first lines. */
     public static final class DataStats {
         public final int files;
         public final long bytes;
@@ -116,22 +91,15 @@ public final class MapDataTransfer {
     private MapDataTransfer() {
     }
 
-    /** Whether a world is loaded: all of this needs one, because it is the unit being moved. */
     public static boolean worldLoaded() {
         return Minecraft.getInstance().level != null;
     }
 
-    /** The current world's map directory. */
     public static Path dataDirectory() {
         return WorldFiles.directory();
     }
 
-    /**
-     * How much the current world's map holds: the data files, not the directory's own record.
-     *
-     * <p>Read once when the screen opens. The alternative -- a count that is recomputed per frame --
-     * would walk the directory sixty times a second to draw the same number.
-     */
+    /** How much the map holds; read once on open, since a per-frame count would walk the directory. */
     public static DataStats dataStats() {
         Path directory = dataDirectory();
         int files = 0;
@@ -147,7 +115,7 @@ public final class MapDataTransfer {
                     try {
                         bytes += Files.size(path);
                     } catch (IOException unreadable) {
-                        // Counted as a file with unknown size rather than not counted at all.
+                        // Counted as a file of unknown size rather than not counted at all.
                     }
                 }
             } catch (IOException unreadableDirectory) {
@@ -157,7 +125,6 @@ public final class MapDataTransfer {
         return new DataStats(files, bytes);
     }
 
-    /** A byte count as a short localised string, for a screen line or a chat message. */
     public static Component humanSize(long bytes) {
         if (bytes < 1024L * 1024L) {
             return Component.translatable("screen.howtogo.mapdata.size_kb",
@@ -167,29 +134,22 @@ public final class MapDataTransfer {
                 String.format(Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0)));
     }
 
-    /** Where an export goes, and where the screen lists this player's own exports. */
     public static Path exportsDirectory() {
         return WorldFiles.configRoot().resolve(EXPORTS);
     }
 
-    /** Where an archive received from another player goes. */
     public static Path importsDirectory() {
         return WorldFiles.configRoot().resolve(IMPORTS);
     }
 
-    /** Where the automatic pre-import copies go. */
     public static Path backupsDirectory() {
         return WorldFiles.configRoot().resolve(BACKUPS);
     }
 
     /**
      * Packs the current world's map into a new archive in the exports folder.
-     *
-     * <p>The file is named after the world's directory and the moment, which is for the player's
-     * benefit only -- importing ignores it. Everything in memory is written out first, so exporting
-     * right after drawing a road does not omit the road waiting for its autosave delay.
-     *
-     * @throws IOException when no world is loaded, or the archive could not be written
+     * Named after the world and the moment, for the player only; in-memory stores are flushed first.
+     * @throws IOException when no world is loaded or the archive could not be written
      */
     public static WorldArchive.Packed exportNow() throws IOException {
         requireWorld();
@@ -207,9 +167,8 @@ public final class MapDataTransfer {
     }
 
     /**
-     * Reads an archive without changing anything, for the warning shown before an import.
-     *
-     * @throws IOException when the file is not a readable zip, or carries no map data
+     * Reads an archive without changing anything, for the pre-import warning.
+     * @throws IOException when the file is not a readable zip or carries no map data
      */
     public static WorldArchive.Contents inspect(Path archive) throws IOException {
         return WorldArchive.inspect(archive);
@@ -217,19 +176,13 @@ public final class MapDataTransfer {
 
     /**
      * Replaces the current world's map with an archive's contents.
-     *
-     * <p>Validation happens before the backup, so a file that is not a map archive is refused without
-     * writing a backup nobody needs; the current map is saved to the backups folder immediately
-     * before the replacement, so the one operation that cannot be undone is one the player can undo
-     * by importing the backup. Pass {@link #inspect} of the same archive to show the warning first --
-     * this method validates again rather than trusting a value read on another screen.
-     *
-     * @throws IOException when no world is loaded, the archive is unusable, or the replacement failed
+     * Validation happens before the backup, so an unusable file costs nothing; the current map is
+     * backed up immediately before replacement. It validates again rather than trusting inspect().
+     * @throws IOException when no world is loaded, the archive is unusable, or replacement failed
      */
     public static Imported importNow(Path archive) throws IOException {
         requireWorld();
-        // Validated before anything is written: a zip that is not a map must not cost the player a
-        // backup, a flush or a scary confirmation.
+        // Validated before anything is written; a non-map zip must not cost a backup or a flush.
         WorldArchive.inspect(archive);
         flushStores();
         String world = WorldFiles.currentWorldKey();
@@ -250,12 +203,8 @@ public final class MapDataTransfer {
     }
 
     /**
-     * The archives a player could import: the imports folder, this player's exports, and the
-     * automatic backups.
-     *
-     * <p>Backups are listed on purpose. They are the undo for an import -- the archive that was
-     * written over the current map a moment ago -- and an undo that can only be reached by finding a
-     * folder by hand is an undo most players will not find.
+     * The archives a player could import: imports, this player's exports, and automatic backups.
+     * Backups are the undo for an import; hidden in a folder, most players would never find it.
      */
     public static List<Candidate> candidates() {
         List<Candidate> all = new ArrayList<>();
@@ -266,7 +215,7 @@ public final class MapDataTransfer {
         return all;
     }
 
-    /** Opens a folder in the platform's file manager, creating it first so the click always does something. */
+    /** Opens a folder in the platform's file manager, creating it first. */
     public static void openFolder(Path folder) {
         try {
             Files.createDirectories(folder);
@@ -282,35 +231,24 @@ public final class MapDataTransfer {
         return message == null || message.isBlank() ? String.valueOf(failed) : message;
     }
 
-    /**
-     * Writes everything the stores are holding out to disk before it is packed or replaced.
-     *
-     * <p>Both stores debounce their saves, so the last few edits of a session can still be in memory.
-     * Rail names are written as soon as they are changed, so there is nothing to flush for them.
-     */
+    /** Writes the stores' debounced saves out before packing or replacing. */
     private static void flushStores() {
         RoadStore.saveNow();
         TransitLineStore.saveNow();
-        // The details debounce like the roads, and an export taken right after an edit would
-        // otherwise pack a file that does not yet contain the note the player just wrote.
+        // Details debounce like roads; an export right after an edit would otherwise miss the note.
         PlaceDetailStore.saveNow();
     }
 
     /**
-     * Makes the stores read the files that are now on disk.
-     *
-     * <p>The edit session is ended first: it holds a {@code RoadEditor} against the old network, and
-     * while the editor rebinds itself when the network object changes, ending the session is the
-     * honest answer to "the map you were editing was just replaced".
+     * Makes the stores read the files now on disk.
+     * The edit session is ended first: it holds a RoadEditor against the old network.
      */
     private static void reloadStores() {
         RoadEditSession.setActive(false);
         RoadStore.reload();
         RailNameStore.reload();
         TransitLineStore.reload();
-        // The place details are one more file in the directory the import just replaced, and they
-        // travel with the archive; leaving the in-memory copy alone would autosave it back over the
-        // imported one. See PlaceDetailStore.
+        // Details are a file in the replaced directory and travel with the archive.
         PlaceDetailStore.reload();
     }
 
@@ -335,8 +273,7 @@ public final class MapDataTransfer {
                             Files.getLastModifiedTime(file).toMillis(), WorldArchive.peek(file),
                             origin));
                 } catch (IOException unreadable) {
-                    // A file that cannot even be stat'ed is not a candidate; the folder is the
-                    // player's own, and one bad entry must not empty the list.
+                    // A file that cannot be stat'ed is not a candidate; one bad entry must not empty the list.
                 }
             }
         } catch (IOException unreadableFolder) {

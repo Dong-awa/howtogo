@@ -21,55 +21,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The editor behind the road-label setting: every road category's name and colour, in one window.
- *
- * <h2>What a category is, and what a player owns of it</h2>
- * A road's {@link RoadClass} says how it is drawn -- its colour and width; its {@link RoadCategory}
- * is the classification one level below that, the number plate a road wears on the map: a national
- * highway against a provincial one, a trunk street against an alley, a trunk line against a branch.
- * Since categories became the player's to define (see {@link RoadCategoryStore}), this window is
- * where that definition is kept: the set of categories, their names, and the colour of their sign.
- *
- * <p>Each class has exactly one category that is not the player's -- the built-in "not classified"
- * one. It is drawn here because a player has to see what an unclassified road is, but it has no
- * name box, no delete button and no picker: it is the answer every unclassified road gives, so
- * letting it be renamed or removed would leave those roads with nothing to say. Everything else in
- * this window is created, renamed, recoloured and deleted here.
- *
- * <h2>Names are a draft; colours and the set are not</h2>
- * A colour is a press: the swatch opens {@link RoadCategoryColorScreen}, and the picker's Done writes
- * the colour to the store at once, which is why there is no undo for a colour. Adding and deleting a
- * category are also immediate -- the store writes a new definition the moment the button is pressed,
- * and a delete takes the category off the roads that wear it (see {@link #deleteCategory}). A name is
- * text, and text is not a value until the player has finished typing it: every box is read once on
- * the way out. {@code Done} keeps what was typed, {@code Cancel} is the one ending that drops it, and
- * Escape saves like {@code Done} does -- leaving this page is not the same gesture as pressing the
- * button that says the edit is unwanted. A blank box means "the store's own default name", not "no
- * name", because a sign on the map has to print something.
- *
- * <h2>Deleting is a two-click gesture</h2>
- * A category is not a row of a table: deleting one takes it off every road that carries it, and the
- * store cannot bring it back (a deleted id is never reused). So the wide {@code ×} on the row arms
- * itself on the first press and deletes on the second, and the hint under the list says which
- * category is armed and what deletion will do to it. Any other press takes it out of that state, so
- * the confirm can never be a press the player made about something else.
- *
- * <h2>Why the list scrolls by whole bands, not by pixels</h2>
- * The name boxes are real {@link EditBox} widgets, drawn by the game's own widget pass after
- * everything this screen paints. A widget cannot be clipped to a half-visible row: it would either
- * hang over the hairline above the list or be cut off by nothing at all. So the content is laid out
- * as whole bands -- six class headers, one band per category and one "add" band per class -- and the
- * wheel scrolls by band. Every band that is drawn is drawn complete, its box included, and a band
- * outside the window takes its box with it. That is also why the screen never scrolls smoothly.
- *
- * <h2>Why the window is painted from render, not renderBackground</h2>
- * The order this screen needs is: the sheet, then the bands and their swatches, then the boxes on
- * top of their rows. {@code Screen.render} paints the background first and the widget list after it,
- * which is exactly that order -- but only if the sheet is painted before the widget pass, and on
- * 1.20.1 the background is never requested by the game at all. Painting the sheet at the top of
- * {@link #render} and asking for the widget pass at the end gives both eras the same order, which is
- * why {@link #renderBackground} is deliberately empty (it must also stay overridden, or the vanilla
- * blur and wash would be drawn under this screen's own window).
+ * The editor behind the road-label setting: every category's name and colour in one window.
+ * A road's RoadClass decides how it is drawn; its RoadCategory is the classification one level below -- the plate a road wears on the map (national vs provincial highway, trunk street vs alley, trunk line vs branch). Categories are the player's to define; each class has exactly one built-in not-classified category, drawn but not renameable, deletable or pickable.
+ * Names are drafts read on the way out: Done and Escape keep them, Cancel drops them, and a blank box means the store's default name. Colours and the set are immediate -- the picker's Done writes the colour, and add and delete hit the store at once.
+ * Deleting is irreversible, so it takes two presses and the hint explains the armed row.
+ * The list scrolls by whole bands because the name boxes are real widgets that cannot be clipped to a half-visible row.
+ * The window is painted from render, not renderBackground, so the sheet precedes the widget pass on both 1.20.1 and later; renderBackground stays overridden and empty to suppress the vanilla blur and wash.
  */
 final class RoadCategoryScreen extends Screen {
 
@@ -78,80 +35,46 @@ final class RoadCategoryScreen extends Screen {
     private static final int TITLE_HEIGHT = 16;
     private static final int LINE_HEIGHT = 10;
     private static final int BUTTON_HEIGHT = 18;
-    /** A group header's band: a word and the air around it, no control of its own. */
     private static final int HEADER_HEIGHT = 18;
-    /** A category's band: one swatch, one name box and the row's two buttons. */
     private static final int ROW_HEIGHT = 24;
-    /** The "add category" band at the end of a group: one button and the air around it. */
     private static final int ADD_HEIGHT = 20;
     private static final int FIELD_HEIGHT = 16;
-    /** The height the delete and add buttons take inside their bands. */
     private static final int ROW_BUTTON_HEIGHT = 16;
-    /** The swatch's side, as the class comment asks: small enough to be a marker, not a block. */
     private static final int SWATCH = 14;
     private static final int SWATCH_X = 8;
     private static final int FIELD_GAP = 8;
     /**
-     * How wide the delete button is.
-     *
-     * <p>Wide enough to carry the confirming word instead of the cross without the label being cut
-     * to an ellipsis: the armed label is what tells the player the second press is the one that acts,
-     * and a label clipped to "…" tells them nothing.
+     * Wide enough to carry the confirming word instead of the cross without clipping it: the armed label is what tells the player the second press acts.
      */
     private static final int DELETE_WIDTH = 34;
-    /** How wide the "add category" button is; it stops growing with the window. */
     private static final int ADD_WIDTH = 150;
-    /** One band per wheel notch: a list of categories is read, not skimmed. */
     private static final int SCROLL_STEP = 1;
     /**
-     * A category name is drawn on a sign card on the map, so it is a label rather than a sentence;
-     * the same budget the road-name field takes is enough for one and stops a paste of prose.
+     * A name is drawn on a sign card, so it is a label rather than a sentence; the same budget as the road-name field.
      */
     private static final int MAX_NAME_LENGTH = 48;
     /**
-     * The store's own name for a category nobody has named yet.
-     *
-     * <p>Repeated here rather than exposed by the store because it is not a value callers read, it
-     * is the field's hint and the thing a blank box is compared against: {@code RoadCategoryStore}
-     * falls back to this translation whenever a definition's name is blank, so the editor has to
-     * know it to tell "the player typed the default" from "the player typed nothing".
+     * The store's own name for a category nobody has named. Repeated here because it is the field's hint and what a blank box is compared against: the store falls back to it whenever a name is blank.
      */
     private static final String NAME_PLACEHOLDER_KEY = "howtogo.road_category.new";
 
-    /** The screen to go back to: the settings screen this was opened from. */
     private final Screen parent;
 
     /**
-     * Every band of the list in drawing order, rebuilt when the set of categories changes.
-     *
-     * <p>Unlike the old fixed-enum list this one is not built once: adding or deleting a category
-     * changes it, and the offsets it carries are what the scroll, the drawing, the boxes and the row
-     * buttons all read. Rebuilding it and re-running the layout is therefore one gesture -- see
-     * {@link #rebuildWidgets()}, which the game itself uses for the same reason on a resize.
+     * Every band in drawing order, rebuilt when the set of categories changes. Adding or deleting changes it, and the offsets it carries are what the scroll, the drawing, the boxes and the row buttons read.
      */
     private final List<Item> items = new ArrayList<>();
 
-    /** The name box of each player-made category, live from {@link #init()} until the screen closes. */
+    /** The name box of each player-made category, live from init() until the screen closes. */
     private final Map<RoadCategory, EditBox> fields = new LinkedHashMap<>();
 
     /**
-     * Names typed so far, lifted out of the boxes before they are rebuilt.
-     *
-     * <p>{@code init()} runs again when the window is resized and when this screen comes back from
-     * the colour picker, and it rebuilds the widgets with it. A name typed but not yet committed
-     * exists only in the old box, so it has to be carried across by hand or a round trip would
-     * silently restore the stored names under the player's cursor.
+     * Names typed so far, lifted out of the boxes before they are rebuilt. init() runs again on a resize and on the way back from the colour picker, and a typed name exists only in the old box.
      */
     private final Map<RoadCategory, String> drafts = new LinkedHashMap<>();
 
     /**
-     * The buttons that live on the list -- the delete cross of each row and the add button of each
-     * group -- rebuilt whenever the rows move.
-     *
-     * <p>Unlike the footer they cannot be built once: {@link PanelButton} is a fixed rectangle, and
-     * these travel with the bands. They are therefore rebuilt on a scroll notch, on a set change and
-     * on a resize, which is cheap at this list's size and keeps one rule instead of two for where a
-     * control is.
+     * The delete cross of each row and the add button of each group, rebuilt whenever the rows move -- a PanelButton is a fixed rectangle, so it travels with its band.
      */
     private List<PanelButton> rowButtons = List.of();
 
@@ -161,11 +84,7 @@ final class RoadCategoryScreen extends Screen {
     private final UiMotion.Slides swatchHovers = new UiMotion.Slides();
 
     /**
-     * The category whose delete button is armed, or null.
-     *
-     * <p>The two-press confirm is state of the screen rather than of the button because it has to
-     * survive the button being rebuilt: a scroll notch rebuilds every row button, and an armed row
-     * that came back un-armed after the wheel was touched would be worse than no confirm at all.
+     * The category whose delete button is armed, or null. Screen state rather than button state because a scroll notch rebuilds every row button.
      */
     private RoadCategory armedDelete;
 
@@ -182,29 +101,20 @@ final class RoadCategoryScreen extends Screen {
     private int deleteX;
     private int hintY;
     private int contentHeight;
-    /** Whether the window is tall enough for the hint line under the list; see {@link #init()}. */
+    /** Whether the window is tall enough for the hint line under the list; see init(). */
     private boolean hintVisible;
 
     /**
-     * The first band drawn: an index into {@link #items}, not a pixel offset.
-     *
-     * <p>The whole list scrolls by band -- see the class note -- so its position is one integer
-     * naming the band at the top of the window. No smoothing is applied for the same reason: every
-     * band that is drawn has to be whole, and a travelling value would put a band part-way out.
+     * The first band drawn: an index into items, not a pixel offset. No smoothing for the same reason -- every drawn band must be whole.
      */
     private int scroll;
 
     /**
-     * Whether this visit ended with the footer's Cancel.
-     *
-     * <p>Needed because Cancel is not the only way out: Escape goes through {@link #onClose}, which
-     * saves. Without this flag a Cancel pressed a moment before Escape -- while the screen is still
-     * drawing its exit -- would be undone by the close that follows it, and the one ending that
-     * promises to discard the text would quietly keep it.
+     * Whether this visit ended with the footer's Cancel. Escape closes through onClose, which saves; without this flag a Cancel pressed just before Escape would be undone.
      */
     private boolean cancelled;
 
-    /** The opacity the whole window is drawn at this frame; see {@link #render}. */
+    /** The opacity the whole window is drawn at this frame; see render. */
     private float open = 1.0F;
 
     RoadCategoryScreen(Screen parent) {
@@ -221,14 +131,7 @@ final class RoadCategoryScreen extends Screen {
     // ------------------------------------------------------------------ content
 
     /**
-     * Lays the list out in content coordinates: a header per class, its categories, then its add
-     * button.
-     *
-     * <p>The order is the declaration order of the classes, which is the order a player expects to
-     * read a road network in -- highways first, then streets, paths, rail, water and ice. Inside a
-     * group the store answers with the built-in category first and the player-made ones in the order
-     * they were made (see {@link RoadCategoryStore#ofClass}), so a category keeps its place when a
-     * neighbour is deleted or renamed.
+     * Lays the list out: a header per class, its categories, then its add button, in the declaration order players expect to read a network in. The store answers with the built-in category first, then player-made ones in creation order.
      */
     private void rebuildItems() {
         items.clear();
@@ -283,14 +186,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Builds one name box per player-made category, carrying the typed text across a rebuild.
-     *
-     * <p>The seed is the draft if one exists, and the store's name otherwise -- which is what makes a
-     * box show the name the sign will carry rather than an empty field on first open. A cleared box
-     * keeps the store's default, which the hint states.
-     *
-     * <p>The built-in category has no box: it cannot be renamed, so a box would be a control that
-     * silently refuses the edit.
+     * Builds one name box per player-made category; the seed is the draft if any, else the store's name, so the box shows what the sign will carry. The built-in category has no box because it cannot be renamed.
      */
     private void buildFields() {
         liftDrafts();
@@ -312,12 +208,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Reads every live box into the drafts and forgets the boxes.
-     *
-     * <p>Called before a rebuild, so a name typed but not yet committed is not lost when the widgets
-     * are thrown away. A box whose category has since been deleted is skipped rather than carried:
-     * the draft would otherwise outlive the row and come back if the same id were ever handed out
-     * again, which the store promises never happens.
+     * Reads every live box into the drafts and forgets the boxes, so an uncommitted name survives a rebuild. A box whose category was deleted is skipped rather than carried.
      */
     private void liftDrafts() {
         for (Map.Entry<RoadCategory, EditBox> entry : fields.entrySet()) {
@@ -329,11 +220,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Puts every name box where its band is drawn this frame, and hides the ones out of the window.
-     *
-     * <p>The boxes are widgets, so they cannot be clipped to the list; a box for a band that is not
-     * fully inside would be drawn over the hairline above the list or the hint below it. The list
-     * scrolls by whole bands precisely so that this test has an answer.
+     * Puts each name box where its band is drawn this frame and hides the ones out of the window -- widgets cannot be clipped to the list, which is why the list scrolls by whole bands.
      */
     private void layoutFields() {
         if (items.isEmpty()) {
@@ -363,11 +250,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Builds the delete cross of every visible row and the add button of every visible group.
-     *
-     * <p>Rebuilt rather than moved because a {@link PanelButton} is a fixed rectangle; the alternative
-     * would be a second, scroll-aware button class for the same three states. The armed category is
-     * read here, so the button that is armed is built with the confirming label and the danger face.
+     * Builds the delete cross of every visible row and the add button of every group. Rebuilt rather than moved because a PanelButton is a fixed rectangle; the armed category gets the confirming label.
      */
     private void buildRowButtons() {
         List<PanelButton> built = new ArrayList<>();
@@ -404,9 +287,7 @@ final class RoadCategoryScreen extends Screen {
     private void buildFooterButtons(int footerY) {
         int inner = panelW - PAD * 2;
         int half = (inner - GAP) / 2;
-        // Done is the one action that keeps the names, so it takes the accent; Cancel is the way out
-        // that drops them and is an ordinary button. Both are this mod's own buttons rather than the
-        // game's grey widgets, like every other screen here.
+        // Done keeps the names, so it takes the accent; Cancel drops them and is an ordinary button.
         footerButtons = List.of(
                 new PanelButton(panelX + PAD, footerY, half, BUTTON_HEIGHT,
                         Component.translatable("gui.done"), PanelButton.Kind.PRIMARY, this::done),
@@ -432,10 +313,7 @@ final class RoadCategoryScreen extends Screen {
                     return true;
                 }
             }
-            // The row buttons come next, and a snapshot is taken because a press on one of them
-            // rebuilds the list it lives in -- the delete button arms itself and the whole group's
-            // buttons are built again. Iterating the live field would then answer a press with a
-            // button that no longer exists.
+            // Row buttons next; a snapshot is taken because a press on one rebuilds the list it lives in.
             List<PanelButton> rowSnapshot = rowButtons;
             for (PanelButton candidate : rowSnapshot) {
                 if (candidate.click(mouseX, mouseY)) {
@@ -444,24 +322,18 @@ final class RoadCategoryScreen extends Screen {
             }
             RoadCategory swatch = categorySwatchAt(mouseX, mouseY);
             if (swatch != null) {
-                // A press on a colour square is a statement about the colour: the picker opens over
-                // this window, and a press that landed on the swatch is consumed here so it is never
-                // also a press on the box beside it.
+                // A press on a swatch opens the picker; consume it so it is not also a press on the box beside it.
                 armedDelete = null;
                 openPicker(swatch);
                 return true;
             }
-            // Any other press takes the delete confirm out of its armed state. The press itself is
-            // still offered to the widgets below -- the point of the disarm is that the *next*
-            // delete press must be a fresh one, not that clicking a name box should be swallowed.
+            // Any other press disarms the delete confirm; the press is still offered to the widgets below.
             if (armedDelete != null) {
                 armedDelete = null;
                 buildRowButtons();
             }
         } else if (armedDelete != null) {
-            // The right and middle buttons have nothing else to do here, but a press of one of them
-            // is still "any other press": the confirm is about a deliberate second press, and a
-            // gesture that is not one has to take it back.
+            // Right and middle presses are still "any other press" and take the confirm back.
             armedDelete = null;
             buildRowButtons();
         }
@@ -480,16 +352,12 @@ final class RoadCategoryScreen extends Screen {
     *///?} else {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
     //?}
-        // Enter is Done. The boxes are a form, and a player who has just typed a name should not have
-        // to reach for the mouse to keep it; Escape still closes (and saves) through the game's own
-        // handler, which is why neither key is consumed on the way to it.
+        // Enter is Done; Escape still closes and saves through the game's own handler.
         if (keyCode == InputConstants.KEY_RETURN || keyCode == InputConstants.KEY_NUMPADENTER) {
             done();
             return true;
         }
-        // Tab walks the name boxes that are on screen, in the order they are drawn. The game's own
-        // cycle would also reach the boxes scrolled out of the window, and focusing one of those
-        // would take the keyboard to a row the player cannot see.
+        // Tab walks the visible boxes in drawn order, not the game's cycle into scrolled-out ones.
         if (keyCode == InputConstants.KEY_TAB) {
             focusNextField();
             return true;
@@ -502,11 +370,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Moves the focus to the next visible box, wrapping at the end.
-     *
-     * <p>Visible boxes in the list's order, not in the widget list's: the list's order is the order
-     * the bands are drawn in, so Tab reads down the window rather than through the order the boxes
-     * happened to be added in.
+     * Moves the focus to the next visible box, wrapping. List order, not widget order, so Tab reads down the window.
      */
     private void focusNextField() {
         List<EditBox> visible = new ArrayList<>();
@@ -523,8 +387,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     @Override
-    // 1.20.2 split the wheel delta into a horizontal and a vertical component; 1.20.1 passes one.
-    // Every use in this mod reads the vertical one, so only the signature and the super call differ.
+    // 1.20.2 split the wheel delta into horizontal and vertical; only the signature differs.
     //? if >=1.20.2 {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
     //?} else {
@@ -556,12 +419,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Cancel: leave without committing the names.
-     *
-     * <p>The colours and the set of categories are not undone, and cannot be from here: a colour is
-     * written by the picker's Done and a category is created or deleted by the press that asked for
-     * it. The hint says so, and the two buttons therefore differ in exactly one thing -- whether the
-     * text in the boxes is kept.
+     * Cancel leaves without committing the names; colours and the set cannot be undone from here, because each was applied when it was pressed.
      */
     private void cancel() {
         cancelled = true;
@@ -570,9 +428,7 @@ final class RoadCategoryScreen extends Screen {
 
     @Override
     public void onClose() {
-        // Escape is a close, not this screen's Cancel: the names typed so far are what the player
-        // came here to write, so leaving the page keeps them. Cancel is the one ending that discards,
-        // and `cancelled` is what keeps a close racing that press from saving over it.
+        // Escape is a close, not Cancel: it keeps the typed names, and cancelled stops a close racing Cancel.
         if (!cancelled) {
             saveNames();
         }
@@ -580,17 +436,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Writes each box's text to the store; a blank line restores the store's default name.
-     *
-     * <p>A box whose text is exactly what the store already answers with is left alone, unless that
-     * text is the store's placeholder. That is not an optimisation: a box starts out holding the
-     * <em>displayed</em> name, so writing every box back unconditionally would turn "opened this page
-     * and pressed Done" into a store full of literal names frozen in whatever language the page was
-     * opened in. A new category is exactly that case: the store names it with the translated
-     * placeholder when it is created, and writing the placeholder back as a name would stop it
-     * following the language. So the placeholder is written as a blank, which makes the store
-     * translate it again on every read -- and anything else the player actually typed is written as
-     * typed.
+     * Writes each box's text to the store; a blank line restores the default name. Writing every box unconditionally would freeze names in whatever language the page was opened in, so a box holding the placeholder is written as blank.
      */
     private void saveNames() {
         String placeholder = Component.translatable(NAME_PLACEHOLDER_KEY).getString();
@@ -609,20 +455,13 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Makes a category for a class, then re-lays the rows so its band appears.
-     *
-     * <p>The store has already written the new definition by the time this returns (see
-     * {@link RoadCategoryStore#add}); what is left is the window. A re-init is the whole of it --
-     * the bands, the boxes and the buttons all read the set -- and the typed names survive it
-     * because {@link #liftDrafts} reads them out of the boxes before they are thrown away.
+     * Makes a category for a class, then re-lays the rows so its band appears. The store has already written the definition; re-init is the whole of it, and liftDrafts keeps the typed names.
      */
     private void addCategory(RoadClass roadClass) {
         RoadCategory created = RoadCategoryStore.add(roadClass);
         armedDelete = null;
         rebuildWidgets();
-        // A new band at the bottom of a group can be below the window, and a button that appears to
-        // do nothing is worse than one that scrolls the list to answer. The scroll is moved by whole
-        // bands to where the new row fits.
+        // A new band can be below the window; scroll to it rather than leaving the button seemingly inert.
         reveal(created);
     }
 
@@ -637,14 +476,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Deletes a category and puts the roads that wear it back to "not classified".
-     *
-     * <p>The store deletes a definition, not the roads that carry its id -- the network is not its
-     * business (see {@link RoadCategoryStore#remove}). Left alone, those roads would keep a dangling
-     * reference that every reader draws as unclassified but that would come back to life on the day
-     * an id was reused. So they are reclassified here, which is also what the store's own tolerance
-     * says such a reference means, and the network is marked dirty so the cleanup reaches the save
-     * file with the player's next autosave rather than never.
+     * Deletes a category and reclassifies the roads that wear it as not classified. The store deletes definitions, not roads; a dangling id would come back to life if it were ever reused. Marking the network dirty lets the cleanup reach the save with the next autosave.
      */
     private void deleteCategory(RoadCategory category) {
         armedDelete = null;
@@ -671,12 +503,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Opens the colour picker over this window.
-     *
-     * <p>The picker hands its result back here rather than knowing about the store, because a swatch
-     * belongs to one category and only this screen knows which. The colour is written on the
-     * picker's Done and nowhere else, which is what makes Cancel a real answer: a colour is not a
-     * draft on this screen, it is applied or it is not.
+     * Opens the colour picker over this window; it hands its result back here because only this screen knows the category. A colour is written on the picker's Done and nowhere else, so Cancel is a real answer.
      */
     private void openPicker(RoadCategory category) {
         Screens.set(new RoadCategoryColorScreen(this, RoadCategoryStore.color(category),
@@ -684,11 +511,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * Scrolls the list by whole bands until a category's band is inside the window.
-     *
-     * <p>Only ever scrolls downwards and only as far as it must: the largest first-band index that
-     * still shows the whole row is chosen, so the row lands at the bottom of the window with its
-     * group above it rather than alone at the top.
+     * Scrolls by whole bands until a category's band is inside the window, only downwards and only as far as it must, so the row lands at the bottom with its group above it.
      */
     private void reveal(RoadCategory category) {
         int index = indexOf(category);
@@ -729,12 +552,7 @@ final class RoadCategoryScreen extends Screen {
     // ------------------------------------------------------------------ drawing
 
     /**
-     * Nothing, deliberately.
-     *
-     * <p>Overriding it is not optional: the inherited body draws the vanilla blurred menu background,
-     * which would sit under a window that paints its own wash and sheet. Painting nothing here is
-     * also what lets {@link #render} paint the sheet and the rows before the game paints the name
-     * boxes over them -- see the class note.
+     * Nothing, deliberately. The inherited body draws the vanilla blurred background under a window that paints its own; painting nothing also lets render paint the sheet before the widget pass.
      */
     @Override
     //? if >=1.20.2 {
@@ -746,9 +564,7 @@ final class RoadCategoryScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The frame's motion first, before anything is drawn: every colour below is read at the
-        // opacity it answers with, and UiMotion.of is also what pumps a deferred screen swap, so it
-        // is asked exactly once per frame rather than once per band.
+        // Frame motion first: colours below read its opacity, and UiMotion.of pumps a deferred swap once.
         UiMotion.ScreenState motion = UiMotion.of(this);
         open = motion.opacity();
         // The window is displaced as one piece -- wash, sheet, bands, boxes and footer -- so it rises
@@ -756,9 +572,7 @@ final class RoadCategoryScreen extends Screen {
         // pop at the end of this method is the whole of the bookkeeping.
         UiMotion.pushFrame(graphics, 0.0F, motion.offsetY(UiMotion.RISE, UiMotion.FALL));
 
-        // The wash reaches past the window's corners because it is drawn inside the displaced frame:
-        // a scrim cut to the window would leave an undimmed strip along the edge the rise moved away
-        // from. The sheet below moves with the frame and needs no margin.
+        // Wash overruns the corners because it is drawn inside the displaced frame.
         graphics.fill(-UiMotion.SCRIM_MARGIN, -UiMotion.SCRIM_MARGIN,
                 this.width + UiMotion.SCRIM_MARGIN, this.height + UiMotion.SCRIM_MARGIN,
                 UiMotion.fade(UiTheme.dim(), open));
@@ -798,9 +612,7 @@ final class RoadCategoryScreen extends Screen {
         }
         graphics.fill(listX, hintY - 4, listX + listW, hintY - 3,
                 UiMotion.fade(UiTheme.panelEdge(), open));
-        // The hint line doubles as the confirm's explanation: an armed delete is a state the player
-        // put the screen in, so it has to say which row it is about and what the second press will do
-        // -- a colour change of the button alone would be a mode with no words.
+        // The hint doubles as the confirm's explanation: which row is armed and what the second press does.
         Component hint = armedDelete == null
                 ? Component.translatable("screen.howtogo.categories.hint")
                 : Component.translatable("screen.howtogo.categories.delete_hint",
@@ -811,13 +623,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * The list: group headers, the built-in row, the player's categories, and the add button of each
-     * group, inside the viewport.
-     *
-     * <p>Clipped to the list's rectangle even though every band drawn is whole: the clip is the
-     * viewport's own edge, and it is the one place that keeps a band, a swatch or a header word from
-     * reaching the title, the hint or the scrollbar if a later row is taller than this one. It goes
-     * through {@link UiMotion#clip} so the scissor follows the displaced frame.
+     * The list: group headers, the built-in row, the player's categories and each group's add button, inside the viewport. Clipped even though every band is whole -- it keeps a later row from reaching the title or hint, and it goes through UiMotion.clip so the scissor follows the displaced frame.
      */
     private void drawList(GuiGraphics graphics, int mouseX, int mouseY) {
         if (items.isEmpty()) {
@@ -840,9 +646,7 @@ final class RoadCategoryScreen extends Screen {
                         UiMotion.fade(UiTheme.header(), arrived), false);
                 case BUILT_IN -> {
                     drawSwatch(graphics, item, bandY, 0.0F, arrived);
-                    // The built-in category's name is drawn instead of a box: it is translated by
-                    // the store on every read and cannot be renamed, so there is nothing to type
-                    // into -- and the muted rank says "this is fixed" before the player tries.
+                    // The built-in name is drawn instead of a box: it cannot be renamed, and the muted rank says so first.
                     graphics.drawString(font, PlaceText.ellipsis(font,
                                     RoadCategoryStore.displayName(item.category).getString(),
                                     listX + listW - 8 - fieldX),
@@ -862,13 +666,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * One category's colour marker: the one thing on the row a press changes.
-     *
-     * <p>Filled with the store's colour and ringed with the theme's icon grey, because that is what
-     * every list row in this mod already uses for "this is the thing's colour" -- and a category may
-     * be given a near-white colour, which without the ring would vanish into a white sheet. The ring
-     * moves towards the accent under the cursor, because on a player-made row the square is a button
-     * that opens the picker rather than a readout.
+     * One category's colour marker. Filled with the store's colour and ringed with the theme's icon grey, because a near-white colour would otherwise vanish into the sheet; the ring moves to the accent under the cursor, where the square is a button.
      */
     private void drawSwatch(GuiGraphics graphics, Item item, int bandY, float lit, float arrived) {
         int x = listX + SWATCH_X;
@@ -880,10 +678,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * The scrollbar: a track and a thumb, drawn only when the list is taller than the window.
-     *
-     * <p>Wheel-only, like every other list in this mod; a 2 px bar is an indicator here, not a second
-     * input surface, which is why no drag state is kept for it.
+     * The scrollbar: a track and a thumb, drawn only when the list is taller than the window. Wheel-only, so the bar is an indicator and keeps no drag state.
      */
     private void drawScrollbar(GuiGraphics graphics) {
         if (contentHeight <= listH) {
@@ -903,12 +698,7 @@ final class RoadCategoryScreen extends Screen {
     // ----------------------------------------------------------------- geometry
 
     /**
-     * The largest first-band index whose page still fits in the window.
-     *
-     * <p>Derived from the bands rather than from the content height so the last page is the last
-     * bands rather than a fixed number of pixels above the end: the list's last bands are a row with
-     * a name box and a group's add button, and a scroll clamp that allowed a page past them would
-     * leave one of those out of reach at the bottom of the content.
+     * The largest first-band index whose page still fits, derived from the bands so the last page is the last bands rather than a fixed pixel height.
      */
     private int maxScroll() {
         for (int i = 0; i < items.size(); i++) {
@@ -923,7 +713,7 @@ final class RoadCategoryScreen extends Screen {
         return Math.max(0, Math.min(maxScroll(), value));
     }
 
-    /** Whether a band drawn at {@code bandY} is wholly inside the list's viewport. */
+    /** Whether a band drawn at bandY is wholly inside the list's viewport. */
     private boolean bandVisible(int bandY, Item item) {
         return bandY >= listY && bandY + item.height <= listY + listH;
     }
@@ -940,10 +730,7 @@ final class RoadCategoryScreen extends Screen {
     }
 
     /**
-     * The player-made category whose swatch is under the cursor, or null.
-     *
-     * <p>Only player-made rows answer: the built-in category's square is a statement of what an
-     * unclassified road is, not a control, so a press on it does nothing.
+     * The player-made category whose swatch is under the cursor, or null. The built-in square is a readout, not a control.
      */
     private RoadCategory categorySwatchAt(double mouseX, double mouseY) {
         if (!insideList(mouseX, mouseY) || items.isEmpty()) {
@@ -985,7 +772,7 @@ final class RoadCategoryScreen extends Screen {
         /** The header's translated class name; null on every other band. */
         private final Component label;
         private final int height;
-        /** Top edge in content coordinates, filled by {@link #rebuildItems()}. */
+        /** Top edge in content coordinates, filled by rebuildItems(). */
         private int offset;
 
         private Item(Kind kind, RoadClass roadClass, RoadCategory category, Component label,

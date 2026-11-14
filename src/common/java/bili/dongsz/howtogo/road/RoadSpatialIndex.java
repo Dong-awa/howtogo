@@ -4,60 +4,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A grid index over one {@link RoadNetwork}, for "what is nearest this point" questions.
- *
- * <h2>Why this exists</h2>
- * Snapping asked that question by walking every node and then every vertex of every segment, and so
- * did the editor's rail snap. Both run inside a frame, so the cost of pointing at the map grew with
- * the size of the map -- which is the one thing a player is certain to grow. The answer is not a
- * better search but an index: a uniform grid of buckets, so a query reads the few cells around the
- * point instead of the whole network.
- *
- * <h2>Exactness</h2>
- * This is an accelerator, not an approximation. {@link #nearestNode} and {@link #nearestOnSegment}
- * return what the exhaustive walk returned, down to the projected point and the vertex span the point
- * was found on, which is what makes it safe to put under behaviour a player has already learned. Two
- * things buy that:
- *
- * <ul>
- *   <li>the search widens by whole cells and stops only once the <em>nearest possible</em> point in
- *       the next ring is further away than the best candidate already found, so a nearer point can
- *       never be sitting in a ring that was skipped;</li>
- *   <li>the candidate test is the caller's own, including its tie-break, so a point read from the
- *       index is the point the scan would have picked rather than merely an equally near one.</li>
- * </ul>
- *
- * <h2>What the caller supplies</h2>
- * Radii here are in world blocks, but a caller's idea of "near enough" is usually a budget of screen
- * pixels: a road editor wants a catch radius that feels the same at every zoom, and a fixed world
- * radius is unusable zoomed in and useless zoomed out. The conversion belongs to the caller, which is
- * the only side that knows the viewport -- so it passes a world radius in, and {@link Coverage} lets
- * it state the test that radius came from. Keeping that test with the caller is what lets the two
- * axes differ without this class having to know why they would.
+ * A grid index over one RoadNetwork for nearest-point queries.
+ * Exact, not approximate: nearestNode and nearestOnSegment return what an exhaustive walk would,
+ * including the projected point and vertex span. The search widens by whole cells and stops when
+ * the next ring cannot hold anything nearer; the caller's Coverage test and tie-break decide the
+ * winner.
  */
 public final class RoadSpatialIndex {
 
     /**
-     * Cell size in blocks.
-     *
-     * <p>Chosen against the largest snap the editor uses rather than against the network: a catch
-     * radius of a few blocks against a cell of tens of blocks means a query reads one cell and its
-     * immediate neighbours, which is the whole point of the structure. It is also kept from being
-     * small: a segment contributes one entry per cell its bounding box spans, so a continent-sized
-     * straight road would fill the grid with copies of itself if the cell were tiny.
+     * Cell size in blocks. Chosen against the largest snap radius rather than the network: a few-block
+     * radius against tens-of-block cells reads one cell and its neighbours. Not smaller, because a
+     * segment files one entry per cell its bounding box spans.
      */
     private static final double CELL = 24.0;
 
     /**
-     * The most cells one axis pair may ask for, together.
-     *
-     * <p>A cell is one reference to a list, and there are two arrays of them, so four million of them
-     * is about sixty-four megabytes of empty array -- already more than a map should cost, and far more
-     * than the array of lists a network that sparse could ever need. It was unbounded, and the grid's
-     * size is the network's bounding box over the cell size: a network whose roads ended a million
-     * blocks apart -- which a player reaches by clicking twice at the world map's widest zoom -- asked
-     * for 1.7 billion cells and the allocation failed on a path the client runs every frame. Larger
-     * spans overflowed the multiplication instead and asked for an array of negative length.
+     * Most cells one axis pair may ask for. Two arrays of cell references, so four million is already
+     * about 64 MB; unbounded, a network whose ends are a million blocks apart asked for 1.7 billion
+     * cells and overflowed to a negative length.
      */
     private static final long MAX_CELLS = 4_000_000L;
 
@@ -69,13 +34,8 @@ public final class RoadSpatialIndex {
     private final List<Edge>[] edgeCells;
 
     /**
-     * Whether this index is one bucket rather than a grid, because the network was too spread out to
-     * file into cells.
-     *
-     * <p>Every query then reads the whole network, which is what the exhaustive walk this class
-     * replaced did -- slower than a grid and exactly as correct, which is the right way round: a
-     * network nobody can afford to index is still a network whose roads must be found. The alternative
-     * was the failure above, on the frame the player happened to point at the map.
+     * Whether this index is one bucket because the network was too spread out to file into cells.
+     * Queries then read the whole network -- slower than a grid, exactly as correct.
      */
     private final boolean flat;
 
@@ -87,7 +47,7 @@ public final class RoadSpatialIndex {
         private final double az;
         private final double bx;
         private final double bz;
-        /** Where this edge sits in the network's own order; see the tie-break on the queries. */
+        /** Where this edge sits in the network's own order; see the query tie-break. */
         private final long order;
 
         Edge(RoadSegment segment, int index) {
@@ -124,8 +84,7 @@ public final class RoadSpatialIndex {
             minZ = Math.min(minZ, node.z());
             maxZ = Math.max(maxZ, node.z());
         }
-        // A node is not the only thing with a position: a segment's shape is its vertices, and a
-        // network whose roads run between distant nodes has nothing else to bound it by.
+        // Segment vertices are positions too; a network of distant nodes bounds itself by them.
         for (RoadSegment segment : network.segments()) {
             for (int i = 0; i < segment.vertexCount(); i++) {
                 minX = Math.min(minX, segment.x(i));
@@ -138,24 +97,16 @@ public final class RoadSpatialIndex {
             return empty();
         }
 
-        // One cell of padding on each side, so a query just outside the network's bounds still lands
-        // on a real cell rather than being clamped into the outermost one.
+        // One cell of padding each side, so a query just outside the bounds lands on a real cell.
         double originX = minX - CELL;
         double originZ = minZ - CELL;
-        // Measured in long, because the very span this guards against -- one whose cell count does not
-        // fit an int -- is the one that has to be compared rather than wrapped. The padding is added
-        // after the floor and in long, so a coordinate of planetary scale saturates on the cast instead
-        // of wrapping to a negative count that would read as a small grid.
+        // Measured in long: a cell count that does not fit an int must be compared, not wrapped.
         long cellsX = (long) Math.floor((maxX - originX) / CELL) + 2L;
         long cellsZ = (long) Math.floor((maxZ - originZ) / CELL) + 2L;
-        // One bucket for a network too spread out to file; see MAX_CELLS. Each dimension is tested on
-        // its own before the product, so that two saturated spans cannot overflow the long they are
-        // about to be multiplied in; past that gate neither can exceed MAX_CELLS and the product fits
-        // in a long with room to spare.
+        // One bucket for a network too spread out to file; each dimension is tested first so the product
+        // cannot overflow.
         boolean flat = cellsX > MAX_CELLS || cellsZ > MAX_CELLS || cellsX * cellsZ > MAX_CELLS;
-        // Only cast once the product is known to be small: it is then at most MAX_CELLS, which is well
-        // inside int range, and neither dimension has been clamped to a value the index would then have
-        // to disagree with the coordinates about.
+        // Cast only once the product is known to be small.
         int dimX = flat ? 1 : (int) cellsX;
         int dimZ = flat ? 1 : (int) cellsZ;
 
@@ -179,8 +130,7 @@ public final class RoadSpatialIndex {
             if (segment.vertexCount() < 2) {
                 continue;
             }
-            // An edge is filed into every cell its bounding box touches, so the query never has to
-            // reject one it has already found: being in the bucket is the box test.
+            // Filed into every cell its bounding box touches, so being in the bucket is the box test.
             for (int i = 1; i < segment.vertexCount(); i++) {
                 Edge edge = new Edge(segment, i);
                 if (flat) {
@@ -211,9 +161,7 @@ public final class RoadSpatialIndex {
             }
         }
 
-        // Sorted so that a query reads candidates in the network's own order rather than in whatever
-        // order the rings happen to reach them, which is what makes the tie-break below a rule rather
-        // than an accident of which cell the query started in.
+        // Sorted so candidates come in the network's own order, which makes the tie-break a rule.
         for (List<RoadNode> bucket : nodeCells) {
             if (bucket != null) {
                 bucket.sort((left, right) -> Integer.compare(left.id(), right.id()));
@@ -230,14 +178,8 @@ public final class RoadSpatialIndex {
     }
 
     /**
-     * The node nearest to {@code (x, z)} within {@code radius} blocks, or null when there is none.
-     *
-     * <p>A tie is resolved by the index's own order rather than by the order candidates happened to
-     * be met in: of two nodes the same distance away, the one with the lower id wins. The exhaustive
-     * walk this replaced read the network's backing map, so its winner among equally near nodes was
-     * whichever the map happened to yield last -- a behaviour nobody could state and no one could
-     * rely on. The distance is what a caller acts on and it is unchanged; only the choice between
-     * two nodes at exactly the same distance is now a rule.
+     * Node nearest to (x, z) within radius blocks, or null. Exact ties go to the lower node id: a
+     * stated rule rather than the old backing-map iteration order.
      */
     public RoadNode nearestNode(double x, double z, double radius) {
         if (dimX == 0 || !(radius > 0)) {
@@ -251,8 +193,7 @@ public final class RoadSpatialIndex {
             if (d > radiusSq) {
                 continue;
             }
-            // Nearer wins outright; the canonical order is consulted only on an exact tie, and only
-            // as a tie-break -- never to displace a candidate that is actually nearer.
+            // Nearer wins outright; canonical order only breaks exact ties.
             if (best == null || d < bestSq || (d == bestSq && node.id() < best.id())) {
                 best = node;
                 bestSq = d;
@@ -261,18 +202,9 @@ public final class RoadSpatialIndex {
         return best;
     }
 
-    /**
-     * The nodes in the cells a query of this radius has to read.
-     *
-     * <p>One list for the caller to weigh, rather than the weighing happening inside the traversal,
-     * because the two shapes the traversal can take -- widening rings for a query inside the grid, and
-     * the whole grid for one outside it -- would otherwise each carry their own copy of the rule that
-     * decides a winner, and could drift apart.
-     */
+    /** The nodes in the cells a query of this radius has to read. */
     private List<RoadNode> gatherNodes(double x, double z, double radius) {
-        // A flat index holds the whole network in its one bucket, and the grid walk below cannot
-        // reach it: the query's own cell is a number far outside a one-cell grid, so the "outside"
-        // branch would look for cells between there and cell zero and find none. Read the bucket.
+        // Flat index: the grid walk cannot reach its single bucket.
         if (flat) {
             List<RoadNode> only = nodeCells[0];
             return only == null ? new ArrayList<>() : new ArrayList<>(only);
@@ -280,19 +212,14 @@ public final class RoadSpatialIndex {
         List<RoadNode> found = new ArrayList<>();
         int cx = cellOf(x - originX);
         int cz = cellOf(z - originZ);
-        // The cells the radius can reach, clipped to the grid. Expressed as a rectangle as well as
-        // by rings because a query outside the grid cannot be widened to: the rings between here
-        // and the nearest cell are empty space, and with a cursor far off the map there can be
-        // hundreds of thousands of them.
+        // The cells the radius can reach, clipped to the grid. A rectangle as well, because a query outside
+        // the grid cannot widen rings across empty space.
         int step = reachFor(radius);
         boolean insideGrid = cx >= 0 && cx < dimX && cz >= 0 && cz < dimZ;
 
         if (!insideGrid) {
-            // Outside the grid there is no ring to widen from, so the work is the overlap of the
-            // radius with the grid -- which is empty when the radius does not reach it at all. The
-            // whole grid is deliberately not read instead: a far-away cursor with a small reach is
-            // the common case for a layer like the rail one, and answering it by reading every
-            // bucket would make a query whose answer is "nothing" the most expensive kind there is.
+            // Outside the grid: intersect the radius with the grid. Reading every bucket instead would make a
+            // far-away cursor with a small reach the most expensive query.
             int lowX = Math.max(cx - step, 0);
             int highX = Math.min(cx + step, dimX - 1);
             int lowZ = Math.max(cz - step, 0);
@@ -308,12 +235,10 @@ public final class RoadSpatialIndex {
             return found;
         }
 
-        // Ring r reaches at most r cells out, so once it has passed the far corner of the grid there
-        // is nothing left for the later rings to hold. Bounding it here also keeps a radius larger
-        // than the whole network from walking rings of nothing beyond the grid.
+        // Ring r reaches at most r cells out, so past the far corner there is nothing left to read.
         int maxRing = Math.min(step, Math.max(dimX - 1, dimZ - 1));
         for (int ring = 0; ring <= maxRing; ring++) {
-            // Nothing this far out can be within the radius, so the walk is finished.
+            // Nothing this far out can be within the radius.
             double inner = (ring - 1) * CELL;
             if (ring > 1 && inner * inner > radius * radius) {
                 break;
@@ -334,12 +259,7 @@ public final class RoadSpatialIndex {
         return found;
     }
 
-    /**
-     * The nearest point on any segment, or null when none is within {@code radius} blocks.
-     *
-     * <p>{@code Coverage} states the test that decides "within" and which of two hits is nearer, so a
-     * caller measuring in screen pixels can pass its own radius and its own tie-break.
-     */
+    /** Nearest point on any segment, or null. Coverage states the caller's within test and tie-break. */
     public SegmentHit nearestOnSegment(double x, double z, double radius, Coverage coverage) {
         if (dimX == 0 || !(radius > 0)) {
             return null;
@@ -351,8 +271,7 @@ public final class RoadSpatialIndex {
             double ex = edge.bx - edge.ax;
             double ez = edge.bz - edge.az;
             double lenSq = ex * ex + ez * ez;
-            // A zero-length edge is a vertex written twice; it is still a point the cursor can be on,
-            // so it is measured as the point it is.
+            // A zero-length edge is a vertex written twice; it is still a point the cursor can be on.
             double t = lenSq < 1.0E-9 ? 0
                     : Math.max(0, Math.min(1, ((x - edge.ax) * ex + (z - edge.az) * ez) / lenSq));
             double px = edge.ax + ex * t;
@@ -363,15 +282,15 @@ public final class RoadSpatialIndex {
             if (d > radiusSq) {
                 continue;
             }
-            // Nearer wins outright; the canonical order -- earlier segment, then earlier vertex span
-            // -- is consulted only on an exact tie, and never to displace a nearer candidate.
+            // Nearer wins outright; canonical order -- earlier segment, then earlier vertex span -- only breaks
+            // exact ties.
             boolean better = best == null || d < bestDistanceSq
                     || (d == bestDistanceSq && edge.order < best.orderOf());
             if (!better) {
                 continue;
             }
             SegmentHit hit = new SegmentHit(edge.segment, edge.index, t, px, pz, dx, dz, edge.order);
-            // Asked of the finished candidate, so the rule above is stated once rather than per axis.
+            // Asked of the finished candidate, so the rule is stated once rather than per axis.
             if (coverage.within(hit.dx(), hit.dz())) {
                 best = hit;
                 bestDistanceSq = d;
@@ -380,12 +299,7 @@ public final class RoadSpatialIndex {
         return best;
     }
 
-    /**
-     * The edges in the cells a query of this radius has to read.
-     *
-     * <p>The same two shapes as {@link #gatherNodes}: widening rings while the query is inside the
-     * grid, and the whole grid once it is outside it and the radius has therefore reached all of it.
-     */
+    /** The edges in the cells a query of this radius has to read. */
     private List<Edge> gatherEdges(double x, double z, double radius) {
         // See gatherNodes: a flat index has no rings to widen from.
         if (flat) {
@@ -399,7 +313,7 @@ public final class RoadSpatialIndex {
         boolean insideGrid = cx >= 0 && cx < dimX && cz >= 0 && cz < dimZ;
 
         if (!insideGrid) {
-            // The overlap of the radius with the grid, for the reason given on the node search.
+            // Overlap of the radius with the grid, for the reason given on the node search.
             int lowX = Math.max(cx - step, 0);
             int highX = Math.min(cx + step, dimX - 1);
             int lowZ = Math.max(cz - step, 0);
@@ -436,18 +350,14 @@ public final class RoadSpatialIndex {
         return found;
     }
 
-    /** A point found on a segment: which segment, which vertex span, and where along it. */
+    /** A point found on a segment: segment, vertex span, position along it, and coordinates. */
     public record SegmentHit(RoadSegment segment, int edgeIndex, double t, double x, double z,
                              double dx, double dz, long orderOf) {
     }
 
     /**
-     * The caller's notion of "near enough" for a point.
-     *
-     * <p>One question, not two: which of two equally near points is the answer is decided by the
-     * index's own order, so that it cannot depend on the order the grid happened to hand candidates
-     * over. A caller states the radius it is measuring in -- a budget of screen pixels, usually, and
-     * one that may differ per axis -- and nothing about how ties are settled.
+     * The caller's notion of near enough. One question, not two: ties are settled by the index's own
+     * order.
      */
     public interface Coverage {
 
@@ -456,13 +366,8 @@ public final class RoadSpatialIndex {
     }
 
     /**
-     * How many rings are worth reading for a query of this radius, at this cell.
-     *
-     * <p>Enough to cover the radius and then one more, so a candidate sitting just inside the edge of
-     * the last ring is still reached. Not capped at the network's own extent: a radius larger than
-     * the whole network -- which the checks below exercise -- has to be able to reach across it
-     * rather than quietly stopping short, and a caller asking that of a small network is asking to
-     * read all of it, which is what the rings amount to.
+     * Rings worth reading for this radius: enough to cover it plus one, so a candidate just inside the
+     * last ring is still reached.
      */
     private static int reachFor(double radius) {
         return (int) Math.floor(radius / CELL) + 1;

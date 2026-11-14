@@ -10,22 +10,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Aggregates every registered {@link DestinationSource}.
- *
- * <h2>Where the sources come from</h2>
- * The five this mod ships and every source an addon has contributed, as one ordered list owned by
- * {@link DestinationSources}. This class used to hold the list itself, which meant "add a source"
- * meant "edit this file", and meant the picker, the map and the HUD could only ever draw what was
- * compiled in. It is now a view over the registry, and every one of those callers sees the same
- * sources in the same order -- which is what stops a source that one view draws from being a source
- * another view has never heard of.
+ * Aggregates every registered DestinationSource.
+ * A view over DestinationSources, so every caller sees the same sources in the same order.
  */
 public final class Destinations {
 
     private Destinations() {
     }
 
-    /** Every source, built-in and registered, in the picker's order. */
+    /** Every source, built-in and registered, in picker order. */
     public static List<DestinationSource> sources() {
         return DestinationSources.all();
     }
@@ -43,16 +36,7 @@ public final class Destinations {
 
     /**
      * The destinations that are places, in source order.
-     *
-     * <p>The three views that draw the map each mark these, and they must mark the same set: a place
-     * with a marker in one view and none in another is a place the player cannot rely on. Built from
-     * the sources rather than from the raw nodes and stations so that the name on the map is the same
-     * string the list shows, by construction.
-     *
-     * <p>Which sources are places is the source's own answer -- {@link DestinationSource#marksPlaces()}
-     * -- rather than a list of ids kept here. Waypoints are the case that makes the difference: they
-     * are destinations, but they belong to Xaero and carry their own colours, so painting them in the
-     * place colour would contradict the list.
+     * All three map views must mark the same set (DestinationSource#marksPlaces); Xaero waypoints are destinations but not places.
      */
     public static List<Destination> places() {
         List<Destination> result = new ArrayList<>();
@@ -64,25 +48,15 @@ public final class Destinations {
         return result;
     }
 
-    /**
-     * Whether a source's entries are places, and so get a marker wherever a map is drawn.
-     *
-     * <p>For a caller that has a destination's {@code source} id and not the source itself, which is
-     * every caller that iterates a list of destinations.
-     */
+    /** Whether a source's entries are places, for callers that only have a source id. */
     public static boolean isPlaceSource(String sourceId) {
         return DestinationSources.marksPlaces(sourceId);
     }
 
     /**
-     * What to call a station that has no name of its own: where it is.
-     *
-     * <p>The name is the one string the route, the spoken announcement, the HUD and the search all
-     * share, so the fallback is a whole translated sentence rather than a prefix glued on wherever a
-     * source happens to build it. Shared by the two station sources because a station read from Create
-     * and one read from MTR are nameless for the same reason -- the name lives in the other mod's data,
-     * not in the world -- and two independently written fallbacks is exactly how the same nameless
-     * station ends up listed two different ways.
+     * What to call a nameless station: where it is.
+     * The fallback is a whole translated sentence shared by both station sources, so a Create and an
+     * MTR station are not listed two different ways.
      */
     public static String stationName(String name, int x, int z) {
         if (name != null && !name.isBlank()) {
@@ -93,15 +67,9 @@ public final class Destinations {
     }
 
     /**
-     * Whether a destination stands for a place this mod can hold details about.
-     *
-     * <p>Not the same question as "is it a destination": a point picked on the map is a destination
-     * for the next few minutes and nothing else -- its source is {@code "map"}, no source registered
-     * it, and there is no record to show or write. Every real place comes from a source: the mod's
-     * own nodes, another mod's stations, Xaero's waypoints, a generated structure, or an addon.
-     *
-     * <p>Asked by the details panel before it opens, so the picker's pin does not draw a panel with
-     * an edit button that could only fail.
+     * Whether a destination is a place this mod can hold details about.
+     * A map-picked point is a destination but comes from no source and has no record, so it is not a
+     * place. Asked before the details panel opens.
      */
     public static boolean isPlace(Destination destination) {
         if (destination == null || destination.source() == null
@@ -113,13 +81,9 @@ public final class Destinations {
     }
 
     /**
-     * What the reader is told a place's source is: {@code 手动}, {@code MTR}, an addon's own name.
-     *
-     * <p>Read-only in the interface and derived here rather than stored: the source of a place is a
-     * property of where it came from, not something the player may type, and a stored copy would go
-     * stale the moment another mod renamed itself. The mod's own five ids get keys of their own; an
-     * addon is asked for its display name, and one that cannot be resolved -- an uninstalled mod's
-     * record, an id nobody registered -- is shown as its own id, which is at least the truth.
+     * What the reader is told a place's source is.
+     * Derived, not stored: the source is where the place came from and a stored copy would go stale.
+     * Built-in ids get keys; an addon is asked its display name; an unknown id shows as itself.
      */
     public static String sourceLabel(String sourceId) {
         if (sourceId == null || sourceId.isBlank()) {
@@ -139,7 +103,7 @@ public final class Destinations {
         return sourceId;
     }
 
-    /** The short form of {@link #sourceLabel}, for the badge on a row or a marker. */
+    /** The short form of sourceLabel, for a badge on a row or marker. */
     public static String sourceShortLabel(String sourceId) {
         if (sourceId == null || sourceId.isBlank()) {
             return "";
@@ -151,11 +115,10 @@ public final class Destinations {
         return sourceLabel(sourceId);
     }
 
-    /** A translation, or the given fallback when the key has nothing behind it. */
+    /** A translation, or the fallback when the key has nothing behind it. */
     private static String translated(String key, String fallback) {
         String text = Component.translatable(key).getString();
-        // Component.translatable falls back to the key itself, and a dotted key drawn where a name
-        // belongs is worse than the honest id.
+        // Component.translatable falls back to the key, and a dotted key is worse than the honest id.
         return text.equals(key) ? fallback : text;
     }
 }

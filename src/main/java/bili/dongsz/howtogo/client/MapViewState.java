@@ -5,33 +5,16 @@ import org.joml.Matrix4f;
 import xaero.map.element.render.ElementRenderInfo;
 
 /**
- * Snapshot of the world map's viewport, captured during the render pass.
- *
- * <p>Mouse and keyboard handlers run outside the render pass and have no access to Xaero's camera,
- * so the projection inputs are cached here each frame.
- *
- * <h2>The exact mapping</h2>
- * Xaero places an element at pose-local {@code (world - camera) * info.scale} -- that is what
- * {@code frac} plus the rounded translate add up to -- and the pose then maps pose-local to screen
- * with its own {@code m00}/{@code m11} scale and {@code m30}/{@code m31} translation. So:
- * <pre>
- *   screen = (world - camera) * info.scale * poseScale + poseTranslate
- * </pre>
- * An earlier version of this class dropped the {@code poseScale} term. That made labels drift as
- * the map was panned, and silently shrank every snap radius by the same factor (the pose scale is
- * around 0.25), which is why snapping felt unreliable no matter how the radii were tuned.
+ * Snapshot of the world map's viewport, captured during the render pass: mouse and key handlers run outside it and cannot reach Xaero's camera.
+ * screen = (world - camera) * info.scale * poseScale + poseTranslate. Dropping poseScale made labels drift while panning and shrank every snap radius by the same factor (pose scale is about 0.25).
  */
 public final class MapViewState {
 
-    /** Cached values are considered stale after this long without a render. */
+    /** Cached values are stale after this long without a render. */
     private static final long STALE_MILLIS = 1000L;
 
     /**
-     * How recently a render must have happened for the map to count as being on screen right now.
-     *
-     * <p>Tighter than {@link #STALE_MILLIS} on purpose: that one asks whether cached geometry is still
-     * safe to draw with, this one is used as evidence about what the player is looking at, where being
-     * a second out of date is not good enough.
+     * How recently a render must have happened for the map to count as on screen right now. Tighter than STALE_MILLIS on purpose: that one asks whether geometry is safe to draw, this one is evidence about what the player sees.
      */
     private static final long FRESH_MILLIS = 400L;
 
@@ -71,10 +54,7 @@ public final class MapViewState {
     }
 
     /**
-     * Whether the map was drawing a moment ago, which is evidence that it is on screen now.
-     *
-     * <p>Only this class's own update path feeds this, and that path runs from the map's render pass,
-     * so a fresh reading cannot come from anywhere but the map being drawn.
+     * Whether the map was drawing a moment ago, so it is on screen now. Only the map's own render pass feeds this.
      */
     public static boolean isFresh() {
         return isValid() && System.currentTimeMillis() - updatedAt < FRESH_MILLIS;
@@ -100,12 +80,10 @@ public final class MapViewState {
         return screenH;
     }
 
-    /** Screen pixels per block along X. */
     public static double pixelsPerBlockX() {
         return scale * poseScaleX;
     }
 
-    /** Screen pixels per block along Z. */
     public static double pixelsPerBlockZ() {
         return scale * poseScaleY;
     }

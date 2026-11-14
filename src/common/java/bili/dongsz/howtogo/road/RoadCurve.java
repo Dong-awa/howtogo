@@ -5,65 +5,19 @@ import java.util.List;
 
 /**
  * A smoothed centreline for drawing a road, stored beside the block vertices.
- *
- * <h2>Why a road needs a second shape</h2>
- * The vertices a road is stored with are the blocks the player clicked or the ones another mod
- * sampled: a staircase of block centres. That is the right data to route on -- a junction is a node
- * and a node is a block position -- but it is the wrong data to look at. Drawn as it is, a bend is a
- * series of corners, and a line read out of another mod can be hundreds of one-block steps, which
- * reads as a jagged, broken road however thick it is drawn.
- *
- * <p>So a road may carry this record as well: a smoothed list of world points, worked out once when
- * the road is built, that the views draw instead of the staircase. It is <b>display only</b>. Routing,
- * lengths, hit tests and the stored block vertices all stay on the integer geometry, so a curve can
- * never make two roads connect that the data says do not, and no route is measured along it. The
- * record is persisted with the road (see {@code RoadStorage}) and absent from every road that never
- * had one, which keeps every existing file byte-compatible.
- *
- * <h2>How the smoothing keeps the road's shape</h2>
- * <ol>
- *   <li><b>Simplify with the block grid in mind.</b> A staircase is not a shape; it is the shadow of a
- *       diagonal on a grid. Every point of it is within {@link #GRID_TOLERANCE} of the diagonal it
- *       represents, so a Douglas-Peucker pass at that tolerance drops the whole staircase and keeps a
- *       single straight edge -- while every corner a road really has is far further from its chord
- *       than the tolerance and is kept. This is what stops the old failure: a staircase that survived
- *       simplification and then had every one of its one-block corners rounded into a ripple.</li>
- *   <li><b>Round the corners it kept, at a radius that is a size, not a fraction.</b> Corner cutting
- *       is done with a fixed world-space radius ({@link #CORNER_RADIUS} blocks) rather than a fraction
- *       of the adjacent edge. A fraction is what made a long straight road swing several blocks wide
- *       at a right-angled bend: the quarter of a two-hundred-block edge is fifty blocks. The radius is
- *       capped by half of each adjacent edge, so two corners close together still meet.</li>
- *   <li><b>Only round real corners.</b> A turn below {@link #CORNER_MIN_DEGREES} is part of a gentle
- *       curve and is left exactly as simplified; a switchback past {@link #CORNER_MAX_DEGREES} is left
- *       sharp, because the fillet there would cut blocks off the bend and turn a tight elbow into a
- *       shortcut. The stroke's own round join closes the notch at such a turn.</li>
- * </ol>
- * The two steps are deliberately in that order: rounding before simplifying would let a rounded
- * corner be mistaken for the railway's own curve and keep it, which is exactly the ripple this class
- * exists to remove.
- *
- * <h2>Precision</h2>
- * Machine-read geometry is often already a smooth polyline in world coordinates -- Create rasterises
- * its beziers, MTR samples its curves -- and rounding that to whole blocks before smoothing is what
- * used to add a half-block wobble to every diagonal and every bend. {@link #precise} therefore takes
- * those doubles as they are and only drops the points a display does not need; {@link #of} is for the
- * block-sampled case, where the staircase <i>is</i> the input.
+ * Display only. The stored vertices are a block staircase -- right for routing, wrong to look at -- so routing, lengths and hit tests stay on the integer geometry: a curve can never connect two roads the data says are separate, and no route is measured along it. It is persisted with the road and absent from roads that never had one, keeping existing files byte-compatible.
+ * Smoothing: Douglas-Peucker at GRID_TOLERANCE drops a whole staircase, since every point of it lies within the tolerance of the diagonal, while a real corner is far from its chord. Kept corners are then rounded at a fixed world-space radius, capped by half of each adjacent edge; a fraction of an edge would make a long straight road swing wide at a right angle. Turns below CORNER_MIN_DEGREES belong to a gentle curve and stay as simplified; switchbacks past CORNER_MAX_DEGREES stay sharp, since a fillet would cut blocks off the bend. Rounding runs after simplifying, never before -- a rounded corner would otherwise be mistaken for real geometry and kept, which is the ripple this removes.
+ * precise() takes machine-read geometry (Create bezier rasterisation, MTR track samples) as doubles and avoids the half-block wobble that rounding to blocks adds; of() is for block-sampled input.
  */
 public record RoadCurve(double[] xs, double[] zs) {
 
     /**
-     * How far the simplified line may differ from a block-sampled line, in blocks.
-     *
-     * <p>Large enough to swallow the whole of a one-block staircase: a 45-degree block staircase is at
-     * most half a diagonal -- about 0.71 blocks -- from the line it represents, and the grid wobble of
-     * a road laid out by a pathfinder is of that order. Every real corner is metres away from its
-     * chord, so the tolerance cannot mistake one for grid noise.
+     * How far the simplified line may differ from a block-sampled one, in blocks. Large enough to swallow a one-block staircase (at most about 0.71 blocks off the diagonal), while every real corner is metres from its chord.
      */
     public static final double GRID_TOLERANCE = 0.9;
 
     /**
-     * The same for geometry that is already in world coordinates: only points that add nothing are
-     * dropped, so the drawn line keeps the source's own curve.
+     * The same for geometry already in world coordinates: only points that add nothing are dropped, so the drawn line keeps the source's own curve.
      */
     public static final double PRECISE_TOLERANCE = 0.2;
 
@@ -74,10 +28,7 @@ public record RoadCurve(double[] xs, double[] zs) {
     private static final double CORNER_MIN_DEGREES = 8.0;
 
     /**
-     * A turn past this is a switchback, not a corner a road is driven round. A fillet at such an angle
-     * would cut several blocks off the bend -- more than the width of the road it is drawn on -- so
-     * those turns are left sharp for the stroke's own round join, which closes the notch without
-     * pretending the road takes a wider line than it does.
+     * A turn past this is a switchback, not a corner a road is driven round: a fillet would cut several blocks off the bend, more than the road's width, so it is left sharp for the stroke's round join.
      */
     private static final double CORNER_MAX_DEGREES = 100.0;
 
@@ -87,7 +38,7 @@ public record RoadCurve(double[] xs, double[] zs) {
     /** Hard cap on a curve's points, so a pathological polyline cannot grow without bound. */
     private static final int MAX_POINTS = 4096;
 
-    /** Coordinates are rounded to this many decimals, which is far below anything a map can show. */
+    /** Coordinates are rounded to this many decimals, far below anything a map can show. */
     private static final double COORDINATE_SCALE = 1000.0;
 
     public RoadCurve {
@@ -111,7 +62,7 @@ public record RoadCurve(double[] xs, double[] zs) {
         return zs[index];
     }
 
-    /** Length of the smoothed line in blocks. For a view that wants to space something along it. */
+    /** Length of the smoothed line in blocks, for a view that spaces something along it. */
     public double length() {
         double length = 0;
         for (int i = 1; i < xs.length; i++) {
@@ -120,12 +71,7 @@ public record RoadCurve(double[] xs, double[] zs) {
         return length;
     }
 
-    /**
-     * The smoothed display line for a block-sampled segment, or null when the segment is too short.
-     *
-     * <p>Used by every reader of another mod's blocks: the vertices are what the world contains, and
-     * the staircase they form is what {@link #GRID_TOLERANCE} removes.
-     */
+    /** The smoothed display line for a block-sampled segment, or null when the segment is too short. */
     public static RoadCurve of(RoadSegment segment) {
         if (segment == null || segment.vertexCount() < 2) {
             return null;
@@ -138,25 +84,16 @@ public record RoadCurve(double[] xs, double[] zs) {
     }
 
     /**
-     * The smoothed display line for geometry already sampled in world coordinates.
-     *
-     * <p>Create's {@code BezierConnection.rasterise()} and MTR's own track vertices are double
-     * precision; this keeps that precision instead of rounding to blocks first. Callers pin the first
-     * and last points themselves (they are the segment's own ends) so a curve still ends where the
-     * network says the road ends.
+     * The smoothed display line for geometry already sampled in world coordinates, keeping the source's double precision. Callers pin the first and last points themselves, so a curve still ends where the network says the road ends.
      */
     public static RoadCurve precise(List<double[]> points) {
         return smooth(points, PRECISE_TOLERANCE);
     }
 
     /**
-     * A smoothed line through the given world points.
-     *
-     * <p>Simplify at the given tolerance, then round the corners that are left. The result keeps the
-     * first and last point exactly, which is what makes two curves that name the same junction meet at
-     * it.
-     *
-     * @param tolerance how far, in blocks, the simplified line may differ; zero keeps every point
+     * A smoothed line through the given world points: simplify at the tolerance, then round the corners left.
+     * The first and last point are kept exactly, so two curves naming the same junction meet there.
+     * @param tolerance how far the simplified line may differ, in blocks; zero keeps every point
      * @return the curve, or null when there are fewer than two distinct points
      */
     public static RoadCurve smooth(List<double[]> points, double tolerance) {
@@ -275,13 +212,7 @@ public record RoadCurve(double[] xs, double[] zs) {
     }
 
     /**
-     * Replaces every real corner with a circular arc of {@link #CORNER_RADIUS}, leaving gentle turns
-     * and hairpins alone.
-     *
-     * <p>The arc is written as a quadratic Bezier between the two points where it touches the two
-     * edges, with the corner as its control point. That is the same curve a tangent circle gives to
-     * within a thousandth of the radius at these sizes, and it meets each straight edge with the same
-     * direction, so a rounded corner is continuous with the road on both sides.
+     * Replaces every real corner with a circular arc of CORNER_RADIUS, leaving gentle turns and hairpins alone. Written as a quadratic Bezier between the two touch points with the corner as control point: the same curve a tangent circle gives at these sizes, and it meets each edge with the same direction.
      */
     private static List<double[]> roundCorners(List<double[]> points) {
         List<double[]> out = new ArrayList<>(points.size() * 2);
@@ -311,8 +242,7 @@ public record RoadCurve(double[] xs, double[] zs) {
                 addPoint(out, here);
                 continue;
             }
-            // Where a circle of the chosen radius touches each edge. tan(turn/2) is safe here: the
-            // hairpin case that would make it huge was left alone above.
+            // Where a circle of the chosen radius touches each edge. tan(turn/2) is safe here: the hairpin case that would make it huge was left alone above.
             double cut = Math.min(Math.min(inLength * 0.5, outLength * 0.5),
                     CORNER_RADIUS * Math.tan(Math.toRadians(turn) * 0.5));
             if (cut < 1.0E-6) {
@@ -337,7 +267,7 @@ public record RoadCurve(double[] xs, double[] zs) {
         return out;
     }
 
-    /** Adds a point unless it repeats the previous one; keeps rounding from writing a duplicate. */
+    /** Adds a point unless it repeats the previous one, so rounding writes no duplicates. */
     private static void addPoint(List<double[]> points, double[] point) {
         if (!points.isEmpty()) {
             double[] last = points.get(points.size() - 1);

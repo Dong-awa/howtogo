@@ -9,40 +9,9 @@ import java.util.function.Predicate;
 /**
  * Which roads a plan runs on, when the answer depends on the line.
  *
- * <h2>The problem this solves</h2>
- * A network handed to the planner may have machine-read marks merged into it -- the rails a player did
- * not draw, read out of another mod. Whether a particular line should be planned over those marks is a
- * question about that line, and the planner cannot answer it: the rails belong to the world rather than
- * to the line, one layer serves every line of a kind, and the route package knows nothing about the mod
- * the marks came from.
- *
- * <p>Two networks and a predicate is therefore what the planner is given: the one with the marks, the
- * same without them, and which lines want them. A line that does not is planned on the network without,
- * so switching its marks off really does take them out of its own ride -- rather than merely declining
- * to add a layer that some other line has already added, which would be a switch that does nothing.
- *
- * <p>The pair are the same object when nothing wants the difference, so a plan over lines that all
- * agree never pays for a second copy of the world.
- *
- * <h2>And the line's own track, which is the third answer</h2>
- * The layer above is shared: every switched-on line of a kind rides the same rails, so a ride is planned
- * over all of them at once. That is the only answer there was while nothing said which rails belonged to
- * which line -- but a reading that names them does, and the mod keeps each line's own track for drawing
- * it (see {@code MtrTransit.trackOf}). Planning over that instead is the same ride and two things more:
- *
- * <ul>
- *   <li><b>it is the line's own track</b>, so a ride cannot take a stretch of another line's railway
- *       because it happened to be shorter;</li>
- *   <li><b>it is affordable</b>. A ride is planned per pair of neighbouring stops, and a whole railway
- *       read from a server is hundreds of lines and thousands of stops. Searching a layer holding every
- *       line's track costs the size of that layer per plan; searching one line's own track costs the
- *       size of that line. This is the difference between planning a journey over a railway in a few
- *       milliseconds and in several seconds, which is what happened when the whole network first
- *       arrived and every ride was planned over all of it.</li>
- * </ul>
- *
- * <p>Asked only of lines that want the marks: a line whose marks are switched off is planned on the
- * plain network, and its own track is part of the marks it has declined.
+ * The planner gets two networks -- with and without machine-read marks merged in -- plus the set of lines that want the marks, so switching a line's marks off really removes them from its ride. The pair is the same object when no line needs the difference.
+ * For a line with a known own track, that track is planned over instead of the shared layer: the ride cannot take another line's railway, and search cost scales with one line rather than with every line on the server.
+ * Asked only of lines that want the marks; a line's own track counts as part of them.
  */
 public final class RideRoads {
 
@@ -65,9 +34,9 @@ public final class RideRoads {
     }
 
     /**
-     * @param marked    the network with the machine-read marks merged in
-     * @param plain     the same without them; may be the same object when no line needs the difference
-     * @param usesMarks which lines want the marks
+     * marked: the network with the machine-read marks merged in.
+     * plain: the same without them; may be the marked object when no line needs the difference.
+     * usesMarks: which lines want the marks.
      */
     public static RideRoads of(RoadNetwork marked, RoadNetwork plain,
                                Predicate<TransitLine> usesMarks) {
@@ -75,11 +44,7 @@ public final class RideRoads {
     }
 
     /**
-     * The same, for a caller that also knows what each line runs along.
-     *
-     * @param ownTrack the track one line runs along, or null for a line whose track is not known -- the
-     *                 shared layer is used for those, which is what every line was planned over before
-     *                 a reading could name them
+     * ownTrack: the track one line runs along, or null when unknown -- the shared layer is used for those, as before a reading could name tracks.
      */
     public static RideRoads of(RoadNetwork marked, RoadNetwork plain,
                                Predicate<TransitLine> usesMarks,
@@ -90,10 +55,7 @@ public final class RideRoads {
     /**
      * The roads a ride along this line may use.
      *
-     * <p>Public because it is the answer two callers have to agree on rather than a detail of one: the
-     * planner rides the network this returns, and the line editor judges the same line by it. A screen
-     * that built its own network for the question instead marked stops red against rails the planner
-     * would never have used, which is the whole failure this accessor closes.
+     * Public so the planner and the line editor judge a line by the same network; an editor building its own marked stops red against rails the planner would never use.
      */
     public RoadNetwork forLine(TransitLine line) {
         if (line == null || !usesMarks.test(line)) {
@@ -104,16 +66,9 @@ public final class RideRoads {
     }
 
     /**
-     * The roads the walking legs use, which is the pair without the marks.
+     * The roads the walking legs use: the pair without the marks.
      *
-     * <p>A walk cannot use a rail or a waterway, so both networks answer it identically: the marks are
-     * filtered out by the mode before they are ever looked at. What is not identical is what they cost.
-     * Handing the router the network with the marks in it makes it copy that network before it can
-     * answer the first walk -- and a whole-network reading's marks are the whole railway, so the walking
-     * legs of a journey are planned over a copy of the railway they cannot walk on. Measured, that was
-     * most of the frozen second a short journey still cost: a plan that answered in a hundred
-     * milliseconds answered in a quarter of a second, for the same legs, because of the network the
-     * walking side was given and never used.
+     * A walk cannot use a rail or waterway, so both networks answer identically. Handing the router the marked network makes it copy the whole railway per walk -- measured, most of the frozen second a short journey still cost.
      */
     RoadNetwork forWalks() {
         return plain;

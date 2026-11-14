@@ -101,54 +101,34 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 /**
  * The NeoForge end of the MTR sync: payload registration and the two sends.
  *
- * <h2>Why there are no init calls here</h2>
- * NeoForge hands the mod bus to a constructed class, and Stonecutter's comment-based conditions do not
- * nest -- a version condition inside the loader fence in {@code HowToGo} is not available. So the
- * registration is attached to the buses by annotation, which FML scans for on its own, on both
- * physical sides: the mod-bus listener registers the payload types, the game-bus listener drives the
- * server's tick. Nothing of this is lost on a dedicated server, where {@code HowToGo} is never
- * constructed.
- *
- * <h2>Why the receivers hop threads</h2>
- * A payload handler runs on the network thread; the client store and the server manager only accept
- * their own thread's calls, so each handler hands its work over with {@code enqueueWork}. A payload
- * arriving off-thread is the classic source of a mod that works in single player and corrupts a
- * client on a server.
+ * Registration is attached by annotation because NeoForge hands the mod bus to a constructed class and Stonecutter conditions do not nest, so no init calls exist; FML scans the annotations on both physical sides, including a dedicated server where HowToGo is never constructed.
+ * Payload handlers run on the network thread while the client store and server manager accept their own thread only, so each handler hands work over with enqueueWork.
  */
 public final class MtrNet {
 
-    /** Version of the payload negotiation this mod speaks; bumped with a wire change. */
     private static final String VERSION = "1";
 
     private MtrNet() {
     }
 
-    /** Fabric-shaped entry point, kept so {@link MtrSync} compiles on every loader. */
     public static void registerClient() {
-        // The mod-bus subscriber below does this on this loader.
     }
 
-    /** Fabric-shaped entry point, kept so {@link MtrSync} compiles on every loader. */
+    /** Kept so MtrSync compiles on every loader. */
     public static void registerServer() {
-        // The mod-bus subscriber below does this on this loader.
     }
 
-    /** Says hello, or nothing when there is no server to say it to. */
     public static void sendHello() {
         try {
             PacketDistributor.sendToServer(new MtrPayload.Hello(MtrWire.hello()));
         } catch (RuntimeException notConnected) {
-            // Asked from the client tick while a world may be closing; nothing to say and nothing to do.
         }
     }
 
     /**
      * Sends one part; the caller has already decided this player said hello.
      *
-     * <p>Returns whether it was sent, so the caller can keep the frame for a connection that is not
-     * ready yet. The channel is asked first because NeoForge's own send path assumes it was: sending a
-     * payload the other end never registered throws rather than dropping it, and this runs on the
-     * server tick, where an uncaught throw is a crash report.
+     * Returns whether it was sent so the caller can keep the frame for a connection not ready yet. The channel is checked first because NeoForge's send path throws on a payload the other end never registered, and this runs on the server tick.
      */
     public static boolean sendSnapshotPart(ServerPlayer player, byte[] frame) {
         if (player.connection == null || !player.connection.hasChannel(MtrPayload.SnapshotPart.TYPE)) {
@@ -178,10 +158,8 @@ public final class MtrNet {
 
         @SubscribeEvent
         public static void onRegisterPayloads(RegisterPayloadHandlersEvent event) {
-            // Optional: the channel may be absent on the other side. A vanilla client must still be
-            // able to join a server that has this mod, and a client with this mod must still be able
-            // to join a server without it; the hello handshake is what decides whether anything is
-            // ever sent.
+            // Optional: the channel may be absent on the other side. A vanilla client must still join a server
+            // with this mod, and vice versa; the hello handshake decides whether anything is sent.
             PayloadRegistrar registrar = event.registrar(VERSION).optional();
             IPayloadHandler<MtrPayload.SnapshotPart> snapshot = MtrNet::onSnapshotPart;
             IPayloadHandler<MtrPayload.Hello> hello = MtrNet::onHello;

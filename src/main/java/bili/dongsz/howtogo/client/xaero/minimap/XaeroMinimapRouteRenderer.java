@@ -18,41 +18,12 @@ import xaero.hud.minimap.element.render.MinimapElementRenderer;
 import java.util.List;
 
 /**
- * Draws the navigation overlay onto Xaero's Minimap: the road network, the transit line strokes,
- * the route, and the trip's markers.
+ * Draws the navigation overlay onto Xaero's Minimap: road network, transit strokes, route and markers.
  *
- * <p>No transit line name plates are drawn here. A line's name is a fixed-size capsule, and a
- * minimap shows a few dozen blocks across at most -- a plate that fits at all is a large share of
- * the map it is naming, which is what the player reported after seeing it in game. The two big maps
- * keep their plates, where there is room for them; this overlay draws the lines themselves.
- *
- * <h2>What the pipeline gives, and what it does not</h2>
- * Xaero calls this renderer once per element, with the element already projected: the pose has been
- * pushed and translated so that pose-local {@code (0, 0)} is the element's screen position. The
- * handler adds no scale and no rotation of its own -- measured in its
- * {@code transformAndRenderForRenderer}: a {@code pushPose}, the {@code translatePosition} call and
- * a {@code popPose} around the renderer -- but it hands over no zoom, no rotation and no minimap
- * origin either, so a renderer cannot place a point that is not its own anchor.
- *
- * <p>That is why the frame's transform is measured rather than read: the provider emits probe
- * elements before the layers, the renderer records what Xaero's projection did to each of them, and
- * {@link XaeroMinimapProjection} turns the samples into the world-to-local matrix that the polyline
- * emitters take. This class's job is then simple: feed the transform and the layer to
- * {@link HudDraw}, and clip everything to the minimap rectangle the edge probes measured.
- *
- * <h2>Element-local, not element-relative</h2>
- * Every layer element is anchored at the frame anchor (the player's position at the start of the
- * frame), so the local coordinate system the emitters are given is "blocks from the anchor", with
- * one matrix for all layers. A marker is the exception: it is anchored at its own world position,
- * which is the only place a fixed-size dot needs to be.
- *
- * <h2>The screen-pixel sizes</h2>
- * The pose's own local-to-screen scale {@code s} is measured per frame; every size below that the
- * panel would call a pixel is divided by it before being handed to an emitter. The mapping panel
- * sizes are kept exactly -- road thickness 1.0 px, route thickness 2.6 px, the panel's marker radii
- * -- so the minimap and the panel draw the same map at the same weights. The road alpha is the
- * panel's {@code 0x9A}, the route and markers are solid, and every colour comes from
- * {@link bili.dongsz.howtogo.client.UiTheme} or from the road data itself.
+ * The pipeline projects each element before calling the renderer and gives no zoom, rotation or minimap origin, so the frame transform is measured: the provider emits probes first, the renderer records what Xaero's projection did to each, and XaeroMinimapProjection turns the samples into the world-to-local matrix the emitters take. Everything is clipped to the minimap rectangle the edge probes measured.
+ * Layer elements are all anchored at the frame anchor (the player's position at frame start) so one matrix serves every layer; a marker is the exception, anchored at its own world position.
+ * Pose local-to-screen scale is measured per frame and every pixel size is divided by it, so the minimap and the panel draw the same weights: road 1.0 px, route 2.6 px, the panel's marker radii and its 0x9A road alpha. Colours come from UiTheme or the road data.
+ * No transit line name plates here: a fixed-size capsule would cover much of a map a few dozen blocks wide, so the larger maps keep their plates and this one draws the line.
  */
 public final class XaeroMinimapRouteRenderer
         extends MinimapElementRenderer<XaeroMinimapRouteElement, RoadRenderContext> {
@@ -60,33 +31,23 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Where this renderer sits among the minimap's element renderers.
      *
-     * <p>Xaero sorts renderers by this value and gives the elements of later renderers a slightly
-     * larger depth, so a larger order draws on top. Xaero's own waypoint renderer uses 100; the
-     * roads and the route are above it deliberately -- a waypoint that happens to sit on the road
-     * the player is following must not hide the line they are following, and the destination marker
-     * must stay visible over both.
+     * Xaero sorts renderers by this value and gives later ones slightly larger depth; Xaero's waypoint renderer uses 100, and roads plus route sit above it so a waypoint cannot hide the line the player follows.
      */
     private static final int ORDER = 150;
 
-    /** Half the width of a road stroke, in GUI pixels; the panel draws 1.0 px wide. */
     private static final double ROAD_HALF_WIDTH_PX = 0.5;
 
-    /** Half the width of the route stroke, in GUI pixels; the panel draws 2.6 px wide. */
     private static final double ROUTE_HALF_WIDTH_PX = 1.3;
 
-    /** The alpha the navigation panel passes for the road network. */
     private static final int ROAD_ALPHA = 0x9A;
 
-    /** The route is opaque so the two halves read as one line where they meet. */
     private static final int ROUTE_ALPHA = 0xFF;
 
-    /** Half the width of a transit line stroke: thinner than the roads it runs beside. */
     private static final double LINE_HALF_WIDTH_PX = 0.35;
 
-    /** A line is map content, not the trip, so it is drawn a little softer than the route. */
     private static final int LINE_ALPHA = 0xC8;
 
-    /** Markers are opaque: there is at most one of each on the map at a time. */
+    /** Markers are opaque; there is at most one of each on the map at a time. */
     private static final int MARKER_ALPHA = 0xFF;
 
     /** The origin marker's radius in GUI pixels. */
@@ -98,11 +59,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * How far around the anchor the RoadWeaver layer is asked for, in blocks.
      *
-     * <p>That layer holds a whole region's roads read out of another mod, so it is the one layer
-     * that has to be culled in world space before any projection: the minimap shows a few dozen
-     * blocks across at most, and a few hundred of margin covers the map's corners at every zoom and
-     * the frame's one frame of latency. The other layers are small enough to be projected and
-     * clipped by the emitters, exactly as the navigation panel does.
+     * That layer holds a whole region's roads, so it is the one layer culled in world space before projection: a few hundred blocks of margin covers the map's corners at every zoom plus the frame's latency. The other layers are small enough to project and clip.
      */
     private static final double ROADWEAVER_BOX_RADIUS = 512.0;
 
@@ -115,12 +72,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Whether this renderer draws in this pass at all.
      *
-     * <p>Checked once per frame, before the provider is even asked to build a buffer. Note what is
-     * not in the condition: a destination. The road network belongs to the map, not to a trip, and
-     * a player who has never navigated still expects their roads on their minimap; the route and
-     * the markers are simply absent from the element list when there is no trip. In either of the
-     * two ways the overlay can be off -- the other display mode, or a screen open -- the cost is
-     * one config read and nothing else.
+     * Checked once per frame before the provider builds a buffer. Not conditioned on a destination: the road network belongs to the map, and route and markers are simply absent without a trip. Off costs one config read.
      */
     @Override
     public boolean shouldRender(MinimapElementRenderLocation location) {
@@ -128,18 +80,8 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * Consumes one element: a probe is recorded, a layer is drawn, a marker is a dot.
-     *
-     * <p>The probe kinds come first in the list (see {@link XaeroMinimapRouteProvider}) and are the
-     * only place the frame's projection is read. They return false because nothing was drawn;
-     * Xaero uses the return value to decide whether an element consumes a depth slot, so claiming
-     * one without drawing would make later elements sit a fraction of a unit in front for no
-     * reason.
-     *
-     * <p>The second boolean is Xaero's "was this position clamped to the edge of the minimap". It
-     * means two different things here: for a probe it marks the reading as unusable, and for a
-     * marker it is the feature -- a destination off the map is drawn at the rim, which is exactly
-     * the direction information the player wants.
+     * Consumes one element: a probe is recorded, a layer drawn, a marker a dot.
+     * Probe kinds come first (see XaeroMinimapRouteProvider) and are the only place the frame's projection is read. They return false because nothing was drawn and Xaero uses the return value to decide depth slots. The clamped boolean means two things: for a probe the reading is unusable, for a marker it is the feature -- an off-map destination draws at the rim, which is the direction information wanted.
      */
     @Override
     public boolean renderElement(XaeroMinimapRouteElement element, boolean highlighted,
@@ -148,8 +90,8 @@ public final class XaeroMinimapRouteRenderer
                                  MinimapElementRenderInfo info, GuiGraphics graphics,
                                  MultiBufferSource.BufferSource bufferSource) {
         if (!drawing()) {
-            // shouldRender normally keeps this from being reached; checked again so the conditions
-            // that decide whether the overlay draws live in one place rather than in a contract.
+            // shouldRender normally keeps this from being reached; checked again so the draw conditions live in
+            // one place.
             return false;
         }
         switch (element.kind()) {
@@ -187,14 +129,14 @@ public final class XaeroMinimapRouteRenderer
         }
 
         if (!XaeroMinimapProjection.ready()) {
-            // Nothing has been measured that can place a world point this frame. Drawing nothing
-            // is invisible; drawing with a guessed transform would paint over the whole HUD.
+            // Nothing measured that can place a world point this frame. Drawing nothing is invisible; a guessed
+            // transform would paint over the whole HUD.
             return false;
         }
         if (clamped && isLayer(element.kind())) {
-            // A layer is anchored at the player, which is the centre of the map and can never be
-            // clamped. If one is, the frame is not the one the projection describes; drawing into
-            // it would put the network somewhere arbitrary, so it is skipped instead.
+            // A layer is anchored at the player, the map centre, and can never be clamped. If one is, the frame
+            // is not the one the projection describes, so skip it rather than draw the network somewhere
+            // arbitrary.
             return false;
         }
         return switch (element.kind()) {
@@ -211,11 +153,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Draws one road-network layer with the measured transform.
      *
-     * <p>The emitters do the clipping per segment against the minimap rectangle, so the network is
-     * handed over whole -- exactly as the navigation panel hands it over for its own square -- and
-     * the chains are stroked and joined inside {@code HudDraw}. A layer whose network is null or
-     * empty is skipped before the drawing block, so an install with no rails pays nothing for the
-     * rail layer.
+     * The emitters clip per segment against the minimap rectangle, so the network is handed over whole, exactly as the panel hands it over for its own square. A null or empty network is skipped before the drawing block.
      */
     private static boolean drawNetwork(RoadNetwork network, GuiGraphics graphics) {
         if (network == null || network.segmentCount() == 0) {
@@ -229,20 +167,15 @@ public final class XaeroMinimapRouteRenderer
                 ROAD_HALF_WIDTH_PX * XaeroMinimapProjection.localPerScreenPx(), ROAD_ALPHA,
                 XaeroMinimapProjection.localClipMinX(), XaeroMinimapProjection.localClipMinY(),
                 XaeroMinimapProjection.localClipMaxX(), XaeroMinimapProjection.localClipMaxY(),
-                // The emitter units here are the pose's, not pixels: the one-way marks inside the
-                // stroke pass are sized in pixels, so they are told how many pixels one local unit
-                // is worth. See HudDraw#emitNetwork.
+                // The emitter units here are the pose's, not pixels: the one-way marks inside the stroke pass are
+                // sized in pixels, so tell it how many pixels one local unit is worth. See HudDraw#emitNetwork.
                 screenPxPerLocalUnit());
         HudDraw.endBlock(graphics, drawing);
         return true;
     }
 
     /**
-     * Draws the RoadWeaver layer, which needs its world-space cull box first.
-     *
-     * <p>The box is around the frame anchor, in the same local coordinate space as everything else:
-     * only chains whose world bounding box comes near the map are handed to the projection, so a
-     * whole region's roads do not have to be walked every frame.
+     * Draws the RoadWeaver layer, which needs its world-space cull box first: only chains whose world bounding box comes near the map are projected, so a whole region's roads are not walked every frame.
      */
     private static boolean drawNetworkInBox(XaeroMinimapRouteElement element, GuiGraphics graphics) {
         RoadNetwork network = element.network();
@@ -266,7 +199,6 @@ public final class XaeroMinimapRouteRenderer
         return true;
     }
 
-    /** How many screen pixels one of Xaero's minimap pose units is worth, guarded against zero. */
     private static double screenPxPerLocalUnit() {
         double localPerPx = XaeroMinimapProjection.localPerScreenPx();
         return localPerPx > 1.0E-6 ? 1.0 / localPerPx : 1.0;
@@ -275,14 +207,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Draws one half of the route.
      *
-     * <p>The element carries the route's ink and the distance covered; one drawing block draws the
-     * half this element stands for, and {@code HudDraw} does the rest -- for the covered half one
-     * grey, for the ahead half each stretch in its own colour, cut where the player is. That is the
-     * same call the navigation panel's mini-map makes, so the two small maps colour a journey
-     * identically, and the frame builds no point lists for either.
-     *
-     * <p>The clip rectangle is the minimap's, which matters more for the route than for anything
-     * else: a route is usually longer than the map is wide.
+     * The element carries the route's ink and the distance covered; one drawing block draws the half it stands for and HudDraw does the rest -- grey for the covered half, each stretch's own colour ahead, cut where the player is. Same call as the panel's mini-map, so both small maps colour a journey identically, and the frame builds no point lists. The clip rectangle is the minimap's, which matters most here: a route is usually longer than the map is wide.
      */
     private static boolean drawRoute(XaeroMinimapRouteElement element, GuiGraphics graphics) {
         HudDraw.RouteInk ink = element.routeInk();
@@ -305,17 +230,9 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * Draws one stretch of a public transport line, as a thin stroke in the line's own colour.
+     * Draws one stretch of a public transport line as a thin stroke in the line's own colour.
      *
-     * <p>The element carries the stretch's world points; the frame's measured transform projects
-     * them, and the emitters clip against the minimap rectangle exactly as they do for a road layer
-     * or a route. A line is map content rather than the trip, so it is drawn thinner and softer than
-     * the route -- see {@link #LINE_HALF_WIDTH_PX} and {@link #LINE_ALPHA}.
-     *
-     * <p>The line is not named here. A line's name plate is a fixed-size capsule, and this map shows
-     * a few dozen blocks across at most: a plate that fits at all covers a large share of the map it
-     * is naming, which is what the player reported after seeing it in game. The two big maps keep
-     * their plates; the minimap draws the track itself.
+     * The element carries the world points; the emitters clip against the minimap rectangle as for a road layer or a route. Lines are map content rather than the trip, hence thinner and softer than the route; no name plate here (see the class note).
      */
     private static boolean drawLineStroke(XaeroMinimapRouteElement element, GuiGraphics graphics) {
         List<double[]> points = element.routePoints();
@@ -336,12 +253,7 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * Draws a marker as one disc at the element's own origin.
-     *
-     * <p>Xaero has already placed the element, so there is nothing to project: the disc's centre is
-     * {@code (0, 0)} and only its size needs converting, because the pose's local units are not
-     * pixels. {@code radiusPx} is the size the navigation panel uses for the same marker, so a
-     * destination is the same dot on both maps.
+     * Draws a marker as one disc at the element's own origin. Xaero has already placed it, so only the size needs converting from panel pixels; radiusPx is the panel's size for the same marker.
      */
     private static boolean drawMarker(double radiusPx, int argb, GuiGraphics graphics) {
         HudDraw.Drawing drawing = HudDraw.beginBlock(graphics);
@@ -352,18 +264,9 @@ public final class XaeroMinimapRouteRenderer
     }
 
     /**
-     * The pose matrix at the moment an element is rendered.
+     * The pose matrix at the moment an element is rendered: its translation is the element's position in GUI pixels, its linear part the parent transform. That is the whole basis of the measured projection.
      *
-     * <p>Xaero has pushed this element's translation before calling the renderer, so the matrix's
-     * translation is the element's position in GUI pixels and its linear part is the parent
-     * transform. That is the whole basis of the measured projection; see
-     * {@link XaeroMinimapProjection}.
-     *
-     * <p>The pre-1.21.6 spelling of the GUI pose: {@code PoseStack.last().pose()} is a JOML
-     * {@link Matrix4f} here, while 1.21.6 replaced the GUI pose with a 2D matrix stack. This class
-     * is compiled only on nodes whose {@code libs/} supplied a minimap jar for that generation, so
-     * a newer node needs its own port of this file together with its own jar -- the same rule the
-     * build gating states.
+     * Pre-1.21.6 spelling of the GUI pose: PoseStack.last().pose() is a JOML Matrix4f here, while 1.21.6 replaced the GUI pose with a 2D matrix stack. This class is compiled only on nodes whose libs/ supplied a minimap jar for that generation; a newer node needs its own port with its own jar.
      */
     private static Matrix4f pose(GuiGraphics graphics) {
         return graphics.pose().last().pose();
@@ -372,11 +275,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * An element's on-screen X, in GUI pixels.
      *
-     * <p>The pose translation is already the element's position rounded to whole pose units, and
-     * Xaero hands the renderer the fractions it dropped as the two translate arguments. Putting
-     * them back matters for the calibration probes: the shortest fallback distance is four blocks,
-     * so a half-unit of rounding would be a dozen percent of the basis vector. This is the exact
-     * position the translation would have had, transformed by the pose's linear part.
+     * The pose translation is already the position rounded to whole pose units and Xaero passes the dropped fractions as the two translate arguments. Putting them back matters for probes: the shortest fallback distance is four blocks, so half a unit of rounding is a dozen percent of the basis vector.
      */
     private static double screenX(Matrix4f pose, double residualX, double residualY) {
         return pose.m30() + pose.m00() * residualX + pose.m01() * residualY;
@@ -399,13 +298,7 @@ public final class XaeroMinimapRouteRenderer
     /**
      * Whether the overlay should be drawing at all right now.
      *
-     * <p>Three conditions, in the order they cost: the configured mode must be the minimap one, no
-     * screen may be open, and there must be a player in a level. The mode is read from the config
-     * rather than from the resolved mode router on purpose -- this class exists only on nodes that
-     * were compiled with the minimap API and only registers successfully when Xaero is there, so
-     * "registered" is already true by construction; what it must not do is draw in the other mode,
-     * where the in-HUD panel is drawing the same map. The screen condition keeps the overlay out of
-     * the inventory and out of the full-screen map, neither of which is what this mode is for.
+     * Three conditions in cost order: the minimap mode is configured, no screen is open, and there is a player in a level. The mode is read from the config rather than the resolved router because this class only registers when Xaero and its API are present; it must not draw in the other mode, where the in-HUD panel draws the same map. The screen condition keeps it out of the inventory and the full-screen map.
      */
     private static boolean drawing() {
         if (RoadConfig.mapDisplayMode() != MapDisplayMode.XAERO_MINIMAP) {
@@ -425,7 +318,7 @@ public final class XaeroMinimapRouteRenderer
                           MultiTextureRenderTypeRendererProvider rendererProvider) {
     }
 
-    /** Nothing is released after the elements; {@link HudDraw#endBlock} closes every drawing. */
+    /** Nothing is released after the elements; HudDraw#endBlock closes every drawing. */
     @Override
     public void postRender(MinimapElementRenderInfo info,
                            MultiBufferSource.BufferSource bufferSource,

@@ -21,34 +21,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Create's client-side track graph, read reflectively.
+ * Create's client-side track graph, read reflectively; no Create class appears in a signature.
  *
- * <h2>Why this and not the blocks</h2>
- * Create puts the whole rail network on the client: {@code GlobalRailwayManager.trackNetworks} holds
- * the {@code TrackGraph}s, and Create's own map integration draws them. Reading that is better than
- * reading blocks for three reasons: the node positions are Create's own, so a track is where Create
- * says it is rather than at a block centre; a curve is one edge with a real Bezier on it, which can
- * be sampled, rather than a staircase of diagonal blocks; and a station carries its name, which the
- * blocks never do. Nothing here needs a dependency: no Create class appears in a signature, every
- * handle is looked up by name once and guarded, and with Create absent this reports itself
- * unavailable and the caller falls back to its own block scan.
- *
- * <h2>The chain, taken from Create's own integration</h2>
- * Create's {@code XaeroFullscreenMapMixin} hands off to {@code XaeroTrainMap.onRender}, which goes
- * through {@code TrainMapManager}. Its bytecode reads exactly this, and so does this class:
- * <pre>
- * CreateClient.RAILWAYS                     // static, the client's own manager
- *   .trackNetworks                          // Map&lt;UUID, TrackGraph&gt; -- one per connected network
- *     .getNodes()                           // Set&lt;TrackNodeLocation&gt;
- *     .locateNode(TrackNodeLocation)        // TrackNode
- *     .getConnectionsFrom(TrackNode)        // Map&lt;TrackNode, TrackEdge&gt;
- *     .getPoints(EdgePointType.STATION)     // Collection&lt;GlobalStation&gt;
- * TrackNode.getLocation().getLocation()     // Vec3, the node's world position
- * TrackEdge.isTurn() / getLength() / getPosition(TrackGraph, double)
- * GlobalStation.blockEntityPos / name
- * </pre>
- * The manager also reads {@code version}, a counter it bumps when the network changes, which is used
- * here to avoid rebuilding a layer that cannot have changed.
+ * Reading Create's graph beats reading blocks: node positions are Create's own, a curve is one edge with a real Bezier that can be sampled rather than a staircase of blocks, and a station carries its name. Every handle is looked up by name once and guarded; with Create absent this reports unavailable and the caller falls back to its own block scan.
+ * The chain mirrors Create's own map integration: CreateClient.RAILWAYS.trackNetworks (Map<UUID, TrackGraph>) -> getNodes() -> locateNode -> getConnectionsFrom -> getPoints(EdgePointType.STATION), plus TrackEdge.isTurn, getLength and getPosition. The manager's version counter is used to skip rebuilding a layer that cannot have changed.
  */
 public final class CreateTrackGraph {
 
@@ -64,11 +40,8 @@ public final class CreateTrackGraph {
     private static final String EDGE_POINT = "com.simibubi.create.content.trains.signal.SingleBlockEntityEdgePoint";
     private static final String GLOBAL_STATION = "com.simibubi.create.content.trains.station.GlobalStation";
 
-    /** Longest a curve is sampled at, in vertices: enough for a map line, bounded for a long one. */
     private static final int MAX_CURVE_VERTICES = 24;
-    /** One vertex per this many blocks of a curve, so a short one still shows its shape. */
     private static final double CURVE_VERTEX_SPACING = 2.0;
-    /** How far a sampled end may sit from the node it should be, before the edge is counted as odd. */
     private static final double ENDS_MATCH_BLOCKS = 4.0;
 
     private static volatile boolean resolved;
@@ -99,20 +72,16 @@ public final class CreateTrackGraph {
     private CreateTrackGraph() {
     }
 
-    /** A station, with the name Create gave it, or null when it came from the block scan. */
     public record Station(int x, int y, int z, String name) {
     }
 
-    /** One undirected graph edge and its geometry, as interleaved x, z running from {@code from}. */
     public record Edge(int from, int to, double[] polyline) {
     }
 
     /**
      * One reading of the client's graph, for one dimension.
      *
-     * @param version  the manager's change counter when this was read
-     * @param curves   how many of the edges carried a Bezier rather than a straight line
-     * @param stations stations found, with their names
+     * version is the manager's change counter; curves counts edges that carried a Bezier; stations carry their names.
      */
     public record Snapshot(int version, int graphs, int curves, int oddEdges, double[] nodeX,
                            double[] nodeY, double[] nodeZ, List<Edge> edges, List<Station> stations) {
@@ -122,17 +91,15 @@ public final class CreateTrackGraph {
         }
     }
 
-    /** Whether Create's graph can be read at all in this session. */
     public static boolean available() {
         resolve();
         return available;
     }
 
     /**
-     * The manager's change counter, or {@link Integer#MIN_VALUE} when it cannot be read.
+     * The manager's change counter, or Integer.MIN_VALUE when it cannot be read.
      *
-     * <p>Read on its own, without walking the graph, so a caller can skip a read that cannot have
-     * anything new in it. Never used in arithmetic, only compared.
+     * Read on its own without walking the graph, so a caller can skip a read with nothing new; only compared, never used in arithmetic.
      */
     public static int version() {
         if (!available()) {
@@ -148,10 +115,7 @@ public final class CreateTrackGraph {
     }
 
     /**
-     * Reads the client's graph for one dimension, or null when it cannot be read.
-     *
-     * <p>Never throws: this runs on a client tick, so anything unexpected has to come back as
-     * "nothing to read" rather than as a crash.
+     * Reads the client's graph for one dimension, or null when it cannot be read. Never throws: this runs on a client tick, so anything unexpected comes back as nothing to read.
      */
     public static Snapshot read(ResourceKey<Level> dimension) {
         if (!available()) {
@@ -175,9 +139,8 @@ public final class CreateTrackGraph {
             List<Double> ys = new ArrayList<>();
             List<Double> zs = new ArrayList<>();
             List<Station> stations = new ArrayList<>();
-            // Keyed by the location's own equality rather than by identity: the graph hands the same
-            // object back in practice, but two equal locations are the same point of track either way,
-            // and an identity map that missed would silently drop every edge.
+            // Keyed by the location's own equality: two equal locations are the same point of track, and an
+            // identity map that missed would silently drop every edge.
             int curves = 0;
             int oddEdges = 0;
             int graphCount = 0;
@@ -191,11 +154,11 @@ public final class CreateTrackGraph {
                 if (!(nodes instanceof Set<?> locations)) {
                     continue;
                 }
-                // One index per graph, keyed by Create's own node id. Two graphs are two separate
-                // networks -- Create splits a network at a portal, and unrelated lines are separate
-                // graphs -- so their nodes must never share an index: merging them by position would
-                // join networks that do not touch, which is drawn as a chord across the map. The id
-                // also settles which of two nodes at the same place is which, which a position cannot.
+                // One index per graph, keyed by Create's own node id.
+                //
+                // Two graphs are two separate networks -- Create splits a network at a portal -- so their nodes must
+                // never share an index: merging by position would join networks that do not touch and draw a chord
+                // across the map. The id also settles which of two nodes at the same place is which.
                 Map<Integer, Integer> byId = new HashMap<>();
                 List<Object> graphNodes = new ArrayList<>();
                 List<Integer> graphIndices = new ArrayList<>();
@@ -209,8 +172,8 @@ public final class CreateTrackGraph {
                     }
                     Object netId = nodeGetNetIdMethod.invoke(node);
                     if (!(netId instanceof Integer id)) {
-                        // Without an id there is no way to tell this node from another at the same
-                        // place, so it is left out rather than guessed at.
+                        // Without an id there is no way to tell this node from another at the same place, so it is left out
+                        // rather than guessed at.
                         continue;
                     }
                     if (byId.containsKey(id)) {
@@ -306,23 +269,9 @@ public final class CreateTrackGraph {
     }
 
     /**
-     * The polyline of one edge, running from {@code from} to {@code to}, with its ends on the nodes.
+     * The polyline of one edge, running from from to to, with its ends on the nodes.
      *
-     * <p>A straight edge <em>is</em> the line between the two nodes, so it is two points and nothing
-     * else. A curve is sampled along its own Bezier through Create's own accessor, then turned the
-     * right way round: the samples run in the <em>edge's</em> direction, which is not necessarily the
-     * direction the caller walked in, and taking a curve's path backwards draws a line that leaves the
-     * junction the wrong way and comes back.
-     *
-     * <p>The ends are then written as the two node positions themselves. That is what makes segments
-     * that meet at a node meet exactly -- by sharing a coordinate, not by anything being joined -- and
-     * it is only done when the samples already ended at those nodes, so a curve that genuinely starts
-     * somewhere else is reported in {@code oddEdges} rather than being stretched to fit.
-     *
-     * <p>Create's own map never has the direction problem because it does not keep a direction at all:
-     * it plots the points of {@code BezierConnection.rasterise()} as pixels. A road here has to be an
-     * ordered polyline for the router and the renderer, so the direction has to be settled, and the one
-     * fact that settles it is that an edge's two ends <em>are</em> its two nodes.
+     * A straight edge is the line between the two nodes. A curve is sampled along its own Bezier through Create's accessor then oriented, since samples run the edge's direction and a backwards curve would leave the junction the wrong way. The ends are written as the node positions so segments meet exactly by sharing a coordinate, and only when the samples already ended there -- a curve that truly starts elsewhere is reported in oddEdges rather than stretched to fit. Create's map plots rasterised pixels and needs no direction; a road here must be an ordered polyline for the router and the renderer.
      */
     private static double[] geometry(Object graph, Object edge, double[] from, double[] to)
             throws ReflectiveOperationException {
@@ -341,8 +290,8 @@ public final class CreateTrackGraph {
         }
         double[] oriented = orient(samples, from[0], from[1], to[0], to[1]);
         if (!endsMatch(oriented, from[0], from[1], to[0], to[1])) {
-            // The curve does not run between the nodes it is attached to. Its own shape is still the
-            // only line we are entitled to draw, so it is left exactly as Create gave it.
+            // The curve does not run between the nodes it is attached to. Its own shape is still the only line
+            // we are entitled to draw, so it is left exactly as Create gave it.
             return oriented;
         }
         int points = oriented.length / 2;
@@ -362,11 +311,7 @@ public final class CreateTrackGraph {
     }
 
     /**
-     * Reverses a sampled polyline when it runs the other way, so that geometry always goes from the
-     * node the walk started at to the node it is going to.
-     *
-     * <p>Decided by which end of the sample sits at the start node, which needs nothing from Create
-     * but the two positions the caller already has.
+     * Reverses a sampled polyline when it runs the other way, so geometry always goes from the walk's start node to the node it is going to.
      */
     private static double[] orient(double[] polyline, double fromX, double fromZ, double toX, double toZ) {
         int points = polyline.length / 2;
@@ -387,7 +332,6 @@ public final class CreateTrackGraph {
         return flipped;
     }
 
-    /** Whether a sampled curve really does start and end at the two nodes it was asked for. */
     private static boolean endsMatch(double[] polyline, double fromX, double fromZ, double toX, double toZ) {
         int last = polyline.length - 2;
         return distanceSq(polyline[0], polyline[1], fromX, fromZ) <= ENDS_MATCH_BLOCKS * ENDS_MATCH_BLOCKS
@@ -433,21 +377,16 @@ public final class CreateTrackGraph {
     /**
      * Looks every class, field and method up once and keeps the result.
      *
-     * <p>Guarded because this is read on a client tick, and a failure is permanent: a missing class
-     * does not appear later. Every lookup is public API of Create, so no privileged access is asked
-     * for -- which also means this cannot break a Create that keeps its API but changes its innards.
-     *
-     * <p>Uses double-checked locking with volatile to avoid synchronized overhead on every call after
-     * the first successful resolution.
+     * Guarded because this runs on a client tick and a failure is permanent -- a missing class does not appear later. Every lookup is Create's public API. Double-checked locking with volatile avoids synchronized on every call after the first success.
      */
     private static void resolve() {
-        // Fast path: resolved already, and no lock is taken at all. This is the path every tick after
-        // the first takes, which is the whole reason the lock is not on the method itself.
+        // Fast path: resolved already, and no lock is taken at all -- the path every tick after the first
+        // takes.
         if (resolved) {
             return;
         }
-        // Slow path: the first call, or two threads arriving together. The flag is volatile, so the
-        // second check inside the lock sees a binding another thread has already completed.
+        // Slow path: the first call, or two threads arriving together. The flag is volatile, so the second
+        // check inside the lock sees a binding another thread already completed.
         synchronized (CreateTrackGraph.class) {
             if (resolved) {
                 return;
@@ -457,17 +396,9 @@ public final class CreateTrackGraph {
     }
 
     /**
-     * The lookups themselves, run once from inside {@link #resolve}'s lock.
+     * The lookups themselves, run once from inside resolve's lock.
      *
-     * <p>{@link #resolved} is published <b>last</b>, in a {@code finally}, and that order is what makes
-     * the lock-free fast path in {@link #resolve} safe rather than merely fast. It is volatile, so a
-     * thread that reads it as set is guaranteed to see every class, field and method assigned above it;
-     * setting it first, as this did before the lock was narrowed, would let a second thread skip the
-     * lock and go on to use handles that had not been looked up yet.
-     *
-     * <p>Set on every exit, success or failure, and deliberately not on success alone: a class that is
-     * not on the classpath will not appear later, so a failure is permanent too, and retrying it on
-     * every tick would only pay for the same exception again.
+     * resolved is published last, in a finally: volatile means a thread that reads it as set sees every handle assigned above it, so setting it first would let another thread skip the lock and use uninitialised handles. Set on failure too, because a class not on the classpath will not appear later.
      */
     private static void bind() {
         try {
@@ -512,14 +443,12 @@ public final class CreateTrackGraph {
             available = false;
             warnUnavailable(e);
         } finally {
-            // Published last, so that every handle above is visible to a thread that reads this as set.
-            // See the note on this method: the order is the correctness of the lock-free path, not a
-            // matter of taste.
+            // Published last, so every handle above is visible to a thread that reads this as set; the order is
+            // the correctness of the lock-free path.
             resolved = true;
         }
     }
 
-    /** Reports a failure once, then stays quiet. */
     private static void warnUnavailable(Throwable cause) {
         if (warned) {
             return;

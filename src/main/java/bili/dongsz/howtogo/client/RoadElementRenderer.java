@@ -23,9 +23,8 @@ import com.mojang.math.Axis;
 *///?}
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-// 1.21.8 changed what Xaero hands its element renderer: the map supplies its own graphics
-// interface rather than the vanilla GUI context. Same role, and the mod's drawing calls -- pose(),
-// drawString -- are the same on both, so only the type name differs.
+// 1.21.8 changed what Xaero hands its element renderer: the map supplies its own graphics interface
+// rather than the vanilla GUI context. Same role and same drawing calls, only the type name differs.
 //? if >=1.21.6 {
 /*import xaero.map.element.MapElementGraphics;
 *///?} else {
@@ -48,26 +47,15 @@ import java.util.List;
 /**
  * Draws roads and the road editing UI on Xaero's world map.
  *
- * <h2>Coordinate spaces</h2>
- * Reconstructed from {@code MapElementRenderHandler.transformAndRenderElement}:
- * <pre>
- *   local  = (renderX / dimScale - cameraX) * info.scale
- *   pose   = translate(round(local), round(local), 0)     // applied by Xaero
- *   frac   = local - round(local)                          // handed to renderElement
- * </pre>
- * The pose Xaero leaves on the stack carries no map zoom of its own (its {@code m00} stays at a
- * constant {@code 1/guiScale} while the map scale sweeps over orders of magnitude) and Xaero has
- * already moved the origin to this element, so a vertex is drawn at
- * {@code frac + (worldOffset * info.scale)} and the pose does the rest.
+ * Coordinate spaces, reconstructed from MapElementRenderHandler.transformAndRenderElement: local = (renderX / dimScale - cameraX) * info.scale; Xaero applies translate(round(local), round(local), 0) to the pose and hands renderElement the residual frac = local - round(local).
+ * The pose carries no map zoom (m00 stays at 1/guiScale while the map scale sweeps orders of magnitude) and Xaero has already moved the origin to this element, so a vertex is drawn at frac + (worldOffset * info.scale).
  */
 public final class RoadElementRenderer extends ElementRenderer<RoadElement, RoadRenderContext, RoadElementRenderer> {
 
-    /** Minimum stroke width in screen pixels, so zoomed-out roads stay visible without going fat. */
     private static final double MIN_STROKE_PX = 1.0;
 
-    // What is drawn at all, by zoom and by the player's own switches, is MapFilter's business: the scale
-    // thresholds used to live here as a single footpath rule, and they are now one question asked in one
-    // place so that the panel and the zoom cannot disagree.
+    // What is drawn at all, by zoom and by the player's switches, is MapFilter's business: the
+    // thresholds used to be a footpath rule here and are now one question asked in one place.
 
     // Editing UI palette.
     private static final int COLOR_ENDPOINT = 0xFFE0E0E0;
@@ -76,9 +64,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_SNAP_NODE = 0xFF35E0FF;
     private static final int COLOR_SNAP_SEGMENT = 0xFFFF9A2E;
     private static final int COLOR_SNAP_ANGLE = 0xFFB06BFF;
-    /** Snapped onto a rail: the place colour, since a rail the editor can only land on is a landmark. */
     private static final int COLOR_SNAP_RAIL = HudDraw.COLOR_PLACE;
-    /** Snapped onto RoadWeaver's roads or structures: a colour of their own, distinct from a rail. */
     private static final int COLOR_SNAP_ROADWEAVER = 0xFF9CF06A;
     private static final int COLOR_SNAP_FREE = 0x80FFFFFF;
     private static final int COLOR_RUBBER_BAND = 0xCCFF4DE0;
@@ -87,32 +73,23 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double SELECTED_HANDLE_PX = 4.5;
     private static final double SNAP_RING_PX = 6.0;
 
-    /** Circle resolution for the solid discs the route pass paints. */
     private static final int DISC_SEGMENTS = 10;
 
     private static final double TWO_PI = Math.PI * 2.0;
 
-    // Editing HUD.
     private static final int HUD_LEFT_INSET = 36;
-    /** Mirrors the left inset, so the navigation and editing blocks sit balanced on the screen. */
     private static final int HUD_RIGHT_INSET = HUD_LEFT_INSET;
     private static final int HUD_MARGIN = 6;
     private static final int HUD_LINE_HEIGHT = 11;
     private static final int HUD_BG = 0xA0000000;
     private static final int HUD_FG = 0xFFE8E8E8;
     private static final int COLOR_LABEL_ROAD = 0xFFF0F0F0;
-    /** Railway names, in a cool tint so an automatic line reads apart from a hand-drawn road. */
     private static final int COLOR_LABEL_RAIL = 0xFF9FD2FF;
-    // The ink a sign card's text is drawn in is not stated here: it belongs to the card's own colour
-    // and is chosen from it by RoadSigns.ink, which is the one copy of that rule for every map that
-    // draws a card. See the sign-card note below.
+    // The ink a sign card's text is drawn in belongs to the card's colour and is chosen from it by
+    // RoadSigns.ink, the one copy of that rule for every map that draws a card.
 
     /**
-     * The editing controls, one lang key per line.
-     *
-     * <p>Separate keys rather than one joined sentence split on its separators: the separators are
-     * part of the language, so a split tuned to English would carve a Chinese hint in half, and a
-     * vertical list wants a line per control in any case.
+     * The editing controls, one lang key per line. Separate keys rather than one sentence split on separators, since separators are part of the language and a vertical list wants a line per control.
      */
     private static final List<String> EDIT_HINT_KEYS = List.of(
             "hud.howtogo.edit.place",
@@ -131,7 +108,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     // Active navigation route.
     private static final int COLOR_ROUTE = 0xFF2FD0FF;
-    /** The part of the route already walked. */
     private static final int COLOR_ROUTE_DONE = 0xFF6E6E6E;
     private static final int COLOR_ROUTE_START = 0xFF44FF88;
     private static final int COLOR_ROUTE_END = 0xFFFF4444;
@@ -139,204 +115,87 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double ROUTE_MARKER_PX = 5.0;
 
     /**
-     * The map scale a name's size is measured from, the size it is drawn at there, and the bounds on how
-     * far it may grow or shrink from there.
+     * The map scale a name's size is measured from, the size it is drawn at there, and bounds on how far it may grow or shrink.
      *
-     * <h2>Why the base is below the font's own size</h2>
-     * The font is made for reading a line of text at the top of a screen, and a name laid on a map is
-     * read at a glance and in company with a hundred others: at its own size it is a shout. Everything
-     * here is therefore a fraction of the font, and the largest it ever gets is barely above it.
-     *
-     * <p>Zoomed out from the reference a name shrinks in proportion to the map until it stops being
-     * legible; zoomed in it grows far more slowly, over the whole of the range rather than in one step.
+     * The font is made for reading a line of text, while a name is read at a glance among a hundred others, so every size here is a fraction of the font and the largest is barely above it. Zoomed out a name shrinks with the map until illegible; zoomed in it grows slowly across the whole range.
      */
     private static final double LABEL_NATURAL_SCALE = 0.75;
-    /** The size at the reference: four fifths of the font. */
     private static final double LABEL_BASE_FACTOR = 0.8;
     private static final double LABEL_MIN_FACTOR = 0.55;
     private static final double LABEL_MAX_FACTOR = 1.1;
-    /**
-     * How far past the reference the growth from the base size to the largest is spread.
-     *
-     * <p>Fifty times the reference, which is the whole of the range a player ever zooms through, rather
-     * than the first step of it: growing in proportion to the map reaches the largest size a little past
-     * the reference, so every ordinary zoom looks the same and the close-in range has nothing left to
-     * give.
-     */
     private static final double LABEL_GROWTH_SPAN = 50.0;
     /**
-     * How far below a place's marker its name is written, before the name's own size scales it.
-     *
-     * <p>Scaled with the name: a gap of a fixed number of pixels is a name floating away from its marker
-     * when the text is small and touching it when the text is large, and the gap is there to keep the two
-     * apart rather than to be a distance of its own. Small, because the marker already has a size.
+     * How far below a place's marker its name is written, before the name's own size scales it. Scaled with the name, since a fixed pixel gap drifts when the text changes size; small because the marker already has size.
      */
     private static final double PLACE_NAME_GAP_PX = 6.0;
     /**
-     * How close the cursor has to be to a place's marker, in screen pixels, for the map to print that
-     * place's description.
+     * How close the cursor must be to a place's marker, in screen pixels, for the map to print that place's description.
      *
-     * <p>Measured in screen pixels rather than in blocks because Xaero's zoom sweeps over orders of
-     * magnitude: a block radius would be a dot when zoomed out and a whole village when zoomed in,
-     * while the marker itself is the same few pixels across at every zoom. Slightly larger than the
-     * marker, so pointing at the mark does not have to be a pixel-perfect act.
+     * Screen pixels rather than blocks because Xaero's zoom sweeps orders of magnitude; a block radius would be a dot zoomed out and a village zoomed in. Slightly larger than the marker, so pointing need not be pixel-perfect.
      */
     private static final double PLACE_HOVER_RADIUS_PX = 8.0;
 
-    // ------------------------------------------------------------- label layout
 
-    /**
-     * The room kept between a label and anything it must not touch, in screen pixels.
-     *
-     * <p>Every fit test inflates the label's own box by this much, which is what turns "the boxes do
-     * not overlap" into "two names read as two names": two words whose painted boxes merely miss are
-     * still one smear at map sizes.
-     */
     private static final double LABEL_CLEARANCE_PX = 2.0;
     /**
-     * The screen distance two names of one long road keep between their centres, in pixels.
-     *
-     * <p>A name is only useful if it can be found along the road, and a road long enough to cross the
-     * screen has several stretches of it worth naming. A screen distance rather than a block one,
-     * because it is the screen the names are read from: zoomed out, a block distance would put two
-     * names on top of each other; zoomed in, it would leave the far half of a visible road nameless.
+     * The screen distance two names of one long road keep between centres, in pixels. A screen distance because the screen is where names are read: a block distance would stack names zoomed out and leave half a visible road nameless zoomed in.
      */
     private static final double LABEL_SPACING_PX = 190.0;
-    /** The most names one road gets, however much of it is on screen. */
     private static final int MAX_LABELS_PER_ROAD = 8;
-    /**
-     * The screen distance two signs of one road keep between their centres, in pixels.
-     *
-     * <p>Wider than a name's spacing, and deliberately so: a name is ink lying along the road, while
-     * a sign is an opaque plate. Several plates on one stretch read as a row of fences rather than
-     * as the road's classification, and the road between them is exactly what the player zoomed in
-     * to look at. Reported in play as the signs repeating too densely on one road.
-     */
     private static final double SIGN_LABEL_SPACING_PX = 420.0;
-    /** The most signs one road gets, however much of it is on screen. Fewer than names, for the same reason. */
     private static final int MAX_SIGNS_PER_ROAD = 3;
     /**
-     * The map scale at which a transit line's name is drawn, in Xaero's units per block.
-     *
-     * <p>Twenty pixels a block: the zoom the player has to be at before a line's name is worth a
-     * plate of its own on the map. Further out, a name a hundred blocks long would be a band across
-     * the line it names, and there are several lines in a city -- the names would be the map. The
-     * player asked for this gate in those terms, and the sign cards' own fraction of the zoom is
-     * what keeps the capsule's text readable once it appears.
+     * The map scale at which a transit line's name is drawn, in Xaero's units per block. At twenty pixels a block a name a hundred blocks long would otherwise be a band across the line it names; sign cards' own fraction of the zoom keeps the capsule readable.
      */
     private static final double LINE_NAME_LABEL_MIN_SCALE = 20.0;
     /**
      * The least real zoom at which a transit line's name is drawn, in screen pixels per block.
      *
-     * <p>A plate is a fixed-size capsule, so what makes it worth drawing is not the map's own scale
-     * number but how much ground the screen shows: at two pixels a block the map spans a couple of
-     * hundred blocks and a plate names a stretch of line; further out it would be a badge on a map
-     * that is a diagram. This is asked <em>as well as</em> {@link #LINE_NAME_LABEL_MIN_SCALE}, so the
-     * rule can only ever be stricter than the gate the player asked for -- the two are the same
-     * statement in two units, and the projection's own pixels per block is the one that cannot drift
-     * if Xaero's unit changes between versions.
+     * A plate is a fixed-size capsule, so what makes it worth drawing is how much ground the screen shows: at two pixels a block a plate names a stretch, further out it is a badge on a diagram. Asked as well as LINE_NAME_LABEL_MIN_SCALE so the rule can only be stricter, and the projection's own pixels per block cannot drift with Xaero's units.
      */
     private static final double LINE_NAME_MIN_PPB = 2.0;
-    /**
-     * How far a line's name floats above the line it names, in screen pixels.
-     *
-     * <p>A capsule lying on the stroke would be a second, opaque stroke; lifted clear of it, the
-     * line still reads as one line and the name is an object beside it. A screen distance rather
-     * than a block one: the plate does not grow with the zoom the way the line's stroke does, so a
-     * block offset would be a gap when zoomed out and a plate sitting on the stroke when zoomed in.
-     */
     private static final double LINE_NAME_LABEL_RISE_PX = 7.0;
-    /**
-     * How far a road or railway name sits off the middle of its line, in the label's own pixels.
-     *
-     * <p>Half the font's line height is not available here -- the name is written through the map's
-     * own label helper, which centres on the line -- so a small fixed rise is what keeps the stroke
-     * from running through the letters.
-     */
     private static final int LINE_LABEL_RISE_PX = 4;
     /**
-     * How far around a place its name may be pushed, in screen pixels, when a road is in the way.
-     *
-     * <p>Used to decide which stretches of road are worth reading into the road grid at all: a road
-     * further than this from every place whose name is being placed cannot affect any of its
-     * candidate positions, and reading it would be work for a question nobody asks.
+     * How far around a place its name may be pushed, in screen pixels, when a road is in the way. Roads further than this from every place being labelled cannot affect a candidate position, so they are not read into the road grid at all.
      */
     private static final double PLACE_LABEL_CLEAR_RADIUS_PX = 260.0;
-    /**
-     * The smallest font factor at which a road's name is still worth drawing.
-     *
-     * <p>The name's size is capped by the width of the road it sits on (see
-     * {@link #roadLabelFactor}), so a road too thin to hold a legible word is a road whose name is
-     * left off entirely rather than written over two pixels of it. The player sees the name when they
-     * zoom far enough in for the road to be wide enough to carry it.
-     */
     private static final float ROAD_LABEL_MIN_FACTOR = 0.5f;
 
-    // ------------------------------------------------------------- sign cards
+    // A road may carry a category and a number, and the road_label_style setting decides whether its
+    // label is the name, a sign card, or one card holding both.
     //
-    // A road may carry a category and a number, and the player's road_label_style setting decides
-    // what its label is: the name as above, a sign card, or one card holding both. The card is a
-    // different kind of object from a name -- a rectangle of the category's colour with the number
-    // printed in it -- so it is laid out and drawn separately below, but it is offered the same box
-    // on the same LabelBoard, which is what keeps cards and names from ever covering each other.
+    // A card is a rectangle of the category's colour with the number printed in it, laid out and drawn
+    // separately below, but offered the same box on the same LabelBoard, which keeps cards and names
+    // from covering each other.
 
     /**
-     * What fraction of the map's label zoom a sign card's text is drawn at, and the bounds on it.
+     * What fraction of the map's label zoom a sign card's text is drawn at, with bounds.
      *
-     * <p>Not the whole of the label zoom. A card is not a name: a name belongs to its line and is
-     * read as part of the road, while a card is an object standing on the road, and drawn at a name's
-     * size it wins the contest it is in -- the card is opaque and coloured, the name is ink on the
-     * map, and a street with a card on it starts reading as a card with a street under it. Several
-     * cards along one road only make that worse: at the name's size they stop reading as a
-     * classification and start covering the stroke that carries them, which is the road the map is
-     * for. The fraction is what keeps a sign the small thing a sign is, and the bounds keep it in
-     * that place at both ends of the zoom range -- see the two constants below.
+     * A card is an object standing on the road, not a name belonging to it: at a name's size the opaque coloured card would win the contest and a street with a card would read as a card with a street under it. The fraction keeps a sign the small thing a sign is; see the two bounds below.
      */
     private static final double SIGN_CARD_ZOOM = 0.7;
     /**
-     * The smallest text factor a card is drawn at, in font units.
-     *
-     * <p>The floor is legibility: a card below it is a coloured smudge rather than a plate with a
-     * number on it. A card needs a floor of its own because it is never capped by the road's width
-     * the way a name is (see {@link #roadLabelFactor}), so left to follow the map it would keep
-     * shrinking until nothing could be read on it.
+     * The smallest text factor a card is drawn at, in font units: a card below it is a coloured smudge rather than a plate with a number. A floor of its own because, unlike a name, a card is never capped by the road's width.
      */
     private static final float SIGN_CARD_MIN_FACTOR = 0.5F;
     /**
-     * The largest text factor a card is drawn at, in font units.
-     *
-     * <p>The ceiling is for the closest zoom, where the label zoom has grown well past the card's
-     * fraction of it: without one the card would be the loudest thing on the map, a billboard on a
-     * quiet lane rather than a detail of it.
+     * The largest text factor a card is drawn at, in font units. At the closest zoom the label zoom has grown past the card's fraction, so a ceiling keeps it a detail rather than a billboard.
      */
     private static final float SIGN_CARD_MAX_FACTOR = 0.8F;
     /**
-     * The least share of the card's own factor the mixed card's name line may shrink to.
-     *
-     * <p>In the card's unscaled font units: the name under the number is shrunk to the width the
-     * number's line gives it, but no further than this. Below it the second line is a smudge nobody
-     * can read -- "Hauptstrasse" under "3" -- so a name that would need more shrinking than this
-     * widens the card instead, which keeps the second line legible and the number centred with plate
-     * either side of it. See {@link #measureSignCard}.
+     * The least share of the card's own factor the mixed card's name line may shrink to, in the card's unscaled font units. Below it the second line is unreadable, so a name needing more shrink widens the card instead. See measureSignCard.
      */
     private static final double SIGN_CARD_NAME_FLOOR = 0.7;
-    // The room inside a card and the ink its text takes are the card's own proportions rather than
-    // this map's: RoadSigns holds them for every map that draws one, so the same road's shield has
-    // the same shape here as on the destination picker and on MCphone.
-    /** Room either side of the number inside a card, in the card's own font units. */
+    // The room inside a card and the ink its text takes are the card's own proportions, held by
+    // RoadSigns for every map that draws one, so the same road's shield has the same shape here as on
+    // the picker.
     private static final int SIGN_CARD_PAD_X = RoadSigns.PAD_X;
-    /** Room above and below the card's lines, in the card's own font units. */
     private static final int SIGN_CARD_PAD_Y = RoadSigns.PAD_Y;
-    /** Room between the number and the mixed card's second line, in the card's own font units. */
     private static final int SIGN_CARD_LINE_GAP = RoadSigns.LINE_GAP;
 
     /**
-     * The size a road's name is drawn at, in font units: its zoom size, capped by the road's width.
-     *
-     * <p>The name belongs to the road and sits on it, so its height must not be taller than the
-     * road's own drawn width -- a word taller than the street it names reads as a word standing
-     * beside the street. Both quantities are screen pixels: the road's width is the stroke width at
-     * this zoom (see {@link #strokeHalfWidthPx}), and the font's height is its line height.
+     * The size a road's name is drawn at, in font units: its zoom size, capped by the road's width. The name sits on the road, so it must not be taller than the road's drawn width -- a word taller than the street reads as one standing beside it. Both are screen pixels: stroke width at this zoom, and the font's line height.
      */
     private static float roadLabelFactor(RoadClass roadClass, double scale, Font font) {
         float zoom = labelScale(scale);
@@ -346,10 +205,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * A rectangle two labels may not share, in screen pixels, already inflated by the clearance.
-     *
-     * <p>The box is what is painted rather than what is laid out: a rotated name is measured by the
-     * box its rotation sweeps, which is what makes a diagonal name and a horizontal one comparable.
+     * A rectangle two labels may not share, in screen pixels, already inflated by the clearance. It is what is painted rather than laid out: a rotated name is measured by the box its rotation sweeps, making diagonal and horizontal names comparable.
      */
     private record LabelBox(double minX, double minY, double maxX, double maxY) {
 
@@ -378,40 +234,24 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * A sign card measured for the frame: its size on screen, and the factor its name line is drawn
-     * at, or zero when it has no name line.
+     * A sign card measured for the frame: its size on screen and the factor its name line is drawn at, or zero without one.
      *
-     * <p>Measured once and then both drawn and offered to the board from the same numbers: the box a
-     * card reserves has to be the rectangle it actually paints, and two separate layouts of the same
-     * card would be two boxes that could disagree about where the card is.
-     *
-     * @param factor     the map's label factor this card was measured at, kept so the card's own
-     *                   spacing scales with it without the drawing code having to be handed the
-     *                   zoom as well
-     * @param nameFactor the factor the mixed card's name is drawn at -- the card factor times the
-     *                   share of it the name is allowed (see {@link #measureSignCard}), so the
-     *                   drawing code does not have to work it out a second time -- or zero when this
-     *                   card is the number alone
+     * Measured once and then drawn and offered to the board from the same numbers, so the reserved box is the rectangle actually painted. factor is kept so spacing scales without the drawing code being handed the zoom; nameFactor saves the drawing code working the name's share out again.
      */
     private record SignCard(double width, double height, float factor, float nameFactor) {
     }
 
-    /** A place's name, its marker's screen position, and where the place is in the world. */
     private record PlaceName(String name, double x, double y, double worldX, double worldZ,
                              double markerHalf) {
     }
 
-    /** A point on a line, with the direction of the line there, for a rotated label. */
     private record LinePoint(double x, double y, float angle) {
     }
 
     /**
      * The roads already drawn, as occupied screen rectangles, so a place's name can stand aside.
      *
-     * <p>A coarse grid of cells rather than one list of every road edge: a name has to be tested
-     * against the roads near it, and the whole point of the grid is that it asks only about those.
-     * Cells are far larger than a label, so a query is a handful of lookups whatever the network is
-     * doing, and building it is one walk of the visible roads -- which the label pass already makes.
+     * A coarse grid of cells rather than a list of every edge: a name is tested only against roads near it, cells are far larger than a label so a query is a handful of lookups whatever the network does, and building it is one walk of the visible roads the label pass already makes.
      */
     private static final class RoadInk {
 
@@ -419,7 +259,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         private final java.util.Map<Long, List<double[]>> cells = new java.util.HashMap<>();
 
-        /** Adds one drawn edge, widened by the road's own half-width and the label clearance. */
         void addEdge(double x1, double y1, double x2, double y2, double halfWidthPx) {
             double pad = halfWidthPx + LABEL_CLEARANCE_PX;
             double minX = Math.min(x1, x2) - pad;
@@ -434,7 +273,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
 
-        /** Whether any drawn road runs through the given label box. */
         boolean overlaps(LabelBox box) {
             for (int cellX = cell(box.minX()); cellX <= cell(box.maxX()); cellX++) {
                 for (int cellY = cell(box.minY()); cellY <= cell(box.maxY()); cellY++) {
@@ -463,30 +301,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Where a world position lands on screen, through the pose the map is drawing with right now.
+     * Where a world position lands on screen through the pose the map draws with right now.
      *
-     * <h2>Why not {@link MapViewState}</h2>
-     * The map texture, the roads and the route are all placed by Xaero's own pose for the frame, and
-     * Xaero builds that pose from its camera as it stands at the moment of the draw. The cached view
-     * state is a different reading of the same thing -- the camera from the render info, kept for the
-     * mouse handlers, which run outside the render pass -- and the two are not the same number within a
-     * frame: the map moves between them. Placing a marker from the cached camera while the map under it
-     * is drawn from the pose is what made the transit lines, the stop markers and the place markers
-     * trail behind the map while it was being panned -- exact while standing still, dragging while
-     * moving, which is the signature of two readings of one frame.
-     *
-     * <p>So the arithmetic here is the pose's own: the anchor is the world point Xaero built the pose
-     * around, so subtracting it and applying the pose's scale and translate gives exactly the position
-     * the map has just drawn the same point at. {@code scale} is Xaero's units per block, the same value
-     * the roads are placed with.
-     *
-     * @param anchorX world x the pose was built around
-     * @param anchorZ world z the pose was built around
-     * @param scale   xaero's units per block for this frame
-     * @param m00     the pose's x scale
-     * @param m11     the pose's z scale
-     * @param m30     the pose's x translate
-     * @param m31     the pose's z translate
+     * Not MapViewState: the cached view state is the camera from the render info, kept for mouse handlers outside the render pass, and it differs from the pose within a frame -- placing markers from it made transit lines, stops and places trail behind the map while panning. The pose's own arithmetic is exact: subtract the anchor it was built around, then apply the pose's scale and translate. scale is Xaero's units per block for this frame; m00/m11 are the pose's x/z scale, m30/m31 its translate.
      */
     private record Projection(double anchorX, double anchorZ, double scale, double m00, double m11,
                               double m30, double m31) {
@@ -500,18 +317,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         /**
-         * The same arithmetic backwards: the world x a screen column is showing.
-         *
-         * <p>What the line pass culls with. Taking the view from the cached view state instead would be
-         * a second reading of the frame, which is the thing this record exists to avoid -- see the
-         * warning on the class about the map moving between the two.
+         * The same arithmetic backwards: the world x a screen column is showing. The line pass culls with it; taking the view from the cached state would be the second reading of the frame this record exists to avoid.
          */
         double worldX(double screenX) {
             double perBlock = scale * m00;
             return Math.abs(perBlock) > 1.0E-9 ? (screenX - m30) / perBlock + anchorX : anchorX;
         }
 
-        /** The same for a screen row and world z. */
         double worldZ(double screenY) {
             double perBlock = scale * m11;
             return Math.abs(perBlock) > 1.0E-9 ? (screenY - m31) / perBlock + anchorZ : anchorZ;
@@ -519,12 +331,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * How much bigger or smaller than the font a name is drawn at this map scale.
-     *
-     * <p>Zoomed out from the reference, a name shrinks in proportion to the map until it stops being
-     * legible. Zoomed in, it grows far more slowly, over the whole of the range rather than in one step:
-     * a name is a label rather than a measurement, and one that is already at its largest while the map is
-     * still half way out makes every zoom look the same.
+     * How much bigger or smaller than the font a name is drawn at this map scale. Zoomed out it shrinks with the map until illegible; zoomed in it grows slowly over the whole range, because a label already at maximum half way out makes every zoom look the same.
      */
     private static float labelScale(double scale) {
         double magnitude = Math.abs(scale);
@@ -538,18 +345,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * The factor a sign card's text is drawn at: a fraction of the map's label zoom, within bounds.
+     * The factor a sign card's text is drawn at: SIGN_CARD_ZOOM of the label zoom, clamped by SIGN_CARD_MIN_FACTOR and SIGN_CARD_MAX_FACTOR for a legible floor and a no-billboard ceiling; see those constants.
      *
-     * <p>The card is offered the same box on the same board as a name, and it has to lose that
-     * contest gracefully: a sign is a small plate on the road, not a second name beside it. So its
-     * text is drawn at {@link #SIGN_CARD_ZOOM} of the label zoom, clamped by
-     * {@link #SIGN_CARD_MIN_FACTOR} and {@link #SIGN_CARD_MAX_FACTOR} -- a legible floor when zoomed
-     * all the way out and a ceiling against a billboard when zoomed all the way in. See those three
-     * constants for why each number is where it is.
-     *
-     * <p>Unlike a name, the card is not capped by the width of the road it belongs to: it is a plate
-     * centred on the road, not a word lying along it, so the label zoom and these bounds are the
-     * whole of its rule.
+     * Unlike a name, a card is not capped by the road's width -- it is a plate centred on the road, not a word lying along it.
      */
     private static float signCardFactor(double scale) {
         double factor = labelScale(scale) * SIGN_CARD_ZOOM;
@@ -559,17 +357,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * The map's right and bottom edges, in GUI pixels.
      *
-     * <p>Read from the window on every version, because Xaero's {@code MapElementGraphics} never
-     * reports a size of its own -- not through 26.3, which I checked against the jar after an earlier
-     * note claimed otherwise. Its 1.21.1 counterpart {@code GuiGraphics} read these same numbers from
-     * the window too, so nothing about this is a compromise.
-     *
-     * <p>The size is asked through these two rather than at each of the five call sites, so that those
-     * call sites read the same on every version. It also keeps the question out of reach of the build's
-     * replacement rules, which matters here: a rename rule aimed at the call sites matched this
-     * declaration too, because an unqualified call reads exactly like the declaration it names.
-     *
-     * <p>The parameter is there only to name which graphics type the caller holds; it is not used.
+     * Read from the window on every version because Xaero's MapElementGraphics never reports a size of its own, through 26.3; its 1.21.1 counterpart read the same numbers from the window. Asking through these two keeps the five call sites identical on every version and out of reach of the build's replacement rules (a rename rule aimed at the call sites also matched this declaration). The parameter only names which graphics type the caller holds.
      */
     //? if >=1.21.6 {
     /*private static int mapViewRight(MapElementGraphics graphics) {
@@ -593,14 +381,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * One string on the map.
      *
-     * <p>Xaero's {@code MapElementGraphics} kept {@code drawString} through 26.3 even though vanilla's
-     * graphics object renamed its equivalent to {@code text}. Xaero's type is its own and did not
-     * follow the vanilla change, so the build's rename rule -- which rewrites every {@code .drawString(}
-     * it finds, because it cannot tell one receiver's method from another's -- must not see these
-     * calls. They live in {@link MapLabels}, one file per era, for that reason.
+     * Xaero's MapElementGraphics kept drawString through 26.3 even though vanilla's graphics renamed its equivalent to text; the build's rename rule rewrites every .drawString( because it cannot tell receiver apart, so these calls live in MapLabels, one file per era.
      */
-    // Two independent branches rather than an if/else, matching the viewport helpers above: the else
-    // form and a whole-file fence elsewhere in this same file interfered with each other once.
+    // Two independent branches rather than an if/else, matching the viewport helpers above: an else form
+    // and a whole-file fence elsewhere in this file interfered once.
     //? if >=1.21.6 {
     /*private static void mapLabel(MapElementGraphics graphics, Font font, String text, int x, int y,
                                  int colour, boolean shadow) {
@@ -615,12 +399,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     //?}
 
     /**
-     * One name on the map, centred on a point and drawn at the size the map is zoomed to.
-     *
-     * <p>Text is drawn after the pose has been flattened to screen space, so the scaling has to be put
-     * back for the text alone: the pose is pushed, moved to the point and scaled, and the name is
-     * written at the origin of that frame. The offsets inside it are in the name's own units, so a
-     * centred name stays centred at every size.
+     * One name on the map, centred on a point and drawn at the size the map is zoomed to. Text is drawn after the pose is flattened to screen space, so scaling is put back for the text alone: push, move to the point, scale, and write at the origin. Offsets are in the name's own units, so a centred name stays centred at every size.
      */
     //? if >=1.21.6 {
     /*private static void drawMapLabel(MapElementGraphics graphics, Font font, String name, double x, double y,
@@ -628,9 +407,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static void drawMapLabel(GuiGraphics graphics, Font font, String name, double x, double y,
     //?}
                                      int colour, float factor) {
-        // A PoseStack on every version here, which is worth saying because it is not the rule
-        // elsewhere in this file: a map label is drawn through Xaero's own graphics type, and that
-        // type kept handing out a PoseStack after vanilla's GuiGraphics moved to JOML's 2D stack.
+        // A PoseStack on every version here, unlike elsewhere in this file: labels are drawn through Xaero's
+        // own graphics type, which kept handing out a PoseStack after vanilla moved to the 2D stack.
         PoseStack pose = graphics.pose();
         pose.pushPose();
         pose.translate(x, y, 0.0);
@@ -655,8 +433,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Our reader hands out raw world block coordinates, so the dimension scaling Xaero would
-     * otherwise apply must stay at 1.0, keeping its anchor maths in the same convention.
+     * Our reader hands out raw world block coordinates, so the dimension scaling Xaero would otherwise apply stays at 1.0.
      */
     @Override
     public boolean shouldBeDimScaled() {
@@ -701,14 +478,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         // Cache the viewport so mouse handlers can invert this projection later in the frame.
         MapViewState.update(info, m);
-        // Raw cursor position, for every element: cursor-dependent actions must work with the
-        // editor closed too. Snapping is recomputed separately, once per frame, in the edit branch.
+        // Raw cursor position for every element: cursor-dependent actions must work with the editor closed
+        // too. Snapping is recomputed once per frame in the edit branch.
         RoadEditSession.setMouse(info.mouseX, info.mouseZ);
 
-        // Xaero's local unit step per block. Verified in-game against a line of known length
-        // (a 1000-block highway measured 4000 blocks when this was over-scaled, pinning the
-        // factor at exactly 4) and confirmed independently by the fracX residual check, which
-        // drops to ~0.001 with this value and stays erratic for any other.
+        // Xaero's local unit step per block. Verified in-game against a line of known length (a 1000-block
+        // highway measured 4000 blocks when over-scaled, pinning the factor at 4) and confirmed by the fracX
+        // residual check.
         double p10 = info.scale;
         if (!(p10 > 0.0) || !Double.isFinite(p10)) {
             p10 = 1.0;
@@ -722,12 +498,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
         if (element.kind() == RoadElement.Kind.ROUTE) {
             renderRoute(element, last, vc, fracX, fracY, p10, posePerPixel);
-            // The edit UI is appended after this one, so when it is present it owns the HUD and
-            // drawing it here too would double up.
+            // The edit UI is appended after this one, so when it is present it owns the HUD; drawing here too
+            // would double up.
             if (!RoadEditSession.isActive() && !panelOverMap()) {
-                // The readout is a string, and a string is painted on the spot: the route's quads
-                // are still pending in this renderer's batch, so the road would be painted over
-                // the text. See the flush in renderLabels for the long form.
+                // The readout is a string painted on the spot, while the route's quads are still pending in this
+                // renderer's batch; flushing keeps the road off the text.
                 graphics.flush();
                 renderHud(graphics, pose);
             }
@@ -735,20 +510,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         if (element.kind() == RoadElement.Kind.EDIT_UI) {
-            // Xaero already hands us the cursor in world coordinates, so there is no need for a
-            // mouse-move listener; refreshing here also keeps dragging exactly in step with the
-            // frame being rendered. MapViewState was updated above, which snapping depends on.
+            // Xaero already hands the cursor in world coordinates, so no mouse-move listener is needed;
+            // refreshing here keeps dragging in step with the frame. MapViewState was updated above, which
+            // snapping depends on.
             RoadEditSession.updateMouse(info.mouseX, info.mouseZ, Screen.hasAltDown());
             RoadEditSession.updateDrag();
             renderEditOverlay(element, info, last, vc, fracX, fracY, p10, posePerPixel);
-            // The HUD is the map's own control scheme and readout. It is held back while one of this
-            // mod's panels is up for the same reason the labels and marks are: the map keeps drawing
-            // behind the panel, and the hint block sits at the foot of the screen, where the panel
-            // does not reach -- so the key list ends up beside the line editor as if it belonged to
-            // it.
+            // The HUD is the map's own control scheme and readout. Held back while one of this mod's panels is
+            // up, for the same reason as labels and marks: the hint block sits at the screen foot, where the
+            // panel does not reach, so the key list would look like part of the line editor.
             if (!panelOverMap()) {
-                // Same reason as the ROUTE branch: the handles and the rubber band are still in
-                // the vertex batch, and the control list is a string painted where it is written.
+                // Same reason as the ROUTE branch: the handles and rubber band are still in the vertex batch, and
+                // the control list is a string painted where written.
                 graphics.flush();
                 renderHud(graphics, pose);
             }
@@ -756,10 +529,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         if (element.kind() == RoadElement.Kind.MARKS) {
-            // The track MTR's lines run along, drawn as polylines: its own pass, because what is under
-            // it (the roads) and what is over it (the route, then the lines) are decided by where this
-            // element sits in the map's own order. Not while one of this mod's panels is up, for the
-            // reason the labels pass gives: this pass draws over the map, and a panel is not the map.
+            // MTR's tracks, drawn as polylines in their own pass because what is under them (roads) and over
+            // them (route, then lines) is decided by this element's place in the map's order. Not while a panel
+            // is up: this pass draws over the map.
             if (!panelOverMap()) {
                 int markMargin = 64;
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
@@ -771,36 +543,27 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         if (element.kind() == RoadElement.Kind.LABELS) {
-            // Reached once per frame, from the trailing element. Previously the names were drawn in
-            // the edit branch, so turning editing off made every label vanish.
+            // Reached once per frame from the trailing element; previously names were drawn in the edit branch,
+            // so turning editing off made every label vanish.
             //
-            // Not while one of this mod's own panels is up. The names are drawn here rather than by the
-            // map, so an opaque panel is not enough to keep them out of it: a road name lands across a
-            // list of stops and reads as part of the list. The map itself still shows through, which is
-            // the context these panels want.
-            // Where the cursor is, on every frame the map draws and not only while editing: Ctrl+click
-            // sets the destination, and the map's own panel is clicked through it. The raw position only:
-            // snapping costs a walk of the whole network and is the editor's business.
+            // Not while one of this mod's own panels is up: names drawn here would land across a panel's
+            // contents. Where the cursor is, on every frame, because Ctrl+click sets the destination; raw
+            // position only, since snapping is the editor's business.
             RoadEditSession.setMouse(info.mouseX, info.mouseZ);
             if (!panelOverMap()) {
-                // Shapes before text, and the lines before the names: a line name drawn under a stop
-                // marker is a name nobody can read. The line names go last of all, after the place
-                // markers renderLabels emits, for the same reason.
+                // Shapes before text, and lines before names: a line name under a stop marker is unreadable. Line
+                // names go last, after the place markers.
                 int lineMargin = 64;
-                // Worked out once and handed to both passes: the stops draw an interchange as one orange
-                // marker, and the place markers stand aside where one is drawn, since a station that is
-                // also an interchange is a place whose whole point is that colour. Two passes each
-                // working it out would be two answers that could disagree.
+                // Worked out once and handed to both passes: the stops draw an interchange as one orange marker, and
+                // place markers stand aside where one is drawn. Two passes working it out separately could disagree.
                 java.util.List<TransitInterchanges.Interchange> interchanges =
                         TransitInterchanges.of(Navigation.linesInPlay());
-                // Everything drawn in screen coordinates in this pass goes through this, and not through
-                // the cached view state: the pose is what the map under it was just drawn with, so the
-                // two cannot disagree while the map is moving.
+                // Everything drawn in screen coordinates goes through this, not the cached view state: the pose is
+                // what the map under it was just drawn with, so the two cannot disagree while moving.
                 Projection projection = new Projection(element.anchorX(), element.anchorZ(), p10,
                         m00, m.m11(), m.m30(), m.m31());
-                // The one-way marks first, and from here rather than from the roads' own pass: they are
-                // ink about the roads, so they go under the route, the lines, the markers and the names,
-                // and above every road -- see drawOneWayMarks for the overlay that used to hide them.
+                // The one-way marks come first, from here rather than the roads' pass: they are ink about the roads,
+                // so under the route, lines, markers and names and above every road. See drawOneWayMarks.
                 drawOneWayMarks(pose, vc, Math.abs(info.scale), projection,
                         -lineMargin, -lineMargin,
                         mapViewRight(graphics) + lineMargin, mapViewBottom(graphics) + lineMargin);
@@ -808,14 +571,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         mapViewBottom(graphics) + lineMargin, Math.abs(info.scale), interchanges,
                         projection);
                 renderLabels(graphics, pose, info, vc, interchanges, projection);
-                // The map's switches are not drawn here. They are not part of the map: drawn from this
-                // pass they came out under the lines, the markers and the names however late they were
-                // emitted, because those are written through this renderer's own vertex buffers and the
-                // game flushes them when it flushes them. They are a screen overlay and are drawn from
-                // the screen's render event, after the map has finished -- see MapFilterOverlay.
-                //
-                // This is the last of the mod's own passes in a frame, which is why the report of what
-                // the frame cost is written from here.
+                // The map's switches are not drawn here: drawn from this pass they came out under lines, markers and
+                // names however late, because those use this renderer's own buffers flushed by the game. They are a
+                // screen overlay drawn from the screen render event after the map finishes -- see MapFilterOverlay.
+                // This is the last of the mod's passes, hence the frame report here.
                 MapPassReport.endOfFrame();
             }
             return true;
@@ -826,8 +585,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return false;
         }
 
-        // Level of detail, and the player's own switches: one question, asked in one place, so that what
-        // is shed as the map is zoomed out and what the panel hides cannot disagree. See MapFilter.
+        // Level of detail and the player's switches, one question asked in one place so what is shed when
+        // zoomed out and what the panel hides cannot disagree. See MapFilter.
         if (!MapFilter.shows(segment.roadClass(), info.scale)) {
             return false;
         }
@@ -836,59 +595,49 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
-        // The alpha is the configured one, taken as it stands: a road a player made translucent is
-        // translucent, and one they made invisible is invisible. The default six-digit colours are
-        // opaque and every path that draws a road here hands over an ARGB number, so there is no
-        // "unset" alpha left to guess at.
+        // The alpha is taken as configured: a road made translucent stays translucent, one made invisible
+        // stays invisible. Default colours are opaque and every path hands an ARGB number, so no "unset"
+        // alpha is left to guess.
         int a = (argb >>> 24) & 0xFF;
 
-        // Stroke width is a screen-space quantity: below the per-class cap it tracks the road's
-        // true block width at the current zoom, above it the stroke stops widening. Only the
-        // perpendicular thickness is affected; vertex positions, and therefore length, are not.
+        // Stroke width is a screen-space quantity: below the per-class cap it tracks the road's true block
+        // width at this zoom, above it the stroke stops widening. Only perpendicular thickness is affected,
+        // not vertex positions.
         double halfWidth = strokeHalfWidthPx(segment.roadClass(), info.scale) * posePerPixel;
 
         double anchorX = element.anchorX();
         double anchorZ = element.anchorZ();
 
-        // What is drawn: the segment's smoothed display line when it has one, its block vertices
-        // otherwise. A machine-read railway is stored one block at a time, and that staircase is the
-        // right thing to route on and the wrong thing to look at -- drawn step by step it is a
-        // per-block wobble, and the round joint at every one of those steps turned into a bead. The
-        // curve is the same road without the block grid in it.
+        // The segment's smoothed display line when it has one, its block vertices otherwise. A machine-read
+        // railway is stored a block at a time; that staircase is right to route on and wrong to look at
+        // (per-block wobble, beads at round joints).
         int pointCount = displayPointCount(segment);
 
-        // A hand-drawn road is selected by id in the editor's network; a rail is selected by shape
-        // key in the rail layer, which has no stable ids at all. Both answer the same question here,
-        // which is why the two lookups sit in one expression rather than behind a flag.
+        // Hand-drawn roads are selected by id in the editor's network, rails by shape key in the rail layer,
+        // which has no stable ids. Both answer the same question, hence one expression.
         boolean selected = RoadEditSession.editor().selectedChain().contains(segment.id())
                 || RailNameStore.isSelected(segment);
         if (selected) {
-            // Translucent halo underneath, so the selected road reads clearly without hiding the
-            // class colour that is painted over it. The same continuous stroke as the road itself, so
-            // the halo follows the same mitred bends and rounded ends.
+            // Translucent halo underneath, so a selected road reads clearly without hiding its class colour.
+            // Same continuous stroke as the road, so the halo follows the same joins and caps.
             strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10,
                     halfWidth + 2.5 * posePerPixel,
                     (COLOR_SELECTED >> 16) & 0xFF, (COLOR_SELECTED >> 8) & 0xFF,
                     COLOR_SELECTED & 0xFF, 0x70);
         }
 
-        // One continuous stroke rather than a quad per edge. The shape itself -- an offset for each
-        // side of the line, a mitre or a round join at each bend, a round cap at each end -- is worked
-        // out by StrokeOutline, which is also what keeps the width honest: a per-edge quad leaves a
-        // notch on the outside of every gentle bend, and a cross-section taken from the wrong side of
-        // an end, which is what the old code did, paints half the last edge and looks like the road
-        // thinning into its junction. See StrokeOutline for both.
+        // One continuous stroke, not a quad per edge. StrokeOutline works out the offset sides, mitre or
+        // round joins and round caps, and keeps the width honest: a per-edge quad notches the outside of
+        // every gentle bend, and a cross-section from the wrong side paints half the last edge.
         strokeSegment(last, vc, segment, pointCount, anchorX, anchorZ, fracX, fracY, p10, halfWidth,
                 r, g, b, a);
 
-        // A one-way road's direction marks are not drawn here. They are emitted from the trailing
-        // labels pass instead, because a road drawn after this one used to paint straight over them:
-        // only the arrows of whichever one-way roads happened to be drawn last survived, which is
-        // what "only part of the one-way road has arrows" looked like. See drawOneWayMarks.
+        // One-way marks are emitted from the trailing labels pass instead: a road drawn after this one used
+        // to paint straight over them, leaving arrows only on whichever roads were drawn last.
 
         // Rail diagnostic: one of the auto-detected layer's segments was actually stroked, past the
-        // level-of-detail filter, which is the difference between "never handed over" and "handed over
-        // and dropped".
+        // level-of-detail filter -- the difference between "never handed over" and "handed over and
+        // dropped".
         if (RailTrackStore.isOurs(segment)) {
             RailTrackStore.noteElementStroked();
         }
@@ -896,28 +645,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return true;
     }
 
-    // ------------------------------------------------------------- editing UI
 
     /**
      * Whether one of this mod's own panels is up over the map.
-     *
-     * <p>The map keeps drawing behind these panels -- a panel is laid over the map, not instead of
-     * it -- so every pass that draws in <em>screen</em> coordinates rather than map coordinates has
-     * to hold back while one is up: a road name across a list of stops, a line's marks under the
-     * line editor, and the map's own HUD at the foot of the screen all read as parts of the panel
-     * they are not. The three passes ask this one question so that they cannot disagree about when
-     * they are hidden.
-     *
-     * <p>Asked of {@link ParentBackdrop} rather than of a list of screen classes: the panels are
-     * the ones that re-render the map underneath themselves, and that is exactly what the marker
-     * declares. A panel added later is covered by declaring it, with no second list to keep in step.
+     * The map keeps drawing behind these panels, so every pass drawing in screen coordinates has to hold back while one is up: a road name across a list of stops, a line's marks under the line editor, and the map HUD all read as parts of the panel they are not. Asked once so the three passes cannot disagree. Asked of ParentBackdrop rather than a list of screen classes: the panels re-render the map underneath themselves, which is exactly what that marker declares; a panel added later is covered by declaring it.
      */
     private static boolean panelOverMap() {
         Screen screen = Screens.of(Minecraft.getInstance());
-        // "Is the screen on show a dialog over the map", which is what ParentBackdrop declares: the
-        // two panels the map itself opens, and the place-details dialog opened from the place
-        // panel's More button. Enumerating screen classes here missed that last one, and it is a
-        // dialog over a dialog over the map -- the labels were drawn over the details it was editing.
+        // "Is the screen on show a dialog over the map", as ParentBackdrop declares: the two panels the map
+        // opens and the place-details dialog from the place panel's More button. Enumerating screen classes
+        // missed the last one, and labels were drawn over the details it was editing.
         return screen instanceof ParentBackdrop;
     }
 
@@ -932,8 +669,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // Node handles.
         double handleHalf = NODE_HANDLE_PX * 0.5 * posePerPixel;
         double selectedHalf = SELECTED_HANDLE_PX * 0.5 * posePerPixel;
-        // A place is drawn at the size every other view draws it at, converted into pose units: the
-        // marker is a screen size, so nothing about it scales with the map.
+        // A place is drawn at the size every other view draws it at, converted into pose units: it is a
+        // screen size, so nothing scales with the map.
         double placeHalf = HudDraw.PLACE_MARKER_PX * 0.5 * posePerPixel;
         int selectedNode = editor.selectedNodeId();
 
@@ -956,9 +693,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     half, half, color);
         }
 
-        // Create's stations, as places and nothing more. The editor does not own that geometry, so
-        // there is no handle to grab and no node to select -- only the mark every other place gets.
-        // Drawn here so a station is visible while editing, rather than only on the map.
+        // Create's stations, as places and nothing more. The editor does not own that geometry, so there is
+        // no handle and no node to select; drawn here so a station is visible while editing.
         for (RailTrackStore.Station station : RailTrackStore.stations()) {
             emitBox(pose, vc,
                     localX(station.x(), anchorX, fracX, p10),
@@ -1005,24 +741,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
     }
 
-    // ------------------------------------------------------------- helpers
 
     /**
      * Road and place names, drawn in screen space above the map.
-     *
-     * <h2>What a name is allowed to cost</h2>
-     * A map with every name on it is a map with no names on it: two words that overlap read as a
-     * smear, and one drawn over the next is worse than the second not being drawn. So every label is
-     * offered a box on the screen, and a label that cannot have its box goes undrawn. The board keeps
-     * the boxes already given out, which is what makes this a single rule for roads, railways and
-     * places rather than one rule per kind of thing.
-     *
-     * <h2>The order the names are offered</h2>
-     * Places first, then railways, then roads. A place's name is about one point and has nowhere else
-     * to go; a road's name can be repeated further along its road, and it is the commonest kind of
-     * name on the map, so it is the one that yields. Two places close enough that their names
-     * overlap therefore show one name until the map is zoomed far enough in for the boxes to part,
-     * which is the reading a map wants -- see {@link MapFilter#showsLabel}.
+     * What a name may cost: a map with every name is a map with none -- overlapping words read as a smear. Every label is offered a box on the screen and undrawn if it cannot have one; the board keeps the boxes already given out, one rule for roads, railways and places. Order: places first, then railways, then roads. A place's name is about one point and has nowhere else to go; a road's name can repeat further along and is the commonest, so it yields. Two close places show one name until the boxes part when zoomed in -- see MapFilter#showsLabel.
      */
     //? if >=1.21.6 {
     /*private void renderLabels(MapElementGraphics graphics, PoseStack pose, ElementRenderInfo info,
@@ -1036,9 +758,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         Font font = mc.font;
         RoadNetwork network = RoadStore.get();
 
-        // Labels are positioned from the view transform rather than from the culled element list, so
-        // a line can land far outside the window. Skip those instead of asking the font renderer to
-        // lay out text nobody will see.
+        // Labels are positioned from the view transform, not the culled element list, so a line can land far
+        // outside the window; skip those rather than laying out text nobody sees.
         int margin = 64;
         int viewRight = mapViewRight(graphics) + margin;
         int viewBottom = mapViewBottom(graphics) + margin;
@@ -1049,30 +770,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.last().pose().identity();
         pose.last().normal().identity();
 
-        // Every place gets its marker first, and at every zoom. The marker is what makes a place
-        // findable when the map is zoomed out, which is exactly when the names below are suppressed
-        // for being unreadable -- so gating the two together would remove the marker exactly when it
-        // is needed. Shapes before text: see the warning on HudDraw. The marker's box is reserved on
-        // the board as it is emitted, so a name never covers the place it belongs to.
+        // Every place gets its marker first, at every zoom: the marker makes a place findable exactly when
+        // names are suppressed for being unreadable. Shapes before text. The marker's box is reserved as it
+        // is emitted, so a name never covers its own place.
         LabelBoard board = new LabelBoard();
         drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges, scale,
                 projection, board);
 
-        // Hand the shapes over before the first name is written, and for a newer reason than the
-        // one the labels themselves give. On 1.21.6 and later Xaero writes a map string through
-        // MapElementGraphics, which ends with BufferSource.endLastBatch: the name is painted on the
-        // spot, while the roads, the route, the transit lines and the markers are still sitting in
-        // this renderer's vertex batch, which the map only flushes once every element is done. The
-        // names therefore came out under the roads -- a place name with a highway painted across
-        // it, which is exactly what "a marker is hidden by a road" looks like from the player's
-        // side. Flushing here paints everything emitted above in its own order first; the names
-        // then land on top of it, which is what the pass's contract has always said they do.
-        // Nothing is emitted into vc after this point, so the batch may end here.
+        // Hand the shapes over before the first name is written. On 1.21.6+ Xaero writes a map string
+        // through MapElementGraphics, which ends with BufferSource.endLastBatch: text is painted on the spot
+        // while roads, route, lines and markers still sit in this renderer's vertex batch, flushed only
+        // after every element -- so names came out under the roads. Flushing here paints everything emitted
+        // above in order first; nothing is emitted into vc after this point.
         graphics.flush();
 
-        // A place name stands aside from the roads it is next to, so the roads near the visible
-        // places are read into boxes once. Only built when there is a name to place, which is what
-        // keeps a map zoomed out -- where no place names are drawn -- from paying for it.
+        // A place name stands aside from the roads next to it, so the roads near visible places are read
+        // into boxes once. Only built when there is a name to place, so a map zoomed out pays nothing.
         java.util.List<PlaceName> places = visiblePlaceNames(scale, projection, margin, viewRight,
                 viewBottom);
         RoadInk ink = places.isEmpty() ? null
@@ -1081,46 +794,30 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             drawPlaceName(graphics, pose, font, place, placeFactor, viewRight, viewBottom, board, ink);
         }
 
-        // The railway names, then the road names. A railway is the rarer and more specific thing on
-        // the map, so it gets its space first among the line names.
+        // Railway names, then road names: a railway is the rarer and more specific thing, so it gets its
+        // space first.
         drawLineNames(graphics, pose, font, RailTrackStore.network(), true, scale, projection, margin,
                 viewRight, viewBottom, board);
         drawLineNames(graphics, pose, font, network, false, scale, projection, margin, viewRight,
                 viewBottom, board);
 
-        // The public transport lines' names, last among the line names: a line's plate belongs to a
-        // service rather than to the ground, so it yields the room to the roads, the railways and
-        // the places the map is read for. It is gated far above the road labels' zoom -- see
-        // LINE_NAME_LABEL_MIN_SCALE -- and only appears where the map has room for a plate.
+        // The transit lines' names last among line names: a plate belongs to a service rather than the
+        // ground, so it yields to roads, railways and places. Gated far above the road labels' zoom (see
+        // LINE_NAME_LABEL_MIN_SCALE).
         drawTransitLineNames(graphics, font, scale, projection, margin, viewRight, viewBottom,
                 board);
 
-        // Last of all, after every name, so no label is painted over the readout. Nothing here is a
-        // label of the map: this is the place's own description, which only this mod has.
+        // Last of all, after every name, so no label is painted over the readout: this is the place's own
+        // description, which only this mod has.
         drawPlaceHoverSummary(graphics, font, info, projection, scale);
 
         pose.popPose();
     }
 
     /**
-     * The description of the place under the cursor, printed under the cursor on Xaero's world map.
+     * The description of the place under the cursor, printed under the cursor.
      *
-     * <h2>Why this mod draws it and the map does not</h2>
-     * Xaero already highlights the marker under the cursor and names the place, but a description is
-     * text the player wrote about that place: it lives in this mod's store, so no other map can show
-     * it. The destination picker and the K screen both print it as a hover readout, and a world map
-     * that said nothing would make the same place look as if it had no details here.
-     *
-     * <h2>Which place, and in what space</h2>
-     * The nearest place marker within {@link #PLACE_HOVER_RADIUS_PX} of the cursor, measured in screen
-     * pixels through the same {@link Projection} the markers were just drawn with -- the map can be
-     * panned between two readings of one frame, so asking the cached view state here would point the
-     * readout at a place the cursor is not on. The place markers are emitted by the same
-     * {@code renderLabels} call, and the visibility rule is repeated so a marker the map is not
-     * showing cannot be hovered.
-     *
-     * <p>Nothing is drawn when the nearest place has no description, or when the cursor is not on a
-     * marker: a blank readout would be a box of nothing following the cursor around.
+     * Xaero already highlights the marker and names the place, but a description is text the player wrote and lives in this mod's store, so no other map can show it. The nearest place marker within PLACE_HOVER_RADIUS_PX of the cursor is measured in screen pixels through the same Projection the markers were drawn with -- the map can pan between two readings of one frame. Nothing is drawn when the place has no description or the cursor is not on a marker.
      */
     //? if >=1.21.6 {
     /*private void drawPlaceHoverSummary(MapElementGraphics graphics, Font font, ElementRenderInfo info,
@@ -1154,8 +851,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (summary.isEmpty()) {
             return;
         }
-        // Centred under the cursor, flipped above it when there is no room below, and clamped to the
-        // window in both directions: a readout half off the map is a readout nobody can finish.
+        // Centred under the cursor, flipped above it when there is no room below, and clamped to the window
+        // both ways: a readout half off the map cannot be finished.
         double width = font.width(summary);
         double x = Mth.clamp(mouseX, width / 2.0 + 4.0, screenW - width / 2.0 - 4.0);
         double y = mouseY + 12.0;
@@ -1163,19 +860,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             y = mouseY - 12.0 - font.lineHeight;
         }
         y = Mth.clamp(y, 4.0, screenH - font.lineHeight - 4.0);
-        // Full size rather than the map's label size: a description is a readout about the place,
-        // not a name belonging to the map, and map-scaled text would be unreadable when zoomed out --
-        // which is exactly when a saved place is hardest to find.
+        // Full size rather than the map's label size: a description is a readout, not a name belonging to
+        // the map, and map-scaled text would be unreadable when zoomed out -- when a saved place is hardest
+        // to find.
         drawMapLabel(graphics, font, summary, x, y, HudDraw.COLOR_PLACE, 1.0F);
     }
 
     /**
-     * The named places whose names this zoom draws, with their markers' positions on screen.
+     * The named places whose names this zoom draws, with their markers' screen positions.
      *
-     * <p>One list for the places from every source -- the player's own landmarks, Create's stations,
-     * MTR's stations and an addon's -- because they are all drawn as markers from the same list and
-     * labelled by the same rule. The kind on the way in decides the zoom at which the name is drawn;
-     * the marker's own kind and switch decide whether it is drawn at all.
+     * One list for every source (player's landmarks, Create's stations, MTR's stations, an addon's) because they are all drawn as markers from the same list and labelled by the same rule. The kind decides the zoom at which the name is drawn; the marker's own kind and switch decide whether it is drawn.
      */
     private static java.util.List<PlaceName> visiblePlaceNames(double scale, Projection projection,
                                                                int margin, int viewRight,
@@ -1212,14 +906,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Finds a side for a place's name where it touches neither another label nor a road.
+     * Finds a side for a place's name clear of other labels and roads.
      *
-     * <p>The candidates go round the marker: below first, because that is where a place's name has
-     * always been drawn, then above, then the two sides, then the four corners. The first one whose
-     * box is clear of the board and of the drawn roads is taken. A candidate clear of the board but
-     * not of the roads is remembered: if no side is clear of both, the best of the sides that is at
-     * least clear of the other labels wins, because a name across a road is readable and a name
-     * across another name is not.
+     * Candidates go round the marker: below first, then above, sides, corners; the first whose box is clear of the board and drawn roads is taken. A candidate clear of the board but not the roads is remembered, so if none is clear of both, the best at least clear of other labels wins -- a name across a road is readable, a name across another name is not.
      */
     //? if >=1.21.6 {
     /*private void drawPlaceName(MapElementGraphics graphics, PoseStack pose, Font font, PlaceName place,
@@ -1230,8 +919,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                RoadInk ink) {
         double width = font.width(place.name()) * factor;
         double height = font.lineHeight * factor;
-        // The gap has to clear the marker as well as the text: the marker's own box is on the board,
-        // and a name touching it would be a name that failed its own place's test.
+        // The gap must clear the marker as well as the text: the marker's box is on the board, and a name
+        // touching it would fail its own place's test.
         double gap = place.markerHalf() + PLACE_NAME_GAP_PX * factor + LABEL_CLEARANCE_PX * 2.0;
         double across = gap * 0.7;
         double[] dx = {0, 0, width / 2.0 + gap, -(width / 2.0 + gap),
@@ -1275,33 +964,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * Draws one road's or railway's name at as many places along it as the screen calls for.
-     *
-     * <h2>Why more than one</h2>
-     * A road crossing the screen is a road whose name is useful at more than its middle: the player
-     * looking at the far half is not helped by a name a screen away. So a long road is named once per
-     * {@link #LABEL_SPACING_PX} of its drawn length, at most {@link #MAX_LABELS_PER_ROAD} times, and
-     * each of those labels still has to win its box on the board.
-     *
-     * <h2>Why its size is capped by the road</h2>
-     * A name lies on the road, so its height is capped by the road's drawn width. A street too thin to
-     * hold a legible word keeps its name off the map until it is zoomed in enough to be wide enough,
-     * which is what makes the names appear class by class: a highway is named first, a footpath last.
-     *
-     * <h2>Why the sign replaces the name</h2>
-     * A road carries two identifiers and they are not the same kind of thing: its name is a word
-     * belonging to the line, and its number is a classification the player can read at a glance off a
-     * small coloured card. The player's {@code road_label_style} setting decides which one a labelled
-     * road shows -- see {@link RoadLabelStyle} -- and when it says a sign, the card takes the name's
-     * box on the board rather than being drawn beside it. Two objects at one point on the map are one
-     * object painted over another, and the name loses either way.
-     *
-     * <p>The positions are still the chain's, and still computed per visible run: a sign, like a
-     * name, is useless where the player cannot see the road it belongs to. The card is only drawn
-     * upright and centred on the position the run walked to -- see {@link #drawSignCard} for why it
-     * is not rotated with the road the way the name is, and for why its centre rather than its bottom
-     * edge is what sits on that point.
-     *
-     * @param rail whether these are railway names, which are drawn in the railway palette
+     * A road crossing the screen is useful at more than its middle, so a long road is named once per LABEL_SPACING_PX of drawn length, at most MAX_LABELS_PER_ROAD times, each still winning its box on the board. A name lies on the road, so its height is capped by the road's drawn width: a thin street keeps its name off until zoomed in enough, which is why names appear class by class. A road carries two identifiers: its name is a word belonging to the line, its number a classification read off a small coloured card. road_label_style decides which a labelled road shows (see RoadLabelStyle); with a sign, the card takes the name's box rather than being drawn beside it. Positions are per visible run, and the card is drawn upright and centred (see drawSignCard).
      */
     //? if >=1.21.6 {
     /*private void drawLineNames(MapElementGraphics graphics, PoseStack pose, Font font, RoadNetwork network,
@@ -1313,18 +976,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (network == null || network.segmentCount() == 0) {
             return;
         }
-        // How the player wants roads labelled. Read once per pass, not per segment: it is one value
-        // in the config, and a pass that asked for it thousands of times could in principle see it
-        // change halfway through its own work.
+        // How roads are labelled, read once per pass rather than per segment, so a value in the config
+        // cannot change halfway through the pass.
         RoadLabelStyle style = RoadConfig.roadLabelStyle();
-        // A railway has no category and no number -- those are the road editor's vocabulary, and the
-        // rail layer's names come from elsewhere -- so the sign modes are the road pass's business.
+        // A railway has no category and no number -- those are the road editor's vocabulary and the rail
+        // layer's names come from elsewhere -- so sign modes are the road pass's business.
         boolean signMode = !rail && style != RoadLabelStyle.NAME;
         boolean mixed = style == RoadLabelStyle.MIXED;
         float cardFactor = signCardFactor(scale);
-        // A cheap "could any class be labelled at this zoom" before touching the network: a road's
-        // name is capped by its width, so at a zoomed-out scale no class can carry one and the walk
-        // below would be paid for every frame to find that out.
+        // A cheap "could any class be labelled at this zoom" before touching the network: a name is capped
+        // by road width, so zoomed out no class can carry one.
         boolean anyClass = false;
         for (RoadClass roadClass : RoadClass.values()) {
             if (roadLabelFactor(roadClass, scale, font) >= ROAD_LABEL_MIN_FACTOR) {
@@ -1332,10 +993,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 break;
             }
         }
-        // A card is not capped by the road's width, so with signs switched on it is drawn at zooms
-        // where every class is too thin to carry a name: the cheap check above would then skip
-        // exactly the frames the mode exists for. The walk is the price of the mode, paid only while
-        // the player has chosen it.
+        // A card is not capped by the road's width, so with signs on it is drawn at zooms where every class
+        // is too thin to carry a name; the cheap check would skip exactly the frames the mode exists for.
         if (!anyClass && !signMode) {
             return;
         }
@@ -1344,33 +1003,29 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         for (RoadSegment segment : network.segments()) {
             String name = segment.name();
             boolean named = name != null && !name.isBlank();
-            // A sign needs a number, and a category that still exists to print it on. A category the
-            // player has deleted is not a category any more: the road carries an id nothing defines,
-            // and the store answers false for it (see RoadCategoryStore#has), so the road is drawn as
-            // unclassified -- no card, and its name is its label again. That is also why a road with
-            // a sign and no name is still labelled: the card is the label it has.
+            // A sign needs a number and a category that still exists. A deleted category is one nothing defines,
+            // so the road draws as unclassified -- no card, its name as label; a road with a sign and no name is
+            // still labelled, since the card is its label.
             boolean sign = signMode && segment.hasSign()
                     && RoadCategoryStore.has(segment.category());
             if (!named && !sign) {
-                // Only labelled roads are drawn. Most of a fresh network is unnamed, and a
-                // placeholder on every one of them buries the names that do exist.
+                // Only labelled roads are drawn: most of a fresh network is unnamed and a placeholder on every one
+                // buries the names that exist.
                 continue;
             }
             if (!MapFilter.shows(segment.roadClass(), scale)) {
                 continue;
             }
-            // One walk per road, not one per piece of it: every segment of a chain carries the same
-            // name, and the editor's panel writes a sign to every piece of the chain as well, so the
-            // chain is named -- and signed -- as one road rather than once per piece.
+            // One walk per road, not per piece: every segment of a chain carries the same name and the panel
+            // writes a sign to every piece, so the chain is named and signed as one road.
             if (!roads.add(grouping.keyOf(segment))) {
                 continue;
             }
             float factor = roadLabelFactor(segment.roadClass(), scale, font);
             if (!sign && factor < ROAD_LABEL_MIN_FACTOR) {
-                // The road is narrower than the smallest name that could sit on it. Its name waits
-                // for the zoom at which it is wide enough, rather than being written over 2 pixels.
-                // A card is not held to that cap: it is a plate centred on the road, not a word lying
-                // along it, so its size does not have to fit the width of the stroke.
+                // The road is narrower than the smallest name that could sit on it; its name waits for a zoom where
+                // it is wide enough. A card is not held to that cap -- a plate centred on the road need not fit the
+                // stroke.
                 continue;
             }
             java.util.List<double[]> points = chainPoints(network, grouping.chainOf(segment),
@@ -1380,23 +1035,20 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             SignCard card = sign ? measureSignCard(font, segment, cardFactor, mixed) : null;
             if (sign && card == null) {
-                // hasSign() is number != null, so this cannot happen through the editor; treating
-                // it as no sign draws the road's name rather than an empty coloured box.
+                // hasSign() is number != null, so this cannot happen through the editor; treating it as no sign
+                // draws the name rather than an empty coloured box.
                 sign = false;
                 if (!named || factor < ROAD_LABEL_MIN_FACTOR) {
                     continue;
                 }
             }
             double textWidth = !sign ? font.width(name) * factor : 0;
-            // The width the run must be long enough to carry: the card's own footprint when a sign
-            // is drawn, the painted word's when it is not. This is the same "too narrow to hang a
-            // label on" test in both cases, over a different label.
+            // The width the run must be long enough to carry: the card's footprint when a sign is drawn, the
+            // painted word's otherwise -- the same "too narrow to hang a label on" test.
             double labelWidth = sign ? card.width() : textWidth;
-            // Labels go on the stretches that are actually on the screen, not on the road's whole
-            // length: a road that leaves the screen and comes back has two stretches worth naming,
-            // and the kilometres between them are not places a name should be spent on. A stretch
-            // shorter than the label keeps no label -- it would hang off both its ends and read as a
-            // label for whatever is beside it.
+            // Labels go on the stretches actually on screen, not the whole road: a road that leaves the screen
+            // and comes back has two stretches worth naming. A stretch shorter than the label keeps none, since
+            // it would hang off both ends.
             for (java.util.List<double[]> run : visibleRuns(points, viewRight, viewBottom)) {
                 double runLength = polylineLength(run);
                 if (runLength < labelWidth + LABEL_CLEARANCE_PX * 2.0) {
@@ -1412,22 +1064,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         continue;
                     }
                     if (sign) {
-                        // The card's own box is worked out and offered to the board inside this
-                        // call, from the size measured above: the rectangle it reserves and the
-                        // rectangle it paints are then the same rectangle, both centred on the
-                        // label position.
+                        // The card's own box is worked out and offered to the board inside this call from the size measured
+                        // above, so the reserved and painted rectangles are the same, both centred on the label position.
                         drawSignCard(graphics, font, segment, card, at, viewRight, viewBottom,
                                 board);
                         continue;
                     }
                     LabelBox box = rotatedBox(at.x(), at.y(), textWidth, font.lineHeight * factor,
                             at.angle());
-                    // The anchor, not the painted box, is what has to be on the map: a name whose
-                    // last letter met the screen edge used to vanish whole and come back a notch
-                    // later, which reads as flicker rather than as a rule. The map draws to the edge
-                    // of the screen, so the part past it is cut by the screen itself -- the same
-                    // thing a paper map does with a name at its own margin. What is reserved is
-                    // still the whole painted box, so the part inside cannot be painted over.
+                    // The anchor, not the painted box, has to be on the map: a name whose last letter met the edge used
+                    // to vanish whole and come back, which reads as flicker. The map draws to the screen edge, so the
+                    // part past it is cut by the screen itself; what is reserved is still the whole painted box.
                     if (!onScreen(at.x(), at.y(), 0, viewRight - margin, viewBottom - margin)) {
                         continue;
                     }
@@ -1443,21 +1090,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Names the public transport lines on the map, in each line's own colour.
+     * Names the public transport lines, in each line's own colour, as a horizontal capsule rather than ink turned with the line: a line is a service, and the plate is the same coloured object the line is in every other list and card, so it cannot be read as a road name.
      *
-     * <h2>Why a plate rather than a name along the line</h2>
-     * A road's name belongs to the line it lies on, so it is ink turned with the road. A line's name
-     * is not that: the line is a service, and the plate is the same coloured object the line is in
-     * every other list and card in the mod. Drawn as a horizontal capsule in the line's colour it
-     * cannot be read as a road name, which is what the player asked for -- a line label that is
-     * distinguishable from the roads at a glance.
-     *
-     * <h2>When and where</h2>
-     * Only at the zoom the player named ({@link #LINE_NAME_LABEL_MIN_SCALE}), and only where the
-     * geometry offers a place: every {@link LineNameLabels#SPACING_BLOCKS} blocks along the track,
-     * plus the free room just outside both ends. The placing itself -- the fit test, and stepping
-     * along the line when a place is taken -- lives in {@link LineNameLabels}, shared with the maps
-     * this mod draws itself, so a line's name cannot land differently on two maps.
+     * Only at LINE_NAME_LABEL_MIN_SCALE, and only where the geometry offers a place: every LineNameLabels#SPACING_BLOCKS blocks along the track plus the free room just outside both ends. The fit test and stepping live in LineNameLabels, shared with this mod's own maps.
      */
     //? if >=1.21.6 {
     /*private void drawTransitLineNames(MapElementGraphics graphics, Font font,
@@ -1478,16 +1113,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double screenRight = viewRight - margin;
         double screenBottom = viewBottom - margin;
         double height = LineNameLabels.height(font.lineHeight);
-        // The screen as a world rectangle, for the world-space cull below: a line is tens of
-        // thousands of points long and the places its name is offered at are every 160 blocks, so
-        // asking the placer about every one of them would walk the whole polyline per candidate --
-        // the square of the line's length, per frame. The handful of places anywhere near the
-        // screen are the only ones worth projecting.
+        // The screen as a world rectangle for the cull below: a line is tens of thousands of points and a
+        // name is offered every 160 blocks, so asking the placer about every one would be the square of the
+        // line's length per frame.
         double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
                 Math.abs(projection.scale() * projection.m11()));
         if (pixelsPerBlock < LINE_NAME_MIN_PPB) {
-            // "Only name a line once the zoom is close enough": a fixed-size capsule on a wider view is
-            // a badge over a diagram. See LINE_NAME_MIN_PPB.
+            // Only name a line once the zoom is close enough: a fixed-size capsule on a wider view is a badge
+            // over a diagram. See LINE_NAME_MIN_PPB.
             return;
         }
         double leftWorld = Math.min(projection.worldX(0), projection.worldX(screenRight));
@@ -1547,12 +1180,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One line's name plate: a capsule in the line's colour with the name inside it.
-     *
-     * <p>The rounding is the plate's height, so the two ends are semicircles -- a capsule, which is
-     * deliberately not the shape a road's sign card is. The ink comes from the one contrast rule the
-     * sign cards use, so a pale line's name is dark and a dark line's name is pale without a second
-     * table of colours being kept anywhere.
+     * One line's name plate: a capsule in the line's colour with the name inside it. The rounding is the plate's height, so the ends are semicircles -- deliberately not a sign card. Ink comes from the single contrast rule the sign cards use.
      */
     //? if >=1.21.6 {
     /*private void drawLineNamePlate(MapElementGraphics graphics, Font font, String name,
@@ -1580,14 +1208,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One chain's vertices as a single screen-space polyline, in the order a traveller would meet
-     * them.
+     * One chain's vertices as one screen-space polyline in travel order.
      *
-     * <p>A chain is stored as segments in order, but each segment's own vertices may run either way
-     * along it -- the editor stores the piece, not the direction of the road. So each segment is
-     * appended the way round that continues from the previous one, and the shared corner is not
-     * written twice. Without that, a label placed on a chain of two pieces could land on a line that
-     * jumped from one end of the road to the other.
+     * A chain is stored as ordered segments but each segment's vertices may run either way, so each is appended the way round that continues from the previous one, the shared corner not written twice; without that a label could land on a line that jumps from one end of the road to the other.
      */
     private static java.util.List<double[]> chainPoints(RoadNetwork network, int[] chain,
                                                        Projection projection) {
@@ -1597,8 +1220,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (segment == null || segment.vertexCount() < 2) {
                 continue;
             }
-            // The drawn shape, so a name sits on the line the road is actually painted as rather
-            // than on the block staircase it was read from.
+            // The drawn shape, so a name sits on the line the road is painted as rather than on the block
+            // staircase.
             int count = displayPointCount(segment);
             boolean reverse = false;
             if (!points.isEmpty()) {
@@ -1628,11 +1251,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * The stretches of a polyline that touch the window, each as its own run of points.
      *
-     * <p>A road may cross the screen, leave it and come back -- a ring road, or any road on a map
-     * panned to its middle. Naming it by distance along its whole length would spend every name off
-     * the screen between those stretches; naming each visible stretch separately puts the names
-     * where they can be read. A point is kept in the current run while the edge leaving it has any
-     * part in the window, which is the cheap test -- the label boxes are culled exactly afterwards.
+     * A road may cross the screen, leave and come back; naming by distance along the whole length would spend names off screen. A point stays in the current run while the edge leaving it has any part in the window -- the cheap test, with label boxes culled exactly afterwards.
      */
     private static java.util.List<java.util.List<double[]>> visibleRuns(
             java.util.List<double[]> points, int viewRight, int viewBottom) {
@@ -1674,11 +1293,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * The point a given distance along a polyline, with the direction of the line there.
-     *
-     * <p>The direction is the edge the point is on rather than the line's overall direction: a road
-     * with bends is named along the piece the name sits on, or the name would point across the bend
-     * it is on.
+     * The point a given distance along a polyline, with the direction of the line there. The direction is the edge the point is on, so a bent road is named along the piece the name sits on.
      */
     private static LinePoint pointAt(java.util.List<double[]> points, double distance) {
         if (points.size() < 2) {
@@ -1704,17 +1319,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * The roads already drawn, as occupied boxes, for a place name to stand aside from.
-     *
-     * <p>Built once per frame and only when a place name is actually being placed. Every network
-     * that draws roads on this map contributes -- the player's own, Create's rails and an addon's
-     * layers -- because a name over any of them is a name over a road, whichever layer owns it.
-     *
-     * <h2>Why a world-space prefilter</h2>
-     * A place's name only ever moves by a couple of hundred pixels, so a road further than that from
-     * every place being named cannot affect any of its candidate positions. The segments are therefore
-     * first culled in world space, by asking whether their bounding box is near one of those places,
-     * and only the surviving ones are projected. That keeps the cost proportional to the roads around
-     * the visible places rather than to the whole railway Create happens to have read.
+     * Built once per frame and only when a place name is placed. Every network drawing roads here contributes -- the player's, Create's rails, an addon's layers -- because a name over any of them is over a road. Segments are first culled in world space by bounding box near a named place, and only survivors are projected, so cost is proportional to roads around the visible places rather than to the whole railway.
      */
     private static RoadInk buildRoadInk(double scale, Projection projection,
                                         java.util.List<PlaceName> places, int margin, int viewRight,
@@ -1732,7 +1337,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return ink;
     }
 
-    /** Adds one layer's road edges that are close to a visible place name. */
     private static void addRoadInk(RoadInk ink, Iterable<RoadSegment> segments, double scale,
                                    Projection projection, java.util.List<PlaceName> places,
                                    double reachBlocks, int margin, int viewRight, int viewBottom) {
@@ -1764,7 +1368,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
     }
 
-    /** Whether a segment's world-space bounding box comes within {@code reach} of any named place. */
     private static boolean nearAnyPlace(RoadSegment segment, java.util.List<PlaceName> places,
                                         double reach) {
         int minX = Integer.MAX_VALUE;
@@ -1786,12 +1389,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return false;
     }
 
-    /** Whether a world point's screen position is close enough to the window to matter. */
     private static boolean onScreen(double x, double y, int margin, int viewRight, int viewBottom) {
         return x >= -margin && x <= viewRight && y >= -margin && y <= viewBottom;
     }
 
-    /** An unrotated label's box, centred on a point and inflated by the clearance. */
     private static LabelBox box(double centreX, double centreY, double width, double height) {
         double halfWidth = width / 2.0 + LABEL_CLEARANCE_PX;
         double halfHeight = height / 2.0 + LABEL_CLEARANCE_PX;
@@ -1799,7 +1400,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 centreX + halfWidth, centreY + halfHeight);
     }
 
-    /** A rotated label's box: what its rotation actually sweeps, inflated by the clearance. */
     private static LabelBox rotatedBox(double centreX, double centreY, double width, double height,
                                        float angle) {
         double[] extents = HudDraw.rotatedExtents(width, height, angle);
@@ -1808,17 +1408,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * Draws a name along its line rather than across it.
-     *
-     * <h2>Why rotated</h2>
-     * A road is a line and its name belongs to the line; a horizontal word laid over a diagonal road
-     * crosses it and reads as a separate object standing there, which is what looked out of place.
-     * Rotating the label to the line's own direction is what every map does and what makes a name
-     * read as belonging to the road it sits on.
-     *
-     * <h2>How the rotation is applied</h2>
-     * The label pass has already flattened the pose to screen space, so the translation is in pixels
-     * and the rotation is about the label's own centre -- the text is then drawn at the origin and
-     * the half-width and half-height offsets put its middle on the line.
+     * A road is a line and its name belongs to it; a horizontal word over a diagonal road reads as a separate object. Rotating it to the line's direction makes the name read as belonging to the road. The label pass has already flattened the pose to screen space, so the translation is in pixels and the rotation is about the label's centre; the text is drawn at the origin with half-width and half-height offsets.
      */
     //? if >=1.21.6 {
     /*private void drawLineLabel(MapElementGraphics graphics, PoseStack pose, Font font, String name,
@@ -1826,17 +1416,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private void drawLineLabel(GuiGraphics graphics, PoseStack pose, Font font, String name,
     //?}
                                LinePoint at, int color, float factor) {
-        // At the point the label pass walked to, not at the segment's own middle. Those used to be
-        // two different places: the box that was tested and claimed was the run position's, while
-        // the word was painted at the middle of the chain's first piece -- so a long road's labels
-        // could sit past its ends, on top of each other, or off the stretch the fit test had just
-        // approved. The point carries the run's angle as well, which is the direction the line runs
-        // where the name actually sits.
+        // At the point the label pass walked to, not the segment's middle: the tested box and the painted
+        // word used to be at different places, so a long road's labels could sit past its ends or off the
+        // approved stretch. The point also carries the run's angle.
         pose.pushPose();
         pose.translate(at.x(), at.y(), 0.0);
-        // 26.1 gave PoseStack a rotate(Axis, angle) that takes the angle directly, so the quaternion
-        // this used to build and multiply in is no longer needed. Same rotation, one step instead of
-        // two -- and the two-argument form is what the older nodes still have to spell out.
+        // 26.1 gave PoseStack a rotate(Axis, angle) taking the angle directly, so the quaternion built and
+        // multiplied in is no longer needed; same rotation, one step. The two-argument form is what older
+        // nodes still spell out.
         //? if >=26.3 {
         /*pose.rotate(Axis.ZP, at.angle());
         *///?} else {
@@ -1847,36 +1434,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.popPose();
     }
 
-    // ------------------------------------------------------------ sign cards
 
     /**
-     * Measures one road's sign card at the given factor, so the pass has a size before it has a
-     * position.
-     *
-     * <h2>Why the card is sized by the number</h2>
-     * The card's width belongs to the number, not to the road: a sign is a plate whose width is the
-     * word printed on it, and a number is short. Sized by the mixed mode's name instead, a card for a
-     * long street name would be a plate as long as the street, which is no longer a sign. So the
-     * number's line is drawn at the card's own factor and the name's line gives way -- it is shrunk to
-     * the width the number's line leaves it, which is what "fits inside the card" means when the card
-     * is sized by the sign rather than by the name. It is never enlarged: a short name under a long
-     * number keeps the size the number is drawn at, so the two lines of a mixed card stay one object
-     * rather than two labels of different weights.
-     *
-     * <h2>Why the name has a floor, and what the card does under it</h2>
-     * A name shrunk to a short number's width is a line nobody can read -- "Hauptstrasse" under "3"
-     * is a smudge. So the shrink stops at {@link #SIGN_CARD_NAME_FLOOR} of the card's factor, and a
-     * name that would need to go smaller than that widens the card instead: the number stays centred
-     * at its own size with {@link #SIGN_CARD_PAD_X} of plate either side of it, and the card grows to
-     * hold the readable name. That is the one case where the card is wider than the number's line plus
-     * its padding, and it is the case the floor exists for.
-     *
-     * <p>Everything here is worked out in the card's own unscaled font units and multiplied by the
-     * factor once, at the end: the proportions are then the same plate at every zoom, which is what
-     * makes a card the same object on a zoomed-in map and a zoomed-out one.
-     *
-     * @return the card, or null when the road has no number to print -- which a road with a sign
-     *         cannot have, but which makes this method answer for itself instead of trusting its call
+     * Measures one road's sign card at the given factor, so the pass has a size before it has a position.
+     * The card is sized by the number, not the road or the name: a sign's width is the word printed on it, and a card sized by a long street name would be a plate as long as the street. The name line gives way -- shrunk to the width the number's line leaves, never enlarged -- so a mixed card stays one object. The name has a floor (SIGN_CARD_NAME_FLOOR of the card's factor); below it a name is unreadable, so the card widens instead and the number stays centred at its own size. That is the only case where the card is wider than the number plus padding. Everything is worked out in the card's own unscaled font units and multiplied by the factor once, so proportions are the same at every zoom. Returns null when there is no number to print.
      */
     private static SignCard measureSignCard(Font font, RoadSegment segment, float factor,
                                             boolean withName) {
@@ -1887,9 +1448,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int numberWidth = font.width(number);
         String name = withName ? segment.name() : null;
         boolean named = name != null && !name.isBlank();
-        // The name line's factor relative to the card's, and the width its plate has to give it.
-        // Zero means "no second line", which is also how the drawing code tells the two card kinds
-        // apart -- see SignCard#nameFactor.
+        // The name line's factor relative to the card's, and the width its plate must give it. Zero means
+        // "no second line", which is how the drawing code tells the two card kinds apart.
         double nameUnitFactor = 0.0;
         double nameLineUnits = 0.0;
         int innerWidth = numberWidth;
@@ -1898,9 +1458,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             double raw = (double) numberWidth / nameWidth;
             nameUnitFactor = Math.min(1.0, Math.max(SIGN_CARD_NAME_FLOOR, raw));
             nameLineUnits = font.lineHeight * nameUnitFactor + SIGN_CARD_LINE_GAP;
-            // The hair is subtracted before the ceil because raw was formed by a division and is
-            // multiplied back out here: without it a name that fits the number's line exactly can
-            // round up a pixel and widen a card the floor did not ask to widen.
+            // The hair is subtracted before the ceil because raw came from a division and is multiplied back
+            // out; without it, a name that fits exactly can round up a pixel and widen a card the floor did not
+            // ask to widen.
             innerWidth = Math.max(numberWidth,
                     (int) Math.ceil(nameWidth * nameUnitFactor - 1.0E-6));
         }
@@ -1910,28 +1470,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One sign card on the map: the category's colour, a one-pixel contrasting border, the number
-     * centred inside, and -- in mixed mode -- the road's name shrunk beneath it.
-     *
-     * <h2>Why the card is upright</h2>
-     * A name is a word that belongs to the line, so it is turned along the road and reads as part of
-     * it. A sign is not: it is an object standing at the roadside, a plate with a number printed
-     * straight across it, and a plate turned to the road's angle reads as a label lying on the road
-     * rather than as a sign beside it. Upright is also the only way both of a mixed card's lines can
-     * be read at once, since a rotated card would tilt its second line with the first.
-     *
-     * <h2>Why it is centred on the position</h2>
-     * The label positions come from the visible run, exactly as the name's do, so a card appears
-     * where the road is on screen and repeats along a long road instead of once at its middle. The
-     * card's centre is that point, not its bottom edge: a plate lifted clear of the stroke reads as an
-     * object beside the road with a gap to account for, while a plate centred on it has the road
-     * running into it and out of it, which is what a sign standing on the road looks like. The piece
-     * of stroke under the plate is the price, and it is a small one: the card is kept small exactly so
-     * that the stretch it covers is a stretch and not a boundary -- see {@link #signCardFactor}.
-     *
-     * <p>Everything drawn here is in screen space, after the label pass has flattened the pose, and
-     * the fills go through {@link MapLabels#fillOnMap} so the older and newer graphics eras are one
-     * branch in one file rather than one here as well.
+     * One sign card on the map: the category's colour, a one-pixel contrasting border, the number centred, and in mixed mode the road's name shrunk beneath.
+     * A name belongs to the line and turns with the road; a sign is an object standing at the roadside, a plate printed straight across, and a rotated plate reads as a label lying on the road. Upright is also the only way both lines of a mixed card can be read at once. The label positions come from the visible run, as names do, so a card repeats along a long road. Its centre is the label point, not its bottom edge: a plate centred on the stroke has the road running in and out of it, like a sign standing on the road; the small size keeps the covered stretch a stretch. All in screen space after the label pass flattened the pose; fills go through MapLabels#fillOnMap so the graphics eras are one branch in one file.
      */
     //? if >=1.21.6 {
     /*private void drawSignCard(MapElementGraphics graphics, Font font, RoadSegment segment,
@@ -1945,20 +1485,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (card == null || number == null || number.isBlank()) {
             return;
         }
-        // Centred both ways on the label position: that point is the card's centre, so the stroke of
-        // the road passes through the middle of the plate it is labelled by.
+        // Centred both ways on the label position: that point is the card's centre, so the stroke passes
+        // through the middle of the plate labelling it.
         double left = at.x() - card.width() / 2.0;
         double top = at.y() - card.height() / 2.0;
         double bottom = top + card.height();
-        // The same box the name path offers: the painted rectangle, centred on the label position,
-        // inflated by the label clearance -- which is what turns "the boxes do not overlap" into "two
-        // signs read as two signs" at map sizes. Reserved before drawing, so a later name can never
-        // land on this card.
+        // The same box the name path offers: the painted rectangle, inflated by the label clearance.
+        // Reserved before drawing, so a later name cannot land on this card.
         LabelBox box = box(at.x(), at.y(), card.width(), card.height());
-        // The card's anchor -- the point on the road it stands on -- has to be on the map; its own
-        // painted edges may hang past a screen edge exactly as a name's may. Requiring the whole
-        // plate inside made a sign vanish as it approached the edge and reappear a notch later, which
-        // is the same flicker the names had.
+        // The card's anchor -- the point on the road it stands on -- must be on the map; its painted edges
+        // may hang past a screen edge as a name's may. Requiring the whole plate inside made a sign vanish
+        // as it approached the edge.
         if (!onScreen(at.x(), at.y(), 0, mapViewRight(graphics), mapViewBottom(graphics))) {
             return;
         }
@@ -1973,16 +1510,16 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int y1 = (int) Math.round(top);
         int x2 = (int) Math.round(left + card.width());
         int y2 = (int) Math.round(bottom);
-        // A printed plate, not a sharp-edged rectangle: the same rounding as on the maps that draw
-        // cards at a fixed size, from the one geometry helper in RoadSigns.
+        // A printed plate, not a sharp rectangle: the rounding is the same as on maps that draw cards at
+        // fixed size, from RoadSigns' one geometry helper.
         MapLabels.fillRoundedOnMap(graphics, x1, y1, x2, y2, RoadSigns.CARD_CORNER_PX, background);
-        // The border as a one-pixel rounded rim rather than a frame of the card's own weight: it is a
-        // rim, and a rim that scaled with the zoom would be a band at close range. Same ink as the
-        // number, so the whole card is one contrast decision made from its background.
+        // The border as a one-pixel rounded rim rather than a frame of the card's own weight: a rim that
+        // scaled with zoom would be a band. Same ink as the number, so the card is one contrast decision
+        // from its background.
         MapLabels.outlineRoundedOnMap(graphics, x1, y1, x2, y2, RoadSigns.CARD_CORNER_PX, ink);
 
-        // Both lines are centred on the card through the same helper the names use, which is also
-        // what keeps the two graphics eras out of this method.
+        // Both lines are centred through the same helper the names use, which also keeps the two graphics
+        // eras out of this method.
         double numberTop = top + SIGN_CARD_PAD_Y * card.factor();
         drawMapLabel(graphics, font, number, left + card.width() / 2.0, numberTop, ink,
                 card.factor());
@@ -1995,200 +1532,97 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * A yellow square at every place.
-     *
-     * <h2>Which pose these are emitted with</h2>
-     * The marker pass runs <b>after</b> the pose has been flattened, so its coordinates are screen
-     * pixels and the pose it is handed must be the flattened one -- {@code pose.last()} as it stands
-     * inside this call, not the map pose captured before {@code pushPose}. Emitting with the map pose
-     * and screen coordinates applies the map transform a second time, which is what put the first
-     * version of these markers off to one side of the places they were marking.
-     *
-     * <p>The places come from {@link Destinations#places()}, the same list the panel and the picker
-     * mark, so the three views cannot disagree about what a place is or what it is called.
-     *
-     * <p>Shapes before text: see the warning on HudDraw.
+     * Emitted with the flattened pose: the marker pass runs after the pose is flattened, so coordinates are screen pixels and pose.last() is the flattened pose. Emitting screen coordinates with the map pose applies the transform twice -- what put the first version off to one side. Places come from Destinations#places(), the same list the panel and picker mark, so the views cannot disagree. Shapes before text.
      */
     private static final double LINE_STROKE_PX = 2.5;
-    /** Narrowest a line is drawn at, so a line never disappears however far the map is zoomed out. */
     private static final double MIN_LINE_STROKE_PX = 0.9;
-    /** Map scale at which a line is drawn at its full width: below it, the stroke thins with the map. */
     private static final double FULL_LINE_STROKE_SCALE = 0.5;
     /**
-     * How many bands of zoom one line's thinned geometry is kept for.
-     *
-     * <p>The zoom moves in steps and a band is a power of two pixels per block (see {@link PathRuns}),
-     * so the band a view is in changes when the player zooms and not when they pan. A handful is enough
-     * to hold every band a session passes through twice over; the oldest is displaced, and a band asked
-     * for again costs one walk of the line's points.
+     * How many bands of zoom one line's thinned geometry is kept for. A band is a power of two pixels per block (see PathRuns), so it changes on zoom, not pan; a handful covers a session twice over, the oldest is displaced, and a band asked again costs one walk.
      */
     private static final int BANDS = 6;
     private static final double LINE_STOP_PX = 5.0;
     /**
-     * How far apart the direction marks of a one-way line stand along it, in blocks.
+     * How far apart the direction marks of a one-way line stand, in blocks.
      *
-     * <p>A world distance, which is the opposite of the arrows a one-way road carries
-     * ({@link #ONEWAY_ARROW_SPACING_PX} is a screen distance). A road's arrows are a reading of the map
-     * at the zoom it is being read at; a line's direction is a property of the service, so the distance
-     * between marks must not change with the zoom -- a railway that gained a thousand arrowheads when
-     * the player zoomed in would be the map drawing its own marks rather than the line. The mark's size
-     * on the screen is fixed at {@link #TRANSIT_ARROW_PX}; the distance between marks is the line's.
+     * A world distance, unlike a one-way road's screen-spaced arrows: a road's arrows are a reading of the map at the current zoom, while a line's direction is a property of the service, so the distance must not change with the zoom. The mark's screen size is fixed at TRANSIT_ARROW_PX.
      */
     private static final double TRANSIT_ARROW_SPACING_BLOCKS = 64.0;
     /**
-     * How long a stretch of a one-way line has to be before it is marked at all, in blocks.
-     *
-     * <p>Below this a mark would sit on top of the stop markers at both ends, where an arrowhead and a
-     * round stop marker are the same smudge. Above it, a stretch shorter than the spacing still gets
-     * one mark at its middle, so a line whose stops are a few dozen blocks apart is not the one one-way
-     * line on the map with nothing saying which way it runs.
+     * How long a stretch of a one-way line must be before it is marked, in blocks. Below it a mark would sit on both end stop markers; above it, a shorter stretch still gets one mark at its middle, so a line is never the one with nothing saying which way it runs.
      */
     private static final double TRANSIT_ARROW_MIN_RUN_BLOCKS = 24.0;
     /**
-     * The most marks one stretch of one line draws.
-     *
-     * <p>The spacing already decides how many a stretch gets; this bounds a stretch long enough for the
-     * marks to stop being a reading of its direction -- a line of a whole railway is one shape with one
-     * run, and marking every 64 blocks of it would be a texture along a line rather than an arrow on
-     * it. Such a stretch is marked evenly along all of itself rather than crowded at its start, so the
-     * bound thins the marks instead of truncating them.
+     * The most marks one stretch of one line draws. The spacing decides the count; this bounds a stretch long enough that marks stop being a reading of direction. Such a stretch is marked evenly along itself, so the bound thins rather than truncates.
      */
     private static final int TRANSIT_ARROW_MAX_PER_RUN = 8;
     /**
-     * The most marks one line draws, across all of its stretches.
-     *
-     * <p>A backstop on a whole network being edited at once: the per-stretch bound says nothing about a
-     * line of a hundred stretches, and every mark is two triangles in the frame's buffer. A line that
-     * reaches this many keeps the marks of the stretches that came first.
+     * The most marks one line draws across all its stretches: the per-stretch bound says nothing about a line of a hundred stretches, and every mark is two triangles in the frame buffer.
      */
     private static final int TRANSIT_ARROW_MAX_PER_LINE = 32;
     /**
-     * The length of one direction mark, in screen pixels.
-     *
-     * <p>Half of it is the distance from the point on the line that the mark stands for to its tip,
-     * between four and five pixels: enough to read as an arrowhead on a stroke two and a half pixels
-     * wide, and not enough to become a second marker beside the stops. Fixed in pixels rather than in
-     * blocks because it is a reading, like the stroke's own width -- legible zoomed out, and not a sign
-     * zoomed in.
+     * The length of one direction mark, in screen pixels. Half of it is the distance from the point to the tip, four to five pixels: enough beside a 2.5 px stroke, not enough to be a second marker. Fixed in pixels because it is a reading, like stroke width.
      */
     private static final double TRANSIT_ARROW_PX = 9.0;
     /**
-     * The map scale at which a marker is drawn at {@link HudDraw#PLACE_MARKER_PX} across, and the bounds
-     * on how far it may grow or shrink from there.
+     * The map scale at which a marker is drawn at HudDraw#PLACE_MARKER_PX across, with bounds on how far it may grow or shrink.
      *
-     * <p>A marker is a place on the ground, so it is drawn at the size of a place on the ground: a fixed
-     * number of pixels is a marker that covers half a village when the map is zoomed in and is invisible
-     * when it is zoomed out. The bounds are what keep it from becoming a wall or a speck at the extremes.
+     * A marker is a place on the ground, so it is drawn at the size of a place: a fixed pixel count would cover half a village zoomed in and vanish zoomed out, and the bounds keep it from being a wall or a speck.
      */
     private static final double MARKER_NATURAL_SCALE = 0.5;
     private static final double MARKER_MIN_HALF_PX = 1.4;
-    /**
-     * The most a marker may grow to, in half-width pixels.
-     *
-     * <p>About a third of what a marker reaches if it is left to follow the scale all the way up: a place
-     * is a dot on a map, and one that grows to a fifth of the screen while the map is zoomed in is a
-     * building, not a marker. The scale still moves it between this and the floor below.
-     */
     private static final double MARKER_MAX_HALF_PX = 2.2;
     /**
-     * How close two interchange markers have to land to be drawn as one, in pixels.
-     *
-     * <p>Twice the marker's radius, which is where two of them are just touching: any closer and they
-     * overlap, which is the case the fused marker exists for. Further apart they are two markers, at
-     * whatever zoom that happens to be.
+     * How close two interchange markers must land to be drawn as one, in pixels: twice the marker radius, where they are just touching.
      */
     private static final int COLOR_LINE_TRANSFER = 0xFFFF7A3C;
     /**
-     * The dark backing under a stop marker.
-     *
-     * <p>A stop is drawn in its own line's colour so that which line it belongs to can be read off the
-     * map, and a coloured square on pale ground is otherwise invisible. This was the place marker's
-     * yellow to begin with, which made a stop and an ordinary place look like the same thing.
+     * The dark backing under a stop marker. A stop is drawn in its line's colour, and a coloured square on pale ground is otherwise invisible; this used to be the place marker's yellow, which made a stop look like an ordinary place.
      */
     private static final int COLOR_LINE_STOP_EDGE = 0xFF10141A;
 
     /**
      * The public transport lines, drawn over everything else and at every zoom.
-     *
-     * <p>Straight from stop to stop, which is the service rather than the track: the rails and roads a
-     * line runs along are already drawn underneath by the layer that owns them, and a line that
-     * redrew them would be claiming to know the route better than the rails do. What this adds is the
-     * thing nothing else on the map can say -- which stops belong to which line, in which order, and
-     * where two lines meet.
-     *
-     * <p>An interchange is marked by counting, not by comparing: a stop two lines call at is something
-     * the player cannot see from either line alone, so it gets its own colour and is drawn after the
-     * ordinary stops so that it is never hidden by one.
+     * Straight from stop to stop, which is the service rather than the track: the rails and roads a line runs along are already drawn by the layer that owns them. This adds what nothing else can say -- which stops belong to which line, in which order, and where two lines meet. An interchange is marked by counting, not comparing: it gets its own colour and is drawn after ordinary stops so it is never hidden.
      */
-    /** The path each line actually runs along, one shape per line, and the lines it was built for. */
     private static String lineShapeSignature = "";
     private static List<LineShape> lineShapes = List.of();
     /**
      * The same track, flattened into the strokes the mod's own small maps draw.
      *
-     * <p>One entry per stretch of one line, with the colour of the line it belongs to: the main
-     * screen's viewer and the picker's map project these themselves and have no vertex buffer of
-     * Xaero's to write into, so what they need is the geometry and the colour, not the map's own
-     * drawing. Rebuilt with the shapes -- on a change of the lines, not per frame, because the two
-     * small maps ask for it every frame.
+     * One entry per stretch of one line with the line's colour: the main screen's viewer and the picker's map project these themselves and have no Xaero buffer, so they need geometry and colour. Rebuilt on a change of lines, not per frame, because the two small maps ask every frame.
      */
     private static List<TransitStroke> transitStrokes = List.of();
     /**
-     * The direction marks of the one-way lines, one list per line and in step with {@link #lineShapes}.
-     *
-     * <p>Worked out with the shapes and not per frame: a mark stands on a point of the drawn path every
-     * {@link #TRANSIT_ARROW_SPACING_BLOCKS} blocks, which is a walk of that path's points and the same
-     * answer on every frame until the line changes. The map redraws every line every frame, so planning
-     * the marks in the rebuild turns a walk of every line per frame into a walk of the lines that
-     * changed. The trade is the same one {@link #transitStrokes} makes, made for the same reason.
-     *
-     * <p>A two-way line's entry is an empty list rather than absent: the drawing pass walks this list by
-     * line index, and a hole would have to be explained at that site. The empty list says the same
-     * thing without a second rule.
+     * The direction marks of the one-way lines, one list per line and in step with lineShapes.
+     * Worked out with the shapes, since a mark stands every TRANSIT_ARROW_SPACING_BLOCKS along the path -- a walk of the path and the same answer until the line changes. Planning in the rebuild turns a per-frame walk of every line into a walk of the changed ones. A two-way line's entry is an empty list rather than absent: the drawing pass walks by line index and a hole would need explaining there.
      */
     private static List<List<LineArrow>> lineArrows = List.of();
 
     /**
-     * One direction mark on a one-way line: where it stands in the world, and the unit direction a rider
-     * travels through it.
-     *
-     * <p>World blocks, not screen pixels: the mark belongs to the line and the zoom moves under it, so
-     * what is cached is the place and the bearing, and each frame projects them through its own
-     * {@link Projection} exactly as it projects the strokes the marks sit on.
+     * One direction mark on a one-way line: where it stands in the world and the unit direction a rider travels through it. World blocks, not pixels -- the zoom moves under it, so the place and bearing are cached and projected each frame.
      */
     private record LineArrow(double x, double z, double dirX, double dirZ) {
     }
 
-    /** One line's track in world blocks, and the colour that line is known by. */
     public record TransitStroke(List<double[]> points, int colour) {
     }
 
     /**
-     * The track each line runs along, in world blocks, one stroke per stretch.
+     * The track each line runs along, in world blocks, one stroke per stretch, for the maps this mod draws itself.
      *
-     * <p>For the maps this mod draws itself. The world map draws the same shapes from inside its own
-     * element pass; these two project them with their own camera, so they ask for the geometry instead
-     * of for a drawing. The shapes are the planner's -- each pair of neighbouring stops is routed the
-     * way the router will route it -- so a line on a small map bends where the line bends, rather
-     * than cutting the corner between two stations.
+     * The world map draws the same shapes in its own pass; these project them with their own camera, so they ask for geometry. The shapes are the planner's -- each neighbouring pair routed as the router will route it -- so a line bends where it bends instead of cutting the corner.
      */
     public static List<TransitStroke> transitStrokesFor(List<TransitLine> lines) {
         shapeLines(lines);
         return transitStrokes;
     }
 
-    /** One line's track in world blocks, with the name and colour a map's label needs. */
     public record NamedTransitStroke(String name, int colour, List<double[]> points) {
     }
 
     /**
-     * The same strokes as {@link #transitStrokesFor}, each carrying the name of the line it belongs
-     * to.
-     *
-     * <p>For the line name plates: a plate says which line a stretch of track serves, so it needs the
-     * line's name and its colour beside the geometry, and asking the drawing sites to pair up a flat
-     * stroke list with a line list themselves is how the two would eventually disagree. The geometry
-     * is the cached shapes' own point lists -- nothing is copied, so this is a walk over the shapes
-     * rather than a second set of geometry.
+     * The same strokes as transitStrokesFor, each carrying its line's name, for the name plates. The geometry is the cached shapes' own point lists -- nothing is copied.
      */
     public static List<NamedTransitStroke> transitLineStrokesFor(List<TransitLine> lines) {
         shapeLines(lines);
@@ -2199,9 +1633,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (name == null || name.isBlank()) {
                 continue;
             }
-            // A name plate is part of the line's presence on the map, so it is drawn in the same
-            // colour the line itself is -- which is the whole of what makes the plate the line's
-            // rather than an anonymous label.
+            // A name plate is part of the line's presence on the map, so it uses the colour the line itself is
+            // drawn in.
             int colour = line.colorOr(RoadConfig.transitLineColor(line.kind()));
             for (PathRuns.Run run : lineShapes.get(index).runs()) {
                 named.add(new NamedTransitStroke(name, colour, run.points()));
@@ -2209,41 +1642,21 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
         return named;
     }
-    /** The line count the diagnostic last reported, so it speaks when that changes and not per frame. */
     private static int reportedLineCount = -1;
     /**
      * One line's shape, kept until that line's own stops, kind or track change.
      *
-     * <p>Per line rather than for all of them, because the lines are no longer all the player's: the
-     * ones read out of MTR arrive a window at a time and change as the player walks, and rebuilding
-     * every line's shape because one imported line gained a stop would be a hitch in the middle of
-     * walking -- on the render thread, which is the worst place for one.
+     * Per line rather than for all of them: imported MTR lines arrive a window at a time and change as the player walks, and rebuilding every line because one gained a stop would hitch on the render thread.
      */
     private static final java.util.Map<String, LineShape> lineShapeCache =
             new java.util.HashMap<>();
 
     /**
-     * One line's drawn shape: the stretches of its path that are known, each with the box it fits in,
-     * thinned once per zoom band and kept for the frames that follow.
+     * One line's drawn shape: the known stretches, each with its box, thinned once per zoom band and kept.
      *
-     * <p>A line of several stretches is several polylines and not one. Joining them would draw a
-     * straight line across every gap between them, and a gap is either track the reading does not have
-     * or a pair of stops the router could not join -- see {@link TrackRuns}, which is where the
-     * stretches come from and where the reasoning lives.
-     *
-     * <p>No straight hop between a line's own ends is drawn for a line with no stretch at all. It was,
-     * on the argument that a line nobody can ride should be visible as a line rather than as nothing;
-     * what that is on a map is a straight line across everything between two stations, belonging to no
-     * path. Its stops are marked either way.
-     *
-     * <h2>Why the thinning is kept per band of zoom</h2>
-     * A line read out of MTR is sampled every few blocks and is tens of thousands of points long, and
-     * every frame draws it again at the zoom the player has chosen. Emitting a stroke per step of that
-     * sampling is a cost that grows with the railway rather than with what is on the screen -- and at
-     * any zoom a map is readable at, most of those steps are a fraction of a pixel, so the strokes are
-     * paid for and not seen. So each stretch is thinned to the zoom (see {@link PathRuns}) and the
-     * result is kept: the zoom moves in steps, and every frame between two of them asks for exactly the
-     * geometry that was worked out the first time.
+     * A line of several stretches is several polylines, not one: joining them would draw a straight line across every gap, which is either missing track or stops the router could not join (see TrackRuns).
+     * No straight hop is drawn for a line with no stretch at all: it would be a line across everything between two stations, belonging to no path. Its stops are marked anyway.
+     * Thinning is kept per zoom band: an MTR line is tens of thousands of points sampled every few blocks and redrawn every frame, and most steps are a fraction of a pixel at readable zooms. Each stretch is thinned to the zoom (see PathRuns) and kept, since the zoom moves in steps.
      */
     private static final class LineShape {
 
@@ -2257,7 +1670,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             this.runs = runs;
         }
 
-        /** A shape over bare stretches of points, each wrapped with the box it fits in. */
         static LineShape of(List<List<double[]>> runs) {
             List<PathRuns.Run> wrapped = new java.util.ArrayList<>(runs.size());
             for (List<double[]> run : runs) {
@@ -2268,16 +1680,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return wrapped.isEmpty() ? EMPTY : new LineShape(List.copyOf(wrapped));
         }
 
-        /** Every stretch as the reading gave it, before any thinning: what the diagnostics measure. */
         List<PathRuns.Run> runs() {
             return runs;
         }
 
         /**
-         * The stretches as this zoom draws them.
-         *
-         * @param pixelsPerBlock how many screen pixels one block covers, which is the zoom the thinning
-         *                       has to be fine enough for
+         * The stretches as this zoom draws them. pixelsPerBlock is how many screen pixels one block covers, which is the zoom the thinning must be fine enough for.
          */
         List<PathRuns.Run> runsAt(double pixelsPerBlock) {
             int band = PathRuns.bandOf(pixelsPerBlock);
@@ -2298,30 +1706,22 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
     }
 
-    /** One band of zoom, with the stretches thinned for it. */
     private record Band(int band, List<PathRuns.Run> runs) {
     }
 
     /**
-     * Works out the path each line runs along, by planning each pair of neighbouring stops exactly as
-     * the router will.
+     * Works out the path each line runs along, planning each pair of neighbouring stops exactly as the router will.
      *
-     * <p>A straight hop between two stops is not the line: a railway between two stations may run a long
-     * way round, and drawing the chord instead of the track hides the one thing the map is for -- where
-     * the line actually goes. Planning the pairs costs a route each, so the result is cached and rebuilt
-     * only when a line's kind or its stops change.
-     *
-     * <p>A pair that cannot be planned still gets its straight hop, so a mis-typed line is visible as a
-     * line rather than as a gap.
+     * A straight hop is not the line: a railway between two stations may run a long way round, and the chord would hide where the line goes. Planning costs a route per pair, so the result is cached and rebuilt only when a line's kind or stops change. A pair that cannot be planned gets no hop -- a gap, not a line across ground it may not run over.
      */
     private static void refreshLineShapes(List<TransitLine> lines) {
         StringBuilder signature = new StringBuilder();
         for (TransitLine line : lines) {
             signature.append(shapeKey(line));
-            // The direction marks are built from the direction as well as from the geometry, so a line
-            // whose direction was switched has to rebuild them -- but the direction is deliberately not
-            // in shapeKey, because shapeKey is the shape cache's key as well: putting it there would
-            // plan every route of the line again for a switch that does not move the geometry at all.
+            // The direction marks are built from the direction as well as the geometry, so a line whose
+            // direction switched must rebuild them. The direction is deliberately not in shapeKey, which the
+            // shape cache also uses: it would re-plan every route of the line for a switch that does not move
+            // the geometry.
             signature.append(line.oneWay() ? "+oneway" : "+twoway");
         }
         if (signature.toString().equals(lineShapeSignature)) {
@@ -2329,9 +1729,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
         lineShapeSignature = signature.toString();
 
-        // One workspace per network rather than per line: a workspace copies the network before the
-        // first query through it, and every line that routes on the same roads --
-        // the same kind, and with or without the imported rails -- reuses one.
+        // One workspace per network rather than per line: a workspace copies the network before its first
+        // query, and every line routing on the same roads reuses one.
         java.util.Map<String, bili.dongsz.howtogo.route.RoadRouter.Workspace> workspaces =
                 new java.util.HashMap<>();
         java.util.Map<String, LineShape> rebuilt = new java.util.HashMap<>();
@@ -2349,9 +1748,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         lineShapeCache.clear();
         lineShapeCache.putAll(rebuilt);
         lineShapes = shapes;
-        // The same shapes, flattened for the small maps: one stroke per stretch, carrying the colour
-        // the line is known by everywhere else. The points are the runs' own lists -- nothing is
-        // copied, so this is a walk over the shapes rather than a second set of geometry.
+        // The same shapes flattened for the small maps: one stroke per stretch with the line's colour.
+        // Points are the runs' own lists, nothing copied.
         List<TransitStroke> strokes = new java.util.ArrayList<>();
         for (int index = 0; index < lines.size() && index < shapes.size(); index++) {
             TransitLine line = lines.get(index);
@@ -2361,11 +1759,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         transitStrokes = strokes;
-        // The direction marks of the one-way lines, worked out here beside the same shapes: a mark is a
-        // world position and a world bearing, both taken from the unthinned run -- the marks do not
-        // change with the zoom, and the thinned copies in a Band are per-zoom drawings of the same path.
-        // Rebuilt only when this method rebuilds, which is what makes the per-frame pass a projection of
-        // a prepared list rather than a walk of every line.
+        // The one-way lines' direction marks, built beside the same shapes: a mark is a world position and
+        // bearing taken from the unthinned run. Rebuilt only when this method rebuilds, so the per-frame
+        // pass projects a prepared list.
         List<List<LineArrow>> arrows = new java.util.ArrayList<>(lines.size());
         for (int index = 0; index < lines.size() && index < shapes.size(); index++) {
             arrows.add(planLineArrows(lines.get(index), shapes.get(index)));
@@ -2375,28 +1771,18 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * How long a step between two neighbouring points of a drawn line has to be before it is worth
-     * saying out loud, in blocks.
+     * How long a step between neighbouring points of a drawn line must be before it is worth reporting, in blocks.
      *
-     * <p>A railway's own geometry is a run of points a few blocks apart: a rail is sampled along its
-     * curve. A step of this length inside a stretch is therefore either a rail that really is that
-     * long and straight, or a straight line drawn between two places the geometry does not join --
-     * and the two look identical on the map. This is the number that tells them apart without a guess,
-     * and the coordinates say which stretch of which line to look at.
+     * A rail's geometry is sampled every few blocks, so a longer step inside a stretch is either a genuinely straight rail or a straight line drawn between places the geometry does not join -- and the two look identical on the map.
      */
     private static final double LONG_STEP_BLOCKS = 64.0;
 
-    /** How many lines one rebuild may name, so a map of broken geometry cannot fill the log. */
     private static final int MAX_REPORTED_LONG_STEPS = 12;
 
     /**
      * Names the lines whose drawn shape takes a long step between two of its own points.
      *
-     * <p>Written when the shapes are rebuilt -- on a change of the lines, not per frame -- and only
-     * for the lines that have such a step, so a healthy map says nothing at all. A line whose stretch
-     * is two points a kilometre apart is a straight line drawn across everything between two stops; a
-     * line whose stretch is a hundred points with a twenty-block longest step is a railway. The
-     * difference is not visible on the map, which is exactly why it is worth a log line.
+     * Written on rebuild, not per frame, and only for lines with such a step. A two-point stretch a kilometre long is a straight line; a hundred-point stretch with a twenty-block longest step is a railway. The difference is invisible on the map, which is why it is worth a log line.
      */
     private static void reportLongSteps(List<TransitLine> lines, List<LineShape> shapes) {
         int offenders = 0;
@@ -2445,23 +1831,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * What makes a line's shape its own: which line, of which kind, calling where, over which roads,
-     * and along which track.
+     * What makes a line's shape its own: line, kind, stops, roads, and track.
      *
-     * <h2>Why the track is part of it</h2>
-     * A windowed reading does not hand a line's track over in one piece: it marks the stretch near the
-     * player, and every second the window slides it adds another piece to the same line. The stops do
-     * not change while that happens, so a key built from the stops alone goes on saying "the same
-     * line" while the track under it fills in -- and the shape worked out from the first window's
-     * worth of rails is drawn for the rest of the session, straight hops and all, over track that has
-     * since arrived. The track's own reading is therefore part of the key: its segment count and its
-     * revision, which the network moves on every time a piece is added to it.
+     * A windowed reading adds track a piece at a time without changing the stops, so a key built from stops alone would say "same line" while the track fills in, and a shape from the first window would be drawn for the rest of the session. The track's own reading -- segment count and revision -- is therefore part of the key.
      */
     private static String shapeKey(TransitLine line) {
         StringBuilder key = new StringBuilder();
         key.append(line.id()).append(line.kind().name());
-        // Whether the line rides its own marks is part of the shape: turning the imported rails off has
-        // to redraw the line along the roads it will now be ridden over, not leave the old drawing up.
+        // Whether the line rides its own marks is part of the shape: turning imported rails off must redraw
+        // the line along the roads it is now ridden over.
         key.append(MtrTransit.marksEnabled(line) ? "+marks" : "-marks");
         for (LineStop stop : line.stops()) {
             key.append('|').append(stop.x()).append(',').append(stop.z());
@@ -2474,31 +1852,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One line's path: its own track where it has one, and a planned route over the roads where it does
-     * not.
-     *
-     * <p>A line read out of MTR is drawn along the track it runs on, which is known and is not a question
-     * about anybody's roads -- and is drawn that way whether or not the line's marks are switched on. The
-     * switch decides whether that track is also added to the road network as rail or water roads; it has
-     * nothing to do with where the line is drawn. Planning an imported line over the roads instead, which
-     * is what this used to do, is what made a line switched off collapse into straight hops between its
-     * stops and read as having gone missing.
-     *
-     * <p>An imported line whose track is not known is therefore drawn as nothing at all: its stations are
-     * still marked, and a straight hop from one to the next would be a claim about ground the line may not
-     * cross. It is the same answer {@link TrackRuns} gives to a gap inside a track that is partly known,
-     * taken to its end -- the map shows the track it has and invents none. Such a line is not lost: a
-     * window that brings its rails is a window that draws it, and until then its stops are on the map.
-     *
-     * <p>A line of the player's own has no track of its own, so what is drawn is the route the mod
-     * plans between each neighbouring pair of its stops -- and a pair that cannot be planned is left as
-     * a gap rather than drawn as a straight hop, which is the same rule an imported line follows and
-     * the same reason. It used to be drawn as a hop, so that a mis-typed line was visible as a line
-     * rather than as a gap; on a world with a city's worth of lines that produced a web of straight
-     * lines across the whole map, each one claiming ground the line does not run over, and the real
-     * lines lost in it. A gap says what is true: the path is not known here. Every stop of every line
-     * is still marked, below, so a line whose path cannot be worked out at all is not a line nobody can
-     * find.
+     * One line's path: its own track where it has one, a planned route over the roads where it does not.
+     * An MTR line is drawn along its track whether or not its marks are on -- the switch decides only whether that track joins the road network as rail or water roads, not where the line is drawn. Planning it over roads instead is what made a switched-off line collapse into straight hops and look lost. An imported line whose track is unknown is drawn as nothing: its stations are marked, and a hop would claim ground it may not cross. It reappears when a window brings its rails. A player's line has no track, so its planned route is drawn; an unplannable pair is a gap rather than a hop, the same rule as an imported line. Hops used to produce a web of straight lines across the map, each claiming ground the line does not run over. Every stop is still marked.
      */
     private static LineShape planLine(TransitLine line,
                                       java.util.Map<String,
@@ -2538,47 +1893,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Works out where the direction marks of one line go, from the line's stops and its drawn shape.
-     *
-     * <p>One mark every {@link #TRANSIT_ARROW_SPACING_BLOCKS} blocks of drawn path, on each stretch of a
-     * line whose {@link TransitLine#oneWay()} is true; a two-way line gets an empty list. That is the
-     * whole of the visibility rule: the map is not annotating direction in general, and a line that can
-     * be ridden either way has no direction to annotate.
-     *
-     * <h2>Which way a stretch is travelled</h2>
-     * A run of drawn path has an order of its own -- the order its points are stored in -- and that
-     * order is not the travel order. A player's line is planned from each stop to the next in the
-     * line's list, but a track read out of MTR is drawn from the track's own pieces in the order their
-     * chain walk found them, which can be either way round. So a run is never asked which way it points:
-     * it is oriented by the line's own stops. A larger stop index means travel towards the list's end,
-     * which is what "from the first stop towards the last" means everywhere else in this feature (see
-     * {@link bili.dongsz.howtogo.transit.LineDirection}).
-     *
-     * <p>The first attempt is the run's ends: the stop nearest its first point and the stop nearest its
-     * last point, with the run travelled in the line's order when the second index is the larger and
-     * against it when the smaller. For a stretch that begins at one stop and ends at another, that is
-     * the answer.
-     *
-     * <p>A closed loop has no such ends: its stretch leaves a station and comes back to the same one,
-     * so the nearest stop at both ends is the same index and the ends say nothing. For that case the
-     * stretch is asked again at a quarter and at three quarters of its own length -- a loop passes its
-     * stops in the line's list order, so those two points stand next to different stops, and the larger
-     * of those two indices is the direction the loop is ridden in. This matters more than a corner
-     * case: a circular route is exactly how MTR hands this mod a one-way line, so leaving every loop
-     * unmarked would have left the direction marks with nothing to say about the case they exist for.
-     *
-     * <p>Only when those two indices are equal too is the stretch left unmarked, rather than given an
-     * invented direction. That is now the genuinely undecidable case: a ring whose whole stop list
-     * crowds one stretch of it, so no sample along the run lands nearer a different stop than the
-     * sample before it. A loop the ends alone could not tell is no longer this case, and a short
-     * stretch whose ends both stand nearer one stop than any other usually still finds two different
-     * stops a quarter and three quarters along it.
-     *
-     * <p>The nearest stop is found by distance alone, which assumes what the drawing already assumes:
-     * that a stretch of a line begins and ends at or near the stops it serves. The one case it gets
-     * wrong is a line that passes close to a stop it does not call at; the marks on that stretch would
-     * then be drawn the wrong way. There is no other evidence to use -- the direction is not stored on
-     * the geometry -- so the rule is stated here rather than hidden.
+     * Works out where the direction marks of one line go, from its stops and drawn shape.
+     * One mark every TRANSIT_ARROW_SPACING_BLOCKS of drawn path, on each stretch of a one-way line; a two-way line gets an empty list. A run's stored order is not the travel order -- a player's line is planned stop to stop, while an MTR track is drawn in chain-walk order. So a run is oriented by the line's stops: nearest stop at the run's first and last points, larger index meaning travel towards the list's end (see LineDirection). A closed loop has the same stop at both ends, so it is asked again at a quarter and three quarters of its length: a loop passes its stops in list order, so those samples stand next to different stops. Only when those indices are equal too is the stretch left unmarked rather than given an invented direction. Nearest stop is by distance alone, which assumes a stretch begins and ends near the stops it serves; the one miss is a line passing close to a stop it does not call at, and there is no other evidence -- the direction is not stored on the geometry.
      */
     private static List<LineArrow> planLineArrows(TransitLine line, LineShape shape) {
         if (!line.oneWay()) {
@@ -2601,13 +1917,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Adds the marks of one run of a one-way line, evenly spaced along it.
      *
-     * <p>Evenly spaced rather than at the exact spacing once the per-run bound applies: a run longer
-     * than the bound gets its marks at {@code length / count} blocks apart, so the whole run is marked
-     * rather than only the part of it the marks reached before the budget ran out. Below the bound the
-     * spacing is the world spacing and the marks are the reading asked for.
-     *
-     * <p>Which way the run is travelled is {@link #runTravelSign}'s answer; the rule behind it is
-     * stated on {@link #planLineArrows}, and a run it cannot orient is left unmarked.
+     * Evenly spaced once the per-run bound applies: a run longer than the bound gets marks at length / count blocks, so the whole run is marked. Below the bound the spacing is the world spacing. Direction is runTravelSign's answer; an unorientable run is left unmarked.
      */
     private static void addRunArrows(List<LineStop> stops, List<double[]> points,
                                      List<LineArrow> arrows, int budget) {
@@ -2624,8 +1934,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
         double travel = runTravelSign(stops, points, length);
         if (travel == 0.0) {
-            // Neither the run's ends nor a sample a quarter and three quarters along it could tell
-            // which way it is ridden: a mark there would be a guess. See planLineArrows.
+            // Neither the run's ends nor a sample a quarter and three quarters along it could tell which way it
+            // is ridden: a mark there would be a guess. See planLineArrows.
             return;
         }
         int count = (int) Math.floor(length / TRANSIT_ARROW_SPACING_BLOCKS);
@@ -2651,8 +1961,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             while (placed < count && nextAt <= travelled + edge) {
                 double at = (nextAt - travelled) / edge;
-                // The mark's bearing is the local edge's, so a mark on a bend follows the bend instead
-                // of all of them pointing the way the run happened to begin.
+                // The bearing is the local edge's, so a mark on a bend follows the bend rather than all pointing the
+                // way the run began.
                 arrows.add(new LineArrow(fromX + deltaX * at, fromZ + deltaZ * at,
                         travel * deltaX / edge, travel * deltaZ / edge));
                 placed++;
@@ -2665,16 +1975,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Which way round a run is written relative to the line's travel order.
      *
-     * <p>The first answer is the run's own ends: the stop nearest its first point and the stop nearest
-     * its last point, with the larger index meaning the stored order is the travel order. A closed
-     * loop has the same stop at both ends -- it leaves a station and comes back to it -- so it is
-     * asked again at a quarter and at three quarters of its length, whose nearest stops are different
-     * ones when the stops are spread round the ring. Larger again means the stored order is the travel
-     * order.
-     *
-     * @return +1 when the run's stored order is the line's travel order, -1 when it is against it, and
-     *         0 when neither pair of samples could tell the two apart: a ring whose whole stop list
-     *         crowds one stretch of it
+     * The run's own ends give the first answer; a closed loop has the same stop at both ends, so it is asked at a quarter and three quarters of its length instead. Returns +1 when stored order is travel order, -1 when against it, 0 when neither pair of samples could tell.
      */
     private static double runTravelSign(List<LineStop> stops, List<double[]> points, double length) {
         int fromIndex = nearestStop(stops, points.get(0)[0], points.get(0)[1]);
@@ -2683,9 +1984,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         if (fromIndex != toIndex) {
             return toIndex > fromIndex ? 1.0 : -1.0;
         }
-        // A quarter and three quarters along rather than the ends, which for a loop are the same
-        // place: a loop passes its stops in the line's list order, so these two samples stand next to
-        // different stops as long as the list is not crowded onto one stretch of the ring.
+        // A quarter and three quarters along rather than the ends, which for a loop are the same place; a
+        // loop passes its stops in list order, so the samples stand next to different stops unless the list
+        // crowds one stretch.
         double[] quarter = pointAt(points, length, 0.25);
         double[] threeQuarters = pointAt(points, length, 0.75);
         int quarterIndex = nearestStop(stops, quarter[0], quarter[1]);
@@ -2697,11 +1998,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * The point a given fraction of the way along a run, interpolated inside the edge it falls on.
-     *
-     * <p>Used only to ask a closed loop which way round it is ridden, and only when the shapes are
-     * rebuilt -- never per frame. It falls back to the run's last point only when rounding has eaten
-     * the final edge, in which case that point is the place.
+     * The point a given fraction along a run, interpolated inside the edge it falls on. Used only to orient a closed loop, and only on rebuild -- never per frame.
      */
     private static double[] pointAt(List<double[]> points, double length, double fraction) {
         double target = length * fraction;
@@ -2722,7 +2019,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return new double[] {last[0], last[1]};
     }
 
-    /** The index of the stop nearest the given world point, the earlier stop winning an exact tie. */
     private static int nearestStop(List<LineStop> stops, double x, double z) {
         int nearest = 0;
         double best = Double.POSITIVE_INFINITY;
@@ -2745,32 +2041,27 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                                      interchanges,
                                              Projection projection) {
         List<LineLabel> labels = new java.util.ArrayList<>();
-        // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is
-        // a line whose route the map should show, whichever of the two it came from.
+        // The player's lines and the ones read out of MTR: a line the mod will plan a journey over is one
+        // whose route the map should show, whichever it came from.
         List<TransitLine> lines = Navigation.linesInPlay();
         reportLines(lines);
         if (lines.isEmpty()) {
             return labels;
         }
-        // The screen-space transform, taken exactly as renderLabels takes it: the coordinates below come
-        // from MapViewState, which is already screen space, so they may only be emitted under an identity
-        // pose. Emitting them under the map's own transform applies that transform a second time, and a
-        // line that floats away from its own stops is what that looks like.
+        // The screen-space transform, taken exactly as renderLabels takes it: coordinates below are already
+        // screen space, so they may only be emitted under an identity pose; the map's own transform applied
+        // twice floats a line away from its stops.
         pose.pushPose();
         pose.last().pose().identity();
         pose.last().normal().identity();
         PoseStack.Pose screenPose = pose.last();
 
-        // The shapes the lines are drawn from, as they stand: what each line's own track is, stretched
-        // into the polylines the map draws. Brought up to date here rather than kept by the line list,
-        // because the track under a line arrives a window at a time and a shape built from the first
-        // window's worth of it would be drawn for the rest of the session.
+        // The shapes the lines are drawn from, brought up to date here rather than kept by the line list:
+        // the track under a line arrives a window at a time.
         shapeLines(lines);
 
-        // The zoom, and the piece of the world the screen is showing: the scale a stretch is thinned
-        // for, and the box it has to overlap to be drawn at all. Both are read from this frame's own
-        // projection, so the culling and the drawing cannot disagree about where the map is -- which is
-        // the same reason the coordinates below come from it rather than from the cached view state.
+        // The zoom and the screen's piece of the world, both from this frame's own projection so culling and
+        // drawing cannot disagree.
         double pixelsPerBlock = Math.max(Math.abs(projection.scale() * projection.m00()),
                 Math.abs(projection.scale() * projection.m11()));
         double leftEdge = projection.worldX(-margin);
@@ -2791,31 +2082,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
 
-        // The lines. Never shed by zoom: a line is what this map is for, and it is the one thing on it
-        // the roads do not already imply -- so the thinning above is what keeps a whole railway's worth
-        // of them affordable, and it is the only thing that does.
+        // The lines, never shed by zoom: they are what this map is for and the one thing the roads do not
+        // already imply. The thinning is what keeps a whole railway affordable.
         int stroked = 0;
         if (MapFilter.showsLines()) {
             for (int index = 0; index < lines.size(); index++) {
                 TransitLine line = lines.get(index);
-                // Each stretch on its own: the gaps between them are track this client has not been
-                // sent, or a pair of stops the router could not join, and a line drawn across one is a
-                // line drawn over ground the line does not cover. A line with no stretch at all is
-                // therefore drawn as nothing rather than as a straight line between its ends -- its
-                // stops are marked below, which is what makes it findable.
+                // Each stretch on its own: the gaps are track this client has not been sent or a pair of stops the
+                // router could not join, and a line drawn across one covers ground it does not. A line with no
+                // stretch draws nothing; its stops are still marked.
                 stroked += drawRuns(screenPose, vc, shapeAt(index).runsAt(pixelsPerBlock), projection,
                         margin, viewRight, viewBottom, minWorldX, minWorldZ, maxWorldX, maxWorldZ,
                         lineStrokePx(scale), lineColour(line), culled);
             }
         }
         MapPassReport.lines(System.nanoTime() - startedAt, lines.size(), stroked, sourcePoints, culled[0]);
-        // The direction of a one-way line, and only while the road editor is open. The map is not a
-        // sign: everywhere else it draws which lines exist and where they go, and marking the direction
-        // of every one-way line on it would be annotating the network rather than editing it. In the
-        // editor the direction is exactly the thing being worked on, and the marks are the same arrow
-        // the editor already draws along a one-way road -- same ink, same head, see emitLineArrows --
-        // so a rider reads one language for both. Emitted straight after the strokes they belong to,
-        // in the same screen space, so a mark cannot drift off the line under it while the map moves.
+        // A one-way line's direction, only while the road editor is open: elsewhere marking every one-way
+        // line would be annotating the network rather than editing it. The marks are the editor's own arrow
+        // (same ink and head, see emitLineArrows), emitted straight after the strokes so they cannot drift
+        // while the map moves.
         if (MapFilter.showsLines() && RoadEditSession.isActive()) {
             HudDraw.VertexSink arrowSink = HudDraw.sink(screenPose, vc);
             for (int index = 0; index < lines.size(); index++) {
@@ -2825,22 +2110,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 emitLineArrows(arrowSink, arrowsAt(index), projection, margin, viewRight, viewBottom);
             }
         }
-        // No name is drawn along a line. It was tried at the middle stop and at the middle of the path
-        // and was wrong in both places -- on a line that curves or loops, no single point along it is
-        // the middle a reader means, and a name written over the stroke or beside a station marker is
-        // worse than no name. Read off the line editor instead, which lists a line's stops in order and
-        // has room to say what it is called.
+        // No name is drawn along a line: on a line that curves or loops no single point is the middle a
+        // reader means. Read the name off the line editor, which lists the stops in order.
         if (!MapFilter.showsLines()) {
-            // The lines, their stops and the interchanges two of them meet at are what this switch
-            // turns off. The railway they run on is not theirs -- it answers to the switches beside
-            // roads and railways -- so it stays, and so does everything below this.
+            // The lines, their stops and their interchanges are what this switch turns off. The railway they run
+            // on answers to the switches beside roads and railways, so it stays.
             pose.popPose();
             return labels;
         }
 
-        // The stops, each at the size a place on the ground covers at this zoom, and each only while the
-        // place it stands at is being drawn at all: a stop marker left behind by a station that the zoom
-        // (or the panel) has taken off the map is a dot pointing at nothing.
+        // The stops, each at the size a place on the ground covers at this zoom, and only while the place it
+        // stands at is drawn: a stop left behind by a shed station points at nothing.
         double stopHalf = markerHalfPx(LINE_STOP_PX, scale);
         for (TransitLine line : lines) {
             for (LineStop stop : line.stops()) {
@@ -2862,14 +2142,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
 
-        // One marker per place two lines meet at, and one marker per group of its stops that land on top
-        // of each other: at a zoom where the two stops are far apart they are drawn separately, which is
-        // the map showing what it knows rather than fusing them at every scale. A group of one is that
-        // stop's own marker, in the interchange colour, because a stop two lines call at is an
-        // interchange whether or not its marker happens to touch the other's.
+        // One marker per place two lines meet at, and one per group of its stops that land on top of each
+        // other: far apart at high zoom they are drawn separately, and a group of one is that stop's own
+        // marker in the interchange colour.
         //
-        // An interchange is a station, so it goes the way the stations go: the zoom that takes the station
-        // markers off the map takes these with them.
+        // An interchange is a station, so it goes when the station markers go.
         if (MapFilter.shows(PlaceKind.STATION, scale)) {
             for (TransitInterchanges.Interchange interchange : interchanges) {
                 for (List<Integer> group : TransitInterchanges.overlapping(interchange,
@@ -2892,8 +2169,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                 COLOR_LINE_STOP_EDGE);
                         HudDraw.emitPlaceMarker(HudDraw.sink(screenPose, vc), x, y, stopHalf, COLOR_LINE_TRANSFER);
                     } else {
-                        // A square, and the same size as a stop's round marker: the fused place is a thing
-                        // of its own rather than a stop of either line, and the shape is what says so.
+                        // A square, the same size as a stop's round marker: the fused place is its own thing and the shape
+                        // says so.
                         emitBox(screenPose, vc, x, y, stopHalf + 1.0, stopHalf + 1.0,
                                 COLOR_LINE_STOP_EDGE);
                         emitBox(screenPose, vc, x, y, stopHalf, stopHalf, COLOR_LINE_TRANSFER);
@@ -2905,50 +2182,17 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return labels;
     }
 
-    /** One line's shape, or nothing when the shapes and the lines have somehow come apart. */
     private static LineShape shapeAt(int index) {
         return index < lineShapes.size() ? lineShapes.get(index) : LineShape.EMPTY;
     }
 
-    /** One line's direction marks, or nothing when the marks and the lines have somehow come apart. */
     private static List<LineArrow> arrowsAt(int index) {
         return index < lineArrows.size() ? lineArrows.get(index) : List.of();
     }
 
     /**
      * Draws the direction marks of one one-way line that the screen can see.
-     *
-     * <p>Per frame this only projects and emits: where each mark stands and which way it points were
-     * worked out with the line's shape (see {@link #planLineArrows}), so what is left is the same
-     * arithmetic the strokes do -- this frame's own {@link Projection}, the same visible rectangle and
-     * margin, and one arrowhead of a fixed screen size. The marks are culled one by one rather than by
-     * the run's box because the box is the whole line: a line crossing the screen has most of its marks
-     * just off it, and the point test is two comparisons.
-     *
-     * <p>The bearing is taken by projecting a one-block step along the mark's direction and normalising
-     * the result, not from the projection's scale factors: that is the projection's own answer, so a
-     * pose whose scale signs flip the map still draws the mark pointing where the line goes on the
-     * screen. The arrowhead itself is {@link #emitArrowHead}, the one the editor draws on a one-way road
-     * -- a light head over a dark rim -- because a direction means the same thing whichever kind of way
-     * it belongs to. The ink is a fixed pair rather than one chosen per line: a line's colour may be any
-     * value a player typed, an imported route's colour, or its kind's configured colour, and this pair
-     * is legible on all of them -- the light head stands off the dark colours, and the rim separates it
-     * from the pale ones. That is the same reason the pair exists on the roads' own marks, and it is the
-     * labels' own two inks: the rim is the dark ink the sign cards are lettered in (0x10141A) carried at
-     * a slight transparency, and the head a light ink in the same family.
-     *
-     * <h2>What has and has not been checked</h2>
-     * This has not been looked at in a running game. What was checked is that the mod and the routing
-     * harness compile with it, and the geometry rules stated on {@link #planLineArrows} -- the travel
-     * order from the nearest stops, the placement, the bounds -- are worked out from the line's own data
-     * and not from anything read off a screen. What needs a human eye in the game is the reading: the
-     * marks' size on a stroke two and a half pixels wide at the zooms a player actually uses, their
-     * contrast on the palest line colours, and whether one mark every sixty-four blocks reads as a
-     * direction or as a texture along a long straight run. The three constants are the place to change
-     * those answers.
-     *
-     * @param out the sink for the frame's vertex batch, made once by the caller so a line with thirty
-     *            marks does not make thirty sinks
+     * Per frame this only projects and emits: placement and direction were worked out with the shape (see planLineArrows). Marks are culled one by one, because a line crossing the screen has most of its marks just off it and the point test is two comparisons. The bearing is taken by projecting a one-block step along the mark's direction and normalising, so a pose whose scale signs flip the map still draws the mark pointing where the line goes on screen. The arrowhead is emitArrowHead, the editor's own (light head over dark rim), with fixed inks legible on any line colour: a line's colour may be any value a player typed, an imported route's colour or its kind's configured colour. Not yet looked at in a running game: what needs a human eye is the marks' size on a 2.5 px stroke at real zooms, their contrast on the palest colours, and whether one mark every 64 blocks reads as direction or as texture. The three constants are where to change that.
      */
     private static void emitLineArrows(HudDraw.VertexSink out, List<LineArrow> arrows,
                                        Projection projection, int margin, int viewRight,
@@ -2963,8 +2207,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             double directionY = projection.screenZ(arrow.z() + arrow.dirZ()) - y;
             double length = Math.hypot(directionX, directionY);
             if (!(length > 1.0E-9)) {
-                // The line is drawn so far zoomed out that a block is less than a pixel, and a mark
-                // whose direction has collapsed to a point is not a direction.
+                // The line is drawn so far zoomed out that a block is under a pixel, and a collapsed direction is
+                // not a direction.
                 continue;
             }
             emitArrowHead(out, x, y, directionX / length, directionY / length, TRANSIT_ARROW_PX);
@@ -2972,13 +2216,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Brings the line shapes up to date, and leaves them in step with the lines they were built for.
+     * Brings the line shapes up to date and leaves them in step with the lines they were built for.
      *
-     * <p>Asked from two passes now -- the marks and the lines -- so it is one call with the check that
-     * the two lists agree, rather than the same guard written twice. The check is not paranoia: the
-     * failure it would cause is silent and total, since indexing past the end throws, the whole overlay
-     * is lost for that frame, and what the player sees is every line disappearing at once, which reads
-     * as the mod having forgotten them. Rebuilding is cheap next to that.
+     * Asked from two passes now, so one call with the check rather than the same guard twice. A mismatch is silent and total -- indexing past the end throws, the overlay is lost for that frame and every line disappears at once.
      */
     private static void shapeLines(List<TransitLine> lines) {
         refreshLineShapes(lines);
@@ -2990,25 +2230,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * MTR's marks: the track each line read out of MTR runs along, as polylines thinned to the zoom.
-     *
-     * <h2>Why this is not the map's element list</h2>
-     * It was: one map element per rail of every line whose marks are switched on, which on a whole
-     * railway is tens of thousands of elements, each drawn as a quad per vertex of its own sampling and
-     * most of them a fraction of a pixel at any zoom a map is readable at. A cost that grows with the
-     * railway while what is on the screen does not, which is what made a map of a whole railway slow to
-     * draw. Here they are instead drawn from the very polylines the lines themselves are drawn from --
-     * a line's marks <em>are</em> its own track, cut by the same code -- so the drawing is thinned,
-     * culled by the box each stretch fits in, and paid for once per line rather than once per rail.
-     *
-     * <p>A line's own switch decides whether its track is here at all, and the class's switch (and the
-     * zoom) decides whether it is drawn: a mark is rail for a train and water for a boat, so the two
-     * questions are asked of the line's kind rather than of one class for all of them.
+     * Not one map element per rail: a whole railway is tens of thousands of elements, each a quad per sampled vertex and most a fraction of a pixel, a cost that grows with the railway while the screen does not. Here they are drawn from the very polylines the lines are drawn from -- a line's marks are its own track -- so drawing is thinned, culled by each stretch's box, and paid once per line. The line's own switch decides whether its track is here; the class switch and zoom decide whether it is drawn. Marks are rail for a train and water for a boat, asked of the line's kind rather than one class for all.
      */
     private void drawMarks(PoseStack pose, VertexConsumer vc, int margin, int viewRight, int viewBottom,
                            double scale, Projection projection) {
-        // A line whose marks are off is not drawn here, and one whose kind has no class at all is not a
-        // line this mod has -- see buildLines, which refuses those. Nothing to ask of the switch above
-        // that: marksEnabled is the one place the answer lives.
+        // A line whose marks are off is not drawn here; one whose kind has no class is not a line this mod
+        // has (see buildLines). marksEnabled is the one place the answer lives.
         List<TransitLine> lines = Navigation.linesInPlay();
         if (lines.isEmpty()) {
             return;
@@ -3056,19 +2283,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Draws the stretches of one shape that the screen can see, as strokes.
-     *
-     * <p>The culling is by the box each stretch fits in, which is why it is worth having: a whole
-     * railway's worth of lines is mostly off the screen, and a stretch nobody can see costs nothing to
-     * draw but still costs a walk of its points to find that out. Each stretch that survives is drawn
-     * in full, because a stretch that crosses the screen has both ends outside it and is exactly the
-     * one a per-point test would throw away.
-     *
-     * @param halfWidth half the stroke's width in screen pixels -- the marks and the lines themselves
-     *                  are the same drawing at two widths
-     * @param culled    a one-element counter, added to for every stretch the screen does not touch, so
-     *                  that the pass can report what the culling saved
-     * @return how many strokes were emitted
+     * Draws the stretches of one shape the screen can see, as strokes.
+     * Culling is by each stretch's box: a whole railway is mostly off screen, and a stretch nobody can see costs a walk of its points to learn that. A surviving stretch is drawn in full, since one crossing the screen has both ends outside it and is exactly what a per-point test would drop. halfWidth is half the stroke's width in screen pixels; culled counts stretches the screen does not touch; returns how many strokes were emitted.
      */
     private static int drawRuns(PoseStack.Pose screenPose, VertexConsumer vc, List<PathRuns.Run> runs,
                                 Projection projection, int margin, int viewRight, int viewBottom,
@@ -3077,9 +2293,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
-        // As in the road pass: the alpha is the colour's own. Lines and marks are both drawn from
-        // colours that are opaque unless a player has configured otherwise, and a configured
-        // transparency must be the transparency drawn.
+        // As in the road pass: the alpha is the colour's own; configured transparency must be the
+        // transparency drawn.
         int a = (argb >>> 24) & 0xFF;
         int stroked = 0;
         for (PathRuns.Run run : runs) {
@@ -3107,11 +2322,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Whether the place a stop stands at is being drawn, which is what the stop marker follows.
-     *
-     * <p>A stop made at a place the player marked is that place's kind; a stop at a station this mod read
-     * out of another mod is a station. The two answers differ in what the map's switches do to them: a
-     * line calling at a shop is hidden with the shops, and one calling at a station with the stations.
+     * Whether the place a stop stands at is being drawn, which is what the stop marker follows. A stop at a player's place is that place's kind; a stop at a read station is a station -- so a line calling at a shop is hidden with the shops.
      */
     private static boolean standShown(LineStop stop, double scale) {
         if (stop.nodeId() == LineStop.NO_NODE) {
@@ -3124,10 +2335,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Half the width of a marker drawn at the given map scale, in screen pixels.
      *
-     * <p>The map's own transform is not applied to markers -- they are emitted in screen space -- so the
-     * size has to be worked out from the scale by hand. What it buys is a marker that keeps its size on
-     * the ground: the same place covers more pixels when the map is zoomed in, and fewer when it is
-     * zoomed out, until the bounds stop it.
+     * Markers are emitted in screen space, so the map transform is not applied and the size is worked out from the scale by hand: the same place covers more pixels zoomed in, until the bounds stop it.
      */
     private static double markerHalfPx(double fullSizePx, double scale) {
         double natural = fullSizePx * 0.5 * Math.abs(scale) / MARKER_NATURAL_SCALE;
@@ -3137,10 +2345,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * How wide a transit line is drawn, in screen pixels.
      *
-     * <p>A line's stroke is emitted in screen space, so a constant number is a stroke that grows
-     * <em>relative to the map</em> as the map is zoomed out: at a scale where a road is a hairline, a
-     * line was still two and a half pixels of solid colour and read as a rope laid over the map. It
-     * thins with the map down to a floor, so it is never invisible and never fat.
+     * A constant would grow relative to the map as it is zoomed out: at a scale where a road is a hairline, a two-and-a-half-pixel line reads as a rope over the map. It thins with the map to a floor, so it is never invisible and never fat.
      */
     private static double lineStrokePx(double scale) {
         double thinned = LINE_STROKE_PX * Math.abs(scale) / FULL_LINE_STROKE_SCALE;
@@ -3150,11 +2355,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * How many lines the map is drawing, written when that changes.
      *
-     * <p>One line per change and none otherwise, and only while a map is open. It is here because "the
-     * line disappeared" has two very different causes that look identical from outside -- the line
-     * leaving the list the map draws from, and the line being in the list but drawn nowhere -- and this
-     * is the number that tells them apart without a guess: a count that stays put while the stroke goes
-     * is the second, and a count that drops is the first.
+     * "the line disappeared" has two causes that look identical: the line leaving the list, and the line in the list but drawn nowhere. A count that stays while the stroke goes is the second; a count that drops is the first.
      */
     private static void reportLines(List<TransitLine> lines) {
         if (lines.size() == reportedLineCount) {
@@ -3174,7 +2375,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 imported, stops, MtrTransit.rememberedLines(), MtrTransit.rememberedStations());
     }
 
-    /** Whether a place is one of the stops an interchange marker already stands for. */
     private static boolean inAnInterchange(
             java.util.List<TransitInterchanges.Interchange> interchanges, int x, int z) {
         for (TransitInterchanges.Interchange interchange : interchanges) {
@@ -3185,16 +2385,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return false;
     }
 
-    /** A line's name and where to write it, kept until every shape has been emitted. */
     private record LineLabel(String name, double x, double y, int colour) {
     }
 
     /**
      * The line names, written after the shapes.
      *
-     * <p>Last because drawing text flushes the vertex batch: a name written before the polyline and the
-     * stop markers would leave them being emitted into a buffer that had already been sent, which is
-     * how a map ends up with no shapes on it and an exception in the log.
+     * Last because drawing text flushes the vertex batch: a name written before the polylines and stop markers would leave them emitted into a buffer already sent, which is how a map ends up with no shapes and an exception in the log.
      */
     //? if >=1.21.6 {
     /*private void drawLineNames(MapElementGraphics graphics, List<LineLabel> labels) {
@@ -3217,23 +2414,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * A line's colour: its own when it has one, and its kind's configured colour when it does not.
+     * A line's colour: its own when it has one, its kind's configured colour otherwise.
      *
-     * <h2>Why the line and not only its kind</h2>
-     * The kinds are what a reader of the map already knows -- a rail line is the railway, a boat line
-     * is the waterway -- and a line without a colour of its own still follows that, so a network where
-     * every rail line is the same colour keeps saying which of them a given stretch of track belongs
-     * to. A colour of the line's own is the other case: an MTR route arrives with one, and a player
-     * who runs two rail lines through one interchange needs them told apart on the map. The colour is
-     * therefore asked of the line first, with the kind's colour as the fallback every drawing site
-     * shares -- the stroke, the stop markers, the interchange markers made of stops, the line list's
-     * swatch and the place card's chips all ask this one method or the one rule it states.
-     *
-     * <p>The colours themselves are configurable, so a player who wants their rail and water lines
-     * told apart from the road and ice ones can have it without every line becoming its own colour.
-     * The stop markers read the same answer, which is what makes a platform shared by two lines of
-     * one kind show that kind's colour rather than one of the two at random -- and a platform shared
-     * by an MTR line with its own colour show that line's.
+     * The kinds are what a map reader knows and keep a network of same-kind lines readable; a colour of the line's own (an imported route arrives with one) tells apart two lines through one interchange. The stroke, stop markers, interchange markers, list swatch and place-card chips all ask this one method. A platform shared by two lines of one kind shows the kind's colour, and one shared with an MTR line shows that line's.
      */
     private static int lineColour(TransitLine line) {
         return line.colorOr(RoadConfig.transitLineColor(line.kind()));
@@ -3241,17 +2424,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * A yellow square at every place, and the square's box reserved on the label board.
-     *
-     * <p>The reservation is what keeps a place's own name off its own marker and keeps a road's name
-     * from covering the place it runs past. It is taken for the markers actually emitted, so a place
-     * that the panel or the zoom has taken off the map does not keep a hole in the label layout for a
-     * marker nobody can see.
-     *
-     * <p>A favourite carries a small star on its marker's corner, in the same block and the same
-     * sink as the marker: the star is a shape, and a shape emitted after the text pass below would
-     * be written into a buffer a string had already flushed. Only the places from
-     * {@link Destinations#places()} can carry one -- an addon's road-data points in the second loop
-     * have no {@code Destination} and so no source-stable id to key a detail record with.
+     * The reservation keeps a place's own name off its marker and a road's name off the place it passes. It is taken only for emitted markers, so a shed place keeps no hole in the label layout. A favourite carries a small star in the same block and sink as its marker: a shape emitted after the text pass would go into an already-flushed buffer. Only Destinations#places() can carry one -- an addon's road-data points have no Destination and no source-stable id.
      */
     private void drawPlaceMarkers(PoseStack.Pose screenPose, VertexConsumer vc,
                                   int margin, int viewRight, int viewBottom,
@@ -3259,15 +2432,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                                   double scale, Projection projection, LabelBoard board) {
         double half = markerHalfPx(HudDraw.PLACE_MARKER_PX, scale);
         for (Destination place : Destinations.places()) {
-            // The panel's switches and the map's zoom, through the one rule: a shop is shed before a
-            // station, and a resource point -- worth travelling to from far away -- last of all.
+            // The panel's switches and the map's zoom through the one rule: a shop is shed before a station, and
+            // a resource point last.
             if (!MapFilter.shows(place.kind(), scale)) {
                 continue;
             }
-            // A place a line stops at is drawn twice -- once as a place, once as the stop -- and the two
-            // markers are the same size in the same spot, so the later one hides the earlier. That is the
-            // wrong way round for an interchange, whose whole point is its colour: the place marker
-            // stands aside there and lets the orange marker be the one that is seen.
+            // A place a line stops at is drawn twice, and the later marker hides the earlier. That is wrong for
+            // an interchange, whose point is its colour: the place marker stands aside there.
             if (inAnInterchange(interchanges, place.x(), place.z())) {
                 continue;
             }
@@ -3279,8 +2450,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             HudDraw.VertexSink markerSink = HudDraw.sink(screenPose, vc);
             HudDraw.emitPlaceMarker(markerSink, x, y, half, HudDraw.COLOR_PLACE);
             if (PlaceDetailStore.isFavorite(place)) {
-                // The star sits on the marker's top-right corner at the marker's own size: a badge
-                // is a mark on the marker, not a second marker that would compete with it.
+                // The star sits on the marker's top-right corner at the marker's own size: a badge, not a second
+                // marker.
                 HudDraw.emitStar(markerSink, x + half, y - half, Math.max(1.4, half * 0.9),
                         UiTheme.accent());
             }
@@ -3288,10 +2459,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             board.reserve(box(x, y, half * 2.0, half * 2.0));
         }
 
-        // An addon's places, by the same rule: the marker is a screen size, and the panel's switches
-        // shed a shop before a station for these exactly as they do for the player's own. Drawn after
-        // the player's places because the player's are the ones a route can be planned to, and a
-        // marker that hides another should be the one with more behind it.
+        // An addon's places by the same rule: screen-size markers, the panel's switches shedding a shop
+        // before a station. Drawn after the player's places, since those are the ones a route can be planned
+        // to.
         for (RoadNode node : AddonRoadStore.nodes()) {
             if (node.type() != RoadNode.Type.POI || !MapFilter.shows(node.placeKind(), scale)) {
                 continue;
@@ -3308,24 +2478,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     /**
      * The active navigation route, drawn over the roads.
-     *
-     * <h2>The ink</h2>
-     * Each stretch of the route is drawn in its own colour -- blue where it is walked, green where
-     * it is driven, the line's own colour where it is ridden -- and everything behind the player is
-     * grey, the way a navigation app colours progress. The stretches come from {@code
-     * Navigation.routeInk}, which is the same table the panel, the minimap and the two viewers draw,
-     * so no surface can disagree about what a ride looks like.
-     *
-     * <h2>Why this is not a polyline stroke</h2>
-     * This map draws the route as one quad per edge with a dot at every joint, unlike the
-     * self-drawn maps, which stroke the whole line as one shape. The two look deliberately
-     * different at this scale, and the split of an edge at the player's exact position is what keeps
-     * the grey boundary from lurching a segment at a time -- so the edges and the dots are still
-     * emitted one at a time, with the stretch's colour replacing the old single "ahead" colour.
-     *
-     * <p>The dots are a second pass, after every edge: a dot drawn inside the edge loop would be
-     * painted over by the next stretch's edges where two stretches meet, and the joint at a station
-     * would show a notch in the colour that is leaving rather than the one that is arriving.
+     * Each stretch is drawn in its own colour -- blue walked, green driven, the line's colour ridden -- and everything behind the player is grey, as a navigation app colours progress. Stretches come from Navigation.routeInk, the same table the panel, minimap and viewers draw. This map draws the route as one quad per edge with a dot at every joint, unlike the stroked self-drawn maps; splitting an edge at the player's exact position keeps the grey boundary from lurching a segment at a time. Dots are a second pass after every edge, so a dot is not painted over where two stretches meet and a joint shows the arriving colour.
      */
     private void renderRoute(RoadElement element, PoseStack.Pose pose, VertexConsumer vc,
                              double fracX, double fracY, double p10, double posePerPixel) {
@@ -3335,8 +2488,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         HudDraw.RouteInk ink = Navigation.routeInk();
 
         if (!ink.isPresent()) {
-            // Still show where the trip started and where it is trying to get to, so a failed
-            // route does not look like the destination was never set.
+            // Still show where the trip started and where it is trying to get to, so a failed route does not
+            // look like the destination was never set.
             drawMarker(pose, vc, anchorX, anchorZ, fracX, fracY, p10,
                     Navigation.tripOriginX(), Navigation.tripOriginZ(), marker, COLOR_ROUTE_START);
             Destination destination = Navigation.target();
@@ -3410,15 +2563,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         }
 
         double[] end = points.get(points.size() - 1);
-        // The origin marker is pinned to where the trip began, not to the current route's first
-        // point, so re-planning after a detour does not drag it along.
+        // The origin is pinned to where the trip began, not to the current route's first point, so
+        // re-planning after a detour does not drag it along.
         drawMarker(pose, vc, anchorX, anchorZ, fracX, fracY, p10,
                 Navigation.tripOriginX(), Navigation.tripOriginZ(), marker, COLOR_ROUTE_START);
         drawMarker(pose, vc, anchorX, anchorZ, fracX, fracY, p10,
                 end[0], end[1], marker, COLOR_ROUTE_END);
     }
 
-    /** Draws one of the round route endpoint markers. */
     private static void drawMarker(PoseStack.Pose pose, VertexConsumer vc,
                                    double anchorX, double anchorZ, double fracX, double fracY,
                                    double p10, double worldX, double worldZ,
@@ -3431,21 +2583,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Bottom-of-screen readout: the trip readout with the editing headline on the left, the road
-     * editing controls on the right.
-     *
-     * <p>The map pose is flattened to identity first, so this draws in plain GUI coordinates the
-     * same way any other screen text would. Each block is sized to its own text rather than to the
-     * full width, and is inset from its own edge, so neither sits on top of Xaero's own bars.
-     *
-     * <p>The split is by how often each line is read. The class being drawn, the swatch standing for
-     * it and the live totals belong with the readout, where the player is already looking; the
-     * control list is a reference consulted once and then ignored, so it is worth a block of its own
-     * out of the way rather than a long line crowded in beside everything else.
-     *
-     * <p>Every quad goes out before any string. A text draw flushes the buffer source, so a quad
-     * emitted after one would have to go through a consumer fetched afresh; keeping the fills in a
-     * single pass removes the question, and this method borrows no consumer of its own.
+     * Bottom-of-screen readout: the trip readout with the editing headline on the left, the road editing controls on the right.
+     * The map pose is flattened to identity first, so this draws in plain GUI coordinates. Each block is sized to its own text and inset from its own edge, so neither sits on Xaero's bars. The split is by how often each line is read: the class, its swatch and live totals belong with the readout, while the control list is a reference consulted once and kept out of the way. Every quad goes out before any string: a text draw flushes the buffer source, so keeping the fills in one pass removes the question.
      */
     //? if >=1.21.6 {
     /*private void renderHud(MapElementGraphics graphics, PoseStack pose) {
@@ -3471,8 +2610,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 leftLines.add(Component.translatable("hud.howtogo.nav_progress",
                         remaining, Navigation.modeLabel(), eta).getString());
 
-                // Says so on the map readout too: the mode is named just above, and a route that
-                // quietly ignores it would look like the estimate had gone wrong.
+                // Says so on the map readout too: the mode is named just above, and a route that quietly ignores it
+                // would look like a wrong estimate.
                 String fallback = Navigation.fallbackHint();
                 if (fallback != null) {
                     leftLines.add(fallback);
@@ -3487,9 +2626,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
 
-        // The editing headline follows the readout in the same block: the caption names the class,
-        // the swatch beside it is that name in colour, and the totals below are the same subject.
-        // Only the control scheme is elsewhere, one control per line.
+        // The editing headline follows the readout in the same block: the caption names the class, the
+        // swatch is that name in colour, the totals are the same subject; only the control scheme is
+        // elsewhere, one control per line.
         List<String> hintLines = new ArrayList<>();
         int swatchColor = 0;
         int swatchLine = 0;
@@ -3502,17 +2641,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     segmentSelected ? "hud.howtogo.selected" : "hud.howtogo.drawing",
                     Navigation.roadClassLabel(roadClass)).getString();
             if (segmentSelected) {
-                // The one-way state of the road the player has selected, spelled out: the arrows on the
-                // map say which way it runs, and this says what pressing the key again will do to it.
+                // The selected road's one-way state spelled out: the arrows say which way it runs, this says what
+                // the key will do to it.
                 RoadDirection direction = RoadEditSession.editor()
                         .chainDirection(RoadEditSession.editor().selectedSegmentId());
                 headline = headline + " · " + Component.translatable(
                         "hud.howtogo.direction." + direction.id()).getString();
-                // Then where it is and how long it is, in that order: a storey is the thing a flat map
-                // cannot show, so it is the first question a selected road raises, and the length is the
-                // number a player reads once the road is the right one. Both are about the whole road
-                // rather than the piece under the cursor -- see RoadEditor.chainLength -- because that is
-                // what selecting a road selects.
+                // Where the selected road is and how long it is, in that order: storey is what a flat map cannot
+                // show, and the length is read once the road is the right one. Both are about the whole road, not
+                // the piece under the cursor (see RoadEditor.chainLength).
                 headline = headline + " · " + Component.translatable("hud.howtogo.layer",
                         Navigation.roadLayerLabel(RoadEditSession.selectedLayer())).getString();
                 headline = headline + " · " + Component.translatable("hud.howtogo.selected_length",
@@ -3535,29 +2672,24 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.last().pose().identity();
         pose.last().normal().identity();
 
-        // The swatch sits in the indent left of the text, on the caption line it stands for, so the
-        // whole block moves right by that indent and the caption keeps its place in the column.
+        // The swatch sits in the indent left of the text, on the caption line it stands for.
         int leftIndent = swatchColor != 0 ? 11 : 0;
         int leftWidth = widestLine(font, leftLines);
         int leftTop = blockTop(hudBottom(screenHeight), leftLines.size());
         int leftPanelRight = HUD_LEFT_INSET + leftWidth + leftIndent + 6;
 
-        // The hints carry no swatch, so their panel is the text with the same padding on both sides,
-        // and it is the text that is aligned: its right edge lands on the inset the left block starts
-        // from. Floored at the screen margin rather than left to run negative, so a hint too wide for
-        // the gap between the insets slides the block rightwards instead of off the screen -- which
-        // these strings are nowhere near, but which should not depend on them staying short.
+        // The hints carry no swatch, so their panel is the text with equal padding and the text is what is
+        // aligned: its right edge lands on the inset the left block starts from. Floored at the screen
+        // margin so a hint too wide slides the block rightwards instead of off screen.
         int hintWidth = widestLine(font, hintLines);
         int hintTextRight = Math.max(screenWidth - HUD_RIGHT_INSET, HUD_MARGIN + hintWidth + 4);
         int hintPanelLeft = hintTextRight - hintWidth - 4;
         int hintTextLeft = hintPanelLeft + 4;
 
-        // Both blocks live in the bottom band, and a long navigation or stats line can be wider than
-        // the gap between the two insets, which would print them over each other. The readout, the
-        // caption and the totals are the ones anchored to their corner, so the hint list is what
-        // moves: it steps up above the other panel when, and only when, the two would meet. The 3
-        // and 2 are the panels' own overhangs above their first line and below their last, which the
-        // gap has to clear as well as the margin.
+        // Both blocks live in the bottom band, and a long navigation or stats line can be wider than the gap
+        // between the insets. The readout, caption and totals are anchored to their corners, so the hint
+        // list moves: it steps above the other panel when, and only when, the two would meet. The 3 and 2
+        // are the panels' overhangs above the first line and below the last.
         int hintBottom = hudBottom(screenHeight);
         if (!leftLines.isEmpty() && !hintLines.isEmpty()
                 && leftPanelRight + HUD_MARGIN > hintPanelLeft) {
@@ -3592,16 +2724,14 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         pose.popPose();
     }
 
-    /** Live totals for the road being drawn. */
     private static String editStats() {
         String stats = Component.translatable("hud.howtogo.stats",
                 (int) Math.round(RoadEditSession.pendingLength()),
                 (int) Math.round(RoadEditSession.totalLength()),
                 RoadStore.get().nodeCount(),
                 RoadStore.get().segmentCount()).getString();
-        // The storey being drawn on, always shown rather than only when it is not the surface: it is
-        // invisible on a map that cannot show height, so a player who has moved one road and not the
-        // next has nothing else to tell them which is which.
+        // The storey being drawn on, always shown rather than only off the surface: it is invisible on a map
+        // that cannot show height, so a player who moved one road and not the next has nothing else.
         stats = stats + "   " + Component.translatable("hud.howtogo.layer",
                 Navigation.roadLayerLabel(RoadEditSession.activeLayer())).getString();
         if (RoadEditSession.isFreePlacementActive()) {
@@ -3611,7 +2741,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return stats;
     }
 
-    /** The editing controls, one per line, in the order they are worth learning. */
     private static List<String> controlHints() {
         List<String> hints = new ArrayList<>(EDIT_HINT_KEYS.size());
         for (String key : EDIT_HINT_KEYS) {
@@ -3620,7 +2749,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return hints;
     }
 
-    /** Width of the widest line in a block, which is what its backing panel is sized to. */
     private static int widestLine(Font font, List<String> lines) {
         int widest = 0;
         for (String line : lines) {
@@ -3630,10 +2758,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Line a HUD block's bottom is anchored to.
-     *
-     * <p>The 4 px covers the panel's own 2 px overhang below its last line and keeps that overhang
-     * off the margin line, so a block never quite touches the screen edge.
+     * Line a HUD block's bottom is anchored to. The 4 px covers the panel's 2 px overhang and keeps it off the margin line.
      */
     private static int hudBottom(int screenHeight) {
         return screenHeight - HUD_MARGIN - 4;
@@ -3642,17 +2767,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Top of a block of the given line count sitting on the given bottom.
      *
-     * <p>Nothing is clamped here because nothing needs to be: the worst case is a six-line left block
-     * -- four navigation lines, the caption and the totals -- with the thirteen-line control list stepped
-     * above it, whose panel top still lands around 10 px of a scaled space Minecraft never makes shorter
-     * than 240. A longer list would run off the top and be clipped by the renderer, which is the
-     * point at which this would need a scroll or a second column rather than more lines.
+     * Nothing is clamped: the worst case is a six-line left block with the thirteen-line control list stepped above it, whose top still lands around 10 px of a scaled space never shorter than 240. A longer list would need a scroll or a second column.
      */
     private static int blockTop(int bottom, int lineCount) {
         return bottom - HUD_LINE_HEIGHT * lineCount;
     }
 
-    /** Human-readable phrase for a signed turn angle, positive being a right turn. */
     private static String turnPhrase(double degrees) {
         return Navigation.turnPhrase(degrees);
     }
@@ -3668,9 +2788,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Half the on-screen stroke width in pixels for a road of the given class.
      *
-     * <p>Below the cap the width is the road's true block width at the current zoom, so the map
-     * stays metrically honest when zoomed out. Above it the stroke stops widening, which keeps
-     * high zoom levels readable instead of turning every road into a solid band.
+     * Below the cap it is the road's true block width at this zoom, so the map stays metrically honest; above it the stroke stops widening, keeping high zoom readable instead of a solid band.
      */
     private static double strokeHalfWidthPx(RoadClass roadClass, double scale) {
         double naturalHalf = roadClass.width() * 0.5 * Math.abs(scale);
@@ -3678,7 +2796,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         return Math.max(MIN_STROKE_PX * 0.5, Math.min(naturalHalf, cappedHalf));
     }
 
-    /** Emits one thick line segment as a single quad in the map's plane. */
     private static void emitStroke(PoseStack.Pose pose, VertexConsumer vc,
                                    double x1, double y1, double x2, double y2, double halfWidth,
                                    int r, int g, int b, int a) {
@@ -3697,7 +2814,6 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         vertex(pose, vc, x1 - nx, y1 - ny, r, g, b, a);
     }
 
-    /** Emits an axis-aligned filled box centred on the given point. */
     private static void emitBox(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
                                 double halfX, double halfY, int argb) {
         int r = (argb >> 16) & 0xFF;
@@ -3710,73 +2826,34 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         vertex(pose, vc, cx - halfX, cy + halfY, r, g, b, a);
     }
 
-    // ------------------------------------------------------------ one-way marks
 
     /**
      * Screen distance between the direction arrows along a one-way road.
      *
-     * <p>A screen distance rather than a world one: the arrows are a reading of the map, and how many of
-     * them fit along a road is a question about the screen. Zoomed out, a fixed world spacing would put
-     * them all on top of each other; zoomed in, it would leave a street with one arrow on it that points
-     * off the edge of the screen. It is also a *floor*: a road drawn wider than usual pushes its arrows
-     * apart so that a mark is never closer to the next than three of its own widths.
+     * A screen distance because the arrows are a reading of the map: a world spacing would stack them zoomed out and leave one arrow pointing off screen zoomed in. It is a floor too -- a road drawn wider pushes its arrows apart.
      */
     private static final double ONEWAY_ARROW_SPACING_PX = 26.0;
     /**
      * The largest an arrowhead is drawn, in screen pixels.
      *
-     * <p>A cap, not the size: the head is sized from the road it sits on (see
-     * {@link #ONEWAY_ARROW_FITS}), because an arrow wider than its road reads as an object beside the
-     * road rather than as a mark on it, which is exactly what was reported from play. The cap is what a
-     * very wide road -- a highway drawn at the widest it is allowed to be -- is held to, so one street
-     * cannot carry arrowheads the size of its junctions.
+     * A cap, not the size: the head is sized from the road it sits on (see ONEWAY_ARROW_FITS), because an arrow wider than its road reads as an object beside it. The cap holds a very wide road so one street cannot carry arrowheads the size of its junctions.
      */
     private static final double ONEWAY_ARROW_PX = 7.5;
     /**
-     * How much of the road's half-width one arrowhead may be, end to end.
-     *
-     * <p>The head's own width across is 1.24 of its length (see {@link #emitArrowHead}), and the whole
-     * road is two half-widths across, so a length of 1.5 half-widths puts the widest part of the mark at
-     * 93% of the road's width -- inside the stroke, which is what "the arrow should be within the road's
-     * width" asks for, with the rim still on the road rather than hanging off its edge.
+     * How much of the road's half-width one arrowhead may be, end to end. The head is 1.24 of its length across and the road two half-widths across, so 1.5 puts the widest part at 93% of the road's width -- inside the stroke.
      */
     private static final double ONEWAY_ARROW_FITS = 1.5;
-    /** The most arrowheads one segment draws, so a long road cannot fill the map with them. */
     private static final int ONEWAY_ARROW_LIMIT = 40;
     /**
-     * Map scale below which a one-way road is drawn without its arrows.
-     *
-     * <p>The same idea as the label gate: at a scale where a whole region is on screen, a road is part of
-     * a picture rather than something being read, and forty arrowheads per street would turn the picture
-     * into a texture. Past the gate the road is still drawn exactly as it is -- only the marks that say
-     * which way it runs are left off.
+     * Map scale below which a one-way road is drawn without its arrows. At a scale where a whole region is on screen, a road is part of a picture and forty arrowheads per street would be texture; the road itself is still drawn.
      */
     private static final double ONEWAY_ARROW_MIN_SCALE = 0.3;
-    /** The arrowhead itself: white, so it stands off all six road colours. */
     private static final int COLOR_ARROW = 0xFFF4F8FF;
-    /** The rim under it, which is what makes it visible on the ice road as well as the highway. */
     private static final int COLOR_ARROW_RIM = 0xB0101418;
 
     /**
      * Draws the direction arrows of every one-way road, above every road.
-     *
-     * <h2>Why this is its own pass, from the trailing element</h2>
-     * The arrows used to be emitted from each segment's own pass, right after the stroke it belongs to.
-     * That is where they went wrong: the map draws one element after another, so any road element drawn
-     * later paints over the arrows of the one before it -- at a junction, or wherever two roads overlap.
-     * Only the arrows of whichever one-way roads happened to be drawn last survived, which from play
-     * looked like "only part of the one-way road has arrows". Drawn here, from the labels element that
-     * is always last in the map's order, no road can cover them.
-     *
-     * <p>The cost is that the pass walks the one-way segments once a frame, in screen space. There are
-     * only ever as many as the player marked, the pass is gated by {@link #ONEWAY_ARROW_MIN_SCALE} and
-     * by the map's own class switches, and each segment's marks are computed from the same display line
-     * the stroke is -- so this is the same arithmetic as before, moved, not added.
-     *
-     * <p>Each mark is sized from the road's stroke half-width ({@link #ONEWAY_ARROW_FITS}) rather than
-     * from a fixed screen size, so it fits inside the road at every zoom and every class width.
-     *
-     * @param left,top,right,bottom the screen rectangle a mark has to stand in to be worth emitting
+     * The arrows used to be emitted from each segment's pass, so any road element drawn later painted over them -- only the arrows of whichever one-way roads were drawn last survived, which looked like "only part of the one-way road has arrows". Drawn from the trailing labels element, no road can cover them. The cost is one walk of the one-way segments per frame in screen space: only as many as the player marked, gated by ONEWAY_ARROW_MIN_SCALE and the class switches, and computed from the same display line the stroke uses. Each mark is sized from the road's stroke half-width (ONEWAY_ARROW_FITS), so it fits at every zoom and class width.
      */
     private void drawOneWayMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -3802,15 +2879,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
             double size = Math.min(ONEWAY_ARROW_PX, halfWidthPx * ONEWAY_ARROW_FITS);
             if (!(size > 0.75)) {
-                // Below this a mark is a speck on a road a few pixels wide; the gate above is where a
-                // zoomed-out map stops drawing them at all, and this is the second half of the same
-                // decision for a road that is simply narrow.
+                // Below this a mark is a speck on a road a few pixels wide; the gate above is where a zoomed-out map
+                // stops drawing them, and this is the same decision for a narrow road.
                 continue;
             }
             double spacing = Math.max(ONEWAY_ARROW_SPACING_PX, size * 3.0);
             boolean backward = segment.direction() == RoadDirection.BACKWARD;
-            // The same little way in from the end as before: the first mark of a road sits clear of the
-            // junction cap at its own end.
+            // The same little way in from the end as before: the first mark sits clear of the junction cap.
             double nextAt = spacing * 0.75;
             double travelled = 0.0;
             int drawn = 0;
@@ -3827,9 +2902,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 }
                 double ux = (bx - ax) / edge;
                 double uy = (by - ay) / edge;
-                // The marks are stepped whatever the edge does -- culling an edge out of the walk
-                // instead would make the first mark back on screen land at a distance that ignores the
-                // road travelled off it -- and only the emission is gated on being visible.
+                // The marks are stepped whatever the edge does -- culling an edge out of the walk would make the
+                // first mark back on screen land at a distance ignoring the road travelled off it -- and only
+                // emission is gated on visibility.
                 while (nextAt <= travelled + edge && drawn < ONEWAY_ARROW_LIMIT) {
                     double at = nextAt - travelled;
                     double cx = ax + ux * at;
@@ -3847,12 +2922,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One arrowhead: a dark rim with a light head on top of it, pointing along (ux, uy).
+     * One arrowhead: a dark rim with a light head on top, pointing along (ux, uy).
      *
-     * <p>{@code size} is the arrow's length in whatever unit the sink's pose is in: screen pixels for
-     * both the roads' marks and a transit line's, since both are emitted from a screen-space pose. The
-     * head is the same shape either way -- a direction mark is one thing on this map, whichever layer
-     * it belongs to.
+     * size is the arrow's length in whatever unit the sink's pose is in -- screen pixels for both road and transit marks, since both are emitted from a screen-space pose. The shape is one thing on this map whichever layer it belongs to.
      */
     private static void emitArrowHead(HudDraw.VertexSink out, double cx, double cy,
                                       double ux, double uy, double size) {
@@ -3877,40 +2949,30 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * The number of points the map draws for this segment.
-     *
-     * <p>The smoothed display curve when it has one, otherwise the block vertices. Kept together with
-     * {@link #displayX} / {@link #displayZ} so a caller cannot take the count from one source and the
-     * positions from the other.
+     * The number of points the map draws for this segment: the smoothed display curve when it has one, the block vertices otherwise. Kept with displayX / displayZ so a caller cannot take the count from one source and positions from the other.
      */
     private static int displayPointCount(RoadSegment segment) {
         RoadCurve curve = segment.curve();
         return curve != null && curve.size() >= 2 ? curve.size() : segment.vertexCount();
     }
 
-    /** The world X of one drawn point: the curve's when there is one, the block vertex otherwise. */
     private static double displayX(RoadSegment segment, int index) {
         RoadCurve curve = segment.curve();
         return curve != null && curve.size() >= 2 ? curve.x(index) : segment.x(index);
     }
 
-    /** The world Z of one drawn point. See {@link #displayX}. */
     private static double displayZ(RoadSegment segment, int index) {
         RoadCurve curve = segment.curve();
         return curve != null && curve.size() >= 2 ? curve.z(index) : segment.z(index);
     }
 
-    // ------------------------------------------------------------------ stroke
-    //
-    // Scratch for one segment's screen-space polyline, and the outline built from it. Render thread
-    // only, like every other buffer in this renderer: one road is stroked at a time, and the same map
-    // is redrawn every frame, so allocating arrays per road would be garbage the frame does not need.
-    // Grown rather than rebuilt when a longer curve comes along.
+    // Scratch for one segment's screen-space polyline and the outline built from it. Render thread only:
+    // one road is stroked at a time and the map is redrawn every frame, so per-road arrays would be
+    // garbage. Grown when a longer curve comes along.
     private static double[] PATH_X = new double[128];
     private static double[] PATH_Y = new double[128];
     /**
-     * The stroke geometry, kept between segments: it owns the arithmetic (offsets, joins, caps) and
-     * the quads for the road being drawn, so the renderer only has to place and colour them.
+     * The stroke geometry, kept between segments: it owns the offsets, joins and caps and the quads for the road being drawn, so the renderer only places and colours them.
      */
     private static final StrokeOutline STROKE = new StrokeOutline();
 
@@ -3926,12 +2988,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Strokes one segment as a single continuous line of one width.
      *
-     * <p>The screen-space line is built here, where it belongs to the map's pose; everything about
-     * its shape -- an offset for each side, how the edges meet at a bend, the two caps, a round join
-     * at a bend too sharp to mitre -- is {@link StrokeOutline}'s, and is checked without a game by
-     * the harness. What is left here is placing the quads it returns and colouring them. The same
-     * outline is asked for twice when the segment is selected: once for the halo under the road, once
-     * for the road itself.
+     * The screen-space line is built here under the map's pose; its shape -- an offset per side, how edges meet at a bend, the two caps, a round join at a bend too sharp to mitre -- is StrokeOutline's, checked by the harness without a game. What is left is placing and colouring the quads. The outline is asked for twice when selected: once for the halo, once for the road.
      */
     private static void strokeSegment(PoseStack.Pose pose, VertexConsumer vc, RoadSegment segment,
                                       int pointCount, double anchorX, double anchorZ,
@@ -3959,11 +3016,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Emits a filled circle as a triangle fan.
      *
-     * <p>The target render type is {@code QUADS}, so each triangle is written as a degenerate quad.
-     * The <em>third</em> corner is repeated, which leaves the quad's second triangle with no area;
-     * repeating the second corner instead -- the same four corners in a different order -- fills the
-     * triangle a second time the other way round, and a road drawn in a translucent configured colour
-     * would then have every junction dot and marker blended twice.
+     * The target render type is QUADS, so each triangle is written as a degenerate quad: the third corner is repeated, leaving the second triangle with no area. Repeating the second corner instead fills the triangle a second time the other way round, and a translucent road would then have every junction dot blended twice.
      */
     private static void emitDisc(PoseStack.Pose pose, VertexConsumer vc, double cx, double cy,
                                  double radius, int r, int g, int b, int a) {
@@ -3988,18 +3041,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
 
     private static void vertex(PoseStack.Pose pose, VertexConsumer vc, double x, double y,
                                int r, int g, int b, int a) {
-        // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, and the
-        // method was renamed with it: vertex(...).color(...) became addVertex(...).setColor(...).
-        // The pose carries the same matrix, so only the wrapper and the two names differ -- plus
-        // endVertex(), which the newer API does not have and which is not decoration.
+        // VertexConsumer took a Matrix4f through 1.20.x and a PoseStack.Pose from 1.21, renamed with it:
+        // vertex(...).color(...) became addVertex(...).setColor(...). The pose carries the same matrix;
+        // endVertex() is the other difference and is not decoration.
         //
-        // On 1.20.x, BufferBuilder counts a vertex and checks or grows its buffer only inside
-        // endVertex(). Without it a batch was stored with a vertex count of 0, so nothing written
-        // through this path ever reached the screen, and the write offset kept advancing until
-        // putFloat ran off the end of the render type's fixed 131072-byte buffer. That is the
-        // IndexOutOfBoundsException at this method that the 1.20.1/1.20.4/1.20.6 builds crashed
-        // with after a node or two was placed, and it is also why the edit overlay drew nothing on
-        // those nodes.
+        // On 1.20.x BufferBuilder counts a vertex and checks or grows its buffer only inside endVertex().
+        // Without it a batch was stored with vertex count 0, so nothing reached the screen and the write
+        // offset advanced until putFloat ran past the fixed 131072-byte buffer -- the
+        // IndexOutOfBoundsException that 1.20.1/1.20.4/1.20.6 builds crashed with after placing a node or
+        // two, and why the edit overlay drew nothing there.
         //? if >=1.21 {
         vc.addVertex(pose, (float) x, (float) y, 0.0F).setColor(r, g, b, a);
         //?} else {

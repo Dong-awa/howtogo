@@ -17,52 +17,21 @@ import java.util.Map;
 
 /**
  * The whole railway, read out of the copy of it this process is already simulating.
- *
- * <h2>Why a second reading exists at all</h2>
- * MTR sends a client the stations and lines within a couple of hundred blocks of it, and that is the
- * whole of what {@link MtrClientData} can see on its own. The window is kept and added to as the player
- * travels -- see {@link MtrKnown} -- but a railway nobody has walked end to end is a railway this mod
- * only half knows, and the half it knows is decided by where the player happens to have been. Asking
- * MTR for a wider window instead is not an option: the radius is MTR's own constant, the answer carries
- * every rail of the network with it, and a client that asked for a thousand blocks would be sent a
- * payload it could not afford to receive.
- *
- * <h2>What is read, and from where</h2>
- * When the player hosts the world, MTR's server is a thread in this process and its network is a plain
- * object graph: {@code Simulator} per dimension, each holding every station, platform and route of that
- * dimension. That is the whole railway, in memory, with no network involved and nothing to serialize.
- * The chain is:
- * <pre>
- * org.mtr.Init (or org.mtr.mod.Init)   // whichever spelling this MTR uses
- *   .main                    (static)  // org.mtr.core.Main, set when the server started
- *     .simulators            (private) // one Simulator per dimension, matched by name
- *       .stations / .platforms / .routes
- * </pre>
- *
- * <h2>Why every name above is looked up and never assumed</h2>
- * The same arrangement as {@link MtrClientData}, for the same reasons: MTR documents this as internal
- * working with no stable API, it is not installed on every copy of this mod, and 4.1 has already moved
- * its own classes once. So no MTR type appears in a signature, the {@code Main} field is recognised by
- * the type it holds rather than by its name, and anything that has moved simply reports itself
- * unavailable -- at which point the windowed reading above is what the mod offers, exactly as before.
- *
- * <h2>Why the read is taken on MTR's thread</h2>
- * The simulator mutates its sets on its own thread, and reading them from the render thread while it
- * ticks is how a client gets a torn reading or a concurrent-modification failure in a mod it merely
- * meant to look at. {@code Simulator.run} is MTR's own answer to that -- it queues a task for the
- * simulator's thread, which is what its HTTP servlets and its embedding mod both use -- so the whole
- * read happens there and only an immutable result is handed back. Nothing is ever written to MTR's
- * data.
+ * MtrClientData sees only the stations and lines within a couple of hundred blocks of the player.
+ * When this process hosts the world, MTR's server is a plain object graph: one Simulator per
+ * dimension holding every station, platform and route, with no network involved.
+ * MTR documents this as internal with no stable API, so every class, field and method is looked up
+ * reflectively and never appears in a signature; anything that moved reports itself unavailable and
+ * the windowed reading stands alone.
+ * The read runs on MTR's own threads (Simulator.run), so a ticking simulator cannot yield a torn
+ * reading. Nothing is ever written to MTR's data.
  */
 final class MtrWholeMap {
 
     /** The class MTR keeps its running server in, under each name it has given it. */
     private static final String[] INIT_NAMES = {
-            // 4.1 renamed the mod's entry class to org.mtr.MTR, alongside moving its other classes from
-            // org.mtr.mod.* to org.mtr.*. Found by the handshake against the real 4.1.0-beta.2 jar, not
-            // from a changelog: the class that holds a static org.mtr.core.Main is the class this wants,
-            // and under the two older spellings there was no such class at all on 4.1 -- so the whole-map
-            // read reported itself unavailable and the mod quietly fell back to the windowed one.
+            // 4.1 renamed the entry class to org.mtr.MTR and moved classes from org.mtr.mod.* to org.mtr.*;
+            // found by handshake against 4.1.0-beta.2, not from a changelog.
             "org.mtr.MTR",
             "org.mtr.Init",
             "org.mtr.mod.Init",
@@ -74,22 +43,15 @@ final class MtrWholeMap {
     private static final String ROUTE_PLATFORM = "org.mtr.core.data.RoutePlatformData";
 
     /**
-     * How often the whole railway is read again, in the seconds {@link #poll} is called on.
-     *
-     * <p>Ten seconds. It is an in-memory walk of every station and every route, so it is cheap but not
-     * free -- and the thing it is looking for is a station or a line the player has just built, which
-     * nobody needs to see within the second.
+     * How often the whole railway is read again, in the seconds poll is called on. Cheap but not free,
+     * and nobody needs a station built a second ago to appear immediately.
      */
     private static final int REREAD_SECONDS = 10;
 
     /**
-     * How long a queued read may stay queued before another is allowed, in the same seconds.
-     *
-     * <p>The task runs on the simulator's thread, which does not tick while the game is paused, so a
-     * read asked for with the pause menu open waits -- and asked for again every second, it would queue
-     * one task per second for as long as the player stayed in a menu, all of which would then run in one
-     * go. Waiting minutes rather than seconds between attempts is what keeps that from being a stall on
-     * the way back into the world.
+     * How long a queued read may stay queued before another is allowed. The simulator's thread does not
+     * tick while paused, so waiting minutes rather than seconds stops a pause menu queueing a task a
+     * second.
      */
     private static final int PENDING_SECONDS = 300;
 
@@ -97,7 +59,6 @@ final class MtrWholeMap {
     private static boolean available;
     private static boolean warned;
     private static boolean reported;
-    /** Whether the model in use is MTR 3.x's, whose whole map is read from the world's data. */
     private static boolean threeX;
 
     private static Field mainField;
@@ -108,7 +69,6 @@ final class MtrWholeMap {
     private static Method routeIdMethod;
     private static Method routeNameMethod;
     private static Method routeColorMethod;
-    /** The route's circular state, optional: a version without it reads every line two-way. */
     private static Method routeCircularMethod;
     private static Method routeModeMethod;
     private static Method routeDestinationMethod;
@@ -123,12 +83,10 @@ final class MtrWholeMap {
     private MtrWholeMap() {
     }
 
-    /** The last completed reading of the whole railway, or an empty one before the first. */
     static MtrClientData.Snapshot snapshot() {
         return latest;
     }
 
-    /** Forgets the reading, which is what switching the whole-map read off does. */
     static void reset() {
         if (!latest.isEmpty()) {
             latest = MtrClientData.Snapshot.EMPTY;
@@ -136,12 +94,8 @@ final class MtrWholeMap {
     }
 
     /**
-     * Asks for a reading when the last one has gone stale, and keeps quiet otherwise.
-     *
-     * <p>Called once a second from the client tick -- see {@code MtrClientData}, which re-reads MTR at
-     * that cadence -- so the numbers here are seconds. The first call asks immediately rather than
-     * waiting out the interval, so a world that is already built is known from the first second of the
-     * session.
+     * Asks for a reading when the last one has gone stale; called once a second from the client tick.
+     * The first call asks immediately.
      */
     static void poll() {
         if (pending && ++pendingSince < PENDING_SECONDS) {
@@ -154,7 +108,6 @@ final class MtrWholeMap {
         request();
     }
 
-    /** Queues one read of the local simulator's network, on the simulator's own thread. */
     private static void request() {
         if (!resolve()) {
             return;
@@ -194,15 +147,9 @@ final class MtrWholeMap {
     }
 
     /**
-     * Queues one read of the 3.x world's data, on the server's own thread.
-     *
-     * <p>The 3.x railway is a world's saved data rather than a simulator's, so it is reached with the
-     * server world the player is in, and the read is queued with {@code MinecraftServer.execute} --
-     * the server's own thread, which is the one that mutates those sets, in the same way
-     * {@code Simulator.run} is MTR's for the 4.x model. Only an immutable reading is handed back.
-     *
-     * <p>A player on somebody else's server gets nothing from here, exactly as before: there is no
-     * server in this process to read, and MTR's own client data is what remains.
+     * Queues one read of the 3.x world's data on the server's own thread, through
+     * MinecraftServer.execute. A player on somebody else's server gets nothing here: there is no
+     * server in this process to read.
      */
     private static void requestThreeX() {
         Minecraft minecraft = Minecraft.getInstance();
@@ -227,9 +174,8 @@ final class MtrWholeMap {
                 latest = reading;
                 if (!reported && !reading.isEmpty()) {
                     reported = true;
-                    // The rail count is here because it is the one number a player reporting "tracks are
-                    // missing" can be asked for: a whole-map reading with tracks means the network was
-                    // read, and no tracks means this MTR build keeps them somewhere this cannot reach.
+                    // The rail count is the number a player reporting missing tracks can be asked for: tracks mean the
+                    // network was read.
                     HowToGo.diagnostic("[HowToGo] MTR whole map | {} station(s), {} platform(s), "
                                     + "{} line(s), {} rail(s) read from the simulated network",
                             reading.stations().size(), reading.platforms().size(),
@@ -243,28 +189,22 @@ final class MtrWholeMap {
         });
     }
 
-    // ------------------------------------------------------------------ the chain
 
     /**
-     * The simulator for the dimension the player is standing in, or null when there is none to read.
-     *
-     * <p>Null covers every case in which this reading has nothing to say and the windowed one stands
-     * alone: MTR absent or moved, no world, a server that is not this process (a remote server, where
-     * there is no simulator here to read), and a world this process hosts but whose dimension MTR has
-     * no simulator for.
+     * The simulator for the player's dimension, or null when there is none to read: MTR absent or
+     * moved, no world, a remote server, or no simulator for this dimension.
      */
     private static Object localSimulator() {
         Minecraft minecraft = Minecraft.getInstance();
         LocalPlayer player = minecraft.player;
         MinecraftServer server = minecraft.getSingleplayerServer();
         if (player == null || server == null || !server.isRunning()) {
-            // Somebody else's server. MTR's own client data is all there is, and it is what is offered.
+            // Somebody else's server: MTR's client data is all there is.
             return null;
         }
         try {
             Object main = mainField.get(null);
             if (main == null) {
-                // MTR's server has not started in this process -- usually the world is still loading.
                 return null;
             }
             String wanted = player.level().dimension().location().toString().replace(':', '/');
@@ -275,8 +215,6 @@ final class MtrWholeMap {
                 only = simulator;
                 String dimension = dimensionOf(simulator);
                 if (dimension == null) {
-                    // No dimension to compare: with exactly one simulator there is nothing to choose
-                    // between, and with several there is a right answer this cannot find.
                     continue;
                 }
                 if (dimension.equals(wanted)) {
@@ -290,13 +228,6 @@ final class MtrWholeMap {
         }
     }
 
-    /**
-     * The simulators a {@code Main} holds, found by what the field holds rather than by its name.
-     *
-     * <p>MTR calls it {@code simulators} today and is free to call it something else tomorrow; the type
-     * it holds -- one simulator per dimension -- is the part that is not free to change, so that is
-     * what is looked for.
-     */
     private static List<Object> simulators(Object main) throws ReflectiveOperationException {
         List<Object> found = new ArrayList<>();
         Class<?> simulator = load(SIMULATOR);
@@ -335,18 +266,7 @@ final class MtrWholeMap {
         }
     }
 
-    // ---------------------------------------------------------------- the reading
 
-    /**
-     * Every station, platform and line the local server holds for this dimension.
-     *
-     * <p>Runs on the simulator's thread -- see the class comment -- and returns an immutable reading, so
-     * nothing of MTR's is held on to afterwards.
-     *
-     * <p>Rails are deliberately not read. The whole railway's geometry is the one part of this that is
-     * genuinely large, the marks are only ever cut for the lines around the player, and the windowed
-     * reading already has those.
-     */
     private static MtrClientData.Snapshot read(Object simulator) throws ReflectiveOperationException {
         List<MtrClientData.Station> stations = new ArrayList<>();
         Map<Long, String> modeByStation = new HashMap<>();
@@ -381,18 +301,14 @@ final class MtrWholeMap {
     }
 
     /**
-     * One route of MTR's own data, as this mod's kind of line.
-     *
-     * <p>The same shape the windowed reading builds, from the fuller object behind it: a client is sent
-     * a {@code SimplifiedRoute}, which drops the route's own transport mode -- which is why the windowed
-     * reader has to infer a line's kind from the stations it calls at -- while the server's own
-     * {@code Route} carries it outright. Both are read into the same record, so nothing downstream can
-     * tell which of the two a line came from.
+     * One route of MTR's data, as this mod's kind of line. The server's Route carries its transport mode
+     * outright, unlike the SimplifiedRoute a client is sent, so no mode inference is needed; both read
+     * into the same record.
      */
     private static MtrClientData.Line line(Object route, Map<Long, String> modeByStation) {
         try {
             if (routeHiddenMethod != null && Boolean.TRUE.equals(routeHiddenMethod.invoke(route))) {
-                // A route MTR itself does not show: not a line this mod should offer either.
+                // A route MTR itself does not show.
                 return null;
             }
             String mode = routeModeMethod == null ? null
@@ -409,8 +325,8 @@ final class MtrWholeMap {
                         station == null ? "" : nameOrEmpty(station),
                         destinationOf(routePlatform, route, index)));
                 if (mode == null && stationId != 0) {
-                    // The fallback the windowed reader uses, kept for a route whose own kind cannot be
-                    // read: the stations it calls at are the only other thing that knows.
+                    // The fallback the windowed reader uses, for a route whose own kind cannot be read: its stations are
+                    // the other thing that knows.
                     mode = modeByStation.get(stationId);
                 }
                 index++;
@@ -421,7 +337,6 @@ final class MtrWholeMap {
                     List.copyOf(stops), List.of(),
                     MtrClientData.circular(route, routeCircularMethod));
         } catch (ReflectiveOperationException | RuntimeException e) {
-            // One unreadable route must not cost the reading every other one.
             return null;
         }
     }
@@ -444,32 +359,24 @@ final class MtrWholeMap {
         return null;
     }
 
-    // ---------------------------------------------------------------- resolving
 
     private static synchronized boolean resolve() {
         if (resolved) {
             return available;
         }
         resolved = true;
-        // Asked first because it is the cheaper question and the one that covers MTR not being
-        // installed at all: with no client data to read there is no server data to read either.
         if (!MtrClientData.ready()) {
             return false;
         }
         if (MtrClientData.isThreeX()) {
-            // 3.x has no simulation core: the railway is the world's saved data, reached through a
-            // static factory instead of a Main of simulators. See Mtr3Data.
             return bindThreeX();
         }
         return bind();
     }
 
     /**
-     * Binds MTR 3.x's simulated network.
-     *
-     * <p>Nothing of this class's own chain -- no entry class, no Main, no Simulator -- exists on that
-     * data model, so this reader has no handles of its own to look up: the world's data is reached
-     * through {@link Mtr3Data} on demand, and what is bound here is whether that is possible at all.
+     * Binds MTR 3.x's simulated network. None of this class's 4.x chain exists there; what is bound is
+     * whether Mtr3Data can answer at all.
      */
     private static boolean bindThreeX() {
         threeX = Mtr3Data.bindServer();
@@ -482,16 +389,9 @@ final class MtrWholeMap {
     }
 
     /**
-     * Looks up every class, field and method the whole-map read needs, and remembers whether it worked.
-     *
-     * <p>Split out of {@link #resolve()} so that the same lookups can be made with no game running, which
-     * is what lets the regression harness check them against a real MTR jar: whether this reader still
-     * knows MTR's names is otherwise only found out by a player opening the map, from a log line that
-     * says the data was unavailable and not which name was wrong. The same separation, for the same
-     * reason, as {@link MtrClientData#bind()}.
-     *
-     * <p>Classes are loaded without being initialised: this needs their shapes, not their state.
-     *
+     * Looks up every class, field and method the whole-map read needs and remembers whether it worked.
+     * Split out of resolve() so the harness can check the lookups against a real MTR jar. Classes are
+     * loaded without being initialised: this needs their shapes, not their state.
      * @return whether MTR's shapes are the ones this reads
      */
     static boolean bind() {
@@ -511,8 +411,7 @@ final class MtrWholeMap {
                 throw new ClassNotFoundException(String.join(" or ", INIT_NAMES));
             }
 
-            // The field holding the running server, recognised by the type it holds rather than by the
-            // name MTR gave it: the name is the part an update is free to change, and the type is not.
+            // The field holding the running server, recognised by the type it holds rather than by its name.
             for (Field field : init.getDeclaredFields()) {
                 if (java.lang.reflect.Modifier.isStatic(field.getModifiers())
                         && field.getType() == main) {
@@ -526,9 +425,8 @@ final class MtrWholeMap {
             }
 
             runMethod = simulator.getMethod("run", Runnable.class);
-            // Not required: it is what picks the right dimension out of MTR's several simulators, and
-            // without it the read falls back to "the only one there is", which is the right answer in a
-            // world with a single dimension and no answer at all in one with several.
+            // Not required: without it the read falls back to the only simulator there is, right for a single
+            // dimension and wrong for several.
             dimensionField = optionalField(simulator, "dimension");
 
             Class<?> route = load(ROUTE);
@@ -538,9 +436,6 @@ final class MtrWholeMap {
             routeIdMethod = route.getMethod("getId");
             routeNameMethod = route.getMethod("getName");
             routeColorMethod = route.getMethod("getColor");
-            // Optional, like the mode and the hidden flag above: a version that moved this name loses
-            // the direction and keeps the line, which reads two-way -- what every line was before
-            // directions existed. The handshake against a real jar is what notices the name moving.
             routeCircularMethod = optionalMethod(route, "getCircularState");
             routeModeMethod = optionalMethod(route, "getTransportMode");
             routeHiddenMethod = optionalMethod(route, "getHidden");
@@ -560,17 +455,13 @@ final class MtrWholeMap {
     }
 
     /**
-     * Whether MTR's server-side classes are on the classpath at all, under any of their names.
-     *
-     * <p>Asked by the harness before it checks the handshake, the same way
-     * {@link MtrClientData#classesPresent()} is: a machine that has never seen MTR should skip the
-     * check rather than fail it.
+     * Whether MTR's server-side classes are on the classpath at all, under any of their names; a machine
+     * that has never seen MTR should skip the check rather than fail it.
      */
     static boolean classesPresent() {
         if (MtrClientData.isThreeX()) {
             // The 3.x whole map needs the world's data class and nothing of the 4.x chain. Whether the
-            // Minecraft types its shape mentions can be loaded is a question of which Minecraft version
-            // this process is running, not of whether MTR is installed.
+            // Minecraft types it mentions can load is a question of the running Minecraft version.
             return Mtr3Data.serverPresent();
         }
         try {

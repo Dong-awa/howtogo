@@ -8,32 +8,12 @@ import java.util.List;
 /**
  * One thing the navigation overlay puts through Xaero's minimap element pipeline.
  *
- * <p>An element carries a kind, a world position in blocks, the colour it is drawn in, and -- for
- * some kinds -- what it draws and a probe distance. The kinds fall into four groups with quite
- * different jobs, which is worth knowing before reading any of the rendering code:
- *
- * <ul>
- *   <li><b>Probes</b> ({@link Kind#CAL_CENTRE}, {@link Kind#CAL_X}, {@link Kind#CAL_Z}) are not
- *       drawn at all. They exist because the element API hands a renderer no zoom, rotation or
- *       minimap origin, and a polyline cannot be drawn without them. Xaero projects every element
- *       before calling the renderer, so a probe at a known world offset is one sample of the
- *       projection; {@link XaeroMinimapProjection} turns the samples into a transform.</li>
- *   <li><b>Edge probes</b> ({@link Kind#EDGE_XP} and friends) are not drawn either. They sit a
- *       hundred thousand blocks away, Xaero clamps them to the minimap's edge, and their clamped
- *       position is where the minimap's rectangle comes from.</li>
- *   <li><b>Layers</b> ({@link Kind#ROADS}, {@link Kind#RAILS}, {@link Kind#MTR_LAYER},
- *       {@link Kind#ROADWEAVER}, {@link Kind#TRANSIT_LINES},
- *       {@link Kind#ROUTE_DONE}, {@link Kind#ROUTE_AHEAD}) carry the network or the route they
- *       draw. One element per layer, each anchored at the frame anchor, so everything a layer draws
- *       is in one local coordinate space and the whole layer is one drawing block.</li>
- *   <li><b>Markers</b> ({@link Kind#DESTINATION}, {@link Kind#ORIGIN}) are the
- *       only elements anchored at their own world position, because a marker is a dot at exactly
- *       the place it marks and needs no transform beyond the one Xaero already applied.</li>
- * </ul>
- *
- * <p>One class with a kind rather than a class per kind: all of these are the same few numbers with
- * a different interpretation, and a hierarchy would be ten files to say nothing. The renderer
- * switches on {@link Kind}, which is where the interpretation lives.
+ * An element carries a kind, a world position in blocks, a colour and, for some kinds, what it draws and a probe distance. The kinds fall into four groups:
+ * - Probes (CAL_CENTRE, CAL_X, CAL_Z) are not drawn. The API hands a renderer no zoom, rotation or minimap origin, and Xaero projects every element before calling the renderer, so a probe at a known world offset samples the projection; XaeroMinimapProjection turns samples into a transform.
+ * - Edge probes (EDGE_*) are not drawn either: they sit a hundred thousand blocks away, Xaero clamps them to the minimap's edge, and their clamped position defines the minimap rectangle.
+ * - Layers (ROADS, RAILS, MTR_LAYER, ROADWEAVER, TRANSIT_LINES, ROUTE_DONE, ROUTE_AHEAD) carry the network or route they draw, one element per layer anchored at the frame anchor, so a layer is one local coordinate space and one drawing block.
+ * - Markers (DESTINATION, ORIGIN) are anchored at their own world position, because a marker is a dot at exactly the place it marks.
+ * One class with a kind rather than a class per kind: a hierarchy would be ten files that say nothing.
  */
 public final class XaeroMinimapRouteElement {
 
@@ -41,24 +21,20 @@ public final class XaeroMinimapRouteElement {
     public enum Kind {
 
         /**
-         * The anchor point itself: one probe at the player's position.
+         * The anchor point itself: a probe at the player's position.
          *
-         * <p>Its pose translation is the screen position of the frame anchor, and its matrix's
-         * linear part is the parent transform every element of the frame shares. Both facts are
-         * needed before any other probe can be interpreted.
+         * Its pose translation is the frame anchor's screen position and its matrix's linear part is the transform every element shares.
          */
         CAL_CENTRE,
 
         /**
-         * A probe at {@code anchor + d} along world X, for a calibrated distance {@code d}.
+         * A probe at anchor + d along world X, for a calibration distance d.
          *
-         * <p>Tells the transform where one block of +X lands on screen. If Xaero clamped it to the
-         * minimap's edge, it says nothing about the projection and the next smaller distance is
-         * used.
+         * If Xaero clamped it to the minimap edge it says nothing about the projection and the next smaller distance is used.
          */
         CAL_X,
 
-        /** The same at {@code anchor + d} along world Z. */
+        /** The same at anchor + d along world Z. */
         CAL_Z,
 
         /** The far-away probe along +X; Xaero clamps it to the minimap's edge. */
@@ -83,17 +59,12 @@ public final class XaeroMinimapRouteElement {
         MTR_LAYER,
 
         /**
-         * Roads read out of RoadWeaver. A separate element because this layer needs a world-space
-         * cull box: it holds a whole region's worth of roads, and projecting all of them only to
-         * clip them would be the frame cost.
+         * Roads read out of RoadWeaver. A separate element because this layer needs a world-space cull box: it holds a whole region's roads and projecting all of them just to clip them would be the frame cost.
          */
         ROADWEAVER,
 
         /**
-         * The public transport lines, one element per stretch, each in its line's own colour.
-         *
-         * <p>Between the road layers and the route on purpose: a line is part of the map, not part of
-         * the trip, so the route the player is following must stay on top of it.
+         * The public transport lines, one element per stretch, each in its line's own colour. Between roads and route on purpose: a line is part of the map, not the trip, so the route stays on top.
          */
         TRANSIT_LINES,
 
@@ -103,7 +74,7 @@ public final class XaeroMinimapRouteElement {
         /** The part of the route still ahead. */
         ROUTE_AHEAD,
 
-        /** The end of the trip; drawn clamped to the edge when it is out of view. */
+        /** The end of the trip; drawn clamped to the edge when out of view. */
         DESTINATION,
 
         /** Where the trip started; drawn only while it is on the map. */
@@ -134,41 +105,18 @@ public final class XaeroMinimapRouteElement {
         this.travelled = travelled;
     }
 
-    /**
-     * A probe element.
-     *
-     * @param kind the probe kind
-     * @param x world X
-     * @param z world Z
-     * @param probe the calibration distance in blocks, or 0 for the centre and edge probes
-     */
+    /** A calibration probe at (x, z); probe is the distance in blocks, 0 for centre and edge probes. */
     static XaeroMinimapRouteElement probe(Kind kind, double x, double z, double probe) {
         return new XaeroMinimapRouteElement(kind, x, z, 0, probe, null, null, null, 0);
     }
 
-    /**
-     * A road-network layer, anchored at the frame anchor.
-     *
-     * @param kind which layer this is
-     * @param anchorX the frame anchor's world X
-     * @param anchorZ the frame anchor's world Z
-     * @param network the network to draw, read at the start of the frame
-     */
+    /** A road-network layer, anchored at the frame anchor. */
     static XaeroMinimapRouteElement networkLayer(Kind kind, double anchorX, double anchorZ,
                                                  RoadNetwork network) {
         return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, 0, 0, network, null, null, 0);
     }
 
-    /**
-     * A route layer, anchored at the frame anchor.
-     *
-     * @param kind which half of the route this is
-     * @param anchorX the frame anchor's world X
-     * @param anchorZ the frame anchor's world Z
-     * @param argb the colour the half is drawn in, which for the ahead half is only the colour the
-     *             element used to carry; the stretches bring their own now
-     * @param points the polyline's world points
-     */
+    /** A route layer built from explicit polyline points, anchored at the frame anchor. */
     static XaeroMinimapRouteElement routeLayer(Kind kind, double anchorX, double anchorZ, int argb,
                                                List<double[]> points) {
         return new XaeroMinimapRouteElement(kind, anchorX, anchorZ, argb, 0, null, points, null, 0);
@@ -177,17 +125,7 @@ public final class XaeroMinimapRouteElement {
     /**
      * One half of the live route, carried as the route's ink and the distance already covered.
      *
-     * <p>Rather than the two point lists the provider used to build, one per half and per frame.
-     * The ink is the table every other surface draws from -- see {@code Navigation.routeInk} -- and
-     * the renderer walks it and draws only the half this element stands for, so the two halves come
-     * from one calculation and the frame allocates no lists of its own.
-     *
-     * @param kind {@link Kind#ROUTE_DONE} for the covered half, {@link Kind#ROUTE_AHEAD} for the rest
-     * @param anchorX the frame anchor's world X
-     * @param anchorZ the frame anchor's world Z
-     * @param argb the colour the covered half is drawn in; the ahead half uses each stretch's own
-     * @param ink the route's ink, shared with the other surfaces and not owned by this element
-     * @param travelled drawn distance already covered
+     * The ink is the table every other surface draws from (Navigation.routeInk); the renderer walks it and draws only the half this element stands for, so both halves come from one calculation and the frame allocates no lists.
      */
     static XaeroMinimapRouteElement routeInkLayer(Kind kind, double anchorX, double anchorZ,
                                                   int argb,
@@ -197,65 +135,46 @@ public final class XaeroMinimapRouteElement {
                 travelled);
     }
 
-    /**
-     * A marker element, anchored at the place it marks.
-     *
-     * @param kind the marker kind
-     * @param x the marked place's world X
-     * @param z the marked place's world Z
-     * @param argb the marker's colour
-     */
+    /** A marker element, anchored at the place it marks. */
     static XaeroMinimapRouteElement marker(Kind kind, double x, double z, int argb) {
         return new XaeroMinimapRouteElement(kind, x, z, argb, 0, null, null, null, 0);
     }
 
-    /** What this element means. */
     public Kind kind() {
         return kind;
     }
 
-    /** World X of the element's anchor, in blocks. */
     public double x() {
         return x;
     }
 
-    /** World Z of the element's anchor, in blocks. */
     public double z() {
         return z;
     }
 
     /**
-     * The colour the element is drawn in, as ARGB.
-     *
-     * <p>Carried on the element rather than chosen by the renderer from the kind because the route
-     * has two colours and the network layers have none -- those take their colour from the road
-     * data -- and only the provider knows which is which when it builds them.
+     * The colour the element is drawn in, as ARGB -- carried here because the route has two colours and network layers none (they take the road data's colour), and only the provider knows which is which.
      */
     public int argb() {
         return argb;
     }
 
-    /** The calibration distance in blocks, or 0 for an element that is not a calibration probe. */
     public double probe() {
         return probe;
     }
 
-    /** The network a layer element draws, or null for anything that is not a network layer. */
     public RoadNetwork network() {
         return network;
     }
 
-    /** The polyline a route layer draws, or null for anything that is not a route layer. */
     public List<double[]> routePoints() {
         return points;
     }
 
-    /** The live route's ink, or null for anything that is not one of the two route halves. */
     public HudDraw.RouteInk routeInk() {
         return ink;
     }
 
-    /** The drawn distance already covered, for the two route halves; meaningless for anything else. */
     public double travelled() {
         return travelled;
     }
