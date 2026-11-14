@@ -373,6 +373,31 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     //?}
 
     /**
+     * Puts the pose into screen space for a pass that projects its own screen coordinates, keeping the
+     * frame's depth where the map needs it.
+     *
+     * Such a pass must drop the pose's x/y transform, or the map's camera transform is applied a second
+     * time and the content floats away from the map. The pose's z is a different matter: Xaero draws the
+     * whole map at a depth of its own, and on 26.x anything drawn at z = 0 fails the depth test against
+     * that depth and never shows -- which is why the transit lines, the place markers, the one-way arrows
+     * and the HUD shapes all disappeared from the world map while the roads (drawn in the map's own pose)
+     * stayed. From 26.1 the depth the pose already carries is kept, putting these passes in the same
+     * plane as the map they belong to. Below that the transform is dropped whole, exactly as it always
+     * was: those versions draw these passes at z = 0 and that is where they have always been visible.
+     */
+    private static void screenSpace(PoseStack pose) {
+        Matrix4f screen = pose.last().pose();
+        //? if >=26.1 {
+        /*float depth = screen.m32();
+        screen.identity();
+        screen.m32(depth);
+        *///?} else {
+        screen.identity();
+        //?}
+        pose.last().normal().identity();
+    }
+
+    /**
      * One string on the map.
      *
      * Xaero's MapElementGraphics kept drawString through 26.3 even though vanilla's graphics renamed its equivalent to text; the build's rename rule rewrites every .drawString( because it cannot tell receiver apart, so these calls live in MapLabels, one file per era.
@@ -488,7 +513,21 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         // Pose units per screen pixel.
         double posePerPixel = Math.abs(m00) > 1.0E-6 ? 1.0 / Math.abs(m00) : 1.0;
 
+        // The source every shape in this pass is emitted into. A name is written after a flush of it, so
+        // shapes and the text meant to stand above them have to share one source.
+        //
+        // Before 1.21.6 that source is the parameter Xaero hands over: the map's own vanilla buffer source.
+        // From 1.21.6 the graphics carries the source its text is written through, and it is the one to
+        // share. From 26.2 the two stopped being the same object: the parameter became Xaero's global
+        // element buffer provider -- flushed only after every renderer -- while names go through the
+        // graphics' own source and are painted on the spot. The label pass's flush then flushed nothing,
+        // and every shape (roads, transit lines, place markers) was painted on top of the names it belongs
+        // under. Sharing the graphics' source restores the order the flush is written for.
+        //? if >=1.21.6 {
+        /*VertexConsumer vc = graphics.getBufferSource().getBuffer(RenderType.debugQuads());
+        *///?} else {
         VertexConsumer vc = buffers.getBuffer(RenderType.debugQuads());
+        //?}
 
         if (element.kind() == RoadElement.Kind.ROUTE) {
             renderRoute(element, last, vc, fracX, fracY, p10, posePerPixel);
@@ -761,8 +800,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         float placeFactor = labelScale(info.scale);
 
         pose.pushPose();
-        pose.last().pose().identity();
-        pose.last().normal().identity();
+        screenSpace(pose);
 
         // Every place gets its marker first, at every zoom: the marker makes a place findable exactly when
         // names are suppressed for being unreadable. Shapes before text. The marker's box is reserved as it
@@ -771,11 +809,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         drawPlaceMarkers(pose.last(), vc, margin, viewRight, viewBottom, interchanges, scale,
                 projection, board);
 
-        // Hand the shapes over before the first name is written. On 1.21.6+ Xaero writes a map string
-        // through MapElementGraphics, which ends with BufferSource.endLastBatch: text is painted on the spot
-        // while roads, route, lines and markers still sit in this renderer's vertex batch, flushed only
-        // after every element -- so names came out under the roads. Flushing here paints everything emitted
-        // above in order first; nothing is emitted into vc after this point.
+        // Hand the shapes over before the first name is written: text is painted on the spot while roads,
+        // route, lines and markers still sit in the batch a flush has yet to submit, so a name written
+        // first would be painted under its own map. The flush ends the source the shapes were emitted into
+        // (see renderElement: on 1.21.6+ that is the graphics' own source, the one the names are written
+        // through, so this flush is what puts them under a name rather than over it); nothing is emitted
+        // into vc after this point.
         graphics.flush();
 
         // A place name stands aside from the roads next to it, so the roads near visible places are read
@@ -1987,11 +2026,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return labels;
         }
         // The screen-space transform, taken exactly as renderLabels takes it: coordinates below are already
-        // screen space, so they may only be emitted under an identity pose; the map's own transform applied
-        // twice floats a line away from its stops.
+        // screen space, so the pose may carry no x/y transform -- the map's own transform applied twice
+        // floats a line away from its stops. Its depth is kept; see screenSpace.
         pose.pushPose();
-        pose.last().pose().identity();
-        pose.last().normal().identity();
+        screenSpace(pose);
         PoseStack.Pose screenPose = pose.last();
 
         // The shapes the lines are drawn from, brought up to date here rather than kept by the line list:
@@ -2192,8 +2230,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         double maxWorldZ = Math.max(topEdge, bottomEdge);
 
         pose.pushPose();
-        pose.last().pose().identity();
-        pose.last().normal().identity();
+        screenSpace(pose);
         PoseStack.Pose screenPose = pose.last();
 
         long startedAt = System.nanoTime();
@@ -2607,8 +2644,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         int screenHeight = mc.getWindow().getGuiScaledHeight();
 
         pose.pushPose();
-        pose.last().pose().identity();
-        pose.last().normal().identity();
+        screenSpace(pose);
 
         // The swatch sits in the indent left of the text, on the caption line it stands for.
         int leftIndent = swatchColor != 0 ? 11 : 0;
@@ -2800,8 +2836,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return;
         }
         pose.pushPose();
-        pose.last().pose().identity();
-        pose.last().normal().identity();
+        screenSpace(pose);
         HudDraw.VertexSink sink = HudDraw.sink(pose.last(), vc);
         for (RoadSegment segment : RoadStore.get().segments()) {
             if (!segment.direction().isOneWay()) {

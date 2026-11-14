@@ -295,6 +295,7 @@ public final class Navigation {
     private static void announceMode() {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player == null)return;
+
         // 26.1 removed the overlay flag, so an action-bar line became a system message.
         //? if >=26.1 {
         /*player.sendSystemMessage(
