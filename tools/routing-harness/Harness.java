@@ -176,6 +176,9 @@ public final class Harness {
         int[] lineLabels = bili.dongsz.howtogo.client.LineLabelCheck.run();
         checks += lineLabels[0];
         failures += lineLabels[1];
+        int[] oneWayMarks = bili.dongsz.howtogo.client.OneWayMarkCheck.run();
+        checks += oneWayMarks[0];
+        failures += oneWayMarks[1];
         int[] routeInk = RouteInkCheck.run();
         checks += routeInk[0];
         failures += routeInk[1];

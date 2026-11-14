@@ -601,6 +601,11 @@ public final class HudDraw {
      */
     private static double[] PATH_X = new double[64];
     private static double[] PATH_Y = new double[64];
+    /**
+     * Which chain piece each projected vertex came from, so a one-way mark placed anywhere along the
+     * chain still knows its segment's direction. Per projected vertex, and grown with the path.
+     */
+    private static int[] PATH_OWNER = new int[64];
 
     /**
      * The cross-section of each projected vertex, per edge: the offset the edge arriving at the vertex
@@ -641,6 +646,7 @@ public final class HudDraw {
         ARRIVING_Y = new double[capacity];
         LEAVING_X = new double[capacity];
         LEAVING_Y = new double[capacity];
+        PATH_OWNER = new int[capacity];
         ROUND_JOINT = new boolean[capacity];
     }
 
@@ -1107,12 +1113,12 @@ public final class HudDraw {
         double previousWorldX = 0;
         double previousWorldZ = 0;
         boolean havePrevious = false;
-        // One record per piece, so the one-way marks below know which stretch of the projected
-        // polyline belongs to which segment and which way round that stretch runs. Keeping them
-        // here rather than re-deriving them is what stops an arrow from pointing down a road the
-        // player cannot travel that way. Most chains are two-way, so the arrays are only made when
-        // one of the pieces actually needs a mark -- this runs once per chain per frame, and four
-        // small allocations apiece is the kind of garbage a map pass must not make.
+        // One record per piece, so the one-way marks below know which way round each stretch of the
+        // projected polyline runs. Keeping them here rather than re-deriving them is what stops an
+        // arrow from pointing down a road the player cannot travel that way. Most chains are two-way,
+        // so the arrays are only made when one of the pieces actually needs a mark -- this runs once
+        // per chain per frame, and four small allocations apiece is the kind of garbage a map pass
+        // must not make.
         int pieceCount = stroke.pieces().size();
         boolean marks = false;
         for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
@@ -1124,15 +1130,9 @@ public final class HudDraw {
         }
         RoadSegment[] segments = marks ? new RoadSegment[pieceCount] : null;
         boolean[] reversed = marks ? new boolean[pieceCount] : null;
-        int[] starts = marks ? new int[pieceCount] : null;
-        int[] ends = marks ? new int[pieceCount] : null;
         for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
             DisplayStrokes.Piece piece = stroke.pieces().get(pieceIndex);
             RoadSegment segment = network.segment(piece.segmentId());
-            if (marks) {
-                starts[pieceIndex] = written;
-                ends[pieceIndex] = written;
-            }
             if (segment == null) {
                 continue;
             }
@@ -1152,6 +1152,11 @@ public final class HudDraw {
                 }
                 PATH_X[written] = m00 * x + m01 * z + m02;
                 PATH_Y[written] = m10 * x + m11 * z + m12;
+                // Which piece owns this vertex: an arrow is placed along a chain, but its direction is
+                // the owning segment's. Recorded for every chain rather than only the marked ones --
+                // it is one int write per vertex and it keeps the two loops from having to agree about
+                // an array's presence.
+                PATH_OWNER[written] = pieceIndex;
                 previousWorldX = x;
                 previousWorldZ = z;
                 havePrevious = true;
@@ -1160,14 +1165,13 @@ public final class HudDraw {
             if (marks) {
                 segments[pieceIndex] = segment;
                 reversed[pieceIndex] = piece.reversed();
-                ends[pieceIndex] = written;
             }
         }
         emitProjectedPath(out, written, halfWidth, argb, alpha, minX, minY, maxX, maxY);
         if (marks) {
             // The marks come after the stroke so they sit on top of it, and before whatever the
             // caller draws next -- a route, a marker -- so those still read as being above the road.
-            emitOneWayMarks(out, segments, reversed, starts, ends, halfWidth, alpha,
+            emitOneWayMarks(out, segments, reversed, written, halfWidth, alpha,
                     screenPxPerUnit, minX, minY, maxX, maxY);
         }
     }
@@ -1178,19 +1182,28 @@ public final class HudDraw {
      * The narrowest road, in screen half-width pixels, that carries one-way arrows on a map this mod
      * draws.
      *
-     * <p>These maps draw every road at a fixed weight rather than at the zoom's, so the arrows have
-     * to decide for themselves when a road is wide enough to carry one. Half a pixel is the width
-     * the HUD's small map and the phone page draw a road at: an arrowhead there is a mark on a line
-     * a pixel wide, which is still the only thing on that map that says which way the road runs.
+     * <p>These maps draw every road at a fixed weight rather than at the zoom's, so the arrows have to
+     * decide for themselves when a road is wide enough to carry one. The rule the player gave is that
+     * the mark has to sit inside the road, so a road too thin to hold a mark at all carries none: below
+     * this width an arrow sized to fit the road would be under a pixel long, and the alternative --
+     * forcing a minimum size -- is a mark wider than the road it belongs to, which is exactly what was
+     * reported and is what this whole rule replaced.
      */
-    private static final double ONEWAY_ARROW_MIN_HALF_PX = 0.45;
+    private static final double ONEWAY_ARROW_MIN_HALF_PX = 0.9;
 
-    /** The smallest and largest arrowhead, in screen pixels, for the maps' road widths. */
-    private static final double ONEWAY_ARROW_MIN_PX = 2.0;
+    /** The largest an arrowhead may be, in screen pixels, however wide the road is drawn. */
     private static final double ONEWAY_ARROW_MAX_PX = 7.0;
 
-    /** Arrowhead size as a multiple of the road's screen half-width: about two road widths long. */
-    private static final double ONEWAY_ARROW_SIZE_PER_HALF_PX = 2.6;
+    /**
+     * Arrowhead length as a multiple of the road's screen half-width.
+     *
+     * <p>1.15 is what makes the mark fit inside its road. The head and its rim are drawn 1.68 of their
+     * length across (see {@link #emitArrow}), and the road is two half-widths across, so a length of
+     * 1.15 half-widths puts the mark's widest point at 1.93 half-widths -- inside the stroke, with the
+     * rim still on the road rather than hanging off its edge. It used to be 2.6 (about two road widths),
+     * which on a four-pixel street drew a ten-pixel mark that read as an icon beside the road.
+     */
+    private static final double ONEWAY_ARROW_SIZE_PER_HALF_PX = 1.15;
 
     /** Screen distance between two arrowheads on one stretch, as a multiple of the arrow's size. */
     private static final double ONEWAY_ARROW_SPACING_PER_SIZE = 4.0;
@@ -1198,21 +1211,28 @@ public final class HudDraw {
     /**
      * The closest two arrowheads may be on screen, in pixels.
      *
-     * <p>The size rule is proportional to the road, and the thinnest maps draw roads at one pixel:
-     * a fixed multiple of a two-pixel arrow would be a dotted line rather than a direction. This
-     * floor is what makes a small map's arrows read as a few marks along the road instead.
+     * <p>The size rule is proportional to the road, and the thinnest roads that carry marks are two
+     * pixels wide: a fixed multiple of a two-pixel arrow would be a dotted line rather than a
+     * direction. This floor is what makes even a thin road's arrows read as a few marks along it.
      */
     private static final double ONEWAY_ARROW_MIN_SPACING_PX = 12.0;
 
-    /** The most arrowheads one piece of one chain draws, so a long road cannot fill the map. */
-    private static final int ONEWAY_ARROW_LIMIT_PER_PIECE = 8;
+    /**
+     * The most arrowheads one chain draws, so a long road cannot fill the map.
+     *
+     * <p>Per chain rather than per piece, which is what it used to be: a road drawn as one long segment
+     * is one piece, so a per-piece cap of eight stopped marking it after about a tenth of its length --
+     * reported from play as "only part of the one-way road has arrows". The cap here is only a guard
+     * against a pathological chain; the real bound is the spacing against the visible box.
+     */
+    private static final int ONEWAY_ARROW_LIMIT_PER_CHAIN = 64;
 
     /** The arrowhead itself, white, and the rim under it that keeps it visible on the ice road. */
     private static final int ONEWAY_ARROW_INK = 0xFFF4F8FF;
     private static final int ONEWAY_ARROW_RIM = 0xB0101418;
 
     /**
-     * Draws the direction arrows along the one-way pieces of one chain.
+     * Draws the direction arrows along the one-way stretches of one chain.
      *
      * <p>The maps that draw their own roads have no place of their own for a direction mark: they
      * draw a road as a continuous chain and the segments' directions are a property of the data, so
@@ -1221,15 +1241,18 @@ public final class HudDraw {
      * are sized from the stroke's own width so the small maps get small marks and the viewer's wide
      * ones get marks that proportionally belong to the road.
      *
-     * <p>Which way a piece runs in the projected polyline is not the segment's own direction: a
-     * stroke may be walked backwards or forwards by {@link DisplayStrokes}, so the piece's
+     * <p>Which way a stretch runs in the projected polyline is not the segment's own direction: a
+     * stroke may be walked backwards or forwards by {@link DisplayStrokes}, so the owning piece's
      * {@code reversed} flag is what turns "the segment allows FORWARD" into "the path goes this
      * way". Getting that wrong is an arrow pointing against the only direction the road can be
      * travelled, which is worse than no arrow at all.
+     *
+     * <p>The walk is over the whole chain and its spacing does not restart at a piece boundary; see
+     * the comment in the body for the two play-reported faults that came from walking piece by piece.
      */
     private static void emitOneWayMarks(VertexSink out, RoadSegment[] segments, boolean[] reversed,
-                                        int[] starts, int[] ends,
-                                        double halfWidth, int alpha, double screenPxPerUnit,
+                                        int written, double halfWidth, int alpha,
+                                        double screenPxPerUnit,
                                         double minX, double minY, double maxX, double maxY) {
         // The marks are laid out in the emitter's own units, which are screen pixels for the maps
         // this mod draws itself but the pose's units (a fraction of a pixel) for Xaero's minimap.
@@ -1237,11 +1260,11 @@ public final class HudDraw {
         // same handful of pixels on every map instead of a fraction of one on the minimap.
         double perUnit = screenPxPerUnit > 0 ? screenPxPerUnit : 1.0;
         double screenHalf = halfWidth * perUnit;
-        if (segments.length == 0 || screenHalf < ONEWAY_ARROW_MIN_HALF_PX) {
+        if (segments.length == 0 || written < 2 || screenHalf < ONEWAY_ARROW_MIN_HALF_PX) {
             return;
         }
-        double screenSize = Math.max(ONEWAY_ARROW_MIN_PX,
-                Math.min(ONEWAY_ARROW_MAX_PX, screenHalf * ONEWAY_ARROW_SIZE_PER_HALF_PX));
+        double screenSize = Math.min(ONEWAY_ARROW_MAX_PX,
+                screenHalf * ONEWAY_ARROW_SIZE_PER_HALF_PX);
         double screenSpacing = Math.max(screenSize * ONEWAY_ARROW_SPACING_PER_SIZE,
                 ONEWAY_ARROW_MIN_SPACING_PX);
         double size = screenSize / perUnit;
@@ -1250,54 +1273,60 @@ public final class HudDraw {
         int rimAlpha = Math.min(alpha * 3 / 5, 0xFF);
         int ink = (bodyAlpha << 24) | (ONEWAY_ARROW_INK & 0xFFFFFF);
         int rim = (rimAlpha << 24) | (ONEWAY_ARROW_RIM & 0xFFFFFF);
-        for (int piece = 0; piece < segments.length; piece++) {
-            RoadSegment segment = segments[piece];
-            if (segment == null || segment.direction() == null || !segment.direction().isOneWay()) {
+        // One walk over the whole chain, not one per piece. The pieces' marks used to restart their own
+        // spacing at every piece boundary and stop after eight of them, so a road drawn as one long
+        // segment went unmarked past its first stretch and a road of many pieces had its marks bunched
+        // at the joints -- "only part of the one-way road has arrows". The distance counter and the
+        // spacing run across the chain, and the direction of each stretch comes from the piece that
+        // owns the vertex. A two-way stretch still consumes the distance, so the marks on either side
+        // of it stay evenly spaced rather than bunching against it.
+        double travelled = 0;
+        double nextAt = spacing * 0.75;
+        int drawn = 0;
+        for (int i = 1; i < written && drawn < ONEWAY_ARROW_LIMIT_PER_CHAIN; i++) {
+            double ax = PATH_X[i - 1];
+            double ay = PATH_Y[i - 1];
+            double bx = PATH_X[i];
+            double by = PATH_Y[i];
+            double edge = Math.hypot(bx - ax, by - ay);
+            if (edge < 1.0E-9) {
+                continue;
+            }
+            int piece = PATH_OWNER[i];
+            RoadSegment segment = piece >= 0 && piece < segments.length ? segments[piece] : null;
+            if (segment == null || segment.direction() == null
+                    || !segment.direction().isOneWay()) {
+                while (nextAt <= travelled + edge) {
+                    nextAt += spacing;
+                }
+                travelled += edge;
                 continue;
             }
             // Increasing polyline index is the allowed direction when the piece was appended in
             // vertex order and the segment runs forwards, or when it was reversed and the segment
             // runs backwards; the two flags together decide it, which is why it is an xor.
             boolean increasing = (segment.direction() == RoadDirection.FORWARD) != reversed[piece];
-            int start = starts[piece];
-            int end = ends[piece];
-            if (end - start < 2) {
-                continue;
+            double dirX = (bx - ax) / edge;
+            double dirY = (by - ay) / edge;
+            if (!increasing) {
+                dirX = -dirX;
+                dirY = -dirY;
             }
-            double travelled = 0;
-            double nextAt = spacing * 0.75;
-            int drawn = 0;
-            for (int i = start + 1; i < end && drawn < ONEWAY_ARROW_LIMIT_PER_PIECE; i++) {
-                double ax = PATH_X[i - 1];
-                double ay = PATH_Y[i - 1];
-                double bx = PATH_X[i];
-                double by = PATH_Y[i];
-                double edge = Math.hypot(bx - ax, by - ay);
-                if (edge < 1.0E-9) {
-                    continue;
+            while (nextAt <= travelled + edge && drawn < ONEWAY_ARROW_LIMIT_PER_CHAIN) {
+                double along = (nextAt - travelled) / edge;
+                double x = ax + (bx - ax) * along;
+                double y = ay + (by - ay) * along;
+                // Whole arrows only: a mark painted across the edge of the box is clipped by the
+                // stroke pass, and a clipped arrowhead is not a direction.
+                double reach = size * 1.3 + 0.5;
+                if (x - reach >= minX && x + reach <= maxX
+                        && y - reach >= minY && y + reach <= maxY) {
+                    emitArrow(out, x, y, dirX, dirY, size, rim, ink);
+                    drawn++;
                 }
-                while (nextAt <= travelled + edge && drawn < ONEWAY_ARROW_LIMIT_PER_PIECE) {
-                    double along = (nextAt - travelled) / edge;
-                    double x = ax + (bx - ax) * along;
-                    double y = ay + (by - ay) * along;
-                    double dirX = (bx - ax) / edge;
-                    double dirY = (by - ay) / edge;
-                    if (!increasing) {
-                        dirX = -dirX;
-                        dirY = -dirY;
-                    }
-                    // Whole arrows only: a mark painted across the edge of the box is clipped by
-                    // the stroke pass, and a clipped arrowhead is not a direction.
-                    double reach = size * 1.3;
-                    if (x - reach >= minX && x + reach <= maxX
-                            && y - reach >= minY && y + reach <= maxY) {
-                        emitArrow(out, x, y, dirX, dirY, size, rim, ink);
-                        drawn++;
-                    }
-                    nextAt += spacing;
-                }
-                travelled += edge;
+                nextAt += spacing;
             }
+            travelled += edge;
         }
     }
 
