@@ -64,6 +64,26 @@ public final class MtrTransit {
     private static volatile int unplaced;
     private static volatile int rememberedLines;
     private static volatile int rememberedStations;
+    /**
+     * The rails the memory holds, published for the store that saves them and for nobody else.
+     * A list of the same immutable Track records the reading carried, so handing it out costs the
+     * references and not the geometry. Published only when the count moved, because MTR re-sends the
+     * rails in every window and a copy per reading would be a copy per second of an unchanged set.
+     */
+    private static volatile List<MtrClientData.Track> railSnapshot = List.of();
+    private static volatile int railSnapshotCount = -1;
+    private static volatile int railStamp;
+
+    /**
+     * The rails a saved session left behind, handed to the worker on its next build.
+     * Read and cleared by the worker only, written by whichever thread opened a world; a plain
+     * reference is enough because the value is a whole immutable list and losing an intermediate
+     * hand-off would simply mean the next build takes the newer one.
+     */
+    private static volatile List<MtrClientData.Track> pendingSeed;
+
+    /** Counts adopted memories, so a rebuild is asked for even when the reading itself did not change. */
+    private static volatile int memoryEpoch;
 
     /**
      * The worker the reading is converted on, and the two signatures that say what it has been asked for and what it has finished.
@@ -167,6 +187,47 @@ public final class MtrTransit {
         return skipped;
     }
 
+    /** How many rails the memory holds, including the ones only a previous session saw. */
+    public static int rememberedRails() {
+        refresh();
+        return Math.max(0, railSnapshotCount);
+    }
+
+    /**
+     * The remembered rails, for the store that writes them out.
+     * The same immutable list until the memory grows, so asking once a tick costs a read of one
+     * reference rather than a copy of the railway.
+     */
+    public static List<MtrClientData.Track> railSnapshot() {
+        refresh();
+        return railSnapshot;
+    }
+
+    /** Bumped whenever the remembered rails change, so a saver can tell whether it is behind. */
+    public static int railStamp() {
+        refresh();
+        return railStamp;
+    }
+
+    /**
+     * The rails a saved session left behind, as the starting point of this one.
+     * They replace the memory rather than adding to it: a world is opened once, and reading another
+     * session's rails on top of this one's would mix two dimensions' track. The rebuild this asks for
+     * is what plans the lines over them; nothing is drawn from the memory without that plan.
+     */
+    public static void adoptRememberedRails(List<MtrClientData.Track> rails) {
+        pendingSeed = rails == null ? List.of() : List.copyOf(rails);
+        memoryEpoch++;
+        // A build already asked for has a signature that predates the memory and will not pick it up;
+        // the epoch is part of the signature, so this call makes the newest request differ.
+        refresh();
+    }
+
+    /** Forgets the rails and everything planned over them; the next reading starts the memory again. */
+    public static void forgetMemory() {
+        adoptRememberedRails(List.of());
+    }
+
     /** How many of a line's stops were left out for having no position the client knew. */
     public static int unplacedStops() {
         refresh();
@@ -199,11 +260,12 @@ public final class MtrTransit {
      * @param stated the lines whose rails the reading named rather than left to be worked out, which decides whether what was kept of them is replaced or added to.
      */
     record Built(List<Station> stations, List<LineStop> stops, List<TransitLine> lines,
-                 Map<Long, RoadNetwork> tracks, Set<Long> stated, int imported, int skipped,
+                 Map<Long, RoadNetwork> tracks, Set<Long> stated,
+                 List<MtrClientData.Track> rawRails, int imported, int skipped,
                  int unplaced) {
 
-        static final Built EMPTY =
-                new Built(List.of(), List.of(), List.of(), Map.of(), Set.of(), 0, 0, 0);
+        static final Built EMPTY = new Built(List.of(), List.of(), List.of(), Map.of(), Set.of(),
+                List.of(), 0, 0, 0);
 
         /** Every line's track as one network. */
         RoadNetwork rails() {
@@ -226,11 +288,30 @@ public final class MtrTransit {
     }
 
     /**
-     * Turns a reading into this mod's stops, lines and the track they run along. A function of the reading and the id counter and of nothing else, so the whole conversion can be checked with no MTR installed.
-     * The marks switch is deliberately not an argument: every line's track is worked out and MtrKnown decides which of them are added as roads, so a switched-off line is still drawn along its track and switching it on needs no fresh reading.
-     * @param nextId the counter the track ids are drawn from, handed in so that two readings of one session cannot number two pieces alike.
+     * Turns a reading into this mod's stops, lines and the track they run along, over the rails this
+     * session has already seen.
+     * A reading on its own is a window: MTR replaces the client's rail set with every update, so a
+     * line whose neighbouring stops were never both inside one window used to have no ride at all,
+     * and one that was planned stopped where the window did. The memory is what lets the plan span
+     * readings. A function of the reading, the id counter, the remembered rails and nothing else, so
+     * the whole conversion can be checked with no MTR installed.
+     * The marks switch is deliberately not an argument: every line's track is worked out and MtrKnown
+     * decides which of them are added as roads, so a switched-off line is still drawn along its track
+     * and switching it on needs no fresh reading.
+     * @param nextId the counter the track ids are drawn from, handed in so that two readings of one
+     * session cannot number two pieces alike
      */
     static Built build(MtrClientData.Snapshot reading, int[] nextId) {
+        return build(reading, nextId, List.of());
+    }
+
+    /**
+     * The same, over the rails the memory already holds.
+     * @param remembered rails MTR sent in earlier windows of this session or a previous one, already
+     * deduplicated by MTR's id; the reading's own copy of a rail wins over it
+     */
+    static Built build(MtrClientData.Snapshot reading, int[] nextId,
+                       List<MtrClientData.Track> remembered) {
         if (reading.isEmpty()) {
             return Built.EMPTY;
         }
@@ -238,9 +319,10 @@ public final class MtrTransit {
         // The stations first, because the lines are placed on them: a stop goes where its station's vehicles stop, which after the grouping is the place rather than whichever MTR area the stop named.
         Places places = places(reading);
         List<TransitLine> builtLines = buildLines(reading, places, counts);
-        BuiltTracks tracks = buildTracks(reading, builtLines, nextId);
+        BuiltTracks tracks = buildTracks(reading, builtLines, nextId, remembered);
         return new Built(places.stations(), stopsOf(places.stations()), builtLines, tracks.byLine(),
-                tracks.stated(), builtLines.size(), counts.skipped, counts.unplaced);
+                tracks.stated(), reading.tracks(), builtLines.size(), counts.skipped,
+                counts.unplaced);
     }
 
     /**
@@ -257,7 +339,8 @@ public final class MtrTransit {
      * One router workspace is shared by every line that needs planning: a workspace copies the rail layer, so one per line would copy the whole layer once per line.
      */
     private static BuiltTracks buildTracks(MtrClientData.Snapshot reading,
-                                           List<TransitLine> lines, int[] nextId) {
+                                           List<TransitLine> lines, int[] nextId,
+                                           List<MtrClientData.Track> remembered) {
         Map<Long, RoadNetwork> tracks = new HashMap<>();
         Set<Long> statedIds = new HashSet<>();
         if (lines.isEmpty()) {
@@ -265,18 +348,33 @@ public final class MtrTransit {
             return new BuiltTracks(tracks, statedIds);
         }
 
-        Map<Long, MtrClientData.Line> sources = new HashMap<>();
-        for (MtrClientData.Line line : reading.lines()) {
-            sources.put(line.id(), line);
-        }
-        Map<String, MtrClientData.Track> railsById = new HashMap<>();
+        // Everything this build may plan over, the window's own rails first so its copy -- the one with
+        // a real height and mode -- is the one kept when a rail is in both.
+        Map<String, MtrClientData.Track> railsById = new LinkedHashMap<>();
         for (MtrClientData.Track rail : reading.tracks()) {
             if (rail.hexId() != null) {
                 railsById.put(rail.hexId(), rail);
             }
         }
+        List<MtrClientData.Track> allRails = new ArrayList<>(reading.tracks());
+        Set<String> taken = new HashSet<>(railsById.keySet());
+        for (MtrClientData.Track rail : remembered) {
+            String id = rail.hexId();
+            if (id != null && !taken.contains(id)) {
+                taken.add(id);
+                railsById.put(id, rail);
+                allRails.add(rail);
+            }
+        }
 
-        // What each line runs along, where the reading says so. A line it says nothing about is one the layer below has to exist for.
+        Map<Long, MtrClientData.Line> sources = new HashMap<>();
+        for (MtrClientData.Line line : reading.lines()) {
+            sources.put(line.id(), line);
+        }
+
+        // What each line runs along, where MTR says so -- in this window or in one this session kept.
+        // A line whose named rails are only partly in the window is completed out of the memory, which
+        // is the difference between a line that stops at the edge of the window and one that does not.
         Map<Long, List<MtrClientData.Track>> stated = new HashMap<>();
         boolean anyPlanned = false;
         for (TransitLine line : lines) {
@@ -296,7 +394,7 @@ public final class MtrTransit {
         MtrLineTracks.Extent extent = null;
         RoadRouter.Workspace workspace = null;
         if (anyPlanned) {
-            rails = buildRailLayer(reading);
+            rails = buildRailLayer(allRails);
             // Asked once for the whole reading rather than once per line: it is a walk of the layer, and the layer is the same for every line of it. See MtrLineTracks.Extent.
             extent = MtrLineTracks.Extent.of(rails);
             workspace = new RoadRouter.Workspace(rails);
@@ -353,16 +451,21 @@ public final class MtrTransit {
         MtrClientData.Snapshot reading = MtrClientData.snapshot();
         boolean enabled = RoadConfig.mtrTransit();
         int marks = MtrMarks.version();
+        int epoch = memoryEpoch;
         // Worked out once per reading rather than once per asker: the map asks for one line's track per line per frame, so a signature that walks every line was being built L times a frame, the square of the line count. It is made of the reading, the switch and the player's answers about marks; the reading's identity is what says the signature still holds.
         String wanted;
         if (keyedSignature != null && reading == keyedReading && enabled == keyedEnabled
-                && marks == keyedMarks) {
+                && marks == keyedMarks && epoch == keyedEpoch) {
             wanted = keyedSignature;
         } else {
-            wanted = key(reading, enabled);
+            // The epoch comes before the reading's own part: adopting a saved memory changes what a
+            // build makes of the same reading, and a signature that ignored it would keep the plan
+            // that was made before the memory was there.
+            wanted = epoch + ";" + key(reading, enabled);
             keyedReading = reading;
             keyedEnabled = enabled;
             keyedMarks = marks;
+            keyedEpoch = epoch;
             keyedSignature = wanted;
         }
         if (wanted.equals(requested)) {
@@ -379,6 +482,7 @@ public final class MtrTransit {
     private static MtrClientData.Snapshot keyedReading;
     private static boolean keyedEnabled;
     private static int keyedMarks = Integer.MIN_VALUE;
+    private static int keyedEpoch = Integer.MIN_VALUE;
     private static String keyedSignature;
 
     /**
@@ -422,6 +526,16 @@ public final class MtrTransit {
      * Converts one reading and publishes everything that comes out of it. Runs on the worker and nowhere else, which is what makes known and markIds safe to touch without locks.
      */
     private static void rebuild(MtrClientData.Snapshot reading, boolean enabled) {
+        // The saved memory, when a world was opened with one: it goes in before anything is planned, so
+        // the first build of the session already plans over the whole railway that was walked before.
+        // Consumed whether or not the integration is on, so a memory adopted while it was off does not
+        // lie in wait for a later build.
+        List<MtrClientData.Track> seed = pendingSeed;
+        if (seed != null) {
+            pendingSeed = null;
+            known.clear();
+            known.seedRails(seed);
+        }
         if (!enabled) {
             // Switched off means forgotten, not merely hidden: a player turning the integration off is asking for the mod to know nothing about their railway.
             known.clear();
@@ -436,17 +550,21 @@ public final class MtrTransit {
             unplaced = 0;
             rememberedLines = 0;
             rememberedStations = 0;
+            clearPublishedRails();
             return;
         }
 
         long startedAt = System.nanoTime();
-        Built built = build(reading, markIds);
+        Built built = build(reading, markIds, known.rails());
         // What this reading adds to what the ones before it taught, and then the answers taken from the whole of that rather than from this reading alone: MTR sends only what is near, so a reading read on its own is a window that closes behind the player.
         known.remember(built);
         List<Station> keptStations = known.stations();
         List<TransitLine> keptLines = known.lines();
         RoadNetwork marks = known.marks(MtrTransit::marksWanted);
         List<LineStop> keptStops = stopsOf(keptStations);
+        // The rails are published before the marks so the store that saves them sees the same set the
+        // plan was made over, not the window the build started from.
+        publishRails(known);
         // Published one at a time, and each complete: a reader on another thread gets either the build before this one or this one. Two accessors asked a moment apart can therefore disagree about which reading they answer for -- the same bargain MtrWholeMap makes -- which is why nothing here is a pair of values that must agree.
         stationList = keptStations;
         lines = keptLines;
@@ -463,11 +581,39 @@ public final class MtrTransit {
             // The time is here because marking plans a ride per pair of neighbouring stops, and this is the number that says whether it is still worth doing off the thread it used to run on.
             HowToGo.diagnostic("[HowToGo] MTR import | stops {} lines {} (skipped {} unplacedStops {}) "
                             + "| marks {} rails {} nodes {} | kept {} lines {} stations {} track pieces "
-                            + "| {} ms | {}",
+                            + "| remembered {} rails | {} ms | {}",
                     keptStops.size(), imported, skipped, unplaced, marks.segmentCount(),
                     marks.nodeCount(), keptLines.size(), keptStations.size(), known.markSegments(),
+                    known.railCount(),
                     Math.round((System.nanoTime() - startedAt) / 1_000_000.0), describe(keptLines));
         }
+    }
+
+    /**
+     * Publishes the railway the plan may use, for the store that saves it.
+     * Only when the count moved: every reading re-sends the window's rails, and copying an unchanged
+     * list of tens of thousands of tracks once a second is work nobody asked for. A rail whose
+     * geometry MTR edited without changing the count keeps the older copy in the store, which costs a
+     * stale curve in a saved file at worst -- the next visit's window carries the new one.
+     */
+    private static void publishRails(MtrKnown memory) {
+        int count = (int) memory.railCount();
+        if (count == railSnapshotCount) {
+            return;
+        }
+        railSnapshotCount = count;
+        railSnapshot = memory.rails();
+        railStamp++;
+    }
+
+    /** Says the memory holds nothing, for the branch where the integration is switched off. */
+    private static void clearPublishedRails() {
+        if (railSnapshotCount == 0 && railSnapshot.isEmpty()) {
+            return;
+        }
+        railSnapshotCount = 0;
+        railSnapshot = List.of();
+        railStamp++;
     }
 
     /**
@@ -832,13 +978,13 @@ public final class MtrTransit {
      * MTR's rails as segments, joined where they meet. Rails are joined by position rather than by id, because the client's rail data has no node id to join on: two rails that meet in the world have ends at the same place and nothing else in common. The tolerance is a little over one block -- what a rounded coordinate can be out by -- and no more, so tracks a couple of blocks apart stay two tracks.
      * Ids come from ID_BASE so a segment of this layer is tellable from one the player drew, as a plan runs on a network holding both.
      */
-    private static RoadNetwork buildRailLayer(MtrClientData.Snapshot reading) {
+    private static RoadNetwork buildRailLayer(List<MtrClientData.Track> tracks) {
         RoadNetwork layer = new RoadNetwork();
-        if (reading.tracks().isEmpty()) {
+        if (tracks.isEmpty()) {
             return layer;
         }
         List<TrackPiece> pieces = new ArrayList<>();
-        for (MtrClientData.Track track : reading.tracks()) {
+        for (MtrClientData.Track track : tracks) {
             RoadClass kind = MtrClientData.roadClassFor(track.mode());
             if (kind == null || track.vertexCount() < 2) {
                 continue;
@@ -940,7 +1086,7 @@ public final class MtrTransit {
      * The rail layer for a reading, for the regression harness. Package-private: it is the conversion and nothing else, and only the harness, which lives in this package, asks for it without a game.
      */
     static RoadNetwork railLayerForCheck(MtrClientData.Snapshot reading) {
-        return buildRailLayer(reading);
+        return buildRailLayer(reading.tracks());
     }
 
     /**

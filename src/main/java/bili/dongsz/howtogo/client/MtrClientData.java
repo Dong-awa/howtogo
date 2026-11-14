@@ -250,11 +250,28 @@ public final class MtrClientData {
     }
 
     /**
+     * Forgets the reading, because the world or the dimension it was read in is gone.
+     * A window read in one dimension must not be merged into the memory of another when the player
+     * changes world: the rail ids of the two are unrelated, and the marks planned from both would be
+     * a railway that does not exist. The next tick re-reads whatever MTR has for the new place.
+     */
+    static void forgetReading() {
+        latest = Snapshot.EMPTY;
+        ticks = 0;
+        reported = "";
+        MtrWholeMap.reset();
+    }
+
+    /**
      * Re-reads the network once a second, and reports it when it changes.
      * On the tick rather than in a plan because a reading is a reading of a place, and there is nothing to gain from making a plan wait for one. Reported only when it changes: a diagnostic that fills the log is worse than no diagnostic.
      * Four readings meet here: the window MTR sent this client (the only one with rails, so marks are cut from it), the whole railway the local server simulates when the player hosts it (MtrWholeMap), the whole railway the server read and sent when it runs this mod (MtrClientSync), and -- only when neither whole reading exists -- MTR Map Overlay's fetched snapshot. Preferring our own means the server that simulated the railway outranks another mod's snapshot of it, and reading both would offer the same stations twice.
      */
     public static void tick() {
+        // The rail memory's file is bound to the loaded world and dimension, and the full railway a
+        // player walked stays worth more than the window MTR sends on the next visit; the store is
+        // ticked before the switch below so leaving a world still writes it out.
+        MtrRailStore.tick();
         if (!RoadConfig.mtrTransit()) {
             // Switched off means forgotten rather than merely not read again: a reading left lying about would go on being offered after the player asked for it not to.
             MtrClientSync.reset();

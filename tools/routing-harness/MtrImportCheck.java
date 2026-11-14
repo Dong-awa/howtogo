@@ -15,9 +15,12 @@ import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Checks the MTR import against a reading that was made up here.
@@ -133,6 +136,7 @@ public final class MtrImportCheck {
         checkOverlayIds();
         checkInterchanges();
         checkKnown();
+        checkRailMemory();
         checkMapFilter();
 
         // A boat line: the other kind this mod has a use for.
@@ -884,6 +888,198 @@ public final class MtrImportCheck {
                 known.marks(id -> true).segmentCount() == 1);
         expect("so the line is the length the reading says it is, and not the length it was",
                 known.marks(id -> true).segmentsSnapshot().get(0).vertexCount() == 3);
+    }
+
+    /**
+     * The rails a reading remembers, which are what completes a line MTR only ever sends in windows.
+     *
+     * <h2>Why this needs a check of its own</h2>
+     * MTR sends a client the railway near the player and replaces its rail set with every update, so a
+     * reading is a window that closes behind them. A line whose neighbouring stops were never both
+     * inside one window used to have no ride at all, and one that could be planned stopped where the
+     * window stopped. Remembering the raw rails is what lets the next window's plan join the two, and
+     * nothing about it is visible from outside: a plan over the union looks exactly like a plan over a
+     * window that happened to be big enough.
+     *
+     * <p>What is walked here is one line, two stops two hundred blocks apart, and two windows that
+     * each see half the run. The first window alone cannot reach the far stop; the second, planned over
+     * what the first remembered, spans the whole line. The memory's own rules -- which rails it refuses,
+     * what seeding replaces, its cap -- and the file it is kept in are checked with it, because all of
+     * them are silent when wrong.
+     */
+    private static void checkRailMemory() {
+        System.out.println("   the rails a reading remembers");
+
+        // One line, two stops far apart, and two windows that each carry half the rail under it.
+        List<MtrClientData.Station> stations = List.of(
+                station(7010, "West", "TRAIN", 0, 0),
+                station(7020, "East", "TRAIN", 200, 0));
+        List<MtrClientData.Platform> platforms = List.of(
+                platform(7101, 7010, "1", "TRAIN", 0, 0),
+                platform(7102, 7020, "1", "TRAIN", 200, 0));
+        MtrClientData.Line across = new MtrClientData.Line(7001, "Across", "TRAIN", 0, List.of(
+                stop(7101, 7010, "West"), stop(7102, 7020, "East")));
+
+        MtrClientData.Snapshot firstHalf = reading(stations, platforms, List.of(across),
+                List.of(track("ma1", "TRAIN", 0, 0, 50, 0),
+                        track("ma2", "TRAIN", 50, 0, 100, 0)));
+        MtrClientData.Snapshot secondHalf = reading(stations, platforms, List.of(across),
+                List.of(track("mb1", "TRAIN", 100, 0, 150, 0),
+                        track("mb2", "TRAIN", 150, 0, 200, 0)));
+
+        // The window on its own: the plan runs out of rail half way along the line.
+        MtrTransit.Built windowOnly = build(firstHalf);
+        expect("a window holding half a line's rails cannot plan the whole line",
+                !hasVertexNear(windowOnly.rails(), 200, 0));
+        expect("and what it would remember is the rails it carried, and only those",
+                windowOnly.rawRails().size() == 2);
+
+        MtrKnown known = new MtrKnown();
+        known.remember(windowOnly);
+        expect("the half a window carries is remembered, so a later one can plan over it",
+                known.railCount() >= 2);
+
+        // The next window, planned over the union: the line spans both halves rather than stopping
+        // where either window stopped.
+        MtrTransit.Built completed = MtrTransit.build(secondHalf, new int[]{1_600_000_000},
+                known.rails());
+        expect("the next window's plan, over the remembered rails, reaches the far stop",
+                hasVertexNear(completed.rails(), 200, 0));
+        expect("and starts at the stop the first window could not use as an end",
+                hasVertexNear(completed.rails(), 0, 0));
+        expect("while remembering, itself, only the rails the newest reading carried",
+                completed.rawRails().size() == 2);
+
+        // Rails a memory cannot use: an unnamed rail can never be recognised as itself in the next
+        // window, and a rail with one sample has no length to plan over.
+        MtrKnown picky = new MtrKnown();
+        picky.remember(build(reading(stations, platforms, List.of(across), List.of(
+                new MtrClientData.Track(null, "TRAIN", 64, new double[]{0, 50},
+                        new double[]{0, 0}),
+                new MtrClientData.Track("short", "TRAIN", 64, new double[]{50},
+                        new double[]{0})))));
+        expect("a rail with no id of its own and a rail with no length are not remembered",
+                picky.railCount() == 0);
+
+        // Seeding is how a world's saved memory arrives: it replaces what this session had rather than
+        // being added to it, so two dimensions' track cannot end up in one plan.
+        MtrKnown seeded = new MtrKnown();
+        seeded.seedRails(List.of(track("s1", "TRAIN", 0, 0, 10, 0),
+                track("s2", "TRAIN", 10, 0, 20, 0)));
+        expect("seeding puts a saved session's rails into the memory", seeded.railCount() == 2);
+        expect("and in the order they were given", seeded.rails().size() == 2
+                && "s1".equals(seeded.rails().get(0).hexId()));
+        seeded.seedRails(List.of(track("s3", "TRAIN", 0, 0, 10, 0)));
+        expect("seeding again replaces them rather than adding a second railway",
+                seeded.rails().size() == 1 && "s3".equals(seeded.rails().get(0).hexId()));
+        seeded.clear();
+        expect("forgetting the memory forgets the rails as well",
+                seeded.railCount() == 0 && seeded.rails().isEmpty());
+
+        // The cap, which bounds one session's memory instead of letting a wandered-onto railway grow
+        // without limit. Reaching it stops the union growing; it never drops what was learned.
+        List<MtrClientData.Track> manyRails = new ArrayList<>();
+        for (int i = 0; i < MtrKnown.MAX_RAILS + 5; i++) {
+            manyRails.add(track("cap" + i, "TRAIN", 0, 0, 1, 0));
+        }
+        MtrKnown capped = new MtrKnown();
+        capped.seedRails(manyRails);
+        expect("the memory stops at its cap of rails", capped.railCount() == MtrKnown.MAX_RAILS);
+
+        checkRailStorage();
+    }
+
+    /**
+     * The file the memory is kept in, which is the one part of it that outlives a world.
+     *
+     * <p>A cache of what MTR sent, not data the player authored: a file that will not parse is set
+     * aside rather than allowed to cost the railway, and a rail that will not parse is dropped rather
+     * than the rest of the file with it. The coordinates are read back to a thousandth of a block,
+     * which is the precision the file keeps, and an empty memory writes no file at all rather than an
+     * empty one that a later load would have to tell from a real one.
+     */
+    private static void checkRailStorage() {
+        Path directory = null;
+        try {
+            directory = Files.createTempDirectory("howtogo-mtr-rails");
+            Path file = directory.resolve("rails.json");
+            MtrClientData.Track curved = new MtrClientData.Track("rt1", "TRAIN", 70,
+                    new double[]{0.1234, 50.9876}, new double[]{-0.0004, 3.14159});
+            expect("a rail memory is written", MtrRailStorage.save(file, List.of(curved)));
+            expect("and the file is there to be read next time", Files.isRegularFile(file));
+
+            List<MtrClientData.Track> back = MtrRailStorage.load(file);
+            expect("a rail comes back with its id, mode and height",
+                    back.size() == 1 && "rt1".equals(back.get(0).hexId())
+                            && "TRAIN".equals(back.get(0).mode()) && back.get(0).y() == 70);
+            expect("and its coordinates to a thousandth of a block",
+                    back.size() == 1 && sameCoordinates(curved, back.get(0)));
+
+            expect("a file this session never wrote is no rails rather than an error",
+                    MtrRailStorage.load(directory.resolve("absent.json")).isEmpty());
+            expect("saving an empty memory writes nothing",
+                    !MtrRailStorage.save(directory.resolve("empty.json"), List.of()));
+
+            Path garbage = directory.resolve("garbage.json");
+            Files.writeString(garbage, "this is not a rail memory {{{");
+            expect("an unreadable file loads as nothing", MtrRailStorage.load(garbage).isEmpty());
+            expect("and is kept aside rather than deleted, in case it can be read by hand",
+                    Files.isRegularFile(directory.resolve("garbage.json.corrupt")));
+
+            // A hand-written file with one good rail and one whose x and z sample counts disagree:
+            // the good rail has to survive, which is the difference between a dropped entry and a lost
+            // railway.
+            Path handWritten = directory.resolve("hand.json");
+            Files.writeString(handWritten, "{\"version\":1,\"rails\":["
+                    + "{\"id\":\"good\",\"mode\":\"TRAIN\",\"y\":64,\"xs\":[0.0,10.0],"
+                    + "\"zs\":[0.0,0.0]},"
+                    + "{\"id\":\"bad\",\"mode\":\"TRAIN\",\"y\":64,\"xs\":[0.0,10.0,20.0],"
+                    + "\"zs\":[0.0,0.0]}]}");
+            List<MtrClientData.Track> salvage = MtrRailStorage.load(handWritten);
+            expect("a malformed rail is dropped without costing the rest of the file",
+                    salvage.size() == 1 && "good".equals(salvage.get(0).hexId()));
+            expect("and the file says which format it is", MtrRailStorage.FORMAT_VERSION == 1);
+        } catch (IOException broken) {
+            expect("the rail memory can be written and read (" + broken + ")", false);
+        } finally {
+            if (directory != null) {
+                removeDirectory(directory);
+            }
+        }
+    }
+
+    /** Whether two rails are the same curve to the precision the file keeps. */
+    private static boolean sameCoordinates(MtrClientData.Track one, MtrClientData.Track other) {
+        if (one.vertexCount() != other.vertexCount()) {
+            return false;
+        }
+        for (int i = 0; i < one.vertexCount(); i++) {
+            if (Math.abs(one.xs()[i] - other.xs()[i]) > 0.001
+                    || Math.abs(one.zs()[i] - other.zs()[i]) > 0.001) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Deletes a temporary directory's files and the directory itself, ignoring what will not go. */
+    private static void removeDirectory(Path directory) {
+        try (Stream<Path> files = Files.list(directory)) {
+            files.forEach(file -> {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException ignored) {
+                    // A temporary file that will not go is not a check's business.
+                }
+            });
+        } catch (IOException ignored) {
+            // The same.
+        }
+        try {
+            Files.deleteIfExists(directory);
+        } catch (IOException ignored) {
+            // The same.
+        }
     }
 
     /** A reading of the given parts, for the checks that need one built by hand. */

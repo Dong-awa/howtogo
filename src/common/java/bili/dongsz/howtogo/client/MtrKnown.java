@@ -44,6 +44,20 @@ final class MtrKnown {
      */
     static final int MAX_MARK_SEGMENTS = 100_000;
 
+    /**
+     * Ceiling on the raw rails one session keeps, and on their vertices.
+     * The rails are what a line's ride is planned over, and MTR sends only what is near the player --
+     * a window that closes behind them. Keeping a rail once it has been seen is what lets the plan
+     * join a line across readings instead of stopping at the edge of the window. The ceilings are a
+     * size bound, not a policy: a whole railway is thousands of rails, and these are several times
+     * that, while a client that wandered onto a render-distance-sized network still cannot grow
+     * without limit. A saved file holds at most every vertex once, so the vertex ceiling is also what
+     * keeps a write from being tens of megabytes.
+     */
+    static final int MAX_RAILS = 20_000;
+
+    static final int MAX_RAIL_VERTICES = 1_000_000;
+
     /** How close two mark ends have to be to be the same piece of track, in blocks. */
     private static final double SAME_TRACK = 1.5;
 
@@ -55,6 +69,16 @@ final class MtrKnown {
      */
     private final Map<String, List<MtrTransit.Station>> stationsByName = new HashMap<>();
     private final Map<Long, RoadNetwork> tracks = new LinkedHashMap<>();
+    /**
+     * Every rail MTR has sent this session, by MTR's own rail id.
+     * Kept because MTR sends a client only what is near it and replaces its rail set with each window:
+     * without this a ride could only be planned over the rails in the newest window, so a line was
+     * drawn in pieces that stopped where the window stopped. Named rails only -- an id is what makes
+     * the same rail recognisable in the next window, and an unnamed one cannot be matched to itself.
+     */
+    private final Map<String, MtrClientData.Track> rails = new LinkedHashMap<>();
+    private long railVertices;
+    private boolean railCapReported;
     private long markSegments;
     private boolean lineCapReported;
     private boolean markCapReported;
@@ -96,7 +120,57 @@ final class MtrKnown {
                 addMarks(entry.getKey(), entry.getValue());
             }
         }
+        rememberRails(reading.rawRails());
         cap();
+    }
+
+    /**
+     * Keeps every rail the reading brought that was not already known.
+     * By MTR's own rail id, which is stable across windows for both data models (4.x's hex id, 3.x's
+     * made one), so a rail re-sent because the player's window slid back over it is not stored twice.
+     * The ceilings stop at the first rail that does not fit rather than forgetting what was learned:
+     * a railway larger than MAX_RAILS was never going to be completed by walking it, and dropping the
+     * earliest rails would take away exactly the ones a plan needs to join a line end to end.
+     */
+    private void rememberRails(List<MtrClientData.Track> seen) {
+        for (MtrClientData.Track rail : seen) {
+            String id = rail.hexId();
+            if (id == null || rail.vertexCount() < 2 || rails.containsKey(id)) {
+                continue;
+            }
+            if (rails.size() >= MAX_RAILS || railVertices + rail.vertexCount() > MAX_RAIL_VERTICES) {
+                if (!railCapReported) {
+                    railCapReported = true;
+                    HowToGo.LOGGER.warn("[HowToGo] MTR rail memory is holding {} rails ({} vertices), "
+                                    + "its limit; the rest of this session's railway will not be "
+                                    + "remembered", rails.size(), railVertices);
+                }
+                return;
+            }
+            rails.put(id, rail);
+            railVertices += rail.vertexCount();
+        }
+    }
+
+    /**
+     * What a saved session left in the memory, in place of whatever this session had learned.
+     * Called once when a world is opened, before the first reading is converted: the saved rails are
+     * what the first plan is made over, and readings from this visit are added to them from then on.
+     */
+    void seedRails(List<MtrClientData.Track> saved) {
+        rails.clear();
+        railVertices = 0;
+        railCapReported = false;
+        rememberRails(saved);
+    }
+
+    /** The remembered rails, by MTR's id, for a caller that wants to plan over them. */
+    List<MtrClientData.Track> rails() {
+        return List.copyOf(rails.values());
+    }
+
+    long railCount() {
+        return rails.size();
     }
 
     /**
@@ -396,9 +470,12 @@ final class MtrKnown {
         stations.clear();
         stationsByName.clear();
         tracks.clear();
+        rails.clear();
+        railVertices = 0;
         markSegments = 0;
         lineCapReported = false;
         markCapReported = false;
+        railCapReported = false;
     }
 
     long markSegments() {

@@ -126,6 +126,7 @@ public final class SelfTest {
         String detail = "nodes=" + network.nodeCount() + " segments=" + network.segmentCount()
                 + " places=" + places + " stops=" + stops.size() + " lines=" + lines.size()
                 + " rail=" + RailTrackStore.segments().size() + " mtr=" + MtrTransit.lines().size()
+                + " mtrRails=" + MtrTransit.rememberedRails()
                 + " roadweaver=" + RoadWeaverLayer.segments().size() + "/"
                 + RoadWeaverLayer.structures().size()
                 + " mode=" + Navigation.mode().id() + " boardOnly="
