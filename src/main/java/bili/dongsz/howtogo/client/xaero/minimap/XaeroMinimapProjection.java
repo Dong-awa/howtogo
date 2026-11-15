@@ -392,7 +392,7 @@ final class XaeroMinimapProjection {
         int height = clipMaxY - clipMinY;
         if (!loggedActive) {
             loggedActive = true;
-            HowToGo.LOGGER.info("[HowToGo] minimap overlay active: {} px/block, map rect {}x{}",
+            HowToGo.logInfo("[HowToGo] minimap overlay active: {} px/block, map rect {}x{}",
                     String.format("%.3f", screenPerBlock), width, height);
         }
         double probe = PROBE_DISTANCES[chosenProbe];

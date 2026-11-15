@@ -610,7 +610,7 @@ final class MtrMapOverlay {
             landmarkSymbolMethod = landmark.getMethod("symbol");
 
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] MTR Map Overlay's fetched railway is readable ({})", CACHE);
+            HowToGo.logInfo("[HowToGo] MTR Map Overlay's fetched railway is readable ({})", CACHE);
             return true;
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;

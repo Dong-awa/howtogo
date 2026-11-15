@@ -120,7 +120,7 @@ public final class TransitLineStore {
         }
         if (TransitLineStorage.save(boundPath, lines)) {
             dirty = false;
-            HowToGo.LOGGER.info("[HowToGo] saved {} line(s) to {}", lines.size(),
+            HowToGo.logInfo("[HowToGo] saved {} line(s) to {}", lines.size(),
                     boundPath.getFileName());
         }
     }

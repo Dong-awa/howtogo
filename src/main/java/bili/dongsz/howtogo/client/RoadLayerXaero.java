@@ -19,7 +19,7 @@ final class RoadLayerXaero {
                 new RoadRenderContext(),
                 new RoadElementProvider(),
                 new RoadElementReader()));
-        HowToGo.LOGGER.info("[HowToGo] road layer registered with Xaero's World Map");
+        HowToGo.logInfo("[HowToGo] road layer registered with Xaero's World Map");
         return true;
     }
 }

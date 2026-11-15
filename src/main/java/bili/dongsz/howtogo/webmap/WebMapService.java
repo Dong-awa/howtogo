@@ -125,7 +125,7 @@ public final class WebMapService {
         }
         try {
             String url = start();
-            HowToGo.LOGGER.info("[HowToGo] webmap | auto-started at {}", url);
+            HowToGo.logInfo("[HowToGo] webmap | auto-started at {}", url);
         } catch (IOException couldNotStart) {
             autoStartFailed.set(true);
             HowToGo.LOGGER.warn("[HowToGo] webmap | could not auto-start: {}", couldNotStart.toString());

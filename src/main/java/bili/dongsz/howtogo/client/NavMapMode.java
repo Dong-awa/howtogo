@@ -44,7 +44,7 @@ public final class NavMapMode {
         }
         reported = mode;
         if (mode == MapDisplayMode.XAERO_MINIMAP) {
-            HowToGo.LOGGER.info("[HowToGo] map display mode: navigation map content is drawn on "
+            HowToGo.logInfo("[HowToGo] map display mode: navigation map content is drawn on "
                     + "Xaero's Minimap; the HUD carries the readout only");
         } else if (RoadConfig.mapDisplayMode() == MapDisplayMode.XAERO_MINIMAP) {
             // The one line this class exists for: a player who asked for the minimap must be able

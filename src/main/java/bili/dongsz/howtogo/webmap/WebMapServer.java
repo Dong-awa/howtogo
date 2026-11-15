@@ -126,7 +126,7 @@ public final class WebMapServer implements AutoCloseable {
                 server.setExecutor(workers);
                 server.start();
             }
-            HowToGo.LOGGER.info("[HowToGo] webmap | listening on {} (loopback only, {} socket(s))",
+            HowToGo.logInfo("[HowToGo] webmap | listening on {} (loopback only, {} socket(s))",
                     started.url, bound.size());
             return started;
         }
@@ -203,7 +203,7 @@ public final class WebMapServer implements AutoCloseable {
             workers.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        HowToGo.LOGGER.info("[HowToGo] webmap | stopped");
+        HowToGo.logInfo("[HowToGo] webmap | stopped");
     }
 
     @Override

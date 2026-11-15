@@ -382,7 +382,7 @@ final class MtrWholeMap {
         threeX = Mtr3Data.bindServer();
         available = threeX;
         if (!threeX) {
-            HowToGo.LOGGER.info("[HowToGo] MTR 3.x's simulated network is not reachable here; the "
+            HowToGo.logInfo("[HowToGo] MTR 3.x's simulated network is not reachable here; the "
                     + "windowed reading is what remains");
         }
         return threeX;
@@ -444,7 +444,7 @@ final class MtrWholeMap {
                     ? optionalMethod(route, "getDestination", int.class) : null;
 
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] MTR's simulated network is reachable through {}",
+            HowToGo.logInfo("[HowToGo] MTR's simulated network is reachable through {}",
                     init.getName());
             return true;
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
@@ -507,7 +507,7 @@ final class MtrWholeMap {
             return;
         }
         warned = true;
-        HowToGo.LOGGER.info("[HowToGo] MTR's whole network is not readable here ({}); its stations and "
+        HowToGo.logInfo("[HowToGo] MTR's whole network is not readable here ({}); its stations and "
                 + "lines are still read from what the server sends, as before", cause.toString());
     }
 }

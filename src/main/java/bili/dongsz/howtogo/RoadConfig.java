@@ -189,6 +189,9 @@ public final class RoadConfig {
         @SerializedName("debug_log")
         public boolean debugLog = false;
 
+        @SerializedName("log_info")
+        public boolean logInfo = true;
+
         @SerializedName("webmap_auto_start")
         public boolean webmapAutoStart = false;
 
@@ -420,6 +423,10 @@ public final class RoadConfig {
         values.webmapAutoStart = on;
     }
 
+    public static void setLogInfo(boolean on) {
+        values.logInfo = on;
+    }
+
 //
 // * Applies the keys the mod holds rather than reads where it uses them.
 // *
@@ -590,6 +597,16 @@ public final class RoadConfig {
 // 
     public static boolean debugLog() {
         return values.debugLog;
+    }
+
+    /**
+     * Whether the mod's ordinary progress lines are written to the log, on before the config loads.
+     * Read by HowToGo.logInfo, the one gate every ordinary line goes through, so the settings
+     * screen's log switch quiets the whole mod with one answer while warnings and errors stay
+     * on the logger directly.
+     */
+    public static boolean logInfo() {
+        return values.logInfo;
     }
 
 // 
@@ -1030,6 +1047,7 @@ public final class RoadConfig {
     private static final ModConfigSpec.BooleanValue ROADWEAVER_STRUCTURES;
     private static final ModConfigSpec.BooleanValue ROADWEAVER_ROUTING;
     private static final ModConfigSpec.BooleanValue DEBUG_LOG;
+    private static final ModConfigSpec.BooleanValue LOG_INFO;
     private static final ModConfigSpec.BooleanValue WEBMAP_AUTO_START;
     private static final ModConfigSpec.IntValue WEBMAP_PORT;
 
@@ -1570,6 +1588,17 @@ public final class RoadConfig {
                 .translation("howtogo.configuration.debug_log")
                 .define("debug_log", false);
 
+        LOG_INFO = builder.comment(
+                        "Whether the mod's ordinary progress lines are written to the log.",
+                        "These are the autosave, re-read and route reports, the editing mode's on and",
+                        "off notes, and the one-off lifecycle lines: everything that is chatter once it",
+                        "has been read once, and everything the settings screen's log switch exists to",
+                        "quiet. On by default -- a mod that logs nothing at all is a mod you cannot",
+                        "report a bug about -- and warnings and errors are not affected either way:",
+                        "a problem is always reported.")
+                .translation("howtogo.configuration.log_info")
+                .define("log_info", true);
+
         WEBMAP_AUTO_START = builder.comment(
                         "Whether the browser map's local server is started as soon as a world is",
                         "loaded, rather than waiting for the /howtogo webmap command.",
@@ -1790,6 +1819,17 @@ public final class RoadConfig {
             return DEBUG_LOG.get();
         } catch (IllegalStateException notLoadedYet) {
             return false;
+        }
+    }
+
+    /**
+     * Whether the mod's ordinary progress lines are written to the log, on before the config loads. Read by HowToGo.logInfo, the one gate every ordinary line goes through; the settings screen's log switch answers here, while warnings and errors stay on the logger directly.
+     */
+    public static boolean logInfo() {
+        try {
+            return LOG_INFO.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return true;
         }
     }
 
@@ -2149,6 +2189,10 @@ public final class RoadConfig {
 
     public static void setWebMapAutoStart(boolean on) {
         write(WEBMAP_AUTO_START, on);
+    }
+
+    public static void setLogInfo(boolean on) {
+        write(LOG_INFO, on);
     }
 
     /**

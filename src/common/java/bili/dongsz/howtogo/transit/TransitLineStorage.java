@@ -71,7 +71,7 @@ public final class TransitLineStorage {
                 }
                 lines.add(line);
             }
-            HowToGo.LOGGER.info("[HowToGo] loaded {} line(s) from {}", lines.size(),
+            HowToGo.logInfo("[HowToGo] loaded {} line(s) from {}", lines.size(),
                     file.getFileName());
         } catch (IOException | RuntimeException e) {
             // RuntimeException rather than JsonSyntaxException alone: a file can be malformed in ways the parser accepts -- a null array element is one and used to throw straight out of load() past every guard. A file that cannot be read must be set aside whatever the reason.

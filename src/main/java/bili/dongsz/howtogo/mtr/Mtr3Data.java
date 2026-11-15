@@ -630,12 +630,12 @@ public final class Mtr3Data {
                 clientRailsField = optionalField(type, "RAILS", "rails");
                 clientCacheField = optionalField(type, "DATA_CACHE", "dataCache", "cache");
                 clientAvailable = true;
-                HowToGo.LOGGER.info("[HowToGo] MTR 3.x client data bound reflectively ({})",
+                HowToGo.logInfo("[HowToGo] MTR 3.x client data bound reflectively ({})",
                         boundClientName);
                 return true;
             } catch (ReflectiveOperationException | LinkageError | RuntimeException wrong) {
                 clientWarned = true;
-                HowToGo.LOGGER.info("[HowToGo] MTR 3.x client data at {} is not the shape this "
+                HowToGo.logInfo("[HowToGo] MTR 3.x client data at {} is not the shape this "
                         + "reads ({})", candidate[0], wrong.toString());
             }
         }
@@ -672,16 +672,16 @@ public final class Mtr3Data {
                 railwayRailsMethod = methodObject(type, "getRailsMap");
                 railwayRailsField = accessibleField(type, "rails");
                 if (railwayRailsMethod == null && railwayRailsField == null) {
-                    HowToGo.LOGGER.info("[HowToGo] MTR 3.x at {} keeps its rails where this cannot reach "
+                    HowToGo.logInfo("[HowToGo] MTR 3.x at {} keeps its rails where this cannot reach "
                             + "them; the whole-map reading will have no track", type.getName());
                 }
                 serverAvailable = true;
-                HowToGo.LOGGER.info("[HowToGo] MTR 3.x simulated data reachable through {}",
+                HowToGo.logInfo("[HowToGo] MTR 3.x simulated data reachable through {}",
                         type.getName());
                 return true;
             } catch (ReflectiveOperationException | LinkageError | RuntimeException wrong) {
                 serverWarned = true;
-                HowToGo.LOGGER.info("[HowToGo] MTR 3.x simulated data at {} is not the shape this "
+                HowToGo.logInfo("[HowToGo] MTR 3.x simulated data at {} is not the shape this "
                         + "reads ({})", type.getName(), wrong.toString());
             }
         }
@@ -785,7 +785,7 @@ public final class Mtr3Data {
                     && stopPlatformIdGetter != null && railLengthGetter != null
                     && railPositionMethod != null && hasStationPosition;
             if (!shapesAvailable) {
-                HowToGo.LOGGER.info("[HowToGo] MTR 3.x's data at {} is missing one of the shapes this "
+                HowToGo.logInfo("[HowToGo] MTR 3.x's data at {} is missing one of the shapes this "
                         + "reads; it is not used", base);
             }
             return shapesAvailable;

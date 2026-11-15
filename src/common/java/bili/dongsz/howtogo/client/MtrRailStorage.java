@@ -104,7 +104,7 @@ final class MtrRailStorage {
                         + "rather than allowed to cost the rest", file.getFileName(), rejected);
             }
             if (!rails.isEmpty()) {
-                HowToGo.LOGGER.info("[HowToGo] loaded {} MTR rails from {}", rails.size(),
+                HowToGo.logInfo("[HowToGo] loaded {} MTR rails from {}", rails.size(),
                         file.getFileName());
             }
             return rails;

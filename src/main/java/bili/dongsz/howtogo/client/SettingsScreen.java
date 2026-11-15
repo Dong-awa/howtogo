@@ -261,6 +261,12 @@ final class SettingsScreen extends Screen {
                         "screen.howtogo.settings.webmap_auto_start.desc",
                         RoadConfig::webMapAutoStart,
                         RoadConfig::setWebMapAutoStart, false));
+
+        group("screen.howtogo.settings.group.log",
+                Row.toggle("howtogo.configuration.log_info",
+                        "screen.howtogo.settings.log_info.desc",
+                        RoadConfig::logInfo,
+                        RoadConfig::setLogInfo, true));
     }
 
     private void group(String titleKey, Row... members) {
