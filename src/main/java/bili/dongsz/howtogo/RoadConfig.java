@@ -599,12 +599,13 @@ public final class RoadConfig {
         return values.debugLog;
     }
 
-    /**
-     * Whether the mod's ordinary progress lines are written to the log, on before the config loads.
-     * Read by HowToGo.logInfo, the one gate every ordinary line goes through, so the settings
-     * screen's log switch quiets the whole mod with one answer while warnings and errors stay
-     * on the logger directly.
-     */
+    // Whether the mod's ordinary progress lines are written to the log, on before the config loads.
+    // Read by HowToGo.logInfo, the one gate every ordinary line goes through, so the settings
+    // screen's log switch quiets the whole mod with one answer while warnings and errors stay
+    // on the logger directly.
+    // Block comments and comment closer sequences stay out of this arm on purpose: the whole
+    // arm lives inside the loader-switch comment pair, and a stray closer here would end it
+    // early and leave half the arm uncommented in the generated file.
     public static boolean logInfo() {
         return values.logInfo;
     }
