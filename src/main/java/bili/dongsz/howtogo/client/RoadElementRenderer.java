@@ -2836,10 +2836,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_CLOSED_BAR = 0xFFF2F2F2;
     /** Screen pixels the closed badge is drawn at, fixed: closures are rare and always worth reading. */
     private static final double CLOSED_BADGE_PX = 11.0;
-    /** World blocks per closure dash period (dash + gap), so the dashes read as paint on the road. */
-    private static final double CLOSED_DASH_PERIOD_BLOCKS = 12.0;
-    /** A cap per closed road, so one very long segment cannot fill the screen with stripes. */
-    private static final int CLOSED_STRIPE_LIMIT = 40;
+    /** World blocks between closure dash anchors; each dash draws at a fixed screen size on its block. */
+    private static final double CLOSED_DASH_ANCHOR_BLOCKS = 16.0;
+    /** Screen length of one closure dash -- fixed, so zooming never grows or shrinks a dash. */
+    private static final double CLOSED_DASH_LEN_PX = 9.0;
+    /** A cap per closed road, so one very long segment cannot fill the screen with dashes. */
+    private static final int CLOSED_DASH_LIMIT = 80;
 
     /**
      * Draws the direction arrows of every one-way road, above every road.
@@ -2918,10 +2920,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * doing -- nothing else on the map says a road does not lead through, so these marks are the one
      * honest reading of it.
      *
-     * The dashes are anchored in world units and walked along the segment's world line: a dash sits
-     * at the same blocks of the road at every zoom, exactly like paint on the asphalt. Zooming scales
-     * them with the map instead of sliding them along the street. Only the thickness hugs the drawn
-     * road's rim in screen pixels, because the road's own stroke is styled in screen pixels too.
+     * Each dash is one of a fixed set of anchors nailed to the segment's world arc length, and draws
+     * at a fixed screen size: zooming changes how many of them are in view and how far apart they
+     * sit, but a dash never slides along the road, grows or shrinks -- the centre stays on its block,
+     * the length stays what it was. Exactly how the reference maps behave.
      */
     private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -2940,61 +2942,49 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (count < 2) {
                 continue;
             }
+            double length = segment.length();
             double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
             double thickness = Math.max(1.2, halfWidthPx * 0.45);
-            double period = CLOSED_DASH_PERIOD_BLOCKS;
-            double dashLength = period * 0.5;
-            double travelled = 0.0;
-            double nextAt = 0.0;
-            int dashes = 0;
-            for (int step = 1; step < count && dashes < CLOSED_STRIPE_LIMIT; step++) {
-                double wx1 = displayX(segment, step - 1);
-                double wz1 = displayZ(segment, step - 1);
-                double wx2 = displayX(segment, step);
-                double wz2 = displayZ(segment, step);
-                double edge = Math.hypot(wx2 - wx1, wz2 - wz1);
-                if (edge < 1.0E-6) {
+            int anchors = (int) Math.min(CLOSED_DASH_LIMIT,
+                    Math.floor(length / CLOSED_DASH_ANCHOR_BLOCKS));
+            for (int i = 0; i < anchors; i++) {
+                double at = i * CLOSED_DASH_ANCHOR_BLOCKS + CLOSED_DASH_ANCHOR_BLOCKS * 0.5;
+                double[] centre = displayPointAt(segment, count, at);
+                double cx = projection.screenX(centre[0]);
+                double cy = projection.screenZ(centre[1]);
+                if (cx < left || cx > right || cy < top || cy > bottom) {
                     continue;
                 }
-                while (nextAt <= travelled + edge && dashes < CLOSED_STRIPE_LIMIT) {
-                    // The dash's ends live in world blocks, clipped to this polyline piece.
-                    double s = Math.max(nextAt, travelled);
-                    double e = Math.min(nextAt + dashLength, travelled + edge);
-                    if (e > s) {
-                        double t1 = (s - travelled) / edge;
-                        double t2 = (e - travelled) / edge;
-                        double sx1 = projection.screenX(wx1 + (wx2 - wx1) * t1);
-                        double sy1 = projection.screenZ(wz1 + (wz2 - wz1) * t1);
-                        double sx2 = projection.screenX(wx1 + (wx2 - wx1) * t2);
-                        double sy2 = projection.screenZ(wz1 + (wz2 - wz1) * t2);
-                        double dx = sx2 - sx1;
-                        double dy = sy2 - sy1;
-                        double len = Math.hypot(dx, dy);
-                        if (len > 1.0E-4) {
-                            double ux = dx / len;
-                            double uy = dy / len;
-                            double nx = -uy;
-                            double ny = ux;
-                            boolean red = dashes % 2 == 0;
-                            int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
-                            // One dash per edge, hugging the road's drawn rim: the pair brackets the
-                            // street the way the reference maps bracket a closure.
-                            for (int side = -1; side <= 1; side += 2) {
-                                double ox = nx * halfWidthPx * side;
-                                double oy = ny * halfWidthPx * side;
-                                HudDraw.emitQuad(sink,
-                                        sx1 + ox + nx * thickness, sy1 + oy + ny * thickness,
-                                        sx2 + ox + nx * thickness, sy2 + oy + ny * thickness,
-                                        sx2 + ox - nx * thickness, sy2 + oy - ny * thickness,
-                                        sx1 + ox - nx * thickness, sy1 + oy - ny * thickness,
-                                        ink);
-                            }
-                            dashes++;
-                        }
-                    }
-                    nextAt += period;
+                // The dash runs along the road's screen direction at its own centre, sampled from
+                // two world points a little before and after it, so a curve bends the dash too.
+                double[] before = displayPointAt(segment, count, Math.max(0.0, at - 3.0));
+                double[] after = displayPointAt(segment, count,
+                        Math.min(length, at + 3.0));
+                double dx = projection.screenX(after[0]) - projection.screenX(before[0]);
+                double dy = projection.screenZ(after[1]) - projection.screenZ(before[1]);
+                double len = Math.hypot(dx, dy);
+                if (len < 1.0E-4) {
+                    continue;
                 }
-                travelled += edge;
+                double ux = dx / len;
+                double uy = dy / len;
+                double nx = -uy;
+                double ny = ux;
+                double half = CLOSED_DASH_LEN_PX * 0.5;
+                boolean red = i % 2 == 0;
+                int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
+                // One dash per edge, hugging the road's drawn rim: the pair brackets the street the
+                // way the reference maps bracket a closure.
+                for (int side = -1; side <= 1; side += 2) {
+                    double ex = cx + nx * halfWidthPx * side;
+                    double ey = cy + ny * halfWidthPx * side;
+                    HudDraw.emitQuad(sink,
+                            ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
+                            ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
+                            ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
+                            ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
+                            ink);
+                }
             }
             // The badge once, halfway along the display line and anchored to the road's own
             // geometry, so panning cannot leave it behind.
@@ -3008,6 +2998,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         pose.popPose();
+    }
+
+    /**
+     * The world point on a segment's display line at a given arc length from its start, walked from
+     * vertex to vertex. Arc lengths beyond the line clamp to its end.
+     */
+    private static double[] displayPointAt(RoadSegment segment, int count, double at) {
+        for (int step = 1; step < count; step++) {
+            double ax = displayX(segment, step - 1);
+            double az = displayZ(segment, step - 1);
+            double bx = displayX(segment, step);
+            double bz = displayZ(segment, step);
+            double edge = Math.hypot(bx - ax, bz - az);
+            if (at <= edge && edge > 1.0E-6) {
+                double t = at / edge;
+                return new double[]{ax + (bx - ax) * t, az + (bz - az) * t};
+            }
+            at -= edge;
+        }
+        return new double[]{displayX(segment, count - 1), displayZ(segment, count - 1)};
     }
 
     /**
