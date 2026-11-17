@@ -2836,8 +2836,8 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_CLOSED_BAR = 0xFFF2F2F2;
     /** Screen pixels the closed badge is drawn at, fixed: closures are rare and always worth reading. */
     private static final double CLOSED_BADGE_PX = 11.0;
-    /** Screen period of the red-white closure dashes along a closed road; same idea as the arrows'. */
-    private static final double CLOSED_STRIPE_SPACING_PX = 12.0;
+    /** World blocks per closure dash period (dash + gap), so the dashes read as paint on the road. */
+    private static final double CLOSED_DASH_PERIOD_BLOCKS = 12.0;
     /** A cap per closed road, so one very long segment cannot fill the screen with stripes. */
     private static final int CLOSED_STRIPE_LIMIT = 40;
 
@@ -2917,6 +2917,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * the segment's middle as the at-a-glance summary. A closure is visible whatever the player is
      * doing -- nothing else on the map says a road does not lead through, so these marks are the one
      * honest reading of it.
+     *
+     * The dashes are anchored in world units and walked along the segment's world line: a dash sits
+     * at the same blocks of the road at every zoom, exactly like paint on the asphalt. Zooming scales
+     * them with the map instead of sliding them along the street. Only the thickness hugs the drawn
+     * road's rim in screen pixels, because the road's own stroke is styled in screen pixels too.
      */
     private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -2936,46 +2941,57 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 continue;
             }
             double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
-            double thickness = Math.max(1.5, halfWidthPx * 0.45);
-            double dash = Math.max(CLOSED_STRIPE_SPACING_PX, thickness * 5.0);
-            double gap = dash * 0.55;
-            double period = dash + gap;
+            double thickness = Math.max(1.2, halfWidthPx * 0.45);
+            double period = CLOSED_DASH_PERIOD_BLOCKS;
+            double dashLength = period * 0.5;
             double travelled = 0.0;
             double nextAt = 0.0;
             int dashes = 0;
             for (int step = 1; step < count && dashes < CLOSED_STRIPE_LIMIT; step++) {
-                double ax = projection.screenX(displayX(segment, step - 1));
-                double ay = projection.screenZ(displayZ(segment, step - 1));
-                double bx = projection.screenX(displayX(segment, step));
-                double by = projection.screenZ(displayZ(segment, step));
-                double edge = Math.hypot(bx - ax, by - ay);
+                double wx1 = displayX(segment, step - 1);
+                double wz1 = displayZ(segment, step - 1);
+                double wx2 = displayX(segment, step);
+                double wz2 = displayZ(segment, step);
+                double edge = Math.hypot(wx2 - wx1, wz2 - wz1);
                 if (edge < 1.0E-6) {
                     continue;
                 }
-                double ux = (bx - ax) / edge;
-                double uy = (by - ay) / edge;
-                double nx = -uy;
-                double ny = ux;
                 while (nextAt <= travelled + edge && dashes < CLOSED_STRIPE_LIMIT) {
-                    double at = nextAt - travelled;
-                    double cx = ax + ux * at;
-                    double cy = ay + uy * at;
-                    double half = dash * 0.5;
-                    boolean red = dashes % 2 == 0;
-                    int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
-                    // One dash per edge, hugging the road's rim: the pair brackets the street the
-                    // way the reference maps bracket a closure, without hiding the road under it.
-                    for (int side = -1; side <= 1; side += 2) {
-                        double ex = cx + nx * halfWidthPx * side;
-                        double ey = cy + ny * halfWidthPx * side;
-                        HudDraw.emitQuad(sink,
-                                ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
-                                ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
-                                ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
-                                ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
-                                ink);
+                    // The dash's ends live in world blocks, clipped to this polyline piece.
+                    double s = Math.max(nextAt, travelled);
+                    double e = Math.min(nextAt + dashLength, travelled + edge);
+                    if (e > s) {
+                        double t1 = (s - travelled) / edge;
+                        double t2 = (e - travelled) / edge;
+                        double sx1 = projection.screenX(wx1 + (wx2 - wx1) * t1);
+                        double sy1 = projection.screenZ(wz1 + (wz2 - wz1) * t1);
+                        double sx2 = projection.screenX(wx1 + (wx2 - wx1) * t2);
+                        double sy2 = projection.screenZ(wz1 + (wz2 - wz1) * t2);
+                        double dx = sx2 - sx1;
+                        double dy = sy2 - sy1;
+                        double len = Math.hypot(dx, dy);
+                        if (len > 1.0E-4) {
+                            double ux = dx / len;
+                            double uy = dy / len;
+                            double nx = -uy;
+                            double ny = ux;
+                            boolean red = dashes % 2 == 0;
+                            int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
+                            // One dash per edge, hugging the road's drawn rim: the pair brackets the
+                            // street the way the reference maps bracket a closure.
+                            for (int side = -1; side <= 1; side += 2) {
+                                double ox = nx * halfWidthPx * side;
+                                double oy = ny * halfWidthPx * side;
+                                HudDraw.emitQuad(sink,
+                                        sx1 + ox + nx * thickness, sy1 + oy + ny * thickness,
+                                        sx2 + ox + nx * thickness, sy2 + oy + ny * thickness,
+                                        sx2 + ox - nx * thickness, sy2 + oy - ny * thickness,
+                                        sx1 + ox - nx * thickness, sy1 + oy - ny * thickness,
+                                        ink);
+                            }
+                            dashes++;
+                        }
                     }
-                    dashes++;
                     nextAt += period;
                 }
                 travelled += edge;
