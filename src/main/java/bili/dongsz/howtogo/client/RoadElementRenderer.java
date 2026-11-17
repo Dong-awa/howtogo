@@ -100,6 +100,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             "hud.howtogo.edit.layer",
             "hud.howtogo.edit.name",
             "hud.howtogo.edit.oneway",
+            "hud.howtogo.edit.closed",
             "hud.howtogo.edit.poi",
             "hud.howtogo.edit.navigate",
             "hud.howtogo.edit.lines",
@@ -598,6 +599,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 // The one-way marks come first, from here rather than the roads' pass: they are ink about the roads,
                 // so under the route, lines, markers and names and above every road. See drawOneWayMarks.
                 drawOneWayMarks(pose, vc, Math.abs(info.scale), projection,
+                        -lineMargin, -lineMargin,
+                        mapViewRight(graphics) + lineMargin, mapViewBottom(graphics) + lineMargin);
+                // The closed badges beside them, for the same reason and from the same place in the
+                // drawing order. A closure matters to a reader who is not editing: the road is drawn
+                // normally and nothing else on the map says it does not lead through.
+                drawClosedMarks(pose, vc, Math.abs(info.scale), projection,
                         -lineMargin, -lineMargin,
                         mapViewRight(graphics) + lineMargin, mapViewBottom(graphics) + lineMargin);
                 drawTransitLines(pose, vc, lineMargin, mapViewRight(graphics) + lineMargin,
@@ -2824,6 +2831,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double ONEWAY_ARROW_MIN_SCALE = 0.3;
     private static final int COLOR_ARROW = 0xFFF4F8FF;
     private static final int COLOR_ARROW_RIM = 0xB0101418;
+    /** The closed badge: a no-entry disc in signal red, with the bar cut in white. */
+    private static final int COLOR_CLOSED_DISC = 0xFFC62828;
+    private static final int COLOR_CLOSED_BAR = 0xFFF2F2F2;
+    /** Screen pixels the closed badge is drawn at, fixed: closures are rare and always worth reading. */
+    private static final double CLOSED_BADGE_PX = 11.0;
+    /** Screen period of the red-white closure dashes along a closed road; same idea as the arrows'. */
+    private static final double CLOSED_STRIPE_SPACING_PX = 12.0;
+    /** A cap per closed road, so one very long segment cannot fill the screen with stripes. */
+    private static final int CLOSED_STRIPE_LIMIT = 40;
 
     /**
      * Draws the direction arrows of every one-way road, above every road.
@@ -2892,6 +2908,116 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         pose.popPose();
+    }
+
+    /**
+     * Draws the closures' road marks in the style the reference maps use: the road itself keeps its
+     * own colour, and alternating red and white dashes run along both edges of it, so the eye reads
+     * "this street is shut" without losing the road under a coat of paint. The no-entry badge sits at
+     * the segment's middle as the at-a-glance summary. A closure is visible whatever the player is
+     * doing -- nothing else on the map says a road does not lead through, so these marks are the one
+     * honest reading of it.
+     */
+    private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
+                                 Projection projection, double left, double top, double right,
+                                 double bottom) {
+        pose.pushPose();
+        screenSpace(pose);
+        HudDraw.VertexSink sink = HudDraw.sink(pose.last(), vc);
+        for (RoadSegment segment : RoadStore.get().segments()) {
+            if (!segment.closed()) {
+                continue;
+            }
+            if (!MapFilter.shows(segment.roadClass(), scale)) {
+                continue;
+            }
+            int count = displayPointCount(segment);
+            if (count < 2) {
+                continue;
+            }
+            double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
+            double thickness = Math.max(1.5, halfWidthPx * 0.45);
+            double dash = Math.max(CLOSED_STRIPE_SPACING_PX, thickness * 5.0);
+            double gap = dash * 0.55;
+            double period = dash + gap;
+            double travelled = 0.0;
+            double nextAt = 0.0;
+            int dashes = 0;
+            for (int step = 1; step < count && dashes < CLOSED_STRIPE_LIMIT; step++) {
+                double ax = projection.screenX(displayX(segment, step - 1));
+                double ay = projection.screenZ(displayZ(segment, step - 1));
+                double bx = projection.screenX(displayX(segment, step));
+                double by = projection.screenZ(displayZ(segment, step));
+                double edge = Math.hypot(bx - ax, by - ay);
+                if (edge < 1.0E-6) {
+                    continue;
+                }
+                double ux = (bx - ax) / edge;
+                double uy = (by - ay) / edge;
+                double nx = -uy;
+                double ny = ux;
+                while (nextAt <= travelled + edge && dashes < CLOSED_STRIPE_LIMIT) {
+                    double at = nextAt - travelled;
+                    double cx = ax + ux * at;
+                    double cy = ay + uy * at;
+                    double half = dash * 0.5;
+                    boolean red = dashes % 2 == 0;
+                    int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
+                    // One dash per edge, hugging the road's rim: the pair brackets the street the
+                    // way the reference maps bracket a closure, without hiding the road under it.
+                    for (int side = -1; side <= 1; side += 2) {
+                        double ex = cx + nx * halfWidthPx * side;
+                        double ey = cy + ny * halfWidthPx * side;
+                        HudDraw.emitQuad(sink,
+                                ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
+                                ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
+                                ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
+                                ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
+                                ink);
+                    }
+                    dashes++;
+                    nextAt += period;
+                }
+                travelled += edge;
+            }
+            // The badge once, halfway along the display line and anchored to the road's own
+            // geometry, so panning cannot leave it behind.
+            int mid = count / 2 - 1;
+            double mx = projection.screenX(
+                    (displayX(segment, mid) + displayX(segment, mid + 1)) * 0.5);
+            double my = projection.screenZ(
+                    (displayZ(segment, mid) + displayZ(segment, mid + 1)) * 0.5);
+            if (mx >= left && mx <= right && my >= top && my <= bottom) {
+                emitClosedBadge(sink, mx, my, CLOSED_BADGE_PX * 0.5);
+            }
+        }
+        pose.popPose();
+    }
+
+    /**
+     * One closed badge: an eight-sided disc in signal red with the no-entry bar across it, drawn the
+     * same way whatever layer it belongs to. Eight sides because a four-sided diamond reads as a
+     * place marker on this map and a true circle costs more triangles than a badge at eleven pixels
+     * can justify.
+     */
+    private static void emitClosedBadge(HudDraw.VertexSink out, double cx, double cy, double radius) {
+        double[] xs = new double[8];
+        double[] ys = new double[8];
+        for (int k = 0; k < 8; k++) {
+            double angle = Math.PI / 4.0 * k;
+            xs[k] = cx + Math.cos(angle) * radius;
+            ys[k] = cy + Math.sin(angle) * radius;
+        }
+        for (int k = 0; k < 8; k++) {
+            int next = (k + 1) % 8;
+            HudDraw.emitTriangle(out, cx, cy, xs[k], ys[k], xs[next], ys[next], COLOR_CLOSED_DISC);
+        }
+        double halfW = radius * 0.62;
+        double halfH = radius * 0.24;
+        HudDraw.emitTriangle(out, cx - halfW, cy - halfH, cx + halfW, cy - halfH,
+                cx + halfW, cy + halfH, COLOR_CLOSED_BAR);
+        HudDraw.emitTriangle(out, cx - halfW, cy - halfH, cx + halfW, cy + halfH,
+                cx - halfW, cy + halfH, COLOR_CLOSED_BAR);
     }
 
     /**

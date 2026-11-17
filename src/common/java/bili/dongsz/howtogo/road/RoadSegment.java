@@ -39,11 +39,26 @@ public final class RoadSegment {
         return appearanceChanges;
     }
 
+    /**
+     * Count of closure sets over the program run, same shape and reason as directionChanges: a
+     * closure is not geometry either, but a routing graph that still holds a closed road would send
+     * the player down a street that is shut. Read by RoadRouter.
+     */
+    private static int closureChanges;
+
+    /**
+     * @see #closureChanges
+     */
+    public static int closureChanges() {
+        return closureChanges;
+    }
+
     private final int id;
     private RoadClass roadClass;
     private int fromNode = NO_NODE;
     private int toNode = NO_NODE;
     private RoadDirection direction = RoadDirection.TWO_WAY;
+    private boolean closed;
     private String name;
 
     /**
@@ -245,6 +260,22 @@ public final class RoadSegment {
     }
 
     /**
+     * Whether the segment is closed: drawn on the map as it is, but routing never travels it. A
+     * closure is a rule about the world rather than a direction, so it is a flag of its own and
+     * orthogonal to the one-way states -- a closed street keeps its direction for the day it reopens.
+     */
+    public boolean closed() {
+        return closed;
+    }
+
+    public void setClosed(boolean closed) {
+        if (closed != this.closed) {
+            this.closed = closed;
+            closureChanges++;
+        }
+    }
+
+    /**
      * Whether a traveller at startNodeId may set off along this segment; the one-way rule in one place,
      * so the graph and the map's arrows agree.
      */
@@ -355,6 +386,7 @@ public final class RoadSegment {
         c.fromNode = fromNode;
         c.toNode = toNode;
         c.direction = direction;
+        c.closed = closed;
         c.layer = layer;
         c.name = name;
         c.category = category;

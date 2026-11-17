@@ -20,20 +20,30 @@ $harnessClasses = Join-Path $work 'harness-classes'
 $initScript = Join-Path $env:TEMP 'howtogo-print-classpath.gradle'
 $gradleErr = Join-Path $work 'gradle-stderr.log'
 
+# The node the classpath is read from: stonecutter's own answer, the same one run-user-test uses.
+$activeNode = (Select-String -Path (Join-Path $project 'stonecutter.gradle.kts') `
+    -Pattern '^\s*stonecutter active "([^"]+)"').Matches[0].Groups[1].Value
+
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Remove-Item $modClasses -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $harnessClasses -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $modClasses -Force | Out-Null
 New-Item -ItemType Directory -Path $harnessClasses -Force | Out-Null
 
-# The classpath the mod itself would run with, including Minecraft and NeoForge.
+# The classpath the mod itself would run with, including Minecraft and NeoForge. The task is
+# registered on the active node's subproject rather than the root: under stonecutter the root
+# project has no sourceSets of its own -- the runtime classpath lives on the node.
 $initBody = @(
     'gradle.projectsEvaluated {'
-    '    rootProject.tasks.register(''printCp'') {'
-    '        doLast {'
-    '            println "CPSTART"'
-    '            println rootProject.sourceSets.main.runtimeClasspath.asPath'
-    '            println "CPEND"'
+    '    rootProject.subprojects { p ->'
+    '        if (p.name == ''' + $activeNode + ''') {'
+    '            p.tasks.register(''printCp'') {'
+    '                doLast {'
+    '                    println "CPSTART"'
+    '                    println p.sourceSets.main.runtimeClasspath.asPath'
+    '                    println "CPEND"'
+    '                }'
+    '            }'
     '        }'
     '    }'
     '}'

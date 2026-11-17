@@ -151,6 +151,7 @@ public final class RoadStorage {
                 s.from = segment.fromNode();
                 s.to = segment.toNode();
                 s.direction = segment.direction().name();
+                s.closed = segment.closed();
                 s.y = segment.y();
                 s.layer = segment.layer();
                 s.name = segment.name();
@@ -245,6 +246,11 @@ public final class RoadStorage {
         segment.setFromNode(s.from);
         segment.setToNode(s.to);
         segment.setDirection(directionOf(s));
+        // Tolerant like every other optional field: an absent flag means open, which is what any
+        // older file's roads were.
+        if (s.closed != null && s.closed) {
+            segment.setClosed(true);
+        }
         // Clamped by the segment itself, so a hand-edited file costs the player the storey rather than the road.
         segment.setLayer(s.layer);
         segment.setName(s.name);
@@ -329,6 +335,10 @@ public final class RoadStorage {
         String direction;
         /** The boolean this field replaced, still read and no longer written. */
         boolean oneWay;
+        /**
+         * Whether the segment is closed to travel. Added after the first release, read tolerantly: absent means open, which is what those roads were. Written always -- a closed road must not silently reopen because one build in between did not know the field.
+         */
+        Boolean closed;
         int y;
         /** Storey: 0 surface, positive above, negative below; older files default to 0, which is right. */
         int layer;

@@ -104,6 +104,9 @@ public final class Harness {
         int[] oneWay = bili.dongsz.howtogo.road.OneWayCheck.run();
         checks += oneWay[0];
         failures += oneWay[1];
+        int[] closures = bili.dongsz.howtogo.road.RoadClosureCheck.run();
+        checks += closures[0];
+        failures += closures[1];
         int[] spatial = bili.dongsz.howtogo.road.SpatialIndexCheck.run();
         checks += spatial[0];
         failures += spatial[1];
