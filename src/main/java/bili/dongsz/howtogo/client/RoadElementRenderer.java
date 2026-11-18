@@ -2836,14 +2836,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final int COLOR_CLOSED_BAR = 0xFFF2F2F2;
     /** Screen pixels the closed badge is drawn at, fixed: closures are rare and always worth reading. */
     private static final double CLOSED_BADGE_PX = 11.0;
-    /**
-     * The closure dash pattern, all in multiples of the road's drawn half-width: the dash runs
-     * 2.4 half-widths, the gap 1.6, and the dashes themselves are 0.45 half-widths thick. Because
-     * the road's drawn width grows as the player zooms, the pattern grows with it -- the reference
-     * renderers' line-dasharray works the same way ("the lengths are later scaled by the line
-     * width"), which is why the marks read as painted on the road at every zoom.
-     */
-    private static final double CLOSED_DASH_HALF_WIDTHS = 2.4;
+    /** World blocks between closure dash anchors; each dash draws at a fixed screen size on its block. */
+    private static final double CLOSED_DASH_ANCHOR_BLOCKS = 16.0;
+    /** Screen length of one closure dash -- fixed, so zooming never grows or shrinks a dash. */
+    private static final double CLOSED_DASH_LEN_PX = 9.0;
     private static final double CLOSED_GAP_HALF_WIDTHS = 1.6;
 
     /**
@@ -2923,10 +2919,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * doing -- nothing else on the map says a road does not lead through, so these marks are the one
      * honest reading of it.
      *
-     * Every dash is a fixed screen size, and the pattern walks outward from the segment's middle:
-     * the dash flanking the badge on each side keeps its ink at every zoom (white on the left of the
-     * badge, red on the right), and zooming only adds further dashes beyond them. Nothing slides,
-     * nothing swaps colour, and the count is the only thing zoom changes.
+     * Each dash is one of a fixed set of anchors nailed to the segment's world arc length (one every
+     * sixteen blocks, counted outward from the middle), and draws at a fixed screen size: zooming in
+     * spreads the dashes apart without growing them, zooming out packs them tighter until the road
+     * gets too thin and only the badge is left. The centre stays on its block at every zoom; the ink
+     * is tied to the anchor and the side, so a dash never slides along the road or swaps colour.
      */
     private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -2953,14 +2950,13 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 continue;
             }
             double thickness = Math.max(1.2, halfWidthPx * 0.45);
-            double dash = halfWidthPx * 2.4;
-            double gap = halfWidthPx * 1.6;
-            double step = dash + gap;
-            int perSide = (int) Math.min(60, Math.ceil(length / step * 0.5) + 1);
+            double half = CLOSED_DASH_LEN_PX * 0.5;
+            int pairs = (int) Math.min(60, Math.ceil(length / CLOSED_DASH_ANCHOR_BLOCKS * 0.5) + 1);
             double midArc = length * 0.5;
-            for (int i = 0; i < perSide; i++) {
+            for (int i = 0; i < pairs; i++) {
                 for (int side = -1; side <= 1; side += 2) {
-                    double arc = midArc + side * ((i + 0.5) * step);
+                    double arc = midArc + side * (i * CLOSED_DASH_ANCHOR_BLOCKS
+                            + CLOSED_DASH_ANCHOR_BLOCKS * 0.5);
                     if (arc < 0 || arc > length) {
                         continue;
                     }
@@ -2984,10 +2980,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     double uy = dy / len;
                     double nx = -uy;
                     double ny = ux;
-                    double half = dash * 0.5;
-                    // The ink is tied to the side and the index, not to a walk order: innermost
-                    // white on the left of the badge, red on its right, alternating outward. A zoom
-                    // changes how many dashes there are, never which colour an existing one is.
+                    // The ink is tied to the anchor and the side, not to a walk order: innermost
+                    // white on the left of the badge, red on its right, alternating outward. Zooming
+                    // changes the spacing, never which colour an existing dash is.
                     boolean inner = i % 2 == 0;
                     int ink = side > 0
                             ? (inner ? COLOR_CLOSED_BAR : COLOR_CLOSED_DISC)
