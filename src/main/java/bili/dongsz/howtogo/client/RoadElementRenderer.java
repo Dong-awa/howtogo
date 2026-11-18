@@ -2951,12 +2951,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             double thickness = Math.max(1.2, halfWidthPx * 0.45);
             double half = CLOSED_DASH_LEN_PX * 0.5;
-            int pairs = (int) Math.min(60, Math.ceil(length / CLOSED_DASH_ANCHOR_BLOCKS * 0.5) + 1);
+            // The anchors sit every sixteen blocks along the road, with one guard: zoomed far out the
+            // same sixteen blocks shrink to a few pixels and the dashes would crowd into a solid
+            // line. There the spacing grows so two dashes on screen are never closer than a dash and
+            // a half -- the count thins out instead of the marks merging.
+            double screenTotal = 0.0;
+            for (int i = 1; i < count; i++) {
+                screenTotal += Math.hypot(projection.screenX(displayX(segment, i))
+                        - projection.screenX(displayX(segment, i - 1)),
+                        projection.screenZ(displayZ(segment, i))
+                        - projection.screenZ(displayZ(segment, i - 1)));
+            }
+            double pxPerBlock = length > 0 ? screenTotal / length : 0.0;
+            double spacingBlocks = Math.max(CLOSED_DASH_ANCHOR_BLOCKS,
+                    CLOSED_DASH_LEN_PX * 1.35 / Math.max(pxPerBlock, 1.0E-3));
+            int pairs = (int) Math.min(60, Math.ceil(length / spacingBlocks * 0.5) + 1);
             double midArc = length * 0.5;
             for (int i = 0; i < pairs; i++) {
                 for (int side = -1; side <= 1; side += 2) {
-                    double arc = midArc + side * (i * CLOSED_DASH_ANCHOR_BLOCKS
-                            + CLOSED_DASH_ANCHOR_BLOCKS * 0.5);
+                    double arc = midArc + side * (i * spacingBlocks
+                            + spacingBlocks * 0.5);
                     if (arc < 0 || arc > length) {
                         continue;
                     }
