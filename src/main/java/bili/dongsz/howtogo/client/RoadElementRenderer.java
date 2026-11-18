@@ -2838,8 +2838,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double CLOSED_BADGE_PX = 11.0;
     /** World blocks between closure dash anchors; each dash draws at a fixed screen size on its block. */
     private static final double CLOSED_DASH_ANCHOR_BLOCKS = 16.0;
-    /** Screen length of one closure dash -- fixed, so zooming never grows or shrinks a dash. */
+    /** Screen length of one closure dash at the base zoom -- the floor; a wide open zoom grows it. */
     private static final double CLOSED_DASH_LEN_PX = 9.0;
+    /** Screen length cap of one closure dash at extreme zoom, so a dash never dwarfs its road. */
+    private static final double CLOSED_DASH_LEN_MAX_PX = 26.0;
+    /** Screen spacing floor between two dashes: closer than this they merge into a solid line. */
+    private static final double CLOSED_DASH_MIN_SPACING_PX = 14.0;
     private static final double CLOSED_GAP_HALF_WIDTHS = 1.6;
 
     /**
@@ -2950,11 +2954,12 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                 continue;
             }
             double thickness = Math.max(1.2, halfWidthPx * 0.45);
-            double half = CLOSED_DASH_LEN_PX * 0.5;
             // The anchors sit every sixteen blocks along the road, with one guard: zoomed far out the
             // same sixteen blocks shrink to a few pixels and the dashes would crowd into a solid
-            // line. There the spacing grows so two dashes on screen are never closer than a dash and
-            // a half -- the count thins out instead of the marks merging.
+            // line. There the spacing grows so two dashes on screen are never closer than a fixed
+            // floor -- the count thins out instead of the marks merging. And zoomed far in the
+            // opposite happens: the spacing opens up, so the dash grows with it (up to a cap) and
+            // keeps its proportion to the road instead of turning into a speck on a wide street.
             double screenTotal = 0.0;
             for (int i = 1; i < count; i++) {
                 screenTotal += Math.hypot(projection.screenX(displayX(segment, i))
@@ -2964,7 +2969,11 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
             double pxPerBlock = length > 0 ? screenTotal / length : 0.0;
             double spacingBlocks = Math.max(CLOSED_DASH_ANCHOR_BLOCKS,
-                    CLOSED_DASH_LEN_PX * 1.35 / Math.max(pxPerBlock, 1.0E-3));
+                    CLOSED_DASH_MIN_SPACING_PX / Math.max(pxPerBlock, 1.0E-3));
+            double pxSpacing = spacingBlocks * pxPerBlock;
+            double half = Math.min(Math.max(pxSpacing * 0.3, CLOSED_DASH_LEN_PX * 0.5),
+                    CLOSED_DASH_LEN_MAX_PX * 0.5);
+            thickness = Math.max(1.2, Math.min(thickness, half * 0.6));
             int pairs = (int) Math.min(60, Math.ceil(length / spacingBlocks * 0.5) + 1);
             double midArc = length * 0.5;
             for (int i = 0; i < pairs; i++) {
