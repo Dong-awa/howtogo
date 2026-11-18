@@ -2923,11 +2923,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * doing -- nothing else on the map says a road does not lead through, so these marks are the one
      * honest reading of it.
      *
-     * Every length here is a multiple of the road's drawn half-width, which is how line dash patterns
-     * are specified in the map renderers this mimics (MapLibre's line-dasharray: "the lengths are
-     * later scaled by the line width"). Zooming in makes the road wider and the dashes longer by the
-     * same factor, so the pattern neither slides along the road nor changes how it reads -- it is a
-     * decal on the road, and it is the zoom that moves.
+     * Every dash is a fixed screen size, and the pattern walks outward from the segment's middle:
+     * the dash flanking the badge on each side keeps its ink at every zoom (white on the left of the
+     * badge, red on the right), and zooming only adds further dashes beyond them. Nothing slides,
+     * nothing swaps colour, and the count is the only thing zoom changes.
      */
     private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -2946,86 +2945,64 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             if (count < 2) {
                 continue;
             }
+            double length = segment.length();
             double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
             if (!(halfWidthPx > 0.75)) {
-                // Below this the road is a line rather than a surface; a badge alone still says
-                // closed there, but a dash pattern would be texture. Same floor as the arrow marks.
+                // Below this the road is a line rather than a surface; the badge alone still says
+                // closed there, but a dash pattern would be texture.
                 continue;
             }
-            // The dash pattern, all in multiples of the road's half-width: dash, gap, and the
-            // thickness of the dashes themselves.
+            double thickness = Math.max(1.2, halfWidthPx * 0.45);
             double dash = halfWidthPx * 2.4;
             double gap = halfWidthPx * 1.6;
-            double thickness = Math.max(1.2, halfWidthPx * 0.45);
-            double period = dash + gap;
-            // Screen-space polyline of the segment's display line, walked once.
-            double[] px = new double[count];
-            double[] py = new double[count];
-            double total = 0.0;
-            for (int i = 0; i < count; i++) {
-                px[i] = projection.screenX(displayX(segment, i));
-                py[i] = projection.screenZ(displayZ(segment, i));
-                if (i > 0) {
-                    total += Math.hypot(px[i] - px[i - 1], py[i] - py[i - 1]);
-                }
-            }
-            if (!(total > period)) {
-                continue;
-            }
-            // The pattern is centred on the segment, so neither end carries a cut-off dash and the
-            // pattern grows outward symmetrically as the player zooms.
-            int repeats = (int) Math.floor(total / period);
-            double start = (total - repeats * period) * 0.5;
-            int dashes = 0;
-            double walked = 0.0;
-            int piece = 1;
-            double pieceLen = Math.hypot(px[1] - px[0], py[1] - py[0]);
-            double patternAt = start;
-            while (patternAt + dash <= total) {
-                // Advance the piece walk to the dash's start and end.
-                double dashStart = patternAt;
-                double dashEnd = patternAt + dash;
-                while (piece < count && walked + (Math.hypot(px[piece] - px[piece - 1],
-                        py[piece] - py[piece - 1])) < dashStart) {
-                    walked += Math.hypot(px[piece] - px[piece - 1], py[piece] - py[piece - 1]);
-                    piece++;
-                }
-                double pieceLen2 = Math.hypot(px[piece] - px[piece - 1],
-                        py[piece] - py[piece - 1]);
-                if (!(pieceLen2 > 1.0E-6)) {
-                    break;
-                }
-                double t1 = (dashStart - walked) / pieceLen2;
-                double t2 = Math.min(1.0, (dashEnd - walked) / pieceLen2);
-                double x1 = px[piece - 1] + (px[piece] - px[piece - 1]) * t1;
-                double y1 = py[piece - 1] + (py[piece] - py[piece - 1]) * t1;
-                double x2 = px[piece - 1] + (px[piece] - px[piece - 1]) * t2;
-                double y2 = py[piece - 1] + (py[piece] - py[piece - 1]) * t2;
-                double dx = x2 - x1;
-                double dy = y2 - y1;
-                double len = Math.hypot(dx, dy);
-                if (len > 1.0E-4) {
+            double step = dash + gap;
+            int perSide = (int) Math.min(60, Math.ceil(length / step * 0.5) + 1);
+            double midArc = length * 0.5;
+            for (int i = 0; i < perSide; i++) {
+                for (int side = -1; side <= 1; side += 2) {
+                    double arc = midArc + side * ((i + 0.5) * step);
+                    if (arc < 0 || arc > length) {
+                        continue;
+                    }
+                    double[] centre = displayPointAt(segment, count, arc);
+                    double cx = projection.screenX(centre[0]);
+                    double cy = projection.screenZ(centre[1]);
+                    if (cx < left || cx > right || cy < top || cy > bottom) {
+                        continue;
+                    }
+                    // The dash runs along the road's screen direction at its own centre, sampled
+                    // from two world points a little before and after it, so a curve bends it too.
+                    double[] before = displayPointAt(segment, count, Math.max(0.0, arc - 3.0));
+                    double[] after = displayPointAt(segment, count, Math.min(length, arc + 3.0));
+                    double dx = projection.screenX(after[0]) - projection.screenX(before[0]);
+                    double dy = projection.screenZ(after[1]) - projection.screenZ(before[1]);
+                    double len = Math.hypot(dx, dy);
+                    if (len < 1.0E-4) {
+                        continue;
+                    }
                     double ux = dx / len;
                     double uy = dy / len;
                     double nx = -uy;
                     double ny = ux;
-                    boolean red = dashes % 2 == 0;
-                    int ink = red ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR;
-                    // One dash per edge, hugging the road's drawn rim: the pair brackets the street
-                    // the way the reference maps bracket a closure.
-                    for (int side = -1; side <= 1; side += 2) {
-                        double ox = nx * (halfWidthPx + thickness * 0.5) * side;
-                        double oy = ny * (halfWidthPx + thickness * 0.5) * side;
+                    double half = dash * 0.5;
+                    // The ink is tied to the side and the index, not to a walk order: innermost
+                    // white on the left of the badge, red on its right, alternating outward. A zoom
+                    // changes how many dashes there are, never which colour an existing one is.
+                    boolean inner = i % 2 == 0;
+                    int ink = side > 0
+                            ? (inner ? COLOR_CLOSED_BAR : COLOR_CLOSED_DISC)
+                            : (inner ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR);
+                    for (int road = -1; road <= 1; road += 2) {
+                        double ex = cx + nx * halfWidthPx * road;
+                        double ey = cy + ny * halfWidthPx * road;
                         HudDraw.emitQuad(sink,
-                                x1 + ox + nx * thickness * 0.5, y1 + oy + ny * thickness * 0.5,
-                                x2 + ox + nx * thickness * 0.5, y2 + oy + ny * thickness * 0.5,
-                                x2 + ox - nx * thickness * 0.5, y2 + oy - ny * thickness * 0.5,
-                                x1 + ox - nx * thickness * 0.5, y1 + oy - ny * thickness * 0.5,
+                                ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
+                                ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
+                                ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
+                                ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
                                 ink);
                     }
-                    dashes++;
                 }
-                patternAt += period;
             }
             // The badge once, halfway along the display line and anchored to the road's own
             // geometry, so panning cannot leave it behind.
@@ -3039,6 +3016,26 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             }
         }
         pose.popPose();
+    }
+
+    /**
+     * The world point on a segment's display line at a given arc length from its start, walked from
+     * vertex to vertex. Arc lengths beyond the line clamp to its end.
+     */
+    private static double[] displayPointAt(RoadSegment segment, int count, double at) {
+        for (int step = 1; step < count; step++) {
+            double ax = displayX(segment, step - 1);
+            double az = displayZ(segment, step - 1);
+            double bx = displayX(segment, step);
+            double bz = displayZ(segment, step);
+            double edge = Math.hypot(bx - ax, bz - az);
+            if (at <= edge && edge > 1.0E-6) {
+                double t = at / edge;
+                return new double[]{ax + (bx - ax) * t, az + (bz - az) * t};
+            }
+            at -= edge;
+        }
+        return new double[]{displayX(segment, count - 1), displayZ(segment, count - 1)};
     }
 
     /**
