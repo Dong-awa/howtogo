@@ -2981,7 +2981,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             int piece = 1;
             double pieceLen = Math.hypot(px[1] - px[0], py[1] - py[0]);
             double patternAt = start;
-            while (patternAt + dash <= total && dashes < 60) {
+            while (patternAt + dash <= total) {
                 // Advance the piece walk to the dash's start and end.
                 double dashStart = patternAt;
                 double dashEnd = patternAt + dash;
