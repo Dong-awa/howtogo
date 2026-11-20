@@ -161,7 +161,7 @@ public final class MapDataTransfer {
         Path archive = WorldArchive.uniqueFile(folder, "howtogo-" + directory.getFileName(), now);
         WorldArchive.Packed packed = WorldArchive.export(directory, archive, WorldFiles.currentWorldKey(),
                 now);
-        HowToGo.LOGGER.info("[HowToGo] exported the map of {} ({} file(s), {} bytes) to {}",
+        HowToGo.logInfo("[HowToGo] exported the map of {} ({} file(s), {} bytes) to {}",
                 WorldFiles.currentWorldKey(), packed.files, packed.bytes, packed.file.getFileName());
         return packed;
     }
@@ -192,7 +192,7 @@ public final class MapDataTransfer {
         WorldArchive.Packed backup = WorldArchive.backup(dataDirectory(), folder, world, now);
         WorldArchive.Contents contents = WorldArchive.importFrom(archive, dataDirectory(), world);
         reloadStores();
-        HowToGo.LOGGER.info("[HowToGo] imported {} file(s) into {} from {}; the previous map is in {}",
+        HowToGo.logInfo("[HowToGo] imported {} file(s) into {} from {}; the previous map is in {}",
                 contents.files(), world, archive.getFileName(),
                 backup == null ? "(nothing to back up)" : backup.file.getFileName());
         if (contents.leftover != null) {

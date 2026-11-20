@@ -266,7 +266,7 @@ public final class Navigation {
         }
         mode = configured;
         modeLoaded = true;
-        HowToGo.LOGGER.info("[HowToGo] travel mode: {}", mode.id());
+        HowToGo.logInfo("[HowToGo] travel mode: {}", mode.id());
     }
 
     /**
@@ -287,7 +287,7 @@ public final class Navigation {
         mode = newMode == null ? TravelMode.WALK : newMode;
         modeLoaded = true;
         modeChosen = true;
-        HowToGo.LOGGER.info("[HowToGo] travel mode: {}", mode.id());
+        HowToGo.logInfo("[HowToGo] travel mode: {}", mode.id());
         announceMode();
         if (target != null)recompute();
     }
@@ -364,7 +364,7 @@ public final class Navigation {
         noteWalkInsteadOfRiding(plan, x, z, destination);
         clearWrongWay();
         turns.reset();
-        HowToGo.LOGGER.info(
+        HowToGo.logInfo(
                 "[HowToGo] route to {} for {} plan {}: {} points, {} blocks, {} turns, about {}",
                 destination.name(), mode.id(), plan.label(), route.points().size(),
                 Math.round(route.totalLength()), plan.turns(),
@@ -437,7 +437,7 @@ public final class Navigation {
         if (minecraft.level == null) {
             // The world is gone: a trip belongs to its world, so leaving ends it; there is no player to tell,
             // so the log is the only report.
-            HowToGo.LOGGER.info("[HowToGo] the world was left while navigating to {}; the trip is ended",
+            HowToGo.logInfo("[HowToGo] the world was left while navigating to {}; the trip is ended",
                     target.name());
             clear();
             return;
@@ -451,7 +451,7 @@ public final class Navigation {
 
         String dimension = currentDimension();
         if (tripDimension != null && dimension != null && !tripDimension.equals(dimension)) {
-            HowToGo.LOGGER.info("[HowToGo] the trip was planned in {} and the player is now in {}; "
+            HowToGo.logInfo("[HowToGo] the trip was planned in {} and the player is now in {}; "
                     + "ending it rather than guiding the wrong world's roads", tripDimension, dimension);
             //? if >=26.1 {
             /*player.sendSystemMessage(Component.translatable("hud.howtogo.dimension_changed"));
@@ -490,7 +490,7 @@ public final class Navigation {
             if (offRouteSince == 0L) {
                 offRouteSince = now;
             } else if (now - offRouteSince > OFF_ROUTE_GRACE_MILLIS) {
-                HowToGo.LOGGER.info(
+                HowToGo.logInfo(
                         "[HowToGo] off route: {} blocks out, tolerance {} - recalculating",
                         String.format("%.1f", route.distanceTo(x, z)),
                         String.format("%.1f", route.toleranceNear(x, z)));
@@ -507,7 +507,7 @@ public final class Navigation {
         if (target != null && Math.hypot(x - target.x(), z - target.z()) < ARRIVAL_DISTANCE) {
             arrived = true;
             arrivedAtMillis = System.currentTimeMillis();
-            HowToGo.LOGGER.info("[HowToGo] arrived at {}", target.name());
+            HowToGo.logInfo("[HowToGo] arrived at {}", target.name());
             route = Route.empty();
             transitTrip = null;
             return true;
@@ -1754,7 +1754,7 @@ public final class Navigation {
             // translation key, the picker the sentence.
             RouteFailure why = RoadRouter.explainFailure(network, x, z, destination.x(),
                     destination.z(), active, policy);
-            HowToGo.LOGGER.info("[HowToGo] no route to {} for {} from ({}, {}): {}",
+            HowToGo.logInfo("[HowToGo] no route to {} for {} from ({}, {}): {}",
                     destination.name(), active.id(), Math.round(x), Math.round(z), why);
             return new RoutePreview(planned, journey, x, z, destination, failureText(why));
         }
@@ -2094,7 +2094,7 @@ public final class Navigation {
                     route.maneuvers().size(),
                     RoadStore.get().nodeCount(), RoadStore.get().segmentCount());
         } else {
-            HowToGo.LOGGER.info("[HowToGo] no route to {} for {}: {}", target.name(),
+            HowToGo.logInfo("[HowToGo] no route to {} for {}: {}", target.name(),
                     mode().id(), RoadRouter.explainFailure(
                             RailTrackStore.forRouting(mode(), preferences), routeOriginX,
                             routeOriginZ, target.x(), target.z(), mode(), preferences));

@@ -12,7 +12,7 @@ palette is current.
 ## What it shows, and what it deliberately does not
 
 The filter is "would a player look for this while playing, and can they understand the answer without
-reading the config file's comments". That leaves five groups:
+reading the config file's comments". That leaves six groups:
 
 | Group | Setting | Config key | Default | Effect |
 | --- | --- | --- | --- | --- |
@@ -35,6 +35,7 @@ reading the config file's comments". That leaves five groups:
 | Map data sources | Read MTR's whole railway | `mtr_full_map` | `true` | while hosting, instead of the sent window |
 | Map data sources | Read RoadWeaver's roads | `roadweaver_roads` | `true` | generated-road layer |
 | Browser map | Start browser map with a world | `webmap_auto_start` | `false` | opens the local socket on world load |
+| Logging | Info log output | `log_info` | `true` | the mod's ordinary progress lines (autosaves, re-reads, route reports); off leaves only warnings and errors -- the debug switch's diagnostics are separate |
 
 Everything else stays in the file. In particular:
 

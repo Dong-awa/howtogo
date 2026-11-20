@@ -54,7 +54,7 @@ public final class AutoSelfTest {
         Screen screen = requestedScreen();
         if (screen != null) {
             // Leave the client up: the rig photographs this screen from outside and a quit would close the window first.
-            HowToGo.LOGGER.info("[HowToGo] rig | opening {} for a screenshot",
+            HowToGo.logInfo("[HowToGo] rig | opening {} for a screenshot",
                     System.getProperty(SCREEN_PROPERTY, "").trim());
             //? if >=26.2 {
             /*Minecraft.getInstance().gui.setScreen(screen);
@@ -65,7 +65,7 @@ public final class AutoSelfTest {
         }
         report();
         if (quitAsked()) {
-            HowToGo.LOGGER.info("[HowToGo] selftest asked the client to stop");
+            HowToGo.logInfo("[HowToGo] selftest asked the client to stop");
             minecraft.stop();
         }
     }
@@ -130,15 +130,15 @@ public final class AutoSelfTest {
                 if (!result.ok()) {
                     failed++;
                 }
-                HowToGo.LOGGER.info("[HowToGo] selftest | {} | {} | {}",
+                HowToGo.logInfo("[HowToGo] selftest | {} | {} | {}",
                         result.ok() ? "ok" : "FAIL", result.name(), result.detail());
             }
-            HowToGo.LOGGER.info("[HowToGo] selftest summary | failed={} total={}", failed,
+            HowToGo.logInfo("[HowToGo] selftest summary | failed={} total={}", failed,
                     results.size());
         } catch (RuntimeException | LinkageError broke) {
             // A run that threw is a failed run, but the summary line must exist either way: the rig blocks on it.
             HowToGo.LOGGER.error("[HowToGo] selftest could not run", broke);
-            HowToGo.LOGGER.info("[HowToGo] selftest summary | failed=1 total=0");
+            HowToGo.logInfo("[HowToGo] selftest summary | failed=1 total=0");
         }
     }
 

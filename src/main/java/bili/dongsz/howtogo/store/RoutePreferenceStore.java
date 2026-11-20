@@ -95,7 +95,7 @@ public final class RoutePreferenceStore {
             voiceAnnouncements = RoadConfig.voiceAnnouncements();
             transitBoardOnly = RoadConfig.transitBoardOnly();
             straightAnnouncements = RoadConfig.straightAnnouncements();
-            HowToGo.LOGGER.info("[HowToGo] no saved route preferences; using the config");
+            HowToGo.logInfo("[HowToGo] no saved route preferences; using the config");
             return;
         }
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -125,7 +125,7 @@ public final class RoutePreferenceStore {
             straightAnnouncements = dto.straightAnnouncements == null
                     ? RoadConfig.straightAnnouncements()
                     : dto.straightAnnouncements;
-            HowToGo.LOGGER.info(
+            HowToGo.logInfo(
                     "[HowToGo] route preferences: metric {} avoid [{}] major {} voice {} boardOnly {} "
                             + "straight {}",
                     preferences.metric().id(), preferences.avoidedSummary(),
@@ -242,7 +242,7 @@ public final class RoutePreferenceStore {
             try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);
             }
-            HowToGo.LOGGER.info(
+            HowToGo.logInfo(
                     "[HowToGo] saved route preferences: metric {} avoid [{}] major {} voice {} "
                             + "boardOnly {} straight {}",
                     dto.metric, dto.avoidedRoadClasses, dto.preferMajorRoads, dto.voiceAnnouncements,

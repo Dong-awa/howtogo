@@ -284,7 +284,7 @@ public final class RailNameStore {
                     }
                 }
             }
-            HowToGo.LOGGER.info("[HowToGo] loaded {} rail name(s) from {}", result.size(),
+            HowToGo.logInfo("[HowToGo] loaded {} rail name(s) from {}", result.size(),
                     file.getFileName());
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting with no rail names", file, e);
@@ -306,7 +306,7 @@ public final class RailNameStore {
             try (Writer writer = Files.newBufferedWriter(boundPath, StandardCharsets.UTF_8)) {
                 GSON.toJson(dto, writer);
             }
-            HowToGo.LOGGER.info("[HowToGo] saved {} rail name(s) to {}", names.size(),
+            HowToGo.logInfo("[HowToGo] saved {} rail name(s) to {}", names.size(),
                     boundPath.getFileName());
         } catch (IOException e) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", boundPath, e);

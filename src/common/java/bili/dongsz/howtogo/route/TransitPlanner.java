@@ -36,7 +36,7 @@ public final class TransitPlanner {
                             double goalX, double goalZ, String destinationName,
                             RoutePreferences preferences) {
         if (lines.isEmpty()) {
-            HowToGo.LOGGER.info("[HowToGo] public transport: no lines configured");
+            HowToGo.logInfo("[HowToGo] public transport: no lines configured");
             return Trip.empty();
         }
         return LinePlanner.plan(roads, lines, startX, startZ, goalX, goalZ, destinationName,

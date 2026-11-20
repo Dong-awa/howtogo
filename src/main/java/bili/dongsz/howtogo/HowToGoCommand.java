@@ -259,7 +259,7 @@ public final class HowToGoCommand {
                 if (!result.ok()) {
                     failed++;
                 }
-                HowToGo.LOGGER.info("[HowToGo] selftest | {} | {} | {}", result.ok() ? "ok" : "FAIL",
+                HowToGo.logInfo("[HowToGo] selftest | {} | {} | {}", result.ok() ? "ok" : "FAIL",
                         result.name(), result.detail());
                 lines.add(Component.translatable(
                                 result.ok() ? "command.howtogo.selftest.ok" : "command.howtogo.selftest.fail",
@@ -674,7 +674,7 @@ public final class HowToGoCommand {
                 if (!result.ok()) {
                     failed++;
                 }
-                HowToGo.LOGGER.info("[HowToGo] selftest | {} | {} | {}", result.ok() ? "ok" : "FAIL",
+                HowToGo.logInfo("[HowToGo] selftest | {} | {} | {}", result.ok() ? "ok" : "FAIL",
                         result.name(), result.detail());
                 lines.add(Component.translatable(
                                 result.ok() ? "command.howtogo.selftest.ok" : "command.howtogo.selftest.fail",
@@ -726,7 +726,7 @@ public final class HowToGoCommand {
         try {
             bili.dongsz.howtogo.client.OsShell.openUrl(url);
         } catch (RuntimeException | LinkageError failed) {
-            HowToGo.LOGGER.info("[HowToGo] webmap | could not open a browser at {} ({}); "
+            HowToGo.logInfo("[HowToGo] webmap | could not open a browser at {} ({}); "
                     + "the address is on screen", url, failed.toString());
         }
     }

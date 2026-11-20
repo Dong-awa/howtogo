@@ -286,7 +286,7 @@ public final class WorldFiles {
         }
         // The record still names the world under its old identity; this directory is the world's under the new one now.
         writeMarker(root.resolve(name), world, true);
-        HowToGo.LOGGER.info("[HowToGo] moved the map directory {} to {} for {} after the world "
+        HowToGo.logInfo("[HowToGo] moved the map directory {} to {} for {} after the world "
                 + "key began naming the save folder", owner, name, world);
         return name;
     }

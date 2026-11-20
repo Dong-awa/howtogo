@@ -91,7 +91,7 @@ public final class MtrOverlayToggles {
                 apply(trackField, savedTrack);
                 route = savedRoute;
                 track = savedTrack;
-                HowToGo.LOGGER.info("[HowToGo] restored MTR Map Overlay's map toggles "
+                HowToGo.logInfo("[HowToGo] restored MTR Map Overlay's map toggles "
                         + "(routes {}, tracks {})", route ? "on" : "off", track ? "on" : "off");
             }
             lastRoute = route;
@@ -273,7 +273,7 @@ public final class MtrOverlayToggles {
             return;
         }
         warned = true;
-        HowToGo.LOGGER.info("[HowToGo] MTR Map Overlay's map toggles are not readable under this "
+        HowToGo.logInfo("[HowToGo] MTR Map Overlay's map toggles are not readable under this "
                 + "version ({}); they are left exactly as it sets them", cause.toString());
     }
 }

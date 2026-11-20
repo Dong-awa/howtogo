@@ -438,7 +438,7 @@ public final class CreateTrackGraph {
             stationDimensionMethod = edgePoint.getMethod("getBlockEntityDimension");
 
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] Create track graph bound reflectively ({})", CREATE_CLIENT);
+            HowToGo.logInfo("[HowToGo] Create track graph bound reflectively ({})", CREATE_CLIENT);
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;
             warnUnavailable(e);

@@ -91,7 +91,7 @@ public final class RoadStorage {
                                 + "what they collided with",
                         file.getFileName(), rejected, duplicates);
             }
-            HowToGo.LOGGER.info("[HowToGo] loaded {} nodes / {} segments from {}",
+            HowToGo.logInfo("[HowToGo] loaded {} nodes / {} segments from {}",
                     network.nodeCount(), network.segmentCount(), file.getFileName());
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; starting empty", file, e);

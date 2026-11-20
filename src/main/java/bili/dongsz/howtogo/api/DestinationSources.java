@@ -67,7 +67,7 @@ public final class DestinationSources {
         }
         REGISTERED.add(source);
         ordered = null;
-        HowToGo.LOGGER.info("[HowToGo] api | destination source registered: {}", id);
+        HowToGo.logInfo("[HowToGo] api | destination source registered: {}", id);
     }
 
     /** Every source in priority order; never null, never empty. */

@@ -44,7 +44,7 @@ public final class RoadDataSources {
             return;
         }
         REGISTERED.add(new Entry(id, source));
-        HowToGo.LOGGER.info("[HowToGo] api | road data source registered: {}", id);
+        HowToGo.logInfo("[HowToGo] api | road data source registered: {}", id);
     }
 
     public static List<Entry> all() {

@@ -63,3 +63,4 @@ local-first.gradle
 .scratch-htg/
 .workbuddy-ai/
 /promo/build_plan_docx.py
+.build-logs/

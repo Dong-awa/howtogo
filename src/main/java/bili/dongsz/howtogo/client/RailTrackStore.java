@@ -607,7 +607,7 @@ public final class RailTrackStore {
         configuredStationIds = stationIds;
         trackBlocks = parseIds(trackIds);
         stationBlocks = parseIds(stationIds);
-        HowToGo.LOGGER.info("[HowToGo] Create track layer: reading {} track id(s) and {} station id(s)",
+        HowToGo.logInfo("[HowToGo] Create track layer: reading {} track id(s) and {} station id(s)",
                 trackBlocks.size(), stationBlocks.size());
     }
 

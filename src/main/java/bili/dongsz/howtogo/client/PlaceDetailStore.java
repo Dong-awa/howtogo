@@ -250,7 +250,7 @@ public final class PlaceDetailStore {
         }
         if (PlaceStorage.save(boundPath, records)) {
             dirty = false;
-            HowToGo.LOGGER.info("[HowToGo] saved {} place detail record(s) to {}",
+            HowToGo.logInfo("[HowToGo] saved {} place detail record(s) to {}",
                     records.size(), boundPath.getFileName());
         }
     }
@@ -262,7 +262,7 @@ public final class PlaceDetailStore {
         }
         records = PlaceStorage.load(boundPath);
         dirty = false;
-        HowToGo.LOGGER.info("[HowToGo] reloaded {} place detail record(s) from {}",
+        HowToGo.logInfo("[HowToGo] reloaded {} place detail record(s) from {}",
                 records.size(), boundPath.getFileName());
     }
 
@@ -291,7 +291,7 @@ public final class PlaceDetailStore {
         boundPath = WorldFiles.worldFile(FILE_NAME);
         records = PlaceStorage.load(boundPath);
         dirty = false;
-        HowToGo.LOGGER.info("[HowToGo] place details: {} record(s) from {}",
+        HowToGo.logInfo("[HowToGo] place details: {} record(s) from {}",
                 records.size(), boundPath.getFileName());
     }
 }

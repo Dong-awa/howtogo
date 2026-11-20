@@ -847,7 +847,7 @@ public final class MtrClientData {
             vectorZMethod = vector.getMethod("z");
 
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] MTR client data bound reflectively ({})", boundName);
+            HowToGo.logInfo("[HowToGo] MTR client data bound reflectively ({})", boundName);
             return true;
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;
@@ -870,7 +870,7 @@ public final class MtrClientData {
         if (Mtr3Data.bindClient()) {
             threeX = true;
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] MTR's 3.x data model is in use; the 4.x names are not on "
+            HowToGo.logInfo("[HowToGo] MTR's 3.x data model is in use; the 4.x names are not on "
                     + "the classpath");
             return true;
         }

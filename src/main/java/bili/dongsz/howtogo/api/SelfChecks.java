@@ -40,7 +40,7 @@ public final class SelfChecks {
             return;
         }
         CHECKS.add(check);
-        HowToGo.LOGGER.info("[HowToGo] api | self check registered: {}", name);
+        HowToGo.logInfo("[HowToGo] api | self check registered: {}", name);
     }
 
     /** How many addon checks are registered. */

@@ -28,7 +28,7 @@ public final class ApiBootstrap {
             *///?} else {
             NeoForge.EVENT_BUS.post(new HowToGoRegistrationEvent());
             //?}
-            HowToGo.LOGGER.info("[HowToGo] api | v{} ready; {} destination source(s) and {} self "
+            HowToGo.logInfo("[HowToGo] api | v{} ready; {} destination source(s) and {} self "
                             + "check(s) contributed by other mods",
                     HowToGoApi.API_VERSION, DestinationSources.registeredCount(),
                     SelfChecks.count());

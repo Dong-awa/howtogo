@@ -55,10 +55,20 @@ public final class HowToGo {
 
     /**
      * Writes one of the mod's own diagnostics, only when RoadConfig.debugLog() is on.
-     * A diagnostic describes how the mod is working (per-second rail line, map frame cost, route arithmetic); warnings, errors and one-off lifecycle lines stay on the logger directly.
+     * A diagnostic describes how the mod is working (per-second rail line, map frame cost, route arithmetic); warnings and errors stay on the logger directly.
      */
     public static void diagnostic(String format, Object... args) {
         if (RoadConfig.debugLog()) {
+            LOGGER.info(format, args);
+        }
+    }
+
+    /**
+     * Writes one of the mod's ordinary progress lines, only when RoadConfig.logInfo() is on.
+     * The periodic lines -- autosaves, data re-reads, route recalculations, the editing mode's on and off notes -- and the one-off lifecycle lines alike go through here, so the settings screen's log switch quiets the whole mod with one answer while warnings and errors stay on the logger directly. Diagnostics keep their own gate: turning info off never hides a line the debug switch explicitly asked for.
+     */
+    public static void logInfo(String format, Object... args) {
+        if (RoadConfig.logInfo()) {
             LOGGER.info(format, args);
         }
     }
@@ -149,7 +159,7 @@ public final class HowToGo {
         // draws can end up over them. See MapFilterOverlay.
         MapFilterOverlay.register();
 
-        LOGGER.info("[HowToGo] constructed");
+        logInfo("[HowToGo] constructed");
     }
     *///?} else {
     public HowToGo(IEventBus modEventBus, ModContainer modContainer) {
@@ -215,7 +225,7 @@ public final class HowToGo {
         });
         HowToGoConfig.registerClient(modContainer);
 
-        LOGGER.info("[HowToGo] constructed");
+        logInfo("[HowToGo] constructed");
     }
     //?}
 }

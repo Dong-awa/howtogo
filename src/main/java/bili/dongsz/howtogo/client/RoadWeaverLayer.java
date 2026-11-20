@@ -1046,7 +1046,7 @@ public final class RoadWeaverLayer {
             }
         } catch (ReflectiveOperationException | RuntimeException failed) {
             aliasMethod = null;
-            HowToGo.LOGGER.info("[HowToGo] RoadWeaver's structure aliases are not readable here ({}); "
+            HowToGo.logInfo("[HowToGo] RoadWeaver's structure aliases are not readable here ({}); "
                     + "structures are named by their ids", failed.toString());
             return;
         }
@@ -1107,7 +1107,7 @@ public final class RoadWeaverLayer {
             return;
         }
         serverReported = true;
-        HowToGo.LOGGER.info("[HowToGo] RoadWeaver's road store is not readable here ({}); its client "
+        HowToGo.logInfo("[HowToGo] RoadWeaver's road store is not readable here ({}); its client "
                 + "map snapshot, if there is one, is used instead", cause.toString());
     }
 
@@ -1195,17 +1195,17 @@ public final class RoadWeaverLayer {
             structureConnectionsMethod =
                     optionalMethod(structures, "getStructureConnections", ServerLevel.class);
             fullMapAvailable = true;
-            HowToGo.LOGGER.info("[HowToGo] RoadWeaver's road store is reachable through {}",
+            HowToGo.logInfo("[HowToGo] RoadWeaver's road store is reachable through {}",
                     storage.getName());
         } catch (ReflectiveOperationException | LinkageError | RuntimeException failed) {
             fullMapAvailable = false;
             if (!serverReported) {
                 serverReported = true;
-                HowToGo.LOGGER.info("[HowToGo] RoadWeaver's road store is not readable under this "
+                HowToGo.logInfo("[HowToGo] RoadWeaver's road store is not readable under this "
                         + "version ({}); its client map snapshot is used instead", failed.toString());
             }
         }
-        HowToGo.LOGGER.info("[HowToGo] RoadWeaver's roads are readable");
+        HowToGo.logInfo("[HowToGo] RoadWeaver's roads are readable");
         return available;
     }
 

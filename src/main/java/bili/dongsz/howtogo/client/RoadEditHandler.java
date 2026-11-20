@@ -331,7 +331,7 @@ public final class RoadEditHandler {
         if (TOGGLE_EDIT.matches(key, scanCode)) {
         //?}
             RoadEditSession.toggle();
-            HowToGo.LOGGER.info("[HowToGo] road editing {}",
+            HowToGo.logInfo("[HowToGo] road editing {}",
                     RoadEditSession.isActive() ? "enabled" : "disabled");
             return true;
         }

@@ -77,6 +77,13 @@ public final class RoadEditSession {
     private static boolean mapScreenClosing;
 
     /**
+     * How many consecutive ticks the map has been away from the editor, and the absence length that
+     * still ends the session, in ticks -- a second. See tick for why the absence is tolerated at all.
+     */
+    private static final int MAP_AWAY_GRACE_TICKS = 20;
+    private static int mapAwayTicks;
+
+    /**
      * The height of the point a RoadWeaver snap resolved to, and whether it is known.
      * A snapped point has to be placed at the layer's height, not the player's feet: the router decides whether two nearby nodes are one place partly by height, so a different height would be refused as a join. The layer's heights are real from its store and flat from its map snapshot.
      */
@@ -153,6 +160,7 @@ public final class RoadEditSession {
         rightPressSegment = RoadSegment.NO_SEGMENT;
         // Before the editor is touched: turning editing off while the right button is held has to let the map's own button go, or the map would keep panning after the mouse was moved.
         mapScreenClosing = false;
+        mapAwayTicks = 0;
         snappedHeightKnown = false;
         endMapPan();
         lastSnap = RoadSnapper.Result.free(0, 0);
@@ -240,7 +248,7 @@ public final class RoadEditSession {
         if (!ed.selectedChain().isEmpty()) {
             if (ed.cycleSelectedDirection()) {
                 RoadStore.markDirty();
-                HowToGo.LOGGER.info("[HowToGo] {} selected road(s) one-way switched",
+                HowToGo.logInfo("[HowToGo] {} selected road(s) one-way switched",
                         ed.selectedChain().size());
             }
             return;
@@ -256,7 +264,7 @@ public final class RoadEditSession {
         RoadDirection next = ed.chainDirection(target).next();
         if (ed.setChainDirection(target, next)) {
             RoadStore.markDirty();
-            HowToGo.LOGGER.info("[HowToGo] road {} set to {}", target, next.id());
+            HowToGo.logInfo("[HowToGo] road {} set to {}", target, next.id());
         }
     }
 
@@ -821,25 +829,39 @@ public final class RoadEditSession {
         }
         if (!active) {
             mapScreenClosing = false;
+            mapAwayTicks = 0;
             return;
         }
         // Editing is a mode of the world map, so it cannot outlive the map. Escape, or any screen that is not one of the editor's own panels, ends it; this is checked a tick after the map was replaced, because the screen event that fires when it happens cannot say what replaced it.
         Screen screen = Screens.current();
-        if (mapScreenClosing) {
-            mapScreenClosing = false;
-            if (!isEditorCompanion(screen)) {
-                endEditing("the world map was closed");
+        boolean mapWasClosed = mapScreenClosing || screen == null;
+        mapScreenClosing = false;
+        if (editingSurface(screen)) {
+            if (mapAwayTicks > 0) {
+                // The map came back inside the grace, so the absence was another mod's blip rather than the player closing anything. One quiet line, so a future "editing died on the map" report can be told apart from a real close.
+                HowToGo.diagnostic("[HowToGo] road editing kept: the map was back after {} ticks away",
+                        mapAwayTicks);
+                mapAwayTicks = 0;
             }
             return;
         }
-        if (screen == null) {
-            endEditing("the world map was closed");
+        // The map is not under the editor this tick. Ending the session on the first sight of that turned every screen another mod borrowed for a frame -- a phone overlay over the map, a setScreen(null) blip -- and every lag stall long enough to expire the map's own freshness (MapViewState.isFresh) while the map still filled the screen, into editing silently switching itself off (issue #10: the stutter the reporter saw was the stall, the exit was this check). The absence gets a one-second grace instead: transient thefts recover well inside it, and input and rendering gate themselves on the map being on screen, so a session held open by the grace cannot act on anything underneath it. Only an absence that outlasts the grace ends the session, with the words that were logged before the grace existed.
+        if (mapAwayTicks == 0) {
+            HowToGo.diagnostic("[HowToGo] road editing: the map is away, {} ticks of grace started",
+                    MAP_AWAY_GRACE_TICKS);
+        }
+        if (mapAwayTicks < MAP_AWAY_GRACE_TICKS) {
+            mapAwayTicks++;
             return;
         }
-        if (!isEditorCompanion(screen) && !RoadEditHandler.isMapScreen(screen)) {
-            // A non-map screen replaced the map without the map itself being closed first. The map is not what is being looked at, so editing goes with it. A map screen that has merely not redrawn yet is not this case: returning from one of the editor's panels lands here before the map's next frame, and ending the session then would make naming a road cancel editing.
-            endEditing("another screen replaced the world map");
-        }
+        endEditing(mapWasClosed ? "the world map was closed" : "another screen replaced the world map");
+    }
+
+    /**
+     * The screens this session stays alive on: the world map itself, or one of the editor's own panels over it. The map half goes through isMapScreen, whose freshness answer is also this check's only evidence that the map is the thing on screen right now -- and exactly the evidence a lag stall takes away.
+     */
+    private static boolean editingSurface(Screen screen) {
+        return isEditorCompanion(screen) || RoadEditHandler.isMapScreen(screen);
     }
 
     /**
@@ -868,7 +890,7 @@ public final class RoadEditSession {
             return;
         }
         setActive(false);
-        HowToGo.LOGGER.info("[HowToGo] road editing disabled: {}", because);
+        HowToGo.logInfo("[HowToGo] road editing disabled: {}", because);
     }
 
     // ---------------------------------------------------------- navigation

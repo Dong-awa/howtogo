@@ -413,7 +413,7 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         }
         boolean on = MtrTransit.marksEnabled(line);
         MtrMarks.toggle(id, on);
-        HowToGo.LOGGER.info("[HowToGo] MTR line '{}' marks {}", line.name(), on ? "off" : "on");
+        HowToGo.logInfo("[HowToGo] MTR line '{}' marks {}", line.name(), on ? "off" : "on");
     }
 
     private void refreshName() {
