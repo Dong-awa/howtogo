@@ -2,6 +2,7 @@ package bili.dongsz.howtogo.client;
 
 import bili.dongsz.howtogo.HowToGo;
 import bili.dongsz.howtogo.road.RoadNetwork;
+import bili.dongsz.howtogo.road.RoadSegment;
 import bili.dongsz.howtogo.road.RoadStorage;
 import net.minecraft.client.Minecraft;
 
@@ -37,6 +38,28 @@ public final class RoadStore {
     public static void markDirty() {
         dirty = true;
         lastMutationMillis = System.currentTimeMillis();
+    }
+
+    /**
+     * A cheap signature of everything about the saved network that can change a plan: its geometry
+     * revision, and the one-way, closure and storey flags that revision deliberately ignores. Read
+     * from the network itself rather than from the global change counters, because the machine-read
+     * layers (MTR, Create, RoadWeaver, an addon's roads) run through those same setters on every
+     * re-read; a consumer of this signature must not mistake such a re-read for an edit of the
+     * player's own roads. The segment sum is order-independent, so a hash-map walk cannot make an
+     * unchanged network look changed.
+     */
+    public static long routingState() {
+        RoadNetwork current = get();
+        long state = current.revision();
+        for (RoadSegment segment : current.segments()) {
+            long piece = segment.id();
+            piece = piece * 31 + segment.direction().ordinal();
+            piece = piece * 31 + (segment.closed() ? 1 : 0);
+            piece = piece * 31 + segment.layer();
+            state += piece;
+        }
+        return state;
     }
 
     /** Called every client tick: follows level changes and runs the debounced autosave. */

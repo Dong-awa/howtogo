@@ -631,7 +631,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             return false;
         }
 
-        int argb = RoadConfig.roadColor(segment.roadClass());
+        // A closed street keeps its own class colour, muted toward grey: the closure is a state of that
+        // road, and the same muted ink is used on every map this mod draws (see HudDraw.roadInk).
+        int argb = HudDraw.roadInk(segment.roadClass(), segment.closed());
         int r = (argb >> 16) & 0xFF;
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
@@ -1696,12 +1698,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     /**
      * Works out the path each line runs along, planning each pair of neighbouring stops exactly as the router will.
      *
-     * A straight hop is not the line: a railway between two stations may run a long way round, and the chord would hide where the line goes. Planning costs a route per pair, so the result is cached and rebuilt only when a line's kind or stops change. A pair that cannot be planned gets no hop -- a gap, not a line across ground it may not run over.
+     * A straight hop is not the line: a railway between two stations may run a long way round, and the chord would hide where the line goes. Planning costs a route per pair, so the result is cached and rebuilt only when a line's kind or stops change, or when the roads under it do (see shapeKey). A pair that cannot be planned gets no hop -- a gap, not a line across ground it may not run over.
      */
     private static void refreshLineShapes(List<TransitLine> lines) {
+        // The roads are part of a player's line shape: the line is planned over them, so shutting a
+        // street under it must redraw it. Read once per pass; see RoadStore.routingState.
+        long roadState = RoadStore.routingState();
         StringBuilder signature = new StringBuilder();
         for (TransitLine line : lines) {
-            signature.append(shapeKey(line));
+            signature.append(shapeKey(line, roadState));
             // The direction marks are built from the direction as well as the geometry, so a line whose
             // direction switched must rebuild them. The direction is deliberately not in shapeKey, which the
             // shape cache also uses: it would re-plan every route of the line for a switch that does not move
@@ -1720,7 +1725,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         java.util.Map<String, LineShape> rebuilt = new java.util.HashMap<>();
         List<LineShape> shapes = new java.util.ArrayList<>(lines.size());
         for (TransitLine line : lines) {
-            String key = shapeKey(line);
+            String key = shapeKey(line, roadState);
             LineShape shape = lineShapeCache.get(key);
             if (shape == null) {
                 shape = planLine(line, workspaces);
@@ -1818,8 +1823,9 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
      * What makes a line's shape its own: line, kind, stops, roads, and track.
      *
      * A windowed reading adds track a piece at a time without changing the stops, so a key built from stops alone would say "same line" while the track fills in, and a shape from the first window would be drawn for the rest of the session. The track's own reading -- segment count and revision -- is therefore part of the key.
+     * The roads are in it for the same reason: a player's line is planned over the saved roads, so a street shut (or a one-way or storey changed) under it changes where the line may run. The hand-drawn network's own state is passed in by the caller, which reads it once for the whole pass.
      */
-    private static String shapeKey(TransitLine line) {
+    private static String shapeKey(TransitLine line, long roadState) {
         StringBuilder key = new StringBuilder();
         key.append(line.id()).append(line.kind().name());
         // Whether the line rides its own marks is part of the shape: turning imported rails off must redraw
@@ -1828,6 +1834,7 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
         for (LineStop stop : line.stops()) {
             key.append('|').append(stop.x()).append(',').append(stop.z());
         }
+        key.append("//").append(roadState);
         bili.dongsz.howtogo.road.RoadNetwork track = MtrTransit.trackOf(line);
         key.append("*/").append(track == null
                 ? "none"
@@ -2831,20 +2838,57 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     private static final double ONEWAY_ARROW_MIN_SCALE = 0.3;
     private static final int COLOR_ARROW = 0xFFF4F8FF;
     private static final int COLOR_ARROW_RIM = 0xB0101418;
-    /** The closed badge: a no-entry disc in signal red, with the bar cut in white. */
+    // The closure's own reading, drawn over the (greyed) road: a no-entry badge, and hazard stripes
+    // along both edges. The badge is sized from the road's drawn width -- a mark wider than its road
+    // reads as an object beside the road -- and gives way at street scale (see CLOSED_BADGE_SHRINK_FROM_SCALE).
+    // The stripes keep the reference maps' long dashes (their length grows with the gap between anchors,
+    // up to a cap) and are drawn as thin lines: the barrier reads by being long and fine, not by being
+    // thick, and a thin stripe does not cover the road it is painted on.
+    /** The badge: a no-entry disc in signal red, with the bar cut in white. */
     private static final int COLOR_CLOSED_DISC = 0xFFC62828;
     private static final int COLOR_CLOSED_BAR = 0xFFF2F2F2;
-    /** Screen pixels the closed badge is drawn at, fixed: closures are rare and always worth reading. */
-    private static final double CLOSED_BADGE_PX = 11.0;
-    /** World blocks between closure dash anchors; each dash draws at a fixed screen size on its block. */
-    private static final double CLOSED_DASH_ANCHOR_BLOCKS = 16.0;
-    /** Screen length of one closure dash at the base zoom -- the floor; a wide open zoom grows it. */
-    private static final double CLOSED_DASH_LEN_PX = 9.0;
-    /** Screen length cap of one closure dash at extreme zoom, so a dash never dwarfs its road. */
-    private static final double CLOSED_DASH_LEN_MAX_PX = 26.0;
-    /** Screen spacing floor between two dashes: closer than this they merge into a solid line. */
-    private static final double CLOSED_DASH_MIN_SPACING_PX = 14.0;
-    private static final double CLOSED_GAP_HALF_WIDTHS = 1.6;
+    /** The stripes: hazard red against near-black, the pair a barrier reads as. */
+    private static final int COLOR_CLOSED_STRIPE_RED = 0xFFC62828;
+    private static final int COLOR_CLOSED_STRIPE_DARK = 0xFF161616;
+    /** The badge's diameter, as a share of the road's drawn width, within screen bounds. */
+    private static final double CLOSED_BADGE_PER_ROAD = 0.9;
+    /** The smallest readable badge; a road drawn narrower than this gets the road's own width instead. */
+    private static final double CLOSED_BADGE_MIN_PX = 4.0;
+    private static final double CLOSED_BADGE_MAX_PX = 7.0;
+    /** One stripe's length along the road: the floor at the tightest zoom, and the cap when zoomed in. */
+    private static final double CLOSED_STRIPE_LEN_PX = 9.0;
+    private static final double CLOSED_STRIPE_LEN_MAX_PX = 26.0;
+    /**
+     * One stripe's thickness across the road, as a share of the road's drawn width, within screen
+     * bounds. Thinner than the dashes this mark used to draw on purpose: the stripes are a hazard
+     * reading, not a paint job over the street.
+     */
+    private static final double CLOSED_STRIPE_THICKNESS_PER_ROAD = 0.12;
+    private static final double CLOSED_STRIPE_MIN_THICKNESS_PX = 0.6;
+    private static final double CLOSED_STRIPE_MAX_THICKNESS_PX = 1.0;
+    /** World blocks between stripe anchors: the pattern is printed on the road, not on the screen. */
+    private static final double CLOSED_STRIPE_ANCHOR_BLOCKS = 16.0;
+    /** Screen spacing floor between two stripes, so a zoomed-out pattern thins out instead of merging. */
+    private static final double CLOSED_STRIPE_MIN_SPACING_PX = 14.0;
+    /** The most stripe pairs one segment draws, so a long shut road cannot fill the map. */
+    private static final int CLOSED_STRIPE_MAX_PAIRS = 60;
+
+    /**
+     * The map scale, in pixels per block, at which the badge begins to give way, and the smallest share
+     * of its full size it keeps. Below the threshold it is drawn at full size; above it, as the road is
+     * drawn wider, the badge shrinks -- at street scale the road carries the reading by itself, so a
+     * sign covering the stretch the player is looking at is worse than a small stamp.
+     */
+    private static final double CLOSED_BADGE_SHRINK_FROM_SCALE = 0.9;
+    private static final double CLOSED_BADGE_SHRINK_FLOOR = 0.55;
+
+    /** How much of its full size the badge keeps at this zoom; see the thresholds above. */
+    private static double closedBadgeFactor(double scale) {
+        if (scale <= CLOSED_BADGE_SHRINK_FROM_SCALE) {
+            return 1.0;
+        }
+        return Math.max(CLOSED_BADGE_SHRINK_FLOOR, CLOSED_BADGE_SHRINK_FROM_SCALE / scale);
+    }
 
     /**
      * Draws the direction arrows of every one-way road, above every road.
@@ -2916,18 +2960,25 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * Draws the closures' road marks in the style the reference maps use: the road itself keeps its
-     * own colour, and alternating red and white dashes run along both edges of it, so the eye reads
-     * "this street is shut" without losing the road under a coat of paint. The no-entry badge sits at
-     * the segment's middle as the at-a-glance summary. A closure is visible whatever the player is
-     * doing -- nothing else on the map says a road does not lead through, so these marks are the one
-     * honest reading of it.
+     * Draws the closures' road marks in the style the reference maps use: the road itself is drawn in
+     * a muted version of its class colour (see HudDraw.roadInk), and alternating red and black hazard
+     * stripes run along both edges of it, so the eye reads "this street is shut" without losing the
+     * road under a coat of paint. The no-entry badge sits at the segment's middle as the at-a-glance
+     * summary. A closure is visible whatever the player is doing -- nothing else on the map says a
+     * road does not lead through, so these marks are the one honest reading of it.
      *
-     * Each dash is one of a fixed set of anchors nailed to the segment's world arc length (one every
-     * sixteen blocks, counted outward from the middle), and draws at a fixed screen size: zooming in
-     * spreads the dashes apart without growing them, zooming out packs them tighter until the road
-     * gets too thin and only the badge is left. The centre stays on its block at every zoom; the ink
-     * is tied to the anchor and the side, so a dash never slides along the road or swaps colour.
+     * The badge is sized from the road's drawn width, never from a fixed pixel size, so it is never
+     * wider than the street it belongs to; and it gives way as the map is zoomed in (see
+     * closedBadgeFactor), because at street scale the road carries the reading by itself and a big sign
+     * would cover exactly the stretch the player is looking at.
+     *
+     * Each stripe is one of a fixed set of anchors nailed to the segment's world arc length (one every
+     * sixteen blocks, counted outward from the middle), so zooming spreads the stripes apart instead of
+     * sliding them along the road; zoomed out, the gap floor thins the count out rather than letting the
+     * marks merge into a solid edge. A stripe's length follows its own spacing up to a cap, like the
+     * dashes of the reference maps, and its width stays a thin line: the barrier reads by being long and
+     * fine, not by being thick. The ink is tied to the anchor and the side, never to a walk order, so a
+     * stripe does not swap colour while the view moves.
      */
     private void drawClosedMarks(PoseStack pose, VertexConsumer vc, double scale,
                                  Projection projection, double left, double top, double right,
@@ -2949,17 +3000,15 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
             double length = segment.length();
             double halfWidthPx = strokeHalfWidthPx(segment.roadClass(), scale);
             if (!(halfWidthPx > 0.75)) {
-                // Below this the road is a line rather than a surface; the badge alone still says
-                // closed there, but a dash pattern would be texture.
+                // Below this the road is a line rather than a surface; a badge or a stripe on it would
+                // be texture, so the greyed ink is the only thing that says closed there.
                 continue;
             }
-            double thickness = Math.max(1.2, halfWidthPx * 0.45);
-            // The anchors sit every sixteen blocks along the road, with one guard: zoomed far out the
-            // same sixteen blocks shrink to a few pixels and the dashes would crowd into a solid
-            // line. There the spacing grows so two dashes on screen are never closer than a fixed
-            // floor -- the count thins out instead of the marks merging. And zoomed far in the
-            // opposite happens: the spacing opens up, so the dash grows with it (up to a cap) and
-            // keeps its proportion to the road instead of turning into a speck on a wide street.
+            double roadWidthPx = halfWidthPx * 2.0;
+            // A stripe's thickness is a line weight rather than a mark's size: it stays a thin hairline
+            // at every zoom, because a stripe shrunk below a pixel stops being a stripe at all.
+            double thickness = Math.min(Math.max(roadWidthPx * CLOSED_STRIPE_THICKNESS_PER_ROAD,
+                    CLOSED_STRIPE_MIN_THICKNESS_PX), CLOSED_STRIPE_MAX_THICKNESS_PX);
             double screenTotal = 0.0;
             for (int i = 1; i < count; i++) {
                 screenTotal += Math.hypot(projection.screenX(displayX(segment, i))
@@ -2968,69 +3017,85 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                         - projection.screenZ(displayZ(segment, i - 1)));
             }
             double pxPerBlock = length > 0 ? screenTotal / length : 0.0;
-            double spacingBlocks = Math.max(CLOSED_DASH_ANCHOR_BLOCKS,
-                    CLOSED_DASH_MIN_SPACING_PX / Math.max(pxPerBlock, 1.0E-3));
+            // The pattern is printed on the road, so its anchors are world distances; only the gap has a
+            // screen floor, which turns a far zoom into fewer stripes instead of a solid line. The stripe
+            // length follows that spacing, as the reference maps draw theirs: zooming in opens the gap and
+            // the stripe grows with it up to a cap, keeping its proportion to the road instead of turning
+            // into a speck.
+            double spacingBlocks = Math.max(CLOSED_STRIPE_ANCHOR_BLOCKS,
+                    CLOSED_STRIPE_MIN_SPACING_PX / Math.max(pxPerBlock, 1.0E-3));
             double pxSpacing = spacingBlocks * pxPerBlock;
-            double half = Math.min(Math.max(pxSpacing * 0.3, CLOSED_DASH_LEN_PX * 0.5),
-                    CLOSED_DASH_LEN_MAX_PX * 0.5);
-            thickness = Math.max(1.2, Math.min(thickness, half * 0.6));
-            int pairs = (int) Math.min(60, Math.ceil(length / spacingBlocks * 0.5) + 1);
+            double stripeLen = Math.min(Math.max(pxSpacing * 0.6, CLOSED_STRIPE_LEN_PX),
+                    CLOSED_STRIPE_LEN_MAX_PX);
             double midArc = length * 0.5;
-            for (int i = 0; i < pairs; i++) {
-                for (int side = -1; side <= 1; side += 2) {
-                    double arc = midArc + side * (i * spacingBlocks
-                            + spacingBlocks * 0.5);
-                    if (arc < 0 || arc > length) {
-                        continue;
-                    }
-                    double[] centre = displayPointAt(segment, count, arc);
-                    double cx = projection.screenX(centre[0]);
-                    double cy = projection.screenZ(centre[1]);
-                    if (cx < left || cx > right || cy < top || cy > bottom) {
-                        continue;
-                    }
-                    // The dash runs along the road's screen direction at its own centre, sampled
-                    // from two world points a little before and after it, so a curve bends it too.
-                    double[] before = displayPointAt(segment, count, Math.max(0.0, arc - 3.0));
-                    double[] after = displayPointAt(segment, count, Math.min(length, arc + 3.0));
-                    double dx = projection.screenX(after[0]) - projection.screenX(before[0]);
-                    double dy = projection.screenZ(after[1]) - projection.screenZ(before[1]);
-                    double len = Math.hypot(dx, dy);
-                    if (len < 1.0E-4) {
-                        continue;
-                    }
-                    double ux = dx / len;
-                    double uy = dy / len;
-                    double nx = -uy;
-                    double ny = ux;
-                    // The ink is tied to the anchor and the side, not to a walk order: innermost
-                    // white on the left of the badge, red on its right, alternating outward. Zooming
-                    // changes the spacing, never which colour an existing dash is.
-                    boolean inner = i % 2 == 0;
-                    int ink = side > 0
-                            ? (inner ? COLOR_CLOSED_BAR : COLOR_CLOSED_DISC)
-                            : (inner ? COLOR_CLOSED_DISC : COLOR_CLOSED_BAR);
-                    for (int road = -1; road <= 1; road += 2) {
-                        double ex = cx + nx * halfWidthPx * road;
-                        double ey = cy + ny * halfWidthPx * road;
-                        HudDraw.emitQuad(sink,
-                                ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
-                                ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
-                                ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
-                                ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
-                                ink);
+            int pairs = (int) Math.min(CLOSED_STRIPE_MAX_PAIRS,
+                    Math.ceil(length / spacingBlocks * 0.5) + 1);
+            // The bounds above keep this true; kept as a guard so a future size change cannot draw a
+            // sub-pixel stripe, which is a smudge on the road rather than a stripe.
+            if (stripeLen >= 0.8) {
+                double half = stripeLen * 0.5;
+                for (int i = 0; i < pairs; i++) {
+                    for (int side = -1; side <= 1; side += 2) {
+                        double arc = midArc + side * (i * spacingBlocks
+                                + spacingBlocks * 0.5);
+                        if (arc < 0 || arc > length) {
+                            continue;
+                        }
+                        double[] centre = displayPointAt(segment, count, arc);
+                        double cx = projection.screenX(centre[0]);
+                        double cy = projection.screenZ(centre[1]);
+                        if (cx < left || cx > right || cy < top || cy > bottom) {
+                            continue;
+                        }
+                        // The stripe runs along the road's screen direction at its own centre, sampled
+                        // from two world points a little before and after it, so a curve bends it too.
+                        double[] before = displayPointAt(segment, count, Math.max(0.0, arc - 3.0));
+                        double[] after = displayPointAt(segment, count, Math.min(length, arc + 3.0));
+                        double dx = projection.screenX(after[0]) - projection.screenX(before[0]);
+                        double dy = projection.screenZ(after[1]) - projection.screenZ(before[1]);
+                        double len = Math.hypot(dx, dy);
+                        if (len < 1.0E-4) {
+                            continue;
+                        }
+                        double ux = dx / len;
+                        double uy = dy / len;
+                        double nx = -uy;
+                        double ny = ux;
+                        // The ink is tied to the anchor and the side, not to a walk order: the first
+                        // stripe on the left of the badge is black and the first on its right is red,
+                        // alternating outward. Zooming changes the spacing, never which colour an
+                        // existing stripe is.
+                        boolean inner = i % 2 == 0;
+                        int ink = side > 0
+                                ? (inner ? COLOR_CLOSED_STRIPE_DARK : COLOR_CLOSED_STRIPE_RED)
+                                : (inner ? COLOR_CLOSED_STRIPE_RED : COLOR_CLOSED_STRIPE_DARK);
+                        for (int road = -1; road <= 1; road += 2) {
+                            double ex = cx + nx * halfWidthPx * road;
+                            double ey = cy + ny * halfWidthPx * road;
+                            HudDraw.emitQuad(sink,
+                                    ex - ux * half + nx * thickness, ey - uy * half + ny * thickness,
+                                    ex + ux * half + nx * thickness, ey + uy * half + ny * thickness,
+                                    ex + ux * half - nx * thickness, ey + uy * half - ny * thickness,
+                                    ex - ux * half - nx * thickness, ey - uy * half - ny * thickness,
+                                    ink);
+                        }
                     }
                 }
             }
             // The badge once, halfway along the display line and anchored to the road's own
-            // geometry, so panning cannot leave it behind.
+            // geometry, so panning cannot leave it behind. A badge is never wider than the road it
+            // marks: the minimum is a readable size only while the road is wide enough to hold it, so
+            // a hairline road gets a dot rather than a sign wider than the street.
             int mid = count / 2 - 1;
             double mx = projection.screenX(
                     (displayX(segment, mid) + displayX(segment, mid + 1)) * 0.5);
             double my = projection.screenZ(
                     (displayZ(segment, mid) + displayZ(segment, mid + 1)) * 0.5);
             if (mx >= left && mx <= right && my >= top && my <= bottom) {
-                emitClosedBadge(sink, mx, my, CLOSED_BADGE_PX * 0.5);
+                double factor = closedBadgeFactor(scale);
+                double readable = Math.max(CLOSED_BADGE_MIN_PX,
+                        Math.min(roadWidthPx * CLOSED_BADGE_PER_ROAD, CLOSED_BADGE_MAX_PX) * factor);
+                emitClosedBadge(sink, mx, my, Math.min(roadWidthPx, readable) * 0.5);
             }
         }
         pose.popPose();
@@ -3057,9 +3122,10 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
     }
 
     /**
-     * One closed badge: an eight-sided disc in signal red with the no-entry bar across it. Eight
-     * sides because a four-sided diamond reads as a place marker on this map and a true circle
-     * costs more triangles than a badge at eleven pixels can justify.
+     * One closed badge: an eight-sided disc in signal red with the no-entry bar across it, at the radius
+     * the caller has already sized from the road (see drawClosedMarks). Eight sides because a four-sided
+     * diamond reads as a place marker on this map and a true circle costs more triangles than a badge the
+     * width of a road can justify.
      */
     private static void emitClosedBadge(HudDraw.VertexSink out, double cx, double cy, double radius) {
         double[] xs = new double[8];

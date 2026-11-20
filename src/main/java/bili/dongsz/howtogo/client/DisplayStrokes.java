@@ -14,7 +14,7 @@ import java.util.Set;
 
 /**
  * Groups a network into the strokes the maps draw, one stroke per road.
- * A stroke differs from the editor's chain: it walks on through a junction, taking the straightest continuation of the same class and name, so a translucent stroke is not painted twice where two pieces of one road meet.
+ * A stroke differs from the editor's chain: it walks on through a junction, taking the straightest continuation of the same class and name, so a translucent stroke is not painted twice where two pieces of one road meet. It stops where the closure state changes, because a shut stretch is drawn in a muted ink of its own and a stroke is one colour.
  * Each Piece records whether it is drawn in stored order or reversed, because a prepended piece must end at the joint; the old nearest-point inference drew a ghost line from a far end back to the joint.
  * Display only: routing never sees a stroke and nothing is written back.
  */
@@ -57,7 +57,8 @@ public final class DisplayStrokes {
         }
     }
 
-    private record Cached(RoadNetwork network, int revision, int appearance, List<Stroke> strokes) {
+    private record Cached(RoadNetwork network, int revision, int appearance, int closures,
+                          List<Stroke> strokes) {
     }
 
     private static final Cached[] CACHE = new Cached[CACHE_SLOTS];
@@ -73,14 +74,16 @@ public final class DisplayStrokes {
         }
         int revision = network.revision();
         int appearance = RoadSegment.appearanceChanges();
+        int closures = RoadSegment.closureChanges();
         for (Cached reading : CACHE) {
             if (reading != null && reading.network == network
-                    && reading.revision == revision && reading.appearance == appearance) {
+                    && reading.revision == revision && reading.appearance == appearance
+                    && reading.closures == closures) {
                 return reading.strokes;
             }
         }
         List<Stroke> built = build(network);
-        CACHE[nextSlot] = new Cached(network, revision, appearance, built);
+        CACHE[nextSlot] = new Cached(network, revision, appearance, closures, built);
         nextSlot = (nextSlot + 1) % CACHE_SLOTS;
         return built;
     }
@@ -264,6 +267,11 @@ public final class DisplayStrokes {
             if (candidate == null || candidate.vertexCount() < 2
                     || candidate.roadClass() != piece.roadClass()
                     || !Objects.equals(name, candidate.name())) {
+                continue;
+            }
+            if (candidate.closed() != piece.closed()) {
+                // A shut stretch is painted in a different ink, so it is a stroke of its own: running
+                // the stroke through it would grey the open part of the street as well.
                 continue;
             }
             double[] away = awayFrom(candidate, nodeId);

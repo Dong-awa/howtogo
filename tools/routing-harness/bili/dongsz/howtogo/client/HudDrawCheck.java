@@ -1,5 +1,6 @@
 package bili.dongsz.howtogo.client;
 
+import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -69,6 +70,7 @@ public final class HudDrawCheck {
         hairpin();
         chain();
         degenerate();
+        closedInk();
         System.out.println(failures == 0 ? "  self-drawn stroke ok (" + checks + " checks)"
                 : "  self-drawn stroke FAILED: " + failures + " of " + checks);
         return new int[]{checks, failures};
@@ -160,6 +162,42 @@ public final class HudDrawCheck {
         List<double[]> whole = path(0, 0, 200, 0, 200, 200);
         expect("and that one stroke is painted once (" + worstCoverage(capture, whole) + ")",
                 worstCoverage(capture, whole) == ONCE);
+    }
+
+    /**
+     * A shut road's ink: the class colour muted toward its own grey and slightly darkened, with the
+     * alpha untouched. The road must stay recognisable as its own class -- a single grey for every
+     * closure would read as another kind of road -- so the checks are darker, less saturated, and still
+     * in the same warm/cool family, not one exact number.
+     */
+    private static void closedInk() {
+        System.out.println("   a shut road's ink");
+        int road = RoadConfig.roadColor(RoadClass.ROAD);
+        int shut = HudDraw.roadInk(RoadClass.ROAD, true);
+        expect("a shut road is still drawn", ((shut >>> 24) & 0xFF) == ((road >>> 24) & 0xFF));
+        expect("and is darker than its class colour", luma(shut) < luma(road));
+        expect("and greyer: its channels are closer together", spread(shut) < spread(road));
+        expect("while an open road keeps its class colour untouched",
+                HudDraw.roadInk(RoadClass.ROAD, false) == road);
+        expect("a translucent road stays translucent when shut",
+                ((HudDraw.closedRoadInk(0x803FD07A) >>> 24) & 0xFF) == 0x80);
+        // A road that was warm must stay warm: the mute is not a global grey.
+        int warm = HudDraw.closedRoadInk(0xFFC8A24A);
+        expect("a shut road keeps a trace of its own hue", ((warm >> 16) & 0xFF) > (warm & 0xFF));
+    }
+
+    /** The perceived brightness of an ARGB colour, for comparing a road with its muted reading. */
+    private static double luma(int argb) {
+        return 0.299 * ((argb >> 16) & 0xFF) + 0.587 * ((argb >> 8) & 0xFF)
+                + 0.114 * (argb & 0xFF);
+    }
+
+    /** How far apart a colour's brightest and darkest channels are: a cheap measure of saturation. */
+    private static int spread(int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        return Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b));
     }
 
     /** Nothing to draw must draw nothing rather than throw. */

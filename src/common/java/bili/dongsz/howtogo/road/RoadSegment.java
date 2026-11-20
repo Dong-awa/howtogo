@@ -395,6 +395,23 @@ public final class RoadSegment {
         return c;
     }
 
+    /**
+     * Hands the road's own state to a piece of it -- direction, closure, storey, name, category and
+     * number -- without counting it as a change. A split is the same road in two pieces, and the
+     * counters exist to tell a cache that the player changed something, not that a topology edit kept
+     * what the road already was; counting an inheritance would make every plan that anchors on a
+     * one-way or shut road look like an edit to the whole map. Geometry is the caller's; the display
+     * curve belongs to the whole road and is not inherited.
+     */
+    void inheritState(RoadSegment source) {
+        this.name = source.name;
+        this.direction = source.direction;
+        this.closed = source.closed;
+        this.layer = source.layer;
+        this.category = source.category;
+        this.number = source.number;
+    }
+
     @Override
     public String toString() {
         return "RoadSegment#" + id + "[" + roadClass + " " + vertexCount + "v len=" + (int) length() + "]";

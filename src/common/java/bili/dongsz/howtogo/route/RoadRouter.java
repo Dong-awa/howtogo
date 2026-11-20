@@ -312,6 +312,7 @@ public final class RoadRouter {
     /**
      * Whether the two places are connected, which is not the same question as whether a trip can be planned -- see Connection. Each place is joined the way the planner joins it (split at the perpendicular foot), then a search asks whether a path runs in that direction.
      * The search starts from the whole neighbourhood of each place, because a place can stand beside more than one piece of road. A place with no road of the wanted kind within JUDGEMENT_REACH is not judged at all.
+     * A place whose nearest road is shut is not split: a shut road is not a road to anchor a line on, and the split would add a junction to the workspace for a piece the line cannot use. It is judged by the usable roads within its own reach instead, which is what catches a closure between two stops.
      * @return CONNECTED, SEPARATE or UNJUDGED
      */
     public static Connection connection(Workspace workspace, double startX, double startZ,
@@ -319,26 +320,30 @@ public final class RoadRouter {
                                         RoutePreferences preferences) {
         RoadNetwork network = workspace.routingNetwork();
         RoadEditor editor = workspace.editor();
+        // Closed roads are counted when the place is read: a stop standing on a shut road has a road
+        // there, and the pair must read as a break rather than as "no road here", which would unmark it.
         RoadPoint startRoad = nearestRoadPointWithin(network, startX, startZ, mode, preferences,
-                JUDGEMENT_REACH);
+                JUDGEMENT_REACH, true);
         if (startRoad == null) {
             return Connection.UNJUDGED;
         }
-        int startNode = anchorNode(network, editor, startRoad);
-        if (startNode < 0) {
+        boolean startShut = onClosedRoad(network, startRoad);
+        int startNode = startShut ? -1 : anchorNode(network, editor, startRoad);
+        if (!startShut && startNode < 0) {
             return Connection.UNJUDGED;
         }
         // Read after the first split: splitting the start's segment very often removes the goal's too.
         RoadPoint goalRoad = nearestRoadPointWithin(network, goalX, goalZ, mode, preferences,
-                JUDGEMENT_REACH);
+                JUDGEMENT_REACH, true);
         if (goalRoad == null) {
             return Connection.UNJUDGED;
         }
-        int goalNode = anchorNode(network, editor, goalRoad);
-        if (goalNode < 0) {
+        boolean goalShut = onClosedRoad(network, goalRoad);
+        int goalNode = goalShut ? -1 : anchorNode(network, editor, goalRoad);
+        if (!goalShut && goalNode < 0) {
             return Connection.UNJUDGED;
         }
-        if (startNode == goalNode) {
+        if (startNode >= 0 && startNode == goalNode) {
             // One place on the network, which is what two stops drawn on the same spot are.
             return Connection.CONNECTED;
         }
@@ -349,6 +354,15 @@ public final class RoadRouter {
         List<Integer> starts = neighbourhood(network, graph, startNode, startX, startZ, mode);
         List<Integer> goals = neighbourhood(network, graph, goalNode, goalX, goalZ, mode);
         return reachesAny(graph, starts, goals) ? Connection.CONNECTED : Connection.SEPARATE;
+    }
+
+    /**
+     * Whether a road point lies on a shut segment, read on the point's own segment and before anything
+     * splits it. See connection for what the answer is used for.
+     */
+    private static boolean onClosedRoad(RoadNetwork network, RoadPoint road) {
+        RoadSegment segment = network.segment(road.segmentId());
+        return segment != null && segment.closed();
     }
 
     /**
@@ -532,22 +546,37 @@ public final class RoadRouter {
     }
 
     /**
-     * Closest point on the network this trip may actually use. Only segments wired to nodes are considered, and the filters matter just as much: without them a driver would anchor to the footpath beside the road or to an avoided class.
+     * Closest point on the network this trip may actually use, closed roads excluded: a shut street is not a road the trip may anchor to, and anchoring to it would split it and hand the search two pieces of it. Only segments wired to nodes are considered, and the filters matter just as much: without them a driver would anchor to the footpath beside the road or to an avoided class.
      */
     private static RoadPoint nearestRoadPoint(RoadNetwork network, double x, double z,
                                               TravelMode mode, RoutePreferences preferences) {
-        return nearestRoadPointWithin(network, x, z, mode, preferences, Double.MAX_VALUE);
+        return nearestRoadPointWithin(network, x, z, mode, preferences, Double.MAX_VALUE, false);
+    }
+
+    /**
+     * The same with the closed roads counted, for the one question that is about where roads are rather than where a trip may go: tell someone standing on a shut street that there is no road there and they will go looking for one that is right under them. See nearestRoadPoint.
+     */
+    private static RoadPoint nearestRoadPointIncludingClosed(RoadNetwork network, double x, double z,
+                                                             TravelMode mode,
+                                                             RoutePreferences preferences) {
+        return nearestRoadPointWithin(network, x, z, mode, preferences, Double.MAX_VALUE, true);
     }
 
     /**
      * The same, considering only roads within radius blocks. Not an optimisation: a caller asking "is there a road nearer than this one" must not have the whole network read.
+     * @param includeClosed whether a shut road counts as a road for this question; see nearestRoadPoint
      */
     private static RoadPoint nearestRoadPointWithin(RoadNetwork network, double x, double z,
                                                     TravelMode mode, RoutePreferences preferences,
-                                                    double radius) {
+                                                    double radius, boolean includeClosed) {
         RoadPoint best = null;
         double bestDistanceSq = radius * radius;
         for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (!includeClosed && segment.closed()) {
+                // A closure is a routing absence, exactly as buildGraph treats it: anchoring here
+                // would split the shut road and let the trip travel down it.
+                continue;
+            }
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
             }
@@ -911,6 +940,7 @@ public final class RoadRouter {
 
     /**
      * Adds zero-ish cost links between nodes that sit essentially on top of each other. The links are real RoadSegment objects, never inserted into the network: they exist only so the polyline has geometry across the join, and they borrow a class the mode may use so a join cannot smuggle a footpath into a drive.
+     * Closed roads take no part: a shut street is absent here as it is absent from the graph, so its nodes are not places a join may be made from, and its own two ends are not a gap to be hopped across.
      * The bucket a node is filed under and the bucket looked up must both be the cell, not the node's coordinates; they used to disagree, so the pass silently did nothing away from the origin. Nothing here may take a join away, and the storey rule is the one samePlaceVertically makes, used with the storeys.
      */
     private static void addCoincidentNodeLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
@@ -933,6 +963,11 @@ public final class RoadRouter {
         // How many usable pieces meet at each node; one is a road end, where a walker may step off.
         Map<Integer, Integer> usableDegree = new HashMap<>();
         for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (segment.closed()) {
+                // A closure is an absence, as it is in buildGraph: a shut street must add no degree to
+                // its ends, or a walker could step off an end that is not really there.
+                continue;
+            }
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
             }
@@ -944,6 +979,20 @@ public final class RoadRouter {
                             .add(segment.layer());
                     usableDegree.merge(nodeId, 1, Integer::sum);
                 }
+            }
+        }
+
+        // The node pairs one closed street spans: the road itself is the way between its ends, and a
+        // shut road's ends must not be joined over the three-block gap, which is the shortest hop of all.
+        Set<Long> closedRoadEnds = new HashSet<>();
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (!segment.closed()) {
+                continue;
+            }
+            int from = segment.fromNode();
+            int to = segment.toNode();
+            if (from != RoadSegment.NO_NODE && to != RoadSegment.NO_NODE && from != to) {
+                closedRoadEnds.add(nodePairKey(from, to));
             }
         }
 
@@ -970,6 +1019,10 @@ public final class RoadRouter {
                             continue;
                         }
                         if (!samePlaceVertically(a, b)) {
+                            continue;
+                        }
+                        if (closedRoadEnds.contains(nodePairKey(a.id(), b.id()))) {
+                            // One shut street's two ends: the join would be a way across its closure.
                             continue;
                         }
                         if (!shareARoad(atNode.get(a.id()), atNode.get(b.id()))) {
@@ -1272,17 +1325,26 @@ public final class RoadRouter {
             }
             return RouteFailure.of("screen.howtogo.failure.nothing_to_route_on", modeName(mode));
         }
-        if (nearestRoadPoint(network, startX, startZ, mode, preferences) == null) {
+        // Asked with the closed roads counted: a place standing on a shut street still has a road under
+        // it, and answering that there is none sends the player looking for a road that is right there.
+        if (nearestRoadPointIncludingClosed(network, startX, startZ, mode, preferences) == null) {
             return RouteFailure.of("screen.howtogo.failure.no_road_at_start", modeName(mode),
                     avoided);
         }
-        if (nearestRoadPoint(network, goalX, goalZ, mode, preferences) == null) {
+        if (nearestRoadPointIncludingClosed(network, goalX, goalZ, mode, preferences) == null) {
             return RouteFailure.of("screen.howtogo.failure.no_road_at_destination", modeName(mode),
                     avoided);
         }
         List<Integer> starts = nearestRoutableNodes(network, graph, startX, startZ, 1, mode);
         List<Integer> goals = nearestRoutableNodes(network, graph, goalX, goalZ, 1, mode);
         if (starts.isEmpty() || goals.isEmpty()) {
+            // Asked before the distance: when the road under an end is shut rather than absent, the
+            // nearest open road can be hundreds of blocks off, and "too far" names the wrong problem.
+            RouteFailure closed = closureBlocks(network, startX, startZ, goalX, goalZ, mode,
+                    preferences, avoided);
+            if (closed != null) {
+                return closed;
+            }
             return RouteFailure.of("screen.howtogo.failure.too_far_from_road", modeName(mode),
                     Math.round(mode.maxConnectorDistance()), avoided);
         }
@@ -1291,24 +1353,36 @@ public final class RoadRouter {
         if (fromStart.contains(goals.get(0))) {
             return RouteFailure.of("screen.howtogo.failure.same_component", fromStart.size());
         }
-        // A closure is a rule rather than a hole, so nothing on the map shows where the fragments
-        // came from -- ask the graph with the closed roads allowed back in whether they are what
-        // splits the two ends. Connected there is the closures' answer, and it names the one thing
-        // the player can do about it: reopen the street.
-        if (hasClosedSegments(network)) {
-            Map<Integer, List<Edge>> full = buildGraph(network, mode, preferences, true);
-            if (!full.isEmpty()) {
-                List<Integer> allStarts = nearestRoutableNodes(network, full, startX, startZ, 1, mode);
-                List<Integer> allGoals = nearestRoutableNodes(network, full, goalX, goalZ, 1, mode);
-                if (!allStarts.isEmpty() && !allGoals.isEmpty()
-                        && component(full, allStarts.get(0)).contains(allGoals.get(0))) {
-                    return RouteFailure.of("screen.howtogo.failure.closed_blocks", modeName(mode),
-                            avoided);
-                }
-            }
+        RouteFailure closed = closureBlocks(network, startX, startZ, goalX, goalZ, mode,
+                preferences, avoided);
+        if (closed != null) {
+            return closed;
         }
         // No fragment sizes: a pair of node counts only pushes the part that matters off a picker row.
         return RouteFailure.of("screen.howtogo.failure.split_fragments", modeName(mode), avoided);
+    }
+
+    /**
+     * Whether closures are what stands between the two ends: the open graph has split them, but the same graph with the shut roads allowed back in joins them, so the one thing the player can do is reopen a street. A closure is a rule rather than a hole, so nothing on the map shows where the fragments came from -- this is the only answer that names the cause.
+     * Null when no closure answers, and when there is no closure at all; see hasClosedSegments for the cheap gate in front of the extra graph. Callers keep same_component ahead of it: a journey the open graph already joins is not explained by a closure.
+     */
+    private static RouteFailure closureBlocks(RoadNetwork network, double startX, double startZ,
+                                              double goalX, double goalZ, TravelMode mode,
+                                              RoutePreferences preferences, Object avoided) {
+        if (!hasClosedSegments(network)) {
+            return null;
+        }
+        Map<Integer, List<Edge>> full = buildGraph(network, mode, preferences, true);
+        if (full.isEmpty()) {
+            return null;
+        }
+        List<Integer> allStarts = nearestRoutableNodes(network, full, startX, startZ, 1, mode);
+        List<Integer> allGoals = nearestRoutableNodes(network, full, goalX, goalZ, 1, mode);
+        if (allStarts.isEmpty() || allGoals.isEmpty()
+                || !component(full, allStarts.get(0)).contains(allGoals.get(0))) {
+            return null;
+        }
+        return RouteFailure.of("screen.howtogo.failure.closed_blocks", modeName(mode), avoided);
     }
 
     /**

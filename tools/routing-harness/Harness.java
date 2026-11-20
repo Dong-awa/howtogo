@@ -128,6 +128,9 @@ public final class Harness {
         int[] ownMaps = bili.dongsz.howtogo.client.HudDrawCheck.run();
         checks += ownMaps[0];
         failures += ownMaps[1];
+        int[] mapStrokes = bili.dongsz.howtogo.client.DisplayStrokesCheck.run();
+        checks += mapStrokes[0];
+        failures += mapStrokes[1];
         int[] thinning = bili.dongsz.howtogo.client.PathThinningCheck.run();
         checks += thinning[0];
         failures += thinning[1];

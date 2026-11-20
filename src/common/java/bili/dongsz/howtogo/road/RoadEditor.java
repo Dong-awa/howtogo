@@ -848,9 +848,12 @@ public final class RoadEditor {
         first.addVertex(x, z);
         first.setFromNode(original.fromNode());
         first.setToNode(junction.id());
-        first.setName(original.name());
-        first.setDirection(original.direction());
-        first.setLayer(original.layer());
+        // A split is a topology edit, not a statement about the road: both halves keep the state the
+        // whole segment had, or a street shut for repairs would reopen the moment the router anchored
+        // a trip on it, and a numbered road would lose its class and its sign. The inheritance is
+        // quiet -- it does not move the one-way, closure or storey counters -- because nothing about
+        // the road changed; counting it would make every anchored plan look like an edit to the map.
+        first.inheritState(original);
 
         RoadSegment second = network.newSegment(original.roadClass(), y,
                 original.vertexCount() - vertexIndex + 1);
@@ -860,9 +863,9 @@ public final class RoadEditor {
         }
         second.setFromNode(junction.id());
         second.setToNode(original.toNode());
-        second.setName(original.name());
-        second.setDirection(original.direction());
-        second.setLayer(original.layer());
+        // The same on the far half, for the same reason: a split is the road broken into two pieces,
+        // never a change to what the road is.
+        second.inheritState(original);
 
         network.removeSegment(segmentId);
         network.addSegment(first);

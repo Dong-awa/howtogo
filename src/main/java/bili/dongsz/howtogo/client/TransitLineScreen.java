@@ -1047,7 +1047,7 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
     /**
      * What the verdicts were worked out for: the line as it stands, and the world under it.
      * The line's own shape is the obvious half, and its flags are in it because turning one changes the answer. The world half was there before and did not work: it used the merged network's segment count and revision, and a merged network is a copy, so its revision described the copy's numbering rather than the world's edits. Moving a rail, changing a class to rail or marking a street one-way therefore left a red mark standing on a line just repaired.
-     * What is named instead is each thing that can move the answer, from its own source: the hand-drawn network's revision, the one-way and storey counters its revision deliberately ignores, the rail layer version and the MTR track version.
+     * What is named instead is each thing that can move the answer, from its own source: the hand-drawn network's revision, the one-way, closure and storey counters its revision deliberately ignores, the rail layer version and the MTR track version.
      */
     private String rideSignature(TransitLine line) {
         if (line == null) {
@@ -1062,6 +1062,7 @@ public final class TransitLineScreen extends Screen implements ParentBackdrop {
         }
         signature.append('#').append(RoadStore.get().revision())
                 .append(':').append(RoadSegment.directionChanges())
+                .append(':').append(RoadSegment.closureChanges())
                 .append(':').append(RoadSegment.layerChanges())
                 .append(':').append(RailTrackStore.layerVersion())
                 .append(':').append(MtrTransit.tracksVersion());

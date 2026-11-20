@@ -42,9 +42,11 @@ public final class DisplayStrokesCheck {
         backwardJoins();
         mixedDirectionJoins();
         sharpElbowEndsTheStroke();
+        closureEndsTheStroke();
         jointIsWrittenOnce();
         jumpIsMeasured();
         cacheFollowsTheNetwork();
+        closureInvalidatesTheCache();
         System.out.println(failures == 0 ? "  road strokes ok (" + checks + " checks)"
                 : "  road strokes FAILED: " + failures + " of " + checks);
         return new int[]{checks, failures};
@@ -147,6 +149,62 @@ public final class DisplayStrokesCheck {
         expect("and neither jumps", noJumps(network));
     }
 
+    /**
+     * A street with one shut stretch is two strokes, not one: the shut stretch is drawn in a muted ink,
+     * so a stroke that ran through it would grey the open part of the street as well. Both stretches
+     * must still be drawn -- a closure is marked on the map, not hidden from it.
+     */
+    private static void closureEndsTheStroke() {
+        System.out.println("   a shut stretch of one street");
+        RoadNetwork network = new RoadNetwork();
+        RoadNode start = network.addNode(0, 64, 0, RoadNode.Type.ENDPOINT, null);
+        RoadNode middle = network.addNode(100, 64, 0, RoadNode.Type.JUNCTION, null);
+        RoadNode end = network.addNode(200, 64, 0, RoadNode.Type.ENDPOINT, null);
+        addSegment(network, RoadClass.ROAD, start, middle, 0, 0, 100, 0);
+        RoadSegment shut = addSegment(network, RoadClass.ROAD, middle, end, 100, 0, 200, 0);
+        shut.setClosed(true);
+
+        List<DisplayStrokes.Stroke> strokes = DisplayStrokes.build(network);
+        expect("a shut stretch is a stroke of its own", strokes.size() == 2);
+        expect("so the open and the shut stretch are not drawn in one ink",
+                everyStrokeHasOneClosureState(network, strokes));
+        expect("and the shut stretch is still drawn", points(network, strokes.get(0)).size()
+                + points(network, strokes.get(1)).size() == 4);
+    }
+
+    /** The cache notices a closure, which is not geometry and does not move the network's revision. */
+    private static void closureInvalidatesTheCache() {
+        System.out.println("   the cached reading after a closure");
+        RoadNetwork network = new RoadNetwork();
+        RoadNode start = network.addNode(0, 64, 0, RoadNode.Type.ENDPOINT, null);
+        RoadNode end = network.addNode(200, 64, 0, RoadNode.Type.ENDPOINT, null);
+        addSegment(network, RoadClass.ROAD, start, end, 0, 0, 200, 0);
+
+        List<DisplayStrokes.Stroke> before = DisplayStrokes.cached(network);
+        network.segment(network.segmentsSnapshot().get(0).id()).setClosed(true);
+        List<DisplayStrokes.Stroke> after = DisplayStrokes.cached(network);
+        expect("the stroke reading is rebuilt when a road is shut", after != before);
+        expect("and it is the shut reading that comes back",
+                after.size() == 1 && network.segment(after.get(0).firstSegmentId()).closed());
+        network.segment(network.segmentsSnapshot().get(0).id()).setClosed(false);
+        List<DisplayStrokes.Stroke> reopened = DisplayStrokes.cached(network);
+        expect("and reopened again when the road is reopened", reopened != after);
+    }
+
+    /** Whether every stroke is drawn in one ink: no stroke mixes a shut piece with an open one. */
+    private static boolean everyStrokeHasOneClosureState(RoadNetwork network,
+                                                         List<DisplayStrokes.Stroke> strokes) {
+        for (DisplayStrokes.Stroke stroke : strokes) {
+            boolean state = network.segment(stroke.firstSegmentId()).closed();
+            for (DisplayStrokes.Piece piece : stroke.pieces()) {
+                if (network.segment(piece.segmentId()).closed() != state) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     /** A joint shared by two pieces is drawn once: twice would double the translucent paint. */
     private static void jointIsWrittenOnce() {
         System.out.println("   the joint between two pieces");
@@ -233,8 +291,8 @@ public final class DisplayStrokesCheck {
     }
 
     /** Adds a piece whose geometry runs from the {@code from} node to the {@code to} node. */
-    private static void addSegment(RoadNetwork network, RoadClass roadClass, RoadNode from, RoadNode to,
-                                   double... xz) {
+    private static RoadSegment addSegment(RoadNetwork network, RoadClass roadClass, RoadNode from,
+                                          RoadNode to, double... xz) {
         RoadSegment segment = network.newSegment(roadClass, from.y(), xz.length / 2);
         for (int i = 0; i + 1 < xz.length; i += 2) {
             segment.addVertex((int) xz[i], (int) xz[i + 1]);
@@ -242,6 +300,7 @@ public final class DisplayStrokesCheck {
         segment.setFromNode(from.id());
         segment.setToNode(to.id());
         network.putSegment(segment);
+        return segment;
     }
 
     private static void expect(String what, boolean ok) {

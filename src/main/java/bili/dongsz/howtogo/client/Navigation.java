@@ -97,6 +97,17 @@ public final class Navigation {
     private static long offRouteSince;
 
     /**
+     * The saved network's routing signature when the live route was planned: its revision plus the
+     * one-way, closure and storey flags that revision deliberately ignores. The global change counters
+     * would be the obvious reading, but the machine-read layers run through the same setters every time
+     * they are re-read, so a counter is not evidence that the player's own roads moved; RoadStore's
+     * signature is read from the hand-drawn network itself (see RoadStore.routingState). Recorded when
+     * a route is taken on -- fresh or handed over by the picker -- so the tick asks whether the world
+     * moved under the route, not whether a plan was made.
+     */
+    private static long plannedRoadState;
+
+    /**
      * The dimension the trip was planned in, or null when no trip is active.
      * A destination is coordinates plus a name, and every reading belongs to one dimension's network;
      * without this, walking through a portal guided a route from the world left behind.
@@ -364,6 +375,9 @@ public final class Navigation {
         noteWalkInsteadOfRiding(plan, x, z, destination);
         clearWrongWay();
         turns.reset();
+        // Handed over whole rather than planned here, so mark the world it was planned against: tick
+        // compares against this, not against when the route object was made.
+        recordRoadState();
         HowToGo.logInfo(
                 "[HowToGo] route to {} for {} plan {}: {} points, {} blocks, {} turns, about {}",
                 destination.name(), mode.id(), plan.label(), route.points().size(),
@@ -479,6 +493,18 @@ public final class Navigation {
         }
 
         if (Double.isNaN(routeOriginX)) {
+            recomputeFrom(x, z);
+            return;
+        }
+
+        // A closure, a one-way or a storey change -- or an undo/redo that puts one back -- is rare and
+        // cheap to re-solve for, and a route that keeps guiding down a road the player has just shut is
+        // worse than a re-plan. Checked here, after the unknown-origin case and before the off-route
+        // grace, so it happens once per change rather than as part of the walking drift the grace
+        // exists to absorb.
+        if (roadStateMoved()) {
+            HowToGo.logInfo("[HowToGo] the routing rules changed under the route to {}; re-planning",
+                    target.name());
             recomputeFrom(x, z);
             return;
         }
@@ -1841,13 +1867,15 @@ public final class Navigation {
      * A cached list must expire when the world moves: the roads, the Create and MTR rails, RoadWeaver's
      * roads, the transit lines and the stores' switches all publish a version, so the stamp folds those
      * rather than hashing geometry. The lines have no version, so identity, size, stop counts and
-     * direction are folded in instead.
+     * direction are folded in instead. The hand-drawn network's own routing signature is folded in as
+     * its network publishes no version for a one-way, closure or storey flag: a cached plan that still
+     * runs through a road shut since is exactly the staleness this stamp is for.
      */
     private static long worldStamp() {
         RoadNetwork handDrawn = RoadStore.get();
-        // The network itself as well as its revision: a new world's revision restarts at zero.
+        // The network itself as well as its signature: a new world's revision restarts at zero.
         long stamp = System.identityHashCode(handDrawn);
-        stamp = stamp * 31 + handDrawn.revision();
+        stamp = stamp * 31 + RoadStore.routingState();
         stamp = stamp * 31 + RailTrackStore.layerVersion();
         stamp = stamp * 31 + MtrTransit.tracksVersion();
         stamp = stamp * 31 + MtrMarks.version();
@@ -1903,7 +1931,18 @@ public final class Navigation {
         }
     }
 
+    /**
+     * Re-plans the live route from a place, then marks the world it was planned against.
+     * The marking is after the plan rather than before because it belongs to the route that is now in
+     * place: every earlier attempt, every fallback branch, is already over by the time this returns.
+     */
     private static void recomputeFrom(double x, double z) {
+        planFrom(x, z);
+        recordRoadState();
+    }
+
+    /** The plan itself; recomputeFrom marks what it was planned against. */
+    private static void planFrom(double x, double z) {
         if (target == null) {
             route = Route.empty();
             return;
@@ -1970,6 +2009,24 @@ public final class Navigation {
         }
         route = plannedRoute;
         logRoute(preferences);
+    }
+
+    /**
+     * Marks the saved network's routing state the live route is good for. Every place a route is taken
+     * on calls this -- a fresh plan and a plan the picker already worked out.
+     */
+    private static void recordRoadState() {
+        plannedRoadState = RoadStore.routingState();
+    }
+
+    /**
+     * Whether the hand-drawn network's routing state moved since the live route was planned; see
+     * plannedRoadState. The counters cannot answer this on their own: undo/redo restores a snapshot
+     * through RoadNetwork.replaceWith, which moves only the revision, and the machine-read layers move
+     * the counters without touching the player's roads at all.
+     */
+    private static boolean roadStateMoved() {
+        return RoadStore.routingState() != plannedRoadState;
     }
 
     /**

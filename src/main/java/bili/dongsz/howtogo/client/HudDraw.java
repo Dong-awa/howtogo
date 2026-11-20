@@ -1056,8 +1056,54 @@ public final class HudDraw {
     }
 
     /**
+     * How far a closed road's colour is pulled toward its own grey, 0 to 1. The road keeps its class
+     * colour, only muted: a closure is a state of that street, not another kind of street, and a colour
+     * of its own would read as one.
+     */
+    private static final double CLOSED_ROAD_GREY = 0.55;
+
+    /**
+     * How much a closed road is darkened, as a multiplier on its channels. The grey alone is not enough
+     * on the pale classes -- the ice road is nearly white -- so the shut street also steps back a little.
+     */
+    private static final double CLOSED_ROAD_DIM = 0.9;
+
+    /**
+     * The ink one road is drawn in on any of this mod's maps: its class colour, or the greyed reading of
+     * that colour for a closed road. One place, because the world map, the viewer, the picker's preview
+     * and the minimap must agree about what a shut street looks like; the closure marks alone say it on
+     * the world map, and the colour has to carry it on every surface that draws no marks.
+     */
+    public static int roadInk(RoadClass roadClass, boolean closed) {
+        int argb = RoadConfig.roadColor(roadClass);
+        return closed ? closedRoadInk(argb) : argb;
+    }
+
+    /**
+     * The greyed reading of an already resolved road colour, for a drawing pass that has the ARGB in
+     * hand. Alpha is kept from the colour it is given, so the world map's configured transparency
+     * survives; the small maps pass their own surface alpha to the stroke instead, which overrides it
+     * there as it overrides every road's.
+     */
+    public static int closedRoadInk(int argb) {
+        int a = (argb >>> 24) & 0xFF;
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        double luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = (int) Math.round((r + (luma - r) * CLOSED_ROAD_GREY) * CLOSED_ROAD_DIM);
+        g = (int) Math.round((g + (luma - g) * CLOSED_ROAD_GREY) * CLOSED_ROAD_DIM);
+        b = (int) Math.round((b + (luma - b) * CLOSED_ROAD_GREY) * CLOSED_ROAD_DIM);
+        return (a << 24) | (clampChannel(r) << 16) | (clampChannel(g) << 8) | clampChannel(b);
+    }
+
+    private static int clampChannel(int channel) {
+        return Math.max(0, Math.min(255, channel));
+    }
+
+    /**
      * Draws a whole network, one continuous stroke per road rather than one per segment. The road a stroke belongs to is the chain the editor and the router already use: segments joined through pass-through nodes with the same class. That removes the notches at joints as well as at bends and collapses a road of twenty pieces into one buffer write.
-     * A chain is one class by construction, so the colour of its first segment is the colour of the whole stroke.
+     * A chain is one class by construction, so the colour of its first segment is the colour of the whole stroke. It is one closure state too -- DisplayStrokes ends a stroke where an open piece meets a closed one -- so a shut stretch of a street is greyed without recolouring the open part.
      */
     public static void emitNetwork(VertexSink out, RoadNetwork network,
                                    double m00, double m01, double m02,
@@ -1114,7 +1160,7 @@ public final class HudDraw {
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
-                    RoadConfig.roadColor(segment.roadClass()), alpha,
+                    roadInk(segment.roadClass(), segment.closed()), alpha,
                     minX, minY, maxX, maxY, screenPxPerUnit);
         }
     }
@@ -1388,7 +1434,7 @@ public final class HudDraw {
             }
             double width = widthOf == null ? halfWidth : widthOf.applyAsDouble(segment.roadClass());
             emitChain(out, network, stroke, m00, m01, m02, m10, m11, m12, width,
-                    RoadConfig.roadColor(segment.roadClass()), alpha,
+                    roadInk(segment.roadClass(), segment.closed()), alpha,
                     minX, minY, maxX, maxY, screenPxPerUnit);
         }
     }
