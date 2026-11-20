@@ -57,13 +57,21 @@ if ($Refresh -or -not (Test-Path $classpathFile)) {
     Write-Host 'reading the runtime classpath from gradle (needed once per build.gradle change)...'
     $initScript = Join-Path $env:TEMP 'howtogo-print-classpath.gradle'
     $gradleErr = Join-Path $work 'gradle-stderr.log'
+    # The task is registered on the active node's subproject rather than the root: under stonecutter
+    # the root project has no sourceSets of its own -- the runtime classpath lives on the node.
+    $activeNode = (Select-String -Path (Join-Path $project 'stonecutter.gradle.kts') `
+        -Pattern '^\s*stonecutter active "([^"]+)"').Matches[0].Groups[1].Value
     $initBody = @(
         'gradle.projectsEvaluated {'
-        '    rootProject.tasks.register(''printCp'') {'
-        '        doLast {'
-        '            println "CPSTART"'
-        '            println rootProject.sourceSets.main.runtimeClasspath.asPath'
-        '            println "CPEND"'
+        '    rootProject.subprojects { p ->'
+        '        if (p.name == ''' + $activeNode + ''') {'
+        '            p.tasks.register(''printCp'') {'
+        '                doLast {'
+        '                    println "CPSTART"'
+        '                    println p.sourceSets.main.runtimeClasspath.asPath'
+        '                    println "CPEND"'
+        '                }'
+        '            }'
         '        }'
         '    }'
         '}'

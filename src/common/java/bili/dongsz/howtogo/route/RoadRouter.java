@@ -104,6 +104,11 @@ public final class RoadRouter {
          */
         private int sourceDirections;
         /**
+         * The closure state of the world when this workspace was made, for the same reason: a closed
+         * road is absent from the graph, so a copy made before a road was shut would still route down it.
+         */
+        private int sourceClosures;
+        /**
          * The storeys of the world when this workspace was made, for the same reason: a storey decides which near-coincident nodes join, so a copy made before a road moved would serve stale joins.
          */
         private int sourceLayers;
@@ -117,6 +122,10 @@ public final class RoadRouter {
         private TravelMode graphMode;
         private int graphRevision = Integer.MIN_VALUE;
         private int graphDirections = Integer.MIN_VALUE;
+        /**
+         * @see #sourceClosures -- the graph's version of the closures.
+         */
+        private int graphClosures = Integer.MIN_VALUE;
         /**
          * @see #sourceLayers -- the graph's version of the storeys.
          */
@@ -171,14 +180,17 @@ public final class RoadRouter {
             RoadNetwork network = routingNetwork();
             int version = network.segmentCount();
             int directions = RoadSegment.directionChanges();
+            int closures = RoadSegment.closureChanges();
             int layers = RoadSegment.layerChanges();
             double walkGapReach = walkGapReach();
             if (graph == null || graphRevision != version || graphDirections != directions
-                    || graphLayers != layers || graphWalkGapReach != walkGapReach
+                    || graphClosures != closures || graphLayers != layers
+                    || graphWalkGapReach != walkGapReach
                     || graphMode != mode || !graphPreferences.equals(preferences)) {
                 graph = buildGraph(network, mode, preferences);
                 graphRevision = version;
                 graphDirections = directions;
+                graphClosures = closures;
                 graphLayers = layers;
                 graphWalkGapReach = walkGapReach;
                 graphMode = mode;
@@ -199,14 +211,17 @@ public final class RoadRouter {
 
         Workspace get(RoadNetwork network) {
             int directions = RoadSegment.directionChanges();
+            int closures = RoadSegment.closureChanges();
             int layers = RoadSegment.layerChanges();
             Workspace found = entries.get(network);
             if (found == null || found.sourceRevision != network.revision()
                     || found.sourceDirections != directions
+                    || found.sourceClosures != closures
                     || found.sourceLayers != layers) {
                 found = new Workspace(network);
                 found.sourceRevision = network.revision();
                 found.sourceDirections = directions;
+                found.sourceClosures = closures;
                 found.sourceLayers = layers;
                 entries.put(network, found);
             }
@@ -844,10 +859,26 @@ public final class RoadRouter {
      */
     private static Map<Integer, List<Edge>> buildGraph(RoadNetwork network, TravelMode mode,
                                                        RoutePreferences preferences) {
+        return buildGraph(network, mode, preferences, false);
+    }
+
+    /**
+     * The same graph with the closed roads allowed back in. That variant exists for one reader:
+     * the failure explainer, which answers "did a closure split the ends apart" by comparing this
+     * graph's reach with the routing graph's.
+     */
+    private static Map<Integer, List<Edge>> buildGraph(RoadNetwork network, TravelMode mode,
+                                                       RoutePreferences preferences,
+                                                       boolean includeClosed) {
         Map<Integer, List<Edge>> graph = new HashMap<>();
         // One counter for the whole build, so every directed edge has its own id; joins are edges too.
         int[] nextEdgeId = {0};
         for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (!includeClosed && segment.closed()) {
+                // A closure removes the road from the graph the way a missing road would be absent:
+                // neither direction travels it, and nothing downstream needs to know the segment exists.
+                continue;
+            }
             if (!mode.allows(segment.roadClass()) || preferences.avoids(segment.roadClass())) {
                 continue;
             }
@@ -1260,8 +1291,37 @@ public final class RoadRouter {
         if (fromStart.contains(goals.get(0))) {
             return RouteFailure.of("screen.howtogo.failure.same_component", fromStart.size());
         }
+        // A closure is a rule rather than a hole, so nothing on the map shows where the fragments
+        // came from -- ask the graph with the closed roads allowed back in whether they are what
+        // splits the two ends. Connected there is the closures' answer, and it names the one thing
+        // the player can do about it: reopen the street.
+        if (hasClosedSegments(network)) {
+            Map<Integer, List<Edge>> full = buildGraph(network, mode, preferences, true);
+            if (!full.isEmpty()) {
+                List<Integer> allStarts = nearestRoutableNodes(network, full, startX, startZ, 1, mode);
+                List<Integer> allGoals = nearestRoutableNodes(network, full, goalX, goalZ, 1, mode);
+                if (!allStarts.isEmpty() && !allGoals.isEmpty()
+                        && component(full, allStarts.get(0)).contains(allGoals.get(0))) {
+                    return RouteFailure.of("screen.howtogo.failure.closed_blocks", modeName(mode),
+                            avoided);
+                }
+            }
+        }
         // No fragment sizes: a pair of node counts only pushes the part that matters off a picker row.
         return RouteFailure.of("screen.howtogo.failure.split_fragments", modeName(mode), avoided);
+    }
+
+    /**
+     * Whether any segment of the network is closed, the cheap gate in front of the closures' second
+     * graph: a network with no closure cannot have been split by one.
+     */
+    private static boolean hasClosedSegments(RoadNetwork network) {
+        for (RoadSegment segment : network.segmentsSnapshot()) {
+            if (segment.closed()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

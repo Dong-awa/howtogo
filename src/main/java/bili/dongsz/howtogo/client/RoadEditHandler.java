@@ -365,6 +365,10 @@ public final class RoadEditHandler {
         } else if (key == InputConstants.KEY_O) {
             // One-way. A bare letter, not a registered mapping, because it acts on a selection the editor owns and exists only while editing.
             safely("toggle one-way", RoadEditSession::toggleOneWay);
+        } else if (key == InputConstants.KEY_B) {
+            // Closed. Same shape as the one-way binding: a bare letter acting on the selection the
+            // editor owns. B for blocked -- O is taken, and a closed road is blocked, not reversed.
+            safely("toggle closed", RoadEditSession::toggleClosed);
         //? if >=1.21.9 {
         /*} else if (LINES.matches(new KeyEvent(key, scanCode, 0))) {
         *///?} else {

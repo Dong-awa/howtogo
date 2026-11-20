@@ -260,6 +260,21 @@ public final class RoadEditor {
     }
 
     /**
+     * Flips one segment's closure, one undo step. A closure is marked per segment rather than per
+     * street -- a construction site shuts one block, and the rest of the street keeps routing.
+     * @return whether the segment is closed after the call
+     */
+    public boolean toggleClosed(int segmentId) {
+        RoadSegment segment = network.segment(segmentId);
+        if (segment == null) {
+            return false;
+        }
+        pushUndo();
+        segment.setClosed(!segment.closed());
+        return segment.closed();
+    }
+
+    /**
      * Turns every selected road one step round the one-way states, each from its own state, so the
      * fourth press brings a mixed selection back to two-way. Each road is oriented along its own walk;
      * one undo step.

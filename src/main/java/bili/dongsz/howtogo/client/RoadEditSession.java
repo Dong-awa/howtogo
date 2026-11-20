@@ -269,6 +269,28 @@ public final class RoadEditSession {
     }
 
     /**
+     * Toggles the closure on a road: the selected chain when a whole road is selected, otherwise the
+     * segment under the cursor. A closure is set on the chain the way a direction is -- one press
+     * closes or reopens the street, one undo step takes it back.
+     */
+    public static void toggleClosed() {
+        RoadEditor ed = editor();
+        int target = ed.selectedSegmentId();
+        if (target == RoadSegment.NO_SEGMENT
+                && lastSnap.kind() == RoadSnapper.Kind.SEGMENT) {
+            target = lastSnap.segmentId();
+        }
+        if (target == RoadSegment.NO_SEGMENT || RoadStore.get().segment(target) == null) {
+            return;
+        }
+        // Per segment: a construction site shuts one block, and the rest of the street keeps routing.
+        boolean closed = ed.toggleClosed(target);
+        RoadStore.markDirty();
+        HowToGo.LOGGER.info("[HowToGo] road {} closure switched: {}", target,
+                closed ? "closed" : "open");
+    }
+
+    /**
      * Records the raw cursor position. Cheap, and called for every rendered element so cursor-dependent actions work even when the editor is closed.
      */
     public static void setMouse(double rawWorldX, double rawWorldZ) {
