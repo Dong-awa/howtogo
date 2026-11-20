@@ -28,7 +28,7 @@ reading the config file's comments". That leaves six groups:
 | Routing and travel | Mix walking into public transport | `transit_mixed` | `true` | transit may walk between lines (walks follow the roads); a journey that rides a line is kept even if walking is quicker |
 | Routing and travel | Transit wait per boarding | `transit_wait_seconds` | `60` | average wait used in estimates |
 | Routing and travel | Walk off-road distance | `walk_offroad_blocks` | `32` | how far a walk may cross between two different roads' ends |
-| Routing and travel | Station snap distance | `station_snap_blocks` | `32` | how close counts as at the stop |
+| Routing and travel | Station snap distance | `station_snap_blocks` | `32` | how close counts as at the stop (and how near a road or track a place may be marked as a station); the planner places a stop on its line by the editor's 256-block station reach instead, so this no longer decides whether a line can be ridden |
 | Routing and travel | Straight-through junction calls | `straight_announcements` | `true` | call a real junction the route carries straight through: distance on the approach, "go straight" as you reach it |
 | Map data sources | Read Create train tracks | `create_train_tracks` | `true` | Create's tracks/stations layer |
 | Map data sources | Read MTR stations and lines | `mtr_transit` | `true` | MTR as transit data |

@@ -1872,15 +1872,44 @@ public final class RoadElementRenderer extends ElementRenderer<RoadElement, Road
                     RailTrackStore.forRouting(mode, policy, marks));
             workspaces.put(workspaceKey, workspace);
         }
+        // Where each stop really stands on the line, as the planner places it: a pair the journey can ride
+        // must not come out as a gap in the drawing just because the station's place stands off its track.
+        double[] anchor = lineAnchors(line, mode, policy, workspace);
         for (int i = 1; i < line.stopCount(); i++) {
-            LineStop from = line.stops().get(i - 1);
-            LineStop to = line.stops().get(i);
             bili.dongsz.howtogo.route.Route ride = bili.dongsz.howtogo.route.RoadRouter.findRoute(
-                    workspace, from.x(), from.z(), to.x(), to.z(), "", mode, policy);
+                    workspace, anchor[coordOf(i - 1)], anchor[coordOf(i - 1) + 1],
+                    anchor[coordOf(i)], anchor[coordOf(i) + 1], "", mode, policy);
             // Null for a pair with no route: a gap in the drawing, not a straight line across it.
             stretches.add(ride.isPresent() ? ride.points() : null);
         }
         return LineShape.of(TrackRuns.ofPlanned(stretches));
+    }
+
+    /**
+     * Each stop of a player's line placed on the line itself, as the planner places it: the drawn line is
+     * the track the ride uses, and a station whose place stands off its platform is walked to rather than
+     * joined to the line by a chord. A stop already within its line's platform reach keeps its mark, so
+     * the drawing matches the route the planner builds. See LinePlanner's anchor and RoadRouter.placedStop.
+     * @return {x0, z0, x1, z1, ...}
+     */
+    private static double[] lineAnchors(TransitLine line,
+                                        bili.dongsz.howtogo.route.TravelMode mode,
+                                        bili.dongsz.howtogo.route.RoutePreferences policy,
+                                        bili.dongsz.howtogo.route.RoadRouter.Workspace workspace) {
+        double[] anchors = new double[line.stopCount() * 2];
+        for (int i = 0; i < line.stopCount(); i++) {
+            LineStop stop = line.stops().get(i);
+            double[] at = workspace.placedStop(stop.x(), stop.z(), mode, policy,
+                    bili.dongsz.howtogo.route.RoadRouter.stationReach());
+            anchors[coordOf(i)] = at[0];
+            anchors[coordOf(i) + 1] = at[1];
+        }
+        return anchors;
+    }
+
+    /** The first of the two slots a stop's x and z take in lineAnchors' list. */
+    private static int coordOf(int stopIndex) {
+        return stopIndex * 2;
     }
 
     /**

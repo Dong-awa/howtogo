@@ -1,6 +1,5 @@
 package bili.dongsz.howtogo.route;
 
-import bili.dongsz.howtogo.RoadConfig;
 import bili.dongsz.howtogo.road.RoadClass;
 import net.minecraft.network.chat.Component;
 
@@ -32,7 +31,7 @@ public enum TravelMode {
     /**
      * Public transport: the rail, water and ice lines (ice is how a boat travels fast).
      * This table is only the riding half: walking to and from a station is planned in WALK over the same network and joined at stations (TransitPlanner). Nothing walkable is in the transit table, or a route could be satisfied by walking the whole way and still be labelled transit.
-     * The riding part follows its line; the only distance at the ends is the platform's own reach (station_snap_blocks). Past that the hop is not boarding but a line across the country, and walking legs use walking's allowance.
+     * The riding part runs between the points the line really calls at -- each stop's marked point placed on its own line, see LinePlanner's anchor -- so the ride's own connectors are the platform's reach, not the gap between a station's place and its track. The walk between those two is an ordinary walking leg.
      */
     TRANSIT("transit", 12.0, Map.of(
             RoadClass.RAIL, 8.0,
@@ -91,14 +90,17 @@ public enum TravelMode {
     /**
      * How far from a usable road this mode will still consider one, in blocks. It caps which start and goal roads the search looks at, and a longer connector is refused rather than drawn as a straight line.
      * Walking's two ends are always reachable (see WALK_CONNECTOR_REACH), so walk_offroad_blocks is not read here; a car's allowance is its widest half-width and a ride's is the platform's reach.
+     * A ride is planned between the points its line really calls at, so this is the platform's own reach rather than the distance a station's marked place may stand from its track: that distance is the line editor's station judgement, and the walk across it is a walking leg. See RoadRouter#stationReach.
      */
     public double maxConnectorDistance() {
         return switch (this) {
             case WALK -> WALK_CONNECTOR_REACH;
             // A car may not leave its road: the only distance it gets is the road's own half-width, so standing anywhere on the carriageway still starts a drive.
             case DRIVE -> widestHalfWidth();
-            // A ride may not leave its line either; it gets the platform's reach, since a station is a place whose stop can stand well off the track's centreline.
-            case TRANSIT -> RoadConfig.stationSnapBlocks();
+            // A ride may not leave its line either; it gets the platform's own reach, since a platform is
+            // the vehicle's stopping point rather than the station's place. A stop marked further off its
+            // line than this is placed on the line by the planner and walked to; see RoadRouter.platformReach.
+            case TRANSIT -> RoadRouter.platformReach();
         };
     }
 

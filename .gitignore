@@ -64,3 +64,4 @@ local-first.gradle
 .workbuddy-ai/
 /promo/build_plan_docx.py
 .build-logs/
+/tools/

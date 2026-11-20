@@ -149,6 +149,26 @@ public final class RoadRouter {
             return work;
         }
 
+        /**
+         * The point on this workspace's network nearest (x, z) that a trip in this mode may start from,
+         * within reach blocks, or null when nothing of the mode's kinds comes that near.
+         * The workspace's own reading of {@link RoadRouter#placeOnLine}, for callers outside the route
+         * package that draw or plan over a workspace they do not own the network of.
+         */
+        public double[] placeOnLine(double x, double z, TravelMode mode,
+                                    RoutePreferences preferences, double reach) {
+            return RoadRouter.placeOnLine(routingNetwork(), x, z, mode, preferences, reach);
+        }
+
+        /**
+         * The same, placed as a stop is: the marked point where it is already a platform's reach from
+         * this mode's line, the point of the line nearest it otherwise. See {@link RoadRouter#placedStop}.
+         */
+        public double[] placedStop(double x, double z, TravelMode mode,
+                                   RoutePreferences preferences, double reach) {
+            return RoadRouter.placedStop(routingNetwork(), x, z, mode, preferences, reach);
+        }
+
         /** The same network, for a caller that is about to split it. */
         RoadNetwork mutable() {
             return routingNetwork();
@@ -308,6 +328,77 @@ public final class RoadRouter {
      * How far from a place a road of the right kind may be and still be the road it is judged against, in blocks. Not the connector cap: a station a hundred blocks off its track still names a station on that track, and its distance from the rail is a fact about the station. 256 is the merge distance such a station is assembled under; past it the answer is UNJUDGED.
      */
     private static final double JUDGEMENT_REACH = 256.0;
+
+    /**
+     * The same distance, for the planner: how far a stop's marked point may stand from the line it
+     * belongs to and still be placed on it. One number rather than two, because the line editor and the
+     * planner must not disagree about which stops a line calls at -- a pair the editor shows as connected
+     * is a pair a ride has to be planable over. See placeOnLine.
+     */
+    public static double stationReach() {
+        return JUDGEMENT_REACH;
+    }
+
+    /**
+     * How far from its line a platform may stand and still be the platform itself, in blocks: a ride's
+     * connectors at either end are capped here, and a stop whose marked point is within this distance of
+     * its line is where the ride begins. Past it the mark is a station's place rather than its platform:
+     * the planner places the stop on the line (see placeOnLine) and the gap between the two is a walking
+     * leg, so this number never decides whether a line can be ridden.
+     *
+     * A constant rather than a setting, and deliberately not station_snap_blocks: that is the radius
+     * inside which the guidance calls the player "at the station" (and how near a track a place may be
+     * marked as one). Sharing it with the ride's reach made raising it to admit a far platform both widen
+     * the navigation's tolerance and draw the gap as a straight hop inside the ride -- the jump this
+     * separation exists to remove.
+     */
+    public static double platformReach() {
+        return 32.0;
+    }
+
+    /**
+     * The point on the network nearest (x, z) that a trip in this mode may start from, within reach
+     * blocks, or null when nothing of the mode's own kinds comes that near.
+     *
+     * A stop's marked point is a place, not a platform: a large station's place is the middle of the
+     * station, and the track its line runs on can stand well off it. A ride has to begin where the
+     * vehicle really is, so the planner places the stop here and lets the walk to and from it be an
+     * ordinary walking leg. The alternative -- snapping the ride itself onto the track within some
+     * radius -- makes that radius decide whether the line can be used at all, and draws a beeline across
+     * the gap as if it were the ride. See {@link #stationReach()} for the distance used.
+     *
+     * @param reach how far from (x, z) a usable piece of the network may be, in blocks
+     * @return the point as {x, z}, or null when there is nothing of the mode's kinds within reach
+     */
+    public static double[] placeOnLine(RoadNetwork network, double x, double z, TravelMode mode,
+                                       RoutePreferences preferences, double reach) {
+        RoadPoint point = nearestRoadPointWithin(network, x, z, mode, preferences, reach, false);
+        return point == null ? null : new double[]{point.x(), point.z()};
+    }
+
+    /**
+     * Where a stop really stands, as {x, z}: its marked point when that is already within a platform's
+     * reach of the mode's own line, and the point of the line nearest it otherwise. A stop with nothing
+     * of its line within the station reach is left where it is marked, and a ride to it is refused as it
+     * always was -- there is no line there to ride.
+     *
+     * The platform's reach is the mode's own connector cap, not one number for every kind: a rail line
+     * may start as far out as a platform stands from the track's centreline, while a road line (the kind
+     * a bus is) rides in DRIVE, whose cap is half a carriageway. Comparing every kind against the rail
+     * figure left a bus stop four blocks off its road in the same refused state this placement exists to
+     * take it out of, and made the answer non-monotone: right on the road and far off it both worked,
+     * a few blocks off did not.
+     */
+    public static double[] placedStop(RoadNetwork network, double x, double z, TravelMode mode,
+                                      RoutePreferences preferences, double reach) {
+        double[] at = placeOnLine(network, x, z, mode, preferences, reach);
+        if (at == null) {
+            return new double[]{x, z};
+        }
+        return Math.hypot(at[0] - x, at[1] - z) <= mode.maxConnectorDistance()
+                ? new double[]{x, z}
+                : at;
+    }
 
     /**
      * Whether the two places are connected, which is not the same question as whether a trip can be planned -- see Connection. Each place is joined the way the planner joins it (split at the perpendicular foot), then a search asks whether a path runs in that direction.
@@ -1053,9 +1144,42 @@ public final class RoadRouter {
                 RoadClass gapClass = preferences.avoids(RoadClass.PATH)
                         || !mode.allows(RoadClass.PATH) ? junctionClass : RoadClass.PATH;
                 addWalkGapLinks(network, graph, atNode, layersAtNode, usableDegree, walkReach,
-                        gapClass, nextEdgeId);
+                        gapClass, nextEdgeId, joinedAlready(graph, network));
             }
         }
+    }
+
+    /**
+     * Which nodes the graph already joins, as component ids.
+     * The gap pass exists to close gaps between pieces of road that do not meet; two ends the graph
+     * already reaches one from the other need nothing, and linking them would shortcut whatever road
+     * joins them. That is the case this is here for: a road split into pieces (by routing to a point on
+     * its bend, say) leaves its two ends as ends of different segments, and a chord across them would
+     * win over the bend the road goes round.
+     */
+    private static Map<Integer, Integer> joinedAlready(Map<Integer, List<Edge>> graph,
+                                                       RoadNetwork network) {
+        Map<Integer, Integer> component = new HashMap<>();
+        int next = 0;
+        for (RoadNode seed : network.nodesSnapshot()) {
+            if (component.containsKey(seed.id())) {
+                continue;
+            }
+            java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>();
+            queue.add(seed.id());
+            component.put(seed.id(), next);
+            while (!queue.isEmpty()) {
+                int at = queue.poll();
+                for (Edge edge : graph.getOrDefault(at, List.of())) {
+                    if (!component.containsKey(edge.toNode())) {
+                        component.put(edge.toNode(), next);
+                        queue.add(edge.toNode());
+                    }
+                }
+            }
+            next++;
+        }
+        return component;
     }
 
     /**
@@ -1071,13 +1195,14 @@ public final class RoadRouter {
     /**
      * Joins a road end to a nearby road on the surface -- the field crossing a walker makes. The pass above stops at three blocks; walk_offroad_blocks was documented but never implemented, so two roads plainly nearly meeting read as no path.
      * Only a road end may be left (a node with a single usable piece): joining every nearby pair would turn a field beside a road into a network of shortcuts, and a walker wanting to cross from the middle is at a trip end anyway.
-     * The link is a footpath (or the junction class when footpaths are avoided) so the estimate does not pretend the crossing is a made road; a road's own two ends are left to that road.
+     * The link is a footpath (or the junction class when footpaths are avoided) so the estimate does not pretend the crossing is a made road. Ends the graph already joins are left alone, which covers a road's own two ends and also the pieces a split leaves of it: a chord across either is shorter than the road and would draw a walk over the inside of the bend.
      */
     private static void addWalkGapLinks(RoadNetwork network, Map<Integer, List<Edge>> graph,
                                         Map<Integer, Set<RoadClass>> atNode,
                                         Map<Integer, Set<Integer>> layersAtNode,
                                         Map<Integer, Integer> usableDegree, double reach,
-                                        RoadClass gapClass, int[] nextEdgeId) {
+                                        RoadClass gapClass, int[] nextEdgeId,
+                                        Map<Integer, Integer> joinedAlready) {
         List<RoadNode> nodes = network.nodesSnapshot();
         double cell = reach;
         Map<Long, List<RoadNode>> buckets = new HashMap<>();
@@ -1087,15 +1212,6 @@ public final class RoadRouter {
         }
         double maxSq = reach * reach;
         double coincidentSq = COINCIDENT_DISTANCE * COINCIDENT_DISTANCE;
-        // Two ends of one road are already joined by that road; a chord across its curve is shorter and would always win, drawing a walk straight over the inside of the bend.
-        Set<Long> joinedByTheirRoad = new HashSet<>();
-        for (RoadSegment segment : network.segmentsSnapshot()) {
-            int from = segment.fromNode();
-            int to = segment.toNode();
-            if (from >= 0 && to >= 0 && from != to) {
-                joinedByTheirRoad.add(nodePairKey(from, to));
-            }
-        }
         for (RoadNode a : nodes) {
             if (usableDegree.getOrDefault(a.id(), 0) != 1) {
                 // Only an end of a road may be left; see the method comment.
@@ -1121,8 +1237,10 @@ public final class RoadRouter {
                         if (usableDegree.getOrDefault(b.id(), 0) == 1 && a.id() > b.id()) {
                             continue;
                         }
-                        if (joinedByTheirRoad.contains(nodePairKey(a.id(), b.id()))) {
-                            // One road's two ends: the road is the way between them.
+                        Integer componentOfA = joinedAlready.get(a.id());
+                        if (componentOfA != null
+                                && componentOfA.equals(joinedAlready.get(b.id()))) {
+                            // Already one place by road: nothing to close, and a chord would shortcut it.
                             continue;
                         }
                         // A crossing is ground a person can walk, not a bridge: the height difference of a walkable crossing is JOIN_DISTANCE, not the slope allowance.

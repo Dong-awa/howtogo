@@ -181,18 +181,23 @@ final class MtrLineTracks {
         // Default policy, not the player's: the ride uses the line's own class only, so a mark stays a
         // function of the reading.
         RoutePreferences policy = LinePlanner.ridePreferences(kind, RoutePreferences.DEFAULTS);
-        double reach = mode.maxConnectorDistance();
+        // A station's marked point can stand well off the rails its line runs on, so each stop is placed
+        // on the rails first: what is drawn is the track the ride really uses, and the gap from the mark
+        // to the track is a walk rather than a chord under the line. One reach for the editor and the
+        // planner alike -- see RoadRouter.stationReach.
+        double judgement = RoadRouter.stationReach();
+        double[] anchors = new double[line.stopCount() * 2];
+        for (int i = 0; i < line.stopCount(); i++) {
+            LineStop stop = line.stops().get(i);
+            double[] at = extent != null && !extent.holds(stop.x(), stop.z(), judgement)
+                    ? new double[]{stop.x(), stop.z()}
+                    : workspace.placedStop(stop.x(), stop.z(), mode, policy, judgement);
+            anchors[i * 2] = at[0];
+            anchors[i * 2 + 1] = at[1];
+        }
         for (int i = 1; i < line.stopCount(); i++) {
-            LineStop from = line.stops().get(i - 1);
-            LineStop to = line.stops().get(i);
-            if (extent != null && (!extent.holds(from.x(), from.z(), reach)
-                    || !extent.holds(to.x(), to.z(), reach))) {
-                // Connectors are capped at the mode's reach, so a stop beyond it cannot be planned at all; the
-                // extent test rejects those before a batch of lines is planned.
-                continue;
-            }
-            Route ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(), "", mode,
-                    policy);
+            Route ride = RoadRouter.findRoute(workspace, anchors[(i - 1) * 2],
+                    anchors[(i - 1) * 2 + 1], anchors[i * 2], anchors[i * 2 + 1], "", mode, policy);
             // A hop longer than the mode allows is a line across open country, not a hop onto the track;
             // the fallback nearest-node search does not refuse it, so the rule is applied here.
             if (!ride.isPresent() || ride.startConnector() > mode.maxConnectorDistance()
@@ -280,8 +285,9 @@ final class MtrLineTracks {
     /**
      * The box a layer of track reaches; a stop outside it cannot be joined to any rail in it.
      * Planning every pair of a whole railway over rails that only exist near the player was measured
-     * at 79 ms for 400 lines on the render thread. The bound is exact: a ride's connectors are capped
-     * at the mode's reach, so a stop further than that from every rail could only fail.
+     * at 79 ms for 400 lines on the render thread. The bound is exact: a stop is placed on a rail within
+     * the station judgement reach (see RoadRouter.stationReach), so a stop further than that from every
+     * rail could only fail.
      */
     record Extent(int minX, int minZ, int maxX, int maxZ) {
 

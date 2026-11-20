@@ -750,8 +750,9 @@ public final class RoadEditSession {
     }
 
     /**
-     * How far beside a road or a railway a station may stand and still count as being on it, in blocks -- station_snap_blocks, the same number the transit planner uses for the platform's reach.
-     * A place farther away could be marked but never boarded, so the editor asks the planner's own number rather than one of its own. It used to be a fixed eight, which refused places on a platform a dozen blocks from the track's centreline.
+     * How far beside a road or a railway a station may stand and still count as being on it, in blocks -- station_snap_blocks.
+     * A place farther away could be marked but never reached from the track by this rule. It used to be a fixed eight, which refused places on a platform a dozen blocks from the track's centreline.
+     * Not the planner's reach: a stop is placed on its own line within the line editor's own station judgement (RoadRouter.stationReach), so this number decides where a station may be *marked*, not where a ride can begin.
      */
     private static double stationTrackTolerance() {
         return RoadConfig.stationSnapBlocks();

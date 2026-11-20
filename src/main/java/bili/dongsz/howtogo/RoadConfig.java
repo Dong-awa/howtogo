@@ -1222,10 +1222,13 @@ public final class RoadConfig {
                         "such stops standing together. Inside this radius of any stop the journey calls",
                         "at, the player is treated as being at the station rather than off the route,",
                         "which is what keeps a platform, a car park and a connecting footbridge from",
-                        "reading as a wrong turn. It is also the radius the station announcements are",
-                        "measured against, and it decides how far from a road or track a place may stand",
-                        "and still be markable as a station -- a place nobody can reach from the track",
-                        "would be a stop no journey calls at.")
+                        "reading as a wrong turn. It also decides how far from a road or track a place",
+                        "may stand and still be markable as a station.",
+                        "It is not the reach the planner binds a stop to its line with: a stop's marked",
+                        "point is placed on the line it belongs to at the nearest point within the line",
+                        "editor's own station judgement (256 blocks), and the walk between the two is an",
+                        "ordinary walking leg. So a station that stands off its railway is still served,",
+                        "without this distance having to be raised to reach it.")
                 .translation("howtogo.configuration.station_snap_blocks")
                 .defineInRange("station_snap_blocks", 32.0, 1.0, 256.0);
 
@@ -1243,7 +1246,8 @@ public final class RoadConfig {
                         "the road, it is a route across the map, and the router does not look for one.",
                         "A car and a ride do not use this number. A car may only be as far from its",
                         "road's centre as the road is wide, and a ride may only be as far from its",
-                        "track as a station platform is from it (station_snap_blocks).")
+                        "line as a platform is from it (RoadRouter.platformReach; a station's marked",
+                        "place standing further off is placed on the line and walked to).")
                 .translation("howtogo.configuration.walk_offroad_blocks")
                 .defineInRange("walk_offroad_blocks", 32.0, 0.0, 256.0);
 

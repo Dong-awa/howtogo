@@ -48,13 +48,16 @@ public final class LineConnectivityCheck {
                 RoadRouter.Connection.CONNECTED, judge(one, 100, 0, 300, 0, rail));
 
         // The false alarm itself: a stop two hundred blocks off its own railway -- a large station, or
-        // several platforms merged into one place -- is beyond the mode's 64 block connector cap, so no
-        // ride to it can be planned, while the railway between the two stops is one unbroken stretch.
-        // "No route" is not "not connected", and this is the case that has to stay unmarked.
+        // several platforms merged into one place -- is beyond the mode's platform reach, so no ride can
+        // be planned to it by snapping its marked point onto the track, while the railway between the two
+        // stops is one unbroken stretch. "No route" is not "not connected", and this is the case that has
+        // to stay unmarked. The journey planner no longer refuses it: it places the stop on its own line
+        // and walks the gap, so the editor's answer and a planned journey agree -- see StationAccessCheck.
+        // What stays true here is that the marked point itself cannot start a ride.
         RoadNetwork platform = rail(0, 0, 400, 0);
         expect("a stop past the connector cap but on the line's own railway is still connected",
                 RoadRouter.Connection.CONNECTED, judge(platform, 200, 200, 300, 0, rail));
-        expect("and it is exactly the pair the ride planner refuses",
+        expect("and it is exactly the pair the marked points cannot start a ride from",
                 !RoadRouter.findRoute(new RoadRouter.Workspace(platform), 200, 200, 300, 0, "",
                         TravelMode.TRANSIT, rail).isPresent());
 

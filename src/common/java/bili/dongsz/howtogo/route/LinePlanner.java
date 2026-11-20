@@ -29,8 +29,9 @@ import java.util.Set;
  * One search, not two: a transfer costs the walk between platforms plus TRANSFER_PENALTY_SECONDS, so
  * a direct ride is not vetoed, only priced -- the old veto made the best single-line journey the
  * answer however far around it went.
- * All links are planned before the search, so Dijkstra runs over a graph that does not move; the
- * budget can then only drop the tail of the ride list, once, and say so.
+ * All links are worked out a stop at a time as the search reaches it (see Links), so the graph a
+ * running search sees does not move underneath it; the ride budget is on the whole plan and is
+ * reported once, when it bites.
  * Only the WALK_CANDIDATES nearest stops at each end are tried; trying every stop would plan a walk
  * route per stop on every press.
  */
@@ -83,17 +84,35 @@ public final class LinePlanner {
     private static final int MAX_PLANS = 3;
 
     /**
-     * How far the player may be asked to walk to reach a stop, in blocks. Past this no stop is near
-     * enough for the journey to be worth taking by line.
+     * How far a stop may be from where the player stands and still count as the place to get on, in
+     * blocks. Past it no stop is near enough for the journey to be worth taking by line: a rider starts
+     * at the station they are beside, not at one across the fields.
      */
-    private static final double MAX_WALK_TO_STOP = 256.0;
+    private static final double MAX_WALK_TO_BOARD = 256.0;
 
     /**
-     * How near a destination has to be for walking to be the whole answer, in blocks: the same distance
-     * the planner would ask a player to walk to board a line. Answered by closeEnoughToWalk, never by the
-     * search.
+     * How far a stop may be from the destination and still count as the place to get off, in blocks: a
+     * kilometre. A destination with no station close by is then a ride and a walk rather than no journey
+     * at all; the walk is planned by the walking router, so it is the walk that really exists -- along
+     * the roads, or across the field where there are none, as walking's ends always are.
      */
-    private static final double CLOSE_ENOUGH_TO_WALK = MAX_WALK_TO_STOP;
+    private static final double MAX_WALK_TO_ALIGHT = 1024.0;
+
+    /**
+     * How long the straight hop drawn when the walking router finds no road route at all may be, in
+     * blocks. A hop across the field beside a road, not a route across the map: a walk whose nearest road
+     * is further than this is refused rather than drawn as a beeline, and a journey that needed one is
+     * refused with it.
+     */
+    private static final double LONGEST_STRAIGHT_WALK = 256.0;
+
+    /**
+     * How near a destination has to be for walking to be the whole answer, in blocks. Not the alighting
+     * reach: that is how far a rider may be asked to walk after getting off, while this is the distance
+     * inside which the journey itself is not worth planning -- a destination a kilometre away is a walk to
+     * a stop and a walk back, not "no line needed". Answered by closeEnoughToWalk, never by the search.
+     */
+    private static final double CLOSE_ENOUGH_TO_WALK = 256.0;
 
     /**
      * How close two positions have to be before the walk between them is no walk. A route needs two
@@ -132,32 +151,42 @@ public final class LinePlanner {
 
     /**
      * How far apart two stops of different lines may stand and still be joined by a walk, when public
-     * transport may mix walking and lines, in blocks. Past a few hundred blocks the walk is no longer a
-     * connection between lines but a journey on foot with two rides attached. The walk is planned by the
-     * walking router, not drawn straight, so it follows real roads and takes the time that walk takes.
+     * transport may mix walking and lines, in blocks: half a kilometre. A change of lines can be a real
+     * walk across a district -- a park between two lines, a river with one crossing -- and the walking leg
+     * is planned by the walking router and timed as the walk it is, so its length is not what makes it
+     * wrong. What keeps half a kilometre from becoming "a journey on foot with two rides attached" is the
+     * candidate pass below: a stop is only ever offered the few most promising stops of other lines, not
+     * every stop within the reach.
      */
-    private static final double MIXED_WALK_RADIUS = 256.0;
+    private static final double MIXED_WALK_RADIUS = 512.0;
 
     /** The cell the mixed walking pass files a stop under: the reach itself. */
     private static final double MIXED_WALK_CELL = MIXED_WALK_RADIUS;
 
     /**
-     * How many stops one stop offers a mixed walking link to: the nearest of other lines. A cap because
-     * each link is a real walking route.
+     * How many stops one stop offers a mixed walking link to, of the other lines within the reach: the
+     * most promising five, not the nearest. A cap because each link is a real walking route, and
+     * "promising" is the walk's length less the ground it wins towards the destination -- with half a
+     * kilometre of reach the nearest stops are often not the ones that carry the rider the right way, and
+     * the old nearest-eight rule was exactly what a long reach made wrong. See mixedNeighboursOf.
      */
-    private static final int MIXED_WALK_CANDIDATES = 8;
+    private static final int MIXED_WALK_CANDIDATES = 5;
 
     /**
      * How near a walkable road a stop must stand for a mixed middle leg to be looked for, in blocks. A
-     * stop far from any road would make the leg a field crossing with a road at one end.
+     * stop far from any road would make the leg a field crossing with a road at one end. A stop whose
+     * marked point is near a road counts as well: its platform may have been placed on its own line,
+     * away from the road, and the walk from the platform still reaches the road.
      */
     private static final double MIXED_WALK_STOP_REACH = 32.0;
 
     /**
      * Ceiling on the mixed walking routes planned in one plan, for the same reason as MAX_RIDE_PLANS.
-     * Reaching it drops the tail of the links and reports the count once.
+     * Reaching it drops the tail of the links and reports the count once. Half a kilometre of reach and
+     * five candidates a stop mean more plans than the old quarter-kilometre did, so the safety valve is
+     * wider; it is still a valve, not a target.
      */
-    private static final int MAX_MIXED_WALK_PLANS = 256;
+    private static final int MAX_MIXED_WALK_PLANS = 512;
 
     private static volatile boolean mixedBudgetWarned;
 
@@ -223,7 +252,6 @@ public final class LinePlanner {
                            double serviceWait, String destinationName, RoutePreferences preferences,
                            RoadRouter.Workspace workspace, Links links) {
     }
-
     private record Journey(Trip trip, Set<TransitLine> lines) {
 
         static final Journey EMPTY = new Journey(Trip.empty(), Set.of());
@@ -271,7 +299,7 @@ public final class LinePlanner {
      * is the whole vertex set, and saying so once keeps every search below from having to.
      */
     private static Context prepare(RideRoads roads, List<TransitLine> lines, String destinationName,
-                                   RoutePreferences preferences) {
+                                   RoutePreferences preferences, double goalX, double goalZ) {
         List<Node> nodes = buildNodes(lines);
         if (nodes.isEmpty()) {
             return null;
@@ -289,7 +317,7 @@ public final class LinePlanner {
         // The graph is worked out a stop at a time as the search reaches it; building all of it first is what
         // a whole-network reading made unaffordable.
         Links links = new Links(roads, lines, nodes, byPosition, destinationName, preferences, wait,
-                workspace, mixed, walkRoads);
+                workspace, mixed, walkRoads, goalX, goalZ);
         return new Context(nodes, byPosition, cache, wait, destinationName, preferences, workspace,
                 links);
     }
@@ -297,7 +325,7 @@ public final class LinePlanner {
     private static Trip search(RideRoads roads, List<TransitLine> lines, double startX,
                                double startZ, double goalX, double goalZ, String destinationName,
                                RoutePreferences preferences) {
-        Context context = prepare(roads, lines, destinationName, preferences);
+        Context context = prepare(roads, lines, destinationName, preferences, goalX, goalZ);
         if (context == null) {
             return Trip.empty();
         }
@@ -318,7 +346,7 @@ public final class LinePlanner {
     public static List<Trip> alternatives(RideRoads roads, List<TransitLine> lines, double startX,
                                           double startZ, double goalX, double goalZ,
                                           String destinationName, RoutePreferences preferences) {
-        Context context = prepare(roads, lines, destinationName, preferences);
+        Context context = prepare(roads, lines, destinationName, preferences, goalX, goalZ);
         if (context == null) {
             return List.of();
         }
@@ -488,9 +516,11 @@ public final class LinePlanner {
         // first ride.
         PriorityQueue<double[]> frontier =
                 new PriorityQueue<>(Comparator.comparingDouble(entry -> entry[0]));
-        for (int index : nearest(nodes, startX, startZ)) {
-            Node node = nodes.get(index);
-            Route walk = walk(workspace, startX, startZ, node.at().x(), node.at().z(),
+        for (int index : nearest(nodes, startX, startZ, MAX_WALK_TO_BOARD)) {
+            // Boarded at the platform the line really calls at, not the stop's marked point; the walk
+            // between the two is part of getting to the station, so it is walked like any other leg.
+            double[] boardingAt = links.anchor(index);
+            Route walk = walk(workspace, startX, startZ, boardingAt[0], boardingAt[1],
                     destinationName, preferences, cache);
             if (!walk.isPresent()) {
                 continue;
@@ -507,7 +537,7 @@ public final class LinePlanner {
 
         // The stops a journey may finish at: the destination is not a graph node, so the cost of getting off
         // must be added before there is anything for the search to stop at.
-        List<Integer> alighting = nearest(nodes, goalX, goalZ);
+        List<Integer> alighting = nearest(nodes, goalX, goalZ, MAX_WALK_TO_ALIGHT);
         boolean[] mayAlight = new boolean[count];
         for (int index : alighting) {
             mayAlight[index] = true;
@@ -536,8 +566,9 @@ public final class LinePlanner {
             if (ridden && mayAlight[stop]) {
                 // Getting off here: the walk from this stop to the destination, the same walk the alighting pass used
                 // to make. Asked only after a ride, because a journey that rides nothing is not public transport.
-                Node node = nodes.get(stop);
-                Route walk = walk(workspace, node.at().x(), node.at().z(), goalX, goalZ,
+                // From the platform the ride actually arrives at, not the stop's marked point: see anchor.
+                double[] alightingAt = links.anchor(stop);
+                Route walk = walk(workspace, alightingAt[0], alightingAt[1], goalX, goalZ,
                         destinationName, preferences, cache);
                 if (walk.isPresent()
                         && dist[current] + walk.estimatedSeconds() * weights.walking() < bestTotal) {
@@ -600,7 +631,7 @@ public final class LinePlanner {
             while (end + 1 < reversed.size() && continues(reversed.get(end), reversed.get(end + 1))) {
                 end++;
             }
-            Trip.Ride ride = rideOf(reversed, at, end, offsets);
+            Trip.Ride ride = rideOf(links, reversed, at, end, offsets);
             for (int i = at; i <= end; i++) {
                 legs.add(new Trip.Leg(reversed.get(i).route(), reversed.get(i).mode(), ride));
             }
@@ -664,7 +695,8 @@ public final class LinePlanner {
      * @param to      the last leg of the run
      * @param offsets where each leg begins along the whole journey
      */
-    private static Trip.Ride rideOf(List<PendingLeg> legs, int from, int to, List<Double> offsets) {
+    private static Trip.Ride rideOf(Links links, List<PendingLeg> legs, int from, int to,
+                                    List<Double> offsets) {
         RideInfo first = legs.get(from).info();
         RideInfo last = legs.get(to).info();
         if (first == null || last == null) {
@@ -679,10 +711,15 @@ public final class LinePlanner {
         for (int i = from; i <= to; i++) {
             RideInfo info = legs.get(i).info();
             LineStop boarded = line.stops().get(info.fromStop());
-            stops.add(new Trip.RideStop(boarded.label(), boarded.x(), boarded.z(), offsets.get(i)));
+            // Where the platform really is, which is not the stop's marked point when the line stands
+            // off it: the "arrived at" call and the station's grounds are measured from here. See anchor.
+            double[] boardedAt = links.stopPlace(line, info.fromStop());
+            stops.add(new Trip.RideStop(boarded.label(), boardedAt[0], boardedAt[1],
+                    offsets.get(i)));
             if (i == to) {
                 LineStop left = line.stops().get(info.toStop());
-                stops.add(new Trip.RideStop(left.label(), left.x(), left.z(),
+                double[] leftAt = links.stopPlace(line, info.toStop());
+                stops.add(new Trip.RideStop(left.label(), leftAt[0], leftAt[1],
                         offsets.get(i) + legs.get(i).route().totalLength()));
             }
         }
@@ -692,101 +729,6 @@ public final class LinePlanner {
                 line.stops().get(last.toStop()).label(), stops);
     }
 
-
-    /**
-     * Every way out of every stop, planned before the search runs. Rides first, then transfers: if the
-     * budget bites it should bite a ride rather than leave the journey no way to change lines.
-     */
-    private static List<List<Link>> buildLinks(RideRoads roads,
-                                               List<TransitLine> lines, List<Node> nodes,
-                                               Map<Long, Integer> byPosition,
-                                               String destinationName, RoutePreferences preferences,
-                                               Map<String, Route> cache, int[] rideBudget,
-                                               double wait) {
-        int count = nodes.size();
-        List<List<Link>> links = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
-            links.add(new ArrayList<>());
-        }
-
-        int unplanned = 0;
-        for (int index = 0; index < count; index++) {
-            for (int[] call : nodes.get(index).calls()) {
-                TransitLine line = lines.get(call[0]);
-                int at = call[1];
-                TravelMode mode = rideMode(line.kind());
-                // The line's own class and nothing else: a mode is a set of classes, so the mode alone would let a
-                // water line's ride come back along a rail.
-                RoutePreferences ridePolicy = ridePreferences(line.kind(), preferences);
-                // The network the line asked for, which is how a line with its marks switched off is kept off them.
-                RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
-                // The same rule as Links.ridesFrom, in this eager form: a one-way line has no edge back.
-                for (int step = -1; step <= 1; step += 2) {
-                    if (step < 0 && line.oneWay()) {
-                        continue;
-                    }
-                    int next = at + step;
-                    if (next < 0 || next >= line.stopCount()) {
-                        continue;
-                    }
-                    LineStop to = line.stops().get(next);
-                    Integer target = byPosition.get(positionKey(to.x(), to.z()));
-                    if (target == null || target == index) {
-                        continue;
-                    }
-                    // Keyed by direction and planned from the end being travelled from: a stretch ridden the other way is
-                    // not the same route reversed, because its instructions must point the way the rider is going.
-                    String key = "R|" + line.id() + "|" + at + "|" + next;
-                    Route ride = cache.get(key);
-                    if (ride == null) {
-                        if (rideBudget[0] <= 0) {
-                            unplanned++;
-                            continue;
-                        }
-                        rideBudget[0]--;
-                        LineStop from = line.stops().get(at);
-                        ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(),
-                                destinationName, mode, ridePolicy);
-                        if (ride.isPresent() && trackLength(ride) < MIN_RIDE_TRACK) {
-                            // Nothing but the two hops onto and off the track: there is no riding in this leg, and calling it
-                            // public transport would be a straight line between two platforms dressed up as a train.
-                            ride = Route.empty();
-                        }
-                        cache.put(key, ride);
-                        if (!ride.isPresent()) {
-                            // Named, because "no journey over 1 line(s)" cannot say which stretch is the one that could not be
-                            // ridden.
-                            HowToGo.diagnostic(
-                                    "[HowToGo] line ride cannot be planned: '{}' -> '{}' ({})",
-                                    from.label(), to.label(), line.kind().name());
-                        }
-                    }
-                    if (!ride.isPresent()) {
-                        continue;
-                    }
-                    links.get(index).add(new Link(target, ride.estimatedSeconds(), ride, mode,
-                            new RideInfo(line, at, next), false));
-                }
-            }
-        }
-        if (unplanned > 0) {
-            HowToGo.LOGGER.warn("[HowToGo] ride budget of {} plans exhausted: {} ride leg(s) were "
-                            + "not planned, so the lines they belong to cannot be used at all. "
-                            + "Connect the lines' stops to the network, or raise the budget in code.",
-                    MAX_RIDE_PLANS, unplanned);
-        }
-        return links;
-    }
-
-    /**
-     * Every way out of a stop, worked out when the search reaches it rather than before it starts.
-     * Building all of it up front was sound on a handful of lines, but the graph is every neighbouring
-     * pair of stops of every line: a two-hundred-block trip across three hundred lines plans twelve
-     * thousand rides, and the map froze. Dijkstra needs only the edges out of each stop when it settles
-     * that stop, so a short journey plans only what it reaches. Nothing is capped per stop, so the graph
-     * a running search sees never changes underneath it; the remaining budget is on the whole plan and
-     * is reported.
-     */
     /**
      * The walking network filed in a grid, to answer one cheap question: does a stop stand near a walkable
      * road? A mixed middle leg is a real walking route, so planning for two roadless stops is wasted, and
@@ -864,6 +806,15 @@ public final class LinePlanner {
         }
     }
 
+    /**
+     * Every way out of a stop, worked out when the search reaches it rather than before it starts.
+     * Building all of it up front was sound on a handful of lines, but the graph is every neighbouring
+     * pair of stops of every line: a two-hundred-block trip across three hundred lines plans twelve
+     * thousand rides, and the map froze. Dijkstra needs only the edges out of each stop when it settles
+     * that stop, so a short journey plans only what it reaches. Nothing is capped per stop, so the graph
+     * a running search sees never changes underneath it; the remaining budget is on the whole plan and
+     * is reported.
+     */
     private static final class Links {
 
         private final RideRoads roads;
@@ -876,6 +827,9 @@ public final class LinePlanner {
         private final RoadRouter.Workspace walkWorkspace;
         private final boolean mixed;
         private final WalkRoads walkRoads;
+        /** Where the journey is going, for choosing which stops of other lines are worth walking to. */
+        private final double goalX;
+        private final double goalZ;
         private final byte[] stopNearRoad;
 
         private final Map<Long, List<Integer>> cells = new HashMap<>();
@@ -885,6 +839,9 @@ public final class LinePlanner {
         private final Map<String, Route> transferWalks = new HashMap<>();
         private final Map<String, Route> rides = new HashMap<>();
         private final List<List<Link>> planned;
+        /** Where each stop's vehicle really stands, worked out once and only for the stops a search
+         *  reaches. See anchor. */
+        private final double[][] anchors;
         private int budget = MAX_RIDE_PLANS;
         private int mixedBudget = MAX_MIXED_WALK_PLANS;
         private int transferBudget = MAX_TRANSFER_WALK_PLANS;
@@ -894,7 +851,8 @@ public final class LinePlanner {
 
         Links(RideRoads roads, List<TransitLine> lines, List<Node> nodes,
               Map<Long, Integer> byPosition, String destinationName, RoutePreferences preferences,
-              double wait, RoadRouter.Workspace walkWorkspace, boolean mixed, WalkRoads walkRoads) {
+              double wait, RoadRouter.Workspace walkWorkspace, boolean mixed, WalkRoads walkRoads,
+              double goalX, double goalZ) {
             this.roads = roads;
             this.lines = lines;
             this.nodes = nodes;
@@ -905,7 +863,10 @@ public final class LinePlanner {
             this.walkWorkspace = walkWorkspace;
             this.mixed = mixed;
             this.walkRoads = walkRoads;
+            this.goalX = goalX;
+            this.goalZ = goalZ;
             this.stopNearRoad = new byte[nodes.size()];
+            this.anchors = new double[nodes.size()][];
             for (int index = 0; index < nodes.size(); index++) {
                 Node node = nodes.get(index);
                 cells.computeIfAbsent(cellOf(node), key -> new ArrayList<>()).add(index);
@@ -922,6 +883,67 @@ public final class LinePlanner {
             for (int index = 0; index < nodes.size(); index++) {
                 planned.add(null);
             }
+        }
+
+        /**
+         * Where on its line this stop's vehicle really stands, as {x, z}.
+         *
+         * A stop's marked point is a place, not a platform: a large station's place is the middle of the
+         * station, and the track its line runs on can stand well off it. A ride was planned by snapping
+         * that mark onto the track within station_snap_blocks, so past that radius the ride could not be
+         * planned at all: the stop graph had no way there, and a journey that rides a line and then walks
+         * the rest was answered "no route" although the line is unbroken and the road out of the station
+         * is there. Raising the radius to admit the stop was no answer either -- it put the gap back into
+         * the ride as a straight hop and widened the guidance's "at the station" tolerance with it.
+         *
+         * So a stop is placed on the line it belongs to: the point of that line nearest its mark, found
+         * within the line editor's own station judgement ({@link RoadRouter#stationReach()}), and the ride
+         * is planned between those points. The walk between the mark and the platform is an ordinary
+         * walking leg -- following roads where it can, timed as a walk, drawn as one -- which is what makes
+         * the gap a walk rather than a jump.
+         *
+         * A mark already within the line's own platform reach is the platform itself and is left alone
+         * ({@link RoadRouter#placedStop}), so every stop a ride could be planned to before behaves exactly
+         * as it did; only the stops no ride could reach are placed. Nothing of the node's lines within the
+         * station judgement leaves the stop where it is and the ride is refused as before -- there is no
+         * line to ride there.
+         *
+         * The placement is one per stop node rather than one per line: a node is a place a rider walks to,
+         * and the walk has to end somewhere one particular. At a station whose lines' tracks stand far
+         * apart the nearest is the one placed, and a ride on another line may still be refused by its own
+         * platform reach -- which is exactly the answer it gave before, since that line's track was
+         * further than a platform from the mark too.
+         */
+        double[] anchor(int index) {
+            double[] known = anchors[index];
+            if (known != null) {
+                return known;
+            }
+            Node node = nodes.get(index);
+            double markedX = node.at().x();
+            double markedZ = node.at().z();
+            double bestX = markedX;
+            double bestZ = markedZ;
+            double best = Double.MAX_VALUE;
+            for (int[] call : node.calls()) {
+                TransitLine line = lines.get(call[0]);
+                TravelMode mode = rideMode(line.kind());
+                RoutePreferences policy = ridePreferences(line.kind(), preferences);
+                RoadRouter.Workspace workspace = RoadRouter.workspaceFor(roads.forLine(line));
+                // Already a platform's reach from its line means the mark is that platform, and the
+                // placement returns the mark itself: only a stop no ride could reach ever moves.
+                double[] at = RoadRouter.placedStop(workspace.routingNetwork(), markedX, markedZ,
+                        mode, policy, RoadRouter.stationReach());
+                double distance = Math.hypot(at[0] - markedX, at[1] - markedZ);
+                if (distance < best) {
+                    best = distance;
+                    bestX = at[0];
+                    bestZ = at[1];
+                }
+            }
+            double[] found = {bestX, bestZ};
+            anchors[index] = found;
+            return found;
         }
 
         /**
@@ -981,8 +1003,19 @@ public final class LinePlanner {
                         }
                         budget--;
                         LineStop from = line.stops().get(at);
-                        ride = RoadRouter.findRoute(workspace, from.x(), from.z(), to.x(), to.z(),
-                                destinationName, mode, ridePolicy);
+                        // Between the points the line really calls at, not the two marked points: the ride is
+                        // the track, and the walk to a platform standing off the track is a walking leg. See
+                        // anchor.
+                        double[] boardedAt = anchor(index);
+                        double[] leftAt = anchor(target);
+                        ride = RoadRouter.findRoute(workspace, boardedAt[0], boardedAt[1],
+                                leftAt[0], leftAt[1], destinationName, mode, ridePolicy);
+                        if (ride.isPresent() && trackLength(ride) < MIN_RIDE_TRACK) {
+                            // Nothing but the two hops onto and off the track: there is no riding in this
+                            // leg, and calling it public transport would be a straight line between two
+                            // platforms dressed up as a train.
+                            ride = Route.empty();
+                        }
                         rides.put(key, ride);
                         if (!ride.isPresent()) {
                             // Named, because "no journey over 1 line(s)" cannot say which stretch failed.
@@ -1010,22 +1043,21 @@ public final class LinePlanner {
          * square of the network.
          */
         private void transfersFrom(int index, List<Link> links) {
-            Node node = nodes.get(index);
             for (int other : interchangeGroup(index)) {
                 if (other == index) {
                     continue;
                 }
-                Node target = nodes.get(other);
                 Route hop = null;
                 if (!sharesLine(index, other)) {
-                    hop = interchangeWalk(node, target);
+                    hop = interchangeWalk(index, other);
                     if (!hop.isPresent()) {
                         hop = null;
                     }
                 }
                 if (hop == null) {
-                    hop = straightWalk(node.at().x(), node.at().z(), target.at().x(),
-                            target.at().z(), destinationName);
+                    double[] from = anchor(index);
+                    double[] to = anchor(other);
+                    hop = straightWalk(from[0], from[1], to[0], to[1], destinationName);
                 }
                 if (!hop.isPresent()) {
                     continue;
@@ -1040,14 +1072,29 @@ public final class LinePlanner {
         }
 
         /**
+         * Where the vehicle really stands for one stop of one line, as {x, z}.
+         * The platform a rider waits on and gets off at, which is the anchor's own point rather than the
+         * stop's marked point when the line stands off it; the announcement of a station is measured
+         * from here. See anchor.
+         */
+        double[] stopPlace(TransitLine line, int stopIndex) {
+            LineStop stop = line.stops().get(stopIndex);
+            Integer node = byPosition.get(positionKey(stop.x(), stop.z()));
+            return node == null ? new double[]{stop.x(), stop.z()} : anchor(node);
+        }
+
+        /**
          * The walk between two platforms of different lines, planned by the walking router and cached by
          * ordered pair. A station with many lines would otherwise plan the same route again for every
          * platform; a pair with no route, or a spent budget, answers empty and the caller falls back to the
          * hop.
+         * Between the two platforms themselves rather than the two marked points: see anchor. A change of
+         * lines is a walk across the station, and the platforms are where the trains are.
          */
-        private Route interchangeWalk(Node from, Node to) {
-            String key = "X|" + from.at().x() + "," + from.at().z() + "|"
-                    + to.at().x() + "," + to.at().z();
+        private Route interchangeWalk(int from, int to) {
+            double[] start = anchor(from);
+            double[] end = anchor(to);
+            String key = "X|" + start[0] + "," + start[1] + "|" + end[0] + "," + end[1];
             Route known = transferWalks.get(key);
             if (known != null) {
                 return known;
@@ -1057,8 +1104,8 @@ public final class LinePlanner {
                 return Route.empty();
             }
             transferBudget--;
-            Route walk = RoadRouter.findRoute(walkWorkspace, from.at().x(), from.at().z(),
-                    to.at().x(), to.at().z(), destinationName, TravelMode.WALK, preferences);
+            Route walk = RoadRouter.findRoute(walkWorkspace, start[0], start[1], end[0], end[1],
+                    destinationName, TravelMode.WALK, preferences);
             if (!walk.isPresent()) {
                 walk = Route.empty();
             }
@@ -1067,10 +1114,10 @@ public final class LinePlanner {
         }
 
         /**
-         * The mixed mode's walking legs: a real walking route to the nearest stops of other lines.
+         * The mixed mode's walking legs: a real walking route to the most promising stops of other lines.
          * Not a transfer: this is a leg through the streets, so it follows the roads a player on foot would
-         * follow. Only stops whose lines differ are offered, and only the nearest few, since each link is a
-         * real route.
+         * follow. Only stops whose lines differ are offered, and only a handful, since each link is a real
+         * route; which handful is decided by mixedNeighboursOf, not by which is nearest.
          */
         private void mixedWalksFrom(int index, List<Link> links) {
             // A middle leg is a walk through the streets, so both ends must stand on the walking network; asking
@@ -1078,20 +1125,8 @@ public final class LinePlanner {
             if (!nearRoad(index)) {
                 return;
             }
-            List<Integer> nearby = mixedNeighboursOf(index);
-            if (nearby.isEmpty()) {
-                return;
-            }
-            List<Integer> interchange = interchangeGroup(index);
-            Node node = nodes.get(index);
-            for (int other : nearby) {
-                if (!nearRoad(other)) {
-                    continue;
-                }
-                if (interchange.contains(other)) {
-                    continue;
-                }
-                Route walk = mixedWalk(node, nodes.get(other));
+            for (int other : mixedNeighboursOf(index)) {
+                Route walk = mixedWalk(index, other);
                 if (!walk.isPresent()) {
                     continue;
                 }
@@ -1105,22 +1140,50 @@ public final class LinePlanner {
             if (known != 0) {
                 return known == 1;
             }
+            // The platform the ride ends at, or the stop's marked point where it stands beside a road: a
+            // station placed on its own line can be a long way from the road its place was marked next to,
+            // and the walk from the platform still reaches that road.
             Node node = nodes.get(index);
             boolean near = walkRoads != null
-                    && walkRoads.near(node.at().x(), node.at().z());
+                    && (walkRoads.near(node.at().x(), node.at().z())
+                    || nearByAnchor(index));
             stopNearRoad[index] = (byte) (near ? 1 : 2);
             return near;
         }
 
+        /** Whether this stop's platform, the placed point, stands near a walkable road. See anchor. */
+        private boolean nearByAnchor(int index) {
+            if (walkRoads == null) {
+                return false;
+            }
+            double[] at = anchor(index);
+            return walkRoads.near(at[0], at[1]);
+        }
+
+        /**
+         * The few stops of other lines this one is worth walking to, most promising first.
+         *
+         * A kilometre of reach with "the nearest eight" was wrong twice over: the nearest stubs are usually
+         * not the ones that carry the rider anywhere, and a stop a little further towards the destination
+         * is worth more than one beside it that goes back. So a candidate is scored by what the walk costs
+         * less what it wins -- its straight length minus the ground it takes off the distance still to go
+         * -- and the best MIXED_WALK_CANDIDATES are offered, in that order.
+         *
+         * The errand is still bounded: the stops are the ones the grid already files in this neighbourhood,
+         * a candidate has to stand on the walking network at both ends, and the interchange this stop
+         * belongs to is not a mixed leg at all (the line itself is the link there).
+         */
         private List<Integer> mixedNeighboursOf(int index) {
             Node node = nodes.get(index);
             int cellX = (int) Math.floor(node.at().x() / MIXED_WALK_CELL);
             int cellZ = (int) Math.floor(node.at().z() / MIXED_WALK_CELL);
             List<Integer> found = new ArrayList<>();
-            List<Double> distance = new ArrayList<>();
+            List<Double> score = new ArrayList<>();
             double maxSq = MIXED_WALK_RADIUS * MIXED_WALK_RADIUS;
             double interchangeSq = TRANSFER_RADIUS * TRANSFER_RADIUS;
+            double hereToGoal = Math.hypot(node.at().x() - goalX, node.at().z() - goalZ);
             Set<Integer> mine = lineSets.get(index);
+            List<Integer> interchange = interchangeGroup(index);
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     List<Integer> nearby = mixedCells.get(cellKey(cellX + dx, cellZ + dz));
@@ -1128,22 +1191,28 @@ public final class LinePlanner {
                         continue;
                     }
                     for (int other : nearby) {
-                        if (other == index) {
+                        if (other == index || interchange.contains(other)) {
                             continue;
                         }
-                        Node target = nodes.get(other);
-                        double dSq = apart(node, target);
+                        double dSq = apart(node, nodes.get(other));
                         if (dSq > maxSq || dSq <= interchangeSq) {
                             continue;
                         }
-                        if (lineSets.get(other).equals(mine)) {
+                        if (lineSets.get(other).equals(mine)
+                                || !java.util.Collections.disjoint(mine, lineSets.get(other))) {
                             continue;
                         }
-                        if (!java.util.Collections.disjoint(mine, lineSets.get(other))) {
+                        if (!nearRoad(other)) {
                             continue;
                         }
+                        double walk = Math.sqrt(dSq);
+                        double thereToGoal = Math.hypot(nodes.get(other).at().x() - goalX,
+                                nodes.get(other).at().z() - goalZ);
+                        // The walk's own length, less the distance it takes off the rest of the journey:
+                        // a stop that carries the rider onwards scores below the walk that reaches it, a
+                        // stop behind them scores the walk plus the ground it gave back.
                         found.add(other);
-                        distance.add(dSq);
+                        score.add(walk - (hereToGoal - thereToGoal));
                     }
                 }
             }
@@ -1154,13 +1223,13 @@ public final class LinePlanner {
             for (int i = 0; i < found.size(); i++) {
                 order.add(i);
             }
-            order.sort(Comparator.comparingDouble(distance::get));
+            order.sort(Comparator.comparingDouble(score::get));
             int kept = Math.min(MIXED_WALK_CANDIDATES, order.size());
-            List<Integer> nearest = new ArrayList<>(kept);
+            List<Integer> best = new ArrayList<>(kept);
             for (int i = 0; i < kept; i++) {
-                nearest.add(found.get(order.get(i)));
+                best.add(found.get(order.get(i)));
             }
-            return nearest;
+            return best;
         }
 
         private double apart(Node a, Node b) {
@@ -1173,10 +1242,12 @@ public final class LinePlanner {
          * One mixed walking leg, planned by the walking router and cached. A route that used no road at all is
          * dropped: that is the straight connector the walker's fallback produces, the direct connection this
          * mode does not make.
+         * Between the two platforms the lines call at rather than the two marked points: see anchor.
          */
-        private Route mixedWalk(Node from, Node to) {
-            String key = "M|" + from.at().x() + "," + from.at().z() + "|"
-                    + to.at().x() + "," + to.at().z();
+        private Route mixedWalk(int from, int to) {
+            double[] start = anchor(from);
+            double[] end = anchor(to);
+            String key = "M|" + start[0] + "," + start[1] + "|" + end[0] + "," + end[1];
             Route known = mixedWalks.get(key);
             if (known != null) {
                 return known;
@@ -1186,8 +1257,8 @@ public final class LinePlanner {
                 return Route.empty();
             }
             mixedBudget--;
-            Route walk = RoadRouter.findRoute(walkWorkspace, from.at().x(), from.at().z(),
-                    to.at().x(), to.at().z(), destinationName, TravelMode.WALK, preferences);
+            Route walk = RoadRouter.findRoute(walkWorkspace, start[0], start[1], end[0], end[1],
+                    destinationName, TravelMode.WALK, preferences);
             if (!walk.isPresent() || walk.roadLength() <= 1.0E-9) {
                 walk = Route.empty();
             }
@@ -1344,8 +1415,9 @@ public final class LinePlanner {
         // straight connector.
         if (!planned.isPresent()) {
             // The straight hop is walking off-road, and walking's first and last hop is always allowed. What
-            // bounds it is how far a stop may be at all (MAX_WALK_TO_STOP, which the candidates already obey).
-            if (straight > MAX_WALK_TO_STOP) {
+            // bounds it is the longest hop a step across the field may be (LONGEST_STRAIGHT_WALK), not how
+            // far a stop may be: reaching a stop a kilometre away means a road that goes there.
+            if (straight > LONGEST_STRAIGHT_WALK) {
                 planned = Route.empty();
                 cache.put(key, planned);
                 return planned;
@@ -1477,7 +1549,12 @@ public final class LinePlanner {
         return ((long) x << 32) | (z & 0xFFFFFFFFL);
     }
 
-    private static List<Integer> nearest(List<Node> nodes, double x, double z) {
+    /**
+     * The WALK_CANDIDATES nearest stops within reach blocks of a point. The reach is the caller's: how
+     * far a rider may be asked to walk to get on, and how far they may be asked to walk after getting off,
+     * are different questions -- see MAX_WALK_TO_BOARD and MAX_WALK_TO_ALIGHT.
+     */
+    private static List<Integer> nearest(List<Node> nodes, double x, double z, double reach) {
         List<Integer> order = new ArrayList<>(nodes.size());
         for (int i = 0; i < nodes.size(); i++) {
             order.add(i);
@@ -1486,7 +1563,7 @@ public final class LinePlanner {
             Node node = nodes.get(i);
             double dx = node.at().x() - x;
             double dz = node.at().z() - z;
-            return dx * dx + dz * dz > MAX_WALK_TO_STOP * MAX_WALK_TO_STOP;
+            return dx * dx + dz * dz > reach * reach;
         });
         order.sort(Comparator.comparingDouble(i -> {
             Node node = nodes.get(i);

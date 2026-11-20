@@ -50,6 +50,7 @@ public final class Harness {
         scenarioTransferBeatsDetour();
         scenarioMixedTransitWalksBetweenLines();
         scenarioTransitWalksArePlanned();
+        scenarioFinalWalkReach();
         scenarioInterchangeIsOnePlace();
         scenarioWholeRailwayPlanIsQuick();
         scenarioOneWayIsRespected();
@@ -101,6 +102,9 @@ public final class Harness {
         int[] nearDestination = NearDestinationCheck.run();
         checks += nearDestination[0];
         failures += nearDestination[1];
+        int[] stationAccess = bili.dongsz.howtogo.client.StationAccessCheck.run();
+        checks += stationAccess[0];
+        failures += stationAccess[1];
         int[] oneWay = bili.dongsz.howtogo.road.OneWayCheck.run();
         checks += oneWay[0];
         failures += oneWay[1];
@@ -935,18 +939,78 @@ public final class Harness {
             expect("while it is still the walk between those two stops", middle < 300);
         }
 
-        // The same shape four hundred blocks apart: past the mixed walking reach, so no journey.
+        // The same shape past half a kilometre: the mixed reach is half a kilometre now, so this is the
+        // pair that is still two lines -- and with a road between them, so it is the reach that refuses it
+        // and not the missing road.
         RoadNetwork apart = new RoadNetwork();
         addRoad(apart, RoadClass.RAIL, 0, 0, 300, 0);
-        addRoad(apart, RoadClass.RAIL, 700, 0, 1000, 0);
+        addRoad(apart, RoadClass.RAIL, 900, 0, 1200, 0);
+        addRoad(apart, RoadClass.ROAD, 300, 0, 900, 0);
         addRoad(apart, RoadClass.ROAD, -20, 0, 20, 0);
-        addRoad(apart, RoadClass.ROAD, 980, 0, 1020, 0);
+        addRoad(apart, RoadClass.ROAD, 1180, 0, 1220, 0);
         List<TransitLine> farLines = new ArrayList<>();
         farLines.add(line("FA", RoadClass.RAIL, stop("FA1", 0, 0), stop("FA2", 300, 0)));
-        farLines.add(line("FB", RoadClass.RAIL, stop("FB1", 700, 0), stop("FB2", 1000, 0)));
-        Trip far = TransitPlanner.plan(apart, farLines, 5, 0, 995, 0, "too far apart",
+        farLines.add(line("FB", RoadClass.RAIL, stop("FB1", 900, 0), stop("FB2", 1200, 0)));
+        Trip far = TransitPlanner.plan(apart, farLines, 5, 0, 1195, 0, "too far apart",
                 RoutePreferences.DEFAULTS);
-        expect("a gap past the mixed walking reach is still two lines", !far.isPresent());
+        expect("a gap past the half kilometre of mixed walking reach is still two lines",
+                !far.isPresent());
+
+        // Half a kilometre of reach is a real change of lines on foot: the same shape four hundred blocks
+        // apart, with a road between the stops, is planned -- and the middle leg is the road's length.
+        RoadNetwork longWalk = new RoadNetwork();
+        addRoad(longWalk, RoadClass.RAIL, 0, 0, 200, 0);
+        addRoad(longWalk, RoadClass.RAIL, 600, 0, 1000, 0);
+        addRoad(longWalk, RoadClass.ROAD, 200, 0, 600, 0);
+        addRoad(longWalk, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(longWalk, RoadClass.ROAD, 980, 0, 1020, 0);
+        List<TransitLine> longLines = new ArrayList<>();
+        longLines.add(line("LA", RoadClass.RAIL, stop("LA1", 0, 0), stop("LA2", 200, 0)));
+        longLines.add(line("LB", RoadClass.RAIL, stop("LB1", 600, 0), stop("LB2", 1000, 0)));
+        Trip across = TransitPlanner.plan(longWalk, longLines, 5, 0, 995, 0, "a long walk on foot",
+                RoutePreferences.DEFAULTS);
+        expect("a change of lines a four hundred block walk apart is planned", across.isPresent());
+        if (across.isPresent()) {
+            double middle = 0;
+            for (Trip.Leg leg : across.legs()) {
+                if (leg.mode() == TravelMode.WALK) {
+                    middle = Math.max(middle, leg.route().totalLength());
+                }
+            }
+            expect("and the walk between the two lines is the road's four hundred blocks ("
+                            + round(middle) + ")", middle > 380 && middle < 420);
+        }
+
+        // The candidate pass offers the five most promising stops of other lines, not the five nearest:
+        // six stubs stand closer to the stop changing from than the line that actually carries the rider
+        // onwards, and the journey must still be found -- a nearest-five rule would spend every slot on
+        // the stubs and answer "no journey".
+        RoadNetwork promising = new RoadNetwork();
+        addRoad(promising, RoadClass.RAIL, 0, 0, 200, 0);
+        addRoad(promising, RoadClass.RAIL, 600, 0, 1000, 0);
+        addRoad(promising, RoadClass.ROAD, 200, 0, 600, 0);
+        addRoad(promising, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(promising, RoadClass.ROAD, 980, 0, 1020, 0);
+        List<TransitLine> promisingLines = new ArrayList<>();
+        promisingLines.add(line("PA", RoadClass.RAIL, stop("PA1", 0, 0), stop("PA2", 200, 0)));
+        promisingLines.add(line("PB", RoadClass.RAIL, stop("PB1", 600, 0), stop("PB2", 1000, 0)));
+        for (int i = 0; i < 6; i++) {
+            int x = 240 + i * 20;
+            int z = 40 + i * 10;
+            // Each stub stands on a scrap of its own, near enough to the stop changing from to pass the
+            // "is there a road here" question, and its line goes twenty blocks nowhere.
+            addRoad(promising, RoadClass.ROAD, x - 10, z, x + 10, z);
+            promisingLines.add(line("decoy" + i, RoadClass.RAIL,
+                    stop("Q" + i, x, z), stop("R" + i, x, z + 20)));
+        }
+        Trip ranked = TransitPlanner.plan(promising, promisingLines, 5, 0, 995, 0,
+                "past the stubs", RoutePreferences.DEFAULTS);
+        expect("six nearer stubs do not take the place of the line that carries the rider onwards",
+                ranked.isPresent());
+        if (ranked.isPresent()) {
+            long rides = ranked.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
+            expect("and the journey still rides both useful lines (rides=" + rides + ")", rides >= 2);
+        }
 
         // Walking navigation between these two stops is a straight connector with a road at one end
         // and nothing under it: the mixed middle must not be that invented line, so the lines are
@@ -999,6 +1063,52 @@ public final class Harness {
             long rides = trap.legs().stream().filter(leg -> leg.mode() != TravelMode.WALK).count();
             expect("and the journey still rides both lines (rides=" + rides + ")", rides >= 2);
         }
+    }
+
+    /**
+     * The walk from the alighting stop to the destination, and how far it may reach.
+     *
+     * <p>A stop is a boarding and alighting candidate only within the same distance, and that distance
+     * also bounds the straight hop the fallback may draw when a walk has no road route at all. So a
+     * destination eight hundred blocks from the last station is a ride and then a road walk, and a
+     * destination past a kilometre is no journey at all rather than a journey with a straight line
+     * drawn to it.
+     */
+    private static void scenarioFinalWalkReach() {
+        System.out.println("== the walk from the last stop to the destination ==");
+
+        RoadNetwork net = new RoadNetwork();
+        addRoad(net, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(net, RoadClass.RAIL, 0, 0, 400, 0);
+        addRoad(net, RoadClass.ROAD, 400, 0, 400, 800);
+        List<TransitLine> lines = new ArrayList<>();
+        lines.add(line("FW", RoadClass.RAIL, stop("FW1", 0, 0), stop("FW2", 400, 0)));
+
+        Trip near = TransitPlanner.plan(net, lines, 5, 0, 400, 800, "up the road",
+                RoutePreferences.DEFAULTS);
+        expect("a destination eight hundred blocks from the last stop is a ride and a walk",
+                near.isPresent());
+        if (near.isPresent()) {
+            Trip.Leg last = near.legs().get(near.legs().size() - 1);
+            System.out.println("   last leg " + last.mode().id() + ", "
+                    + round(last.route().totalLength()) + " blocks");
+            expect("and the walk is the road's eight hundred blocks",
+                    last.mode() == TravelMode.WALK
+                            && Math.abs(last.route().totalLength() - 800) < 1);
+        }
+
+        // Past the kilometre the alighting stop is no longer near enough, and walking is refused too
+        // (the destination's road does not meet the player's), so there is no journey at all.
+        RoadNetwork far = new RoadNetwork();
+        addRoad(far, RoadClass.ROAD, -20, 0, 20, 0);
+        addRoad(far, RoadClass.RAIL, 0, 0, 400, 0);
+        addRoad(far, RoadClass.ROAD, 400, 0, 400, 1400);
+        List<TransitLine> farLines = new ArrayList<>();
+        farLines.add(line("FW", RoadClass.RAIL, stop("FW1", 0, 0), stop("FW2", 400, 0)));
+        Trip beyond = TransitPlanner.plan(far, farLines, 5, 0, 400, 1400, "past the walk",
+                RoutePreferences.DEFAULTS);
+        expect("a destination past the kilometre is no journey rather than a straight hop",
+                !beyond.isPresent());
     }
 
     /**

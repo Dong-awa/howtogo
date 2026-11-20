@@ -63,6 +63,7 @@ Gradle, through a temporary init script, so `build.gradle` is untouched.
 | A change of lines a hundred blocks apart, with a road that bows out to a hundred and forty between them | No journey: a change of lines was only a walk where two stops stood within the 24 block interchange radius. Public transport now mixes walking and lines, and the middle leg is planned by the walking router, so the checks read the leg back off the journey and require the road's length rather than the straight hundred blocks. A gap past the mixed reach is still two lines |
 | A stop near the destination that makes walking the whole way cheaper than riding | No journey at all: the search found the cheapest path, which was walk to that stop and walk on, refused it for riding nothing, and answered "no journey" -- so public transport mode fell back to a walk. The search now runs over two states per stop, before and after the first ride, and only the second may finish, so the best journey that rides a line is what comes out |
 | A winding road drawn as one segment, and the three walks inside a journey | Every walk along that road came out as a straight line over the inside of the bend: the walking gap pass joined the road's own two ends with a straight chord, and a chord is shorter than the curve so it always won. A road's own ends are left to the road. The walks to the first stop, between lines and to the destination are planned walking routes now, including the walk between two lines' platforms; only a walk the router cannot find at all is a straight connector |
+| A line whose station stands well off its own railway, with the rest of the trip on a road | No journey at all: the ride's platform-to-track connector was the station snap distance, so past that radius the stop graph had no way to the station and "A rides to B, then walks the road to C" was answered "no route" although the rails were unbroken and the road out of the station was there. Raising the key admitted it but drew the gap as a straight hop inside the ride, in the ride's colour, and widened the guidance's "at the station" tolerance with it. Each stop is now placed on its own line within the editor's station judgement, the ride runs between those points, and the gap is a walking leg -- see `StationAccessCheck` |
 | A journey whose last leg is a 200 block off-road hop | Flattened route time and length short by that hop, because only the first part's start connector and the last part's goal connector were carried into the joined route |
 | A turn at a fork, and the countdown read off the route at three points along it | Guards the arithmetic behind "in 200 metres" and "now": a turn's distance is measured from the route's own start and the countdown is that less what has been travelled, so a mistake shows as the wrong number rather than as a missing route |
 | A trip with three turns and a bend after the second, driven to the destination | The turn already made shown again as the next instruction, at zero distance, and the turn actually being approached skipped in the same step -- the junction was remembered in one slot the walk over the route overwrote, because that walk restarts at the route's first junction every tick. 3932 of the 6856 guided trips over a saved network did it |
@@ -337,11 +338,21 @@ drawn as a straight line: `Harness`'s `scenarioMixedTransitWalksBetweenLines` pu
 blocks apart with a road that bows out to a hundred and forty between them, and reads the walked leg
 back off the journey -- it has to be the road's length, not the straight one -- pins that a gap past
 the mixed reach is still two lines, and pins that a walk which would be nothing but a straight
-connector is not used as the middle either. Mixing does not turn the mode into walking: a journey that
+connector is not used as the middle either. The reach itself is half a kilometre, and when it grew
+from a quarter, "the nearest few stops of other lines" stopped being the right answer: the nearest is
+usually a dead stub or a stop behind the rider. The pass now scores a candidate by what the walk costs
+less the ground it wins towards the destination, offers the best five, and the checks pin that a four
+hundred block change is planned, that nine hundred blocks with a road between is still two lines, and
+that six nearer stubs cannot take the place of the line that carries the rider onwards. Mixing does not
+turn the mode into walking: a journey that
 rides a line is the answer even when walking the whole way would be quicker, and a whole walk is only
 the fallback when no line can carry the trip -- the harness's journeys all assert a ride. The walk
 plans are budgeted, and the budget is reported once in the log when it runs out, for the same reason
 rides are: a pathological network must not hang the client.
+
+The walk at either end of a journey reaches a kilometre (`scenarioFinalWalkReach`): a destination eight
+hundred blocks from the last stop is a ride and then the road's eight hundred blocks on foot, while one
+past a kilometre is no journey at all rather than a ride with a straight line drawn to it.
 
 The walks on the other three places -- to the first stop, between two lines' platforms, and from the
 last stop to the destination -- are planned walking routes too, which is what

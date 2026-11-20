@@ -35,7 +35,9 @@ public final class Trip {
     /**
      * One stop a ride calls at: name, position and distance along the whole journey.
      *
-     * Position matters because a platform can stand far from the track centreline, and station snap measures against it.
+     * Position is the platform the vehicle really stands at, which is not the stop's marked point when a
+     * station's place stands off its line: the "arrived at" call and the station's own grounds are
+     * measured against this point, so both have to be the platform. See LinePlanner's anchor.
      */
     public record RideStop(String name, double x, double z, double at) {
     }
