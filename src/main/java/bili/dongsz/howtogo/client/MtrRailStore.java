@@ -196,7 +196,7 @@ final class MtrRailStore {
         int count = rails.size();
         IO.execute(() -> {
             if (MtrRailStorage.save(path, rails)) {
-                HowToGo.LOGGER.info("[HowToGo] saved {} MTR rails to {}", count,
+                HowToGo.logInfo("[HowToGo] saved {} MTR rails to {}", count,
                         path.getFileName());
             }
         });

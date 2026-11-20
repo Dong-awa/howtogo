@@ -103,7 +103,7 @@ public final class MtrClientSync {
         if (frame.session() != session) {
             if (session != -1 && !parts.isEmpty()) {
                 // A newer session started before the old one finished: the old reading is obsolete.
-                HowToGo.LOGGER.info("[HowToGo] MTR sync | session {} replaced {}",
+                HowToGo.logInfo("[HowToGo] MTR sync | session {} replaced {}",
                         frame.session(), session);
             }
             session = frame.session();
@@ -127,7 +127,7 @@ public final class MtrClientSync {
             convertedFrom = null;
             if (!announced) {
                 announced = true;
-                HowToGo.LOGGER.info("[HowToGo] MTR is synced from the server ({} dimension(s), {} kB)",
+                HowToGo.logInfo("[HowToGo] MTR is synced from the server ({} dimension(s), {} kB)",
                         reading.dimensions().size(), encoded.length / 1024);
             }
         } catch (IOException | RuntimeException malformed) {

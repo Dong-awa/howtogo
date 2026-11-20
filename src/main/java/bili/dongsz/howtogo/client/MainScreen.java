@@ -442,7 +442,7 @@ public final class MainScreen extends Screen {
                                 Component.translatable(result.name()), result.detail()).getString());
                     }
                 }
-                HowToGo.LOGGER.info("[HowToGo] selftest | {} | {} | {}",
+                HowToGo.logInfo("[HowToGo] selftest | {} | {} | {}",
                         result.ok() ? "ok" : "FAIL", result.name(), result.detail());
             }
             notice(Component.translatable("screen.howtogo.main.selftest_summary",

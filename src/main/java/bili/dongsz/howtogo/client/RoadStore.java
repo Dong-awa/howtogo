@@ -54,7 +54,7 @@ public final class RoadStore {
         }
         if (RoadStorage.save(boundPath, network)) {
             dirty = false;
-            HowToGo.LOGGER.info("[HowToGo] saved {} nodes / {} segments to {}",
+            HowToGo.logInfo("[HowToGo] saved {} nodes / {} segments to {}",
                     network.nodeCount(), network.segmentCount(), boundPath.getFileName());
         }
     }
@@ -100,7 +100,7 @@ public final class RoadStore {
         boundLevel = level;
         boundPath = WorldFiles.of("");
         // Said once per bind so "empty map" and "map is elsewhere" can be told apart in a bug report.
-        HowToGo.LOGGER.info("[HowToGo] world data: {} | {}/{}", WorldFiles.currentWorldKey(),
+        HowToGo.logInfo("[HowToGo] world data: {} | {}/{}", WorldFiles.currentWorldKey(),
                 boundPath.getParent().getFileName(), boundPath.getFileName());
         network = RoadStorage.load(boundPath);
         dirty = false;

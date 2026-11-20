@@ -193,6 +193,14 @@ if (stonecutter.eval(minecraftVersion, ">=26.1")) {
         modCompileOnly(xaeroCoordinate)
     } else {
         modCompileOnly(xaeroJar)
+        // Runtime on the older nodes too: Loom's dev client loads mods from the classpath
+        // and does not scan run/mods before 26.x. The 26.x nodes run in the official
+        // namespace and take their runtime mods from run/mods instead (the release-jar
+        // arrangement further down); a classpath jar there would be remapped by Loom and
+        // then refused by the loader, so the two paths stay mutually exclusive by version.
+        if (stonecutter.eval(minecraftVersion, "<26.1")) {
+            modLocalRuntime(xaeroJar)
+        }
     }
 
     // The Xaero's Minimap overlay's API jar, when this node supplied one: see the note above the

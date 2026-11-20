@@ -119,7 +119,7 @@ public final class MtrMarks {
             }
             addAll(ON, dto.on);
             addAll(OFF, dto.off);
-            HowToGo.LOGGER.info("[HowToGo] MTR line marks: {} line(s) on, {} off, as chosen",
+            HowToGo.logInfo("[HowToGo] MTR line marks: {} line(s) on, {} off, as chosen",
                     ON.size(), OFF.size());
         } catch (IOException | JsonSyntaxException e) {
             HowToGo.LOGGER.error("[HowToGo] could not read {}; every line follows the config", file, e);
@@ -160,7 +160,7 @@ public final class MtrMarks {
                 GSON.toJson(dto, writer);
             }
             dirty = false;
-            HowToGo.LOGGER.info("[HowToGo] saved MTR line marks: {} on, {} off", ON.size(), OFF.size());
+            HowToGo.logInfo("[HowToGo] saved MTR line marks: {} on, {} off", ON.size(), OFF.size());
         } catch (IOException e) {
             HowToGo.LOGGER.error("[HowToGo] could not write {}", file, e);
         }

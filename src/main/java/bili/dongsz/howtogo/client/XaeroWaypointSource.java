@@ -233,7 +233,7 @@ public final class XaeroWaypointSource implements DestinationSource {
             waypointGetWaypointColor = findMethod(WAYPOINT_CLASS, "getWaypointColor");
             waypointColorGetHex = findMethod(WAYPOINT_COLOR_CLASS, "getHex");
             available = true;
-            HowToGo.LOGGER.info("[HowToGo] Xaero waypoint source bound reflectively ({})",
+            HowToGo.logInfo("[HowToGo] Xaero waypoint source bound reflectively ({})",
                     MINIMAP_SESSION_CLASS);
         } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
             available = false;

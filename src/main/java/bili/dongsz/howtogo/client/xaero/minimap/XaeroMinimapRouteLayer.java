@@ -87,7 +87,7 @@ public final class XaeroMinimapRouteLayer {
         handler.add(candidate);
         renderer = candidate;
         registered = true;
-        HowToGo.LOGGER.info("[HowToGo] navigation route overlay registered with Xaero's Minimap");
+        HowToGo.logInfo("[HowToGo] navigation route overlay registered with Xaero's Minimap");
         return true;
     }
 
