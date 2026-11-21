@@ -246,6 +246,11 @@ final class MtrLineTracks {
      * Stamps one planned stretch of track as a road of this line.
      * The class is the line's own (rail, water), so the mark draws in the line's colour and a ride of
      * that kind may use it. The height comes from the nearest rail, so it joins roads the player drew.
+     *
+     * <p>The block tolerance, not precise: a planned ride is returned by the router, which works on the
+     * rails' block vertices, so this geometry is block-sampled like a RoadWeaver polyline even though the
+     * rails themselves arrived as world-coordinate samples. The stated path (see addRun) is the one that
+     * keeps MTR's own samples, because it never goes through the router.
      */
     private static void addRoad(RoadNetwork marks, RoadNetwork rails, RoadClass kind,
                                 List<double[]> track, int[] nextId) {

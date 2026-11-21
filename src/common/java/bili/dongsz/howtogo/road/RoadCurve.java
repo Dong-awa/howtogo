@@ -12,9 +12,21 @@ import java.util.List;
 public record RoadCurve(double[] xs, double[] zs) {
 
     /**
-     * How far the simplified line may differ from a block-sampled one, in blocks. Large enough to swallow a one-block staircase (at most about 0.71 blocks off the diagonal), while every real corner is metres from its chord.
+     * How far the simplified line may differ from a block-sampled one, in blocks.
+     *
+     * <p>One and a quarter, because a rasterised <em>curve</em> is not the one-block staircase a diagonal is: a step
+     * corner of a path drawn in whole blocks stands up to a block off the chord of the run it belongs to -- the
+     * perpendicular distance of such a corner approaches one block as a line flattens, and rounding a curve to
+     * blocks adds another half block either way. At 0.9 those corners were kept, and the corner rounding below then
+     * turned each kept step into its own little arc: the drawn line wobbled left and right along a road that is
+     * actually a smooth arc (measured on a rasterised quarter circle of radius 300: 333 points, 62 changes of bend
+     * direction, 3527 degrees of turning for a 90 degree arc). 1.25 swallows the whole staircase of any rasterised
+     * line, and every real corner is still many blocks from its chord, so a turn is still kept and rounded.
+     *
+     * <p>Display only: the drawn line may cut a rasterised bend by at most this much, which is under a road's drawn
+     * width, and nothing in routing, lengths, hit tests or saving reads it.
      */
-    public static final double GRID_TOLERANCE = 0.9;
+    public static final double GRID_TOLERANCE = 1.25;
 
     /**
      * The same for geometry already in world coordinates: only points that add nothing are dropped, so the drawn line keeps the source's own curve.
@@ -71,7 +83,14 @@ public record RoadCurve(double[] xs, double[] zs) {
         return length;
     }
 
-    /** The smoothed display line for a block-sampled segment, or null when the segment is too short. */
+    /**
+     * The smoothed display line for a block-sampled segment, or null when the segment is too short.
+     * This is the entry point for geometry stored as whole blocks -- a block scan, a RoadWeaver polyline,
+     * an addon's two points. World-coordinate samples a reader already has (Create's bezier, MTR's rails)
+     * go through precise() instead: the tolerance here is sized to swallow a rasterised staircase, and a
+     * source that never needed rasterising would lose accuracy to it. Every read-only layer attaches its
+     * curve through one of these two, so no map has to guess how a layer should be drawn.
+     */
     public static RoadCurve of(RoadSegment segment) {
         if (segment == null || segment.vertexCount() < 2) {
             return null;

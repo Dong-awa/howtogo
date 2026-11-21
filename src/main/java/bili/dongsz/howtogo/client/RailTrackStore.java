@@ -1223,22 +1223,21 @@ public final class RailTrackStore {
         RoadSegment segment = new RoadSegment(build.nextId++, RoadClass.RAIL,
                 (int) Math.round(graph.nodeY()[startNode]), vertices);
         segment.addVertex(round(graph.nodeX()[startNode]), round(graph.nodeZ()[startNode]));
-        List<double[]> display = new ArrayList<>(vertices);
-        display.add(new double[]{graph.nodeX()[startNode], graph.nodeZ()[startNode]});
         for (int i = 0; i < length; i++) {
             int edge = edgePath[i];
             int first = graph.vertexStart()[edge];
             int count = graph.vertexCount()[edge];
             for (int v = 1; v < count; v++) {
                 segment.addVertex(round(graph.vertexX()[first + v]), round(graph.vertexZ()[first + v]));
-                display.add(new double[]{graph.vertexX()[first + v], graph.vertexZ()[first + v]});
             }
         }
         segment.setFromNode(fromId);
         segment.setToNode(toId);
-        // Create's own sampling, for the same reason as the graph source: the scan exists for when the
-        // graph cannot be read, not to lose precision.
-        segment.setCurve(RoadCurve.precise(display));
+        // Block-sampled geometry, so the block tolerance: this reading's vertices are whole blocks (see
+        // buildBlockGraph), and the precise tolerance would keep every step of a staircase as a corner and
+        // then round it into a zigzag. One rule for every machine-read layer: precise() when the source
+        // samples are world coordinates, of() when they are blocks.
+        segment.setCurve(RoadCurve.of(segment));
         build.network.putSegment(segment);
     }
 

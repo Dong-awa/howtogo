@@ -6,6 +6,7 @@ import bili.dongsz.howtogo.api.RoadDataSource;
 import bili.dongsz.howtogo.api.RoadDataSources;
 import bili.dongsz.howtogo.api.RoadDataWriter;
 import bili.dongsz.howtogo.road.RoadClass;
+import bili.dongsz.howtogo.road.RoadCurve;
 import bili.dongsz.howtogo.road.RoadDirection;
 import bili.dongsz.howtogo.road.RoadNetwork;
 import bili.dongsz.howtogo.road.RoadNode;
@@ -229,6 +230,10 @@ public final class AddonRoadStore {
             // From-point to to-point is the forward direction; parameters are named for the ends so the
             // geometry reads independently of traffic direction.
             segment.setDirection(oneWay ? RoadDirection.FORWARD : RoadDirection.TWO_WAY);
+            // Every read-only layer attaches its own display line, so the maps never have to guess: a line
+            // the API states as two points is its own curve, and a later writer that states more keeps the
+            // same treatment without any drawing code changing. See RoadCurve.
+            segment.setCurve(RoadCurve.of(segment));
             network.addSegment(segment);
         }
 

@@ -20,16 +20,29 @@ import java.nio.file.Path;
  * The overlay's buttons only set() its BooleanValues at runtime and never write the TOML, so every
  * session starts with both layers drawn again. This class reads the overlay's values reflectively
  * (optional, not a dependency), saves the pair when the player changes them, and restores it once a
- * world is open next session. The overlay's config file is not touched.
+ * world is open next session. The pair lives in this mod's own file; the overlay's values are reached
+ * only through its own getter and setter, so a build whose setter persists also writes its own file.
  * No preference of this mod's: the values saved are the ones the player clicked; the file exists
  * only so a click survives the game closing.
+ *
+ * <p>The overlay renamed its own classes in 1.5.2 ({@code com.lx862.mtrmap} became
+ * {@code io.github.teamcreating.mtrmap}) and kept the field names, so both are tried, newest first.
+ * 1.6.0 also writes the pair back to its own config itself, which makes this memory a bridge rather
+ * than a necessity from that release on: it still restores what was saved before, and observing the
+ * two values costs two reads a tick.
  */
 public final class MtrOverlayToggles {
 
     private static final String MOD_ID = "mtrmap";
 
-    /** Its config holder: a singleton with one BooleanValue field per map layer. */
-    private static final String CONFIG = "com.lx862.mtrmap.config.MTRMapConfig";
+    /**
+     * Its config holder: a singleton with one BooleanValue field per map layer, under each package the
+     * overlay has given its classes.
+     */
+    private static final String[] CONFIG_NAMES = {
+            "io.github.teamcreating.mtrmap.config.MTRMapConfig",
+            "com.lx862.mtrmap.config.MTRMapConfig",
+    };
 
     private static final String FILE_NAME = "mtr_overlay_toggles.json";
 
@@ -110,12 +123,15 @@ public final class MtrOverlayToggles {
     }
 
     static boolean classesPresent() {
-        try {
-            Class.forName(CONFIG, false, MtrOverlayToggles.class.getClassLoader());
-            return true;
-        } catch (ClassNotFoundException | LinkageError absent) {
-            return false;
+        for (String name : CONFIG_NAMES) {
+            try {
+                Class.forName(name, false, MtrOverlayToggles.class.getClassLoader());
+                return true;
+            } catch (ClassNotFoundException | LinkageError absent) {
+                // The older name, if this build predates the move.
+            }
         }
+        return false;
     }
 
     /**
@@ -124,18 +140,23 @@ public final class MtrOverlayToggles {
      * and a renamed field reports itself here. False also when the overlay is absent.
      */
     static boolean shapeReadable() {
-        try {
-            Class<?> config = Class.forName(CONFIG, false, MtrOverlayToggles.class.getClassLoader());
-            config.getField("INSTANCE");
-            Field route = config.getField("routeLinesEnabled");
-            config.getField("trackLinesEnabled");
-            Class<?> value = route.getType();
-            value.getMethod("get");
-            value.getMethod("set", Object.class);
-            return true;
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException absent) {
-            return false;
+        for (String name : CONFIG_NAMES) {
+            try {
+                Class<?> config = Class.forName(name, false, MtrOverlayToggles.class.getClassLoader());
+                config.getField("INSTANCE");
+                Field route = config.getField("routeLinesEnabled");
+                config.getField("trackLinesEnabled");
+                Class<?> value = route.getType();
+                value.getMethod("get");
+                value.getMethod("set", Object.class);
+                return true;
+            } catch (ClassNotFoundException | NoSuchFieldException absent) {
+                // Not this name; try the next one, and report false when none has the shapes.
+            } catch (ReflectiveOperationException | LinkageError | RuntimeException absent) {
+                return false;
+            }
         }
+        return false;
     }
 
     /**
@@ -150,25 +171,33 @@ public final class MtrOverlayToggles {
         if (!modLoaded()) {
             return false;
         }
-        try {
-            Class<?> config = Class.forName(CONFIG, true, MtrOverlayToggles.class.getClassLoader());
-            Field singleton = config.getField("INSTANCE");
-            Object value = singleton.get(null);
-            if (value == null) {
-                throw new IllegalStateException("MTRMapConfig.INSTANCE is null");
+        for (String name : CONFIG_NAMES) {
+            try {
+                Class<?> config = Class.forName(name, true, MtrOverlayToggles.class.getClassLoader());
+                Field singleton = config.getField("INSTANCE");
+                Object value = singleton.get(null);
+                if (value == null) {
+                    throw new IllegalStateException("MTRMapConfig.INSTANCE is null");
+                }
+                instance = value;
+                routeField = config.getField("routeLinesEnabled");
+                trackField = config.getField("trackLinesEnabled");
+                getMethod = routeField.getType().getMethod("get");
+                // ConfigValue.set(T) erases to set(Object), the same method on every release of the config library.
+                setMethod = routeField.getType().getMethod("set", Object.class);
+                available = true;
+                return true;
+            } catch (ClassNotFoundException absent) {
+                // The older name, if this build predates the move.
+            } catch (ReflectiveOperationException | LinkageError | RuntimeException failed) {
+                available = false;
+                warnUnavailable(failed);
+                return false;
             }
-            instance = value;
-            routeField = config.getField("routeLinesEnabled");
-            trackField = config.getField("trackLinesEnabled");
-            getMethod = routeField.getType().getMethod("get");
-            // ConfigValue.set(T) erases to set(Object), the same method on every release of the config library.
-            setMethod = routeField.getType().getMethod("set", Object.class);
-            available = true;
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException failed) {
-            available = false;
-            warnUnavailable(failed);
         }
-        return available;
+        available = false;
+        warnUnavailable(new ClassNotFoundException(String.join(" or ", CONFIG_NAMES)));
+        return false;
     }
 
 

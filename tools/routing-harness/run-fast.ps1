@@ -205,7 +205,12 @@ Write-Host ''
 # scripts and the vendored html2canvas out of the real files rather than out of a stub -- appended
 # rather than prepended, so nothing here can shadow a class or a resource the runtime already has.
 $resources = Join-Path $project 'src\main\resources'
+# Whether an overlay jar was handed over, reported to the harness so that "the mod is not installed"
+# and "the mod is installed under a name the reader does not know" cannot pass as the same thing: the
+# second is the regression the check exists for.
+$overlayGiven = if ($overlay) { 1 } else { 0 }
 $runArgs = @("-Dhowtogo.webmap.fixture=$WriteWebMapFixture",
+    "-Dhowtogo.mtrmap.present=$overlayGiven",
     '-cp', (Convert-ToArgFileLine "$harnessClasses;$modClasses;$harnessPath;$resources"),
     'Harness')
 $runArgFile = New-ArgumentFile (Join-Path $work 'java-harness.args') $runArgs

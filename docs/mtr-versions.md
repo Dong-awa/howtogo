@@ -25,6 +25,24 @@ MTR 的线路有自己的**环线状态**（`CircularState`：`NONE` / `CLOCKWIS
 MTR 3.x 会尝试同名状态，但没有 3.x 的 jar 可核对，读不到时按双向处理。规则与界面见
 [transit-line-direction.md](transit-line-direction.md)。
 
+## MTR Map Overlay 的版本
+
+Overlay 的快照是第三条读数：在别人的服务器上、既没有本地模拟也没有本模组的服务端同步时，它是唯一能看到
+整张路网的一条。它在 1.5.2 把类包名从 `com.lx862.mtrmap` 改成了 `io.github.teamcreating.mtrmap`，字段与方法
+一个没动，所以读取器两套名字都认、按新名优先，1.5.1 及更早也照旧能读。绑到的是哪一套写在日志里：
+
+```
+[HowToGo] MTR Map Overlay's fetched railway is readable (io.github.teamcreating.mtrmap.mapdata.MapDataCache)
+```
+
+1.6.0 起 `MapTrack.points` 的每个点是「X、Z、真实世界 Y」三段，问道读到 Y 就直接用它当这条轨道的高度；
+旧快照的平面点只有 X、Z，仍按「最近的车站/站台 48 格内」估高，都没有就落在 64 层。快照里没有交通类型
+（Overlay 只采样 TRAIN 轨道），所以这份读数一律按铁路处理。
+
+两套名字都绑不上时，日志里是 `MTR Map Overlay's fetched railway is unavailable (...)`，地图上就没有它抓取的
+车站与线路。回归 `tools/routing-harness` 在「给了 Overlay 的 jar 却绑不上」时直接判失败，不再当成没装跳过；
+给了 jar 时还会用它的 `DimensionData`/`MapRoute`/`MapTrack`/`MapLandmark` 造一份快照真跑一遍转换，见下文。
+
 ## 3.x 上几个必须知道的事实
 
 - **站台没有车站字段**。3.x 的 `SavedRailBase` 不像 4.x 那样带 `area`，唯一的精确联系是

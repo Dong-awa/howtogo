@@ -315,10 +315,10 @@ public final class MtrClientData {
 
     /**
      * The readings there are, side by side, as one.
-     * Merged by MTR's own ids, so the same thing cannot be told apart twice. The parameters are ordered weakest first: window (rails with real heights and modes), whole map (the local simulation: every station and line, no rails), server sync (every station, line and rail), fetched overlay (every station and line, rails flattened to X and Z; passed empty whenever an own reading exists).
+     * Merged by MTR's own ids, so the same thing cannot be told apart twice. The parameters are ordered weakest first: window (rails with real heights and modes), whole map (the local simulation: every station and line, no rails), server sync (every station, line and rail), fetched overlay (every station and line, rails sampled along their geometry -- with a real Y from a 1.6.0 overlay, placed from landmarks before that; passed empty whenever an own reading exists).
      * Stations and platforms take the strongest reading's copy, because the strongest is the complete one -- a platform resolved against a fuller station set knows which station it is actually in.
      * Lines keep whichever placed more of its stops, the strongest of those on a tie.
-     * Rails keep the window's copy first and any other reading's only where the window has not sent that rail, matched by MTR's rail id: the window's has a real height and a transport mode, the others are flattened, and the rest are how a railway the player has never been near gets its track drawn at all.
+     * Rails keep the window's copy first and any other reading's only where the window has not sent that rail, matched by MTR's rail id: the window's copy is MTR's own and says what kind of vehicle runs there (with a height), while a snapshot's rail is always train data and, before a 1.6.0 snapshot, carried no height either -- so keeping a snapshot's copy over the window's would put a mark at sea level and draw a boat line's rail as a train's. The rails a reading brings are how a railway the player has never been near gets its track drawn at all.
      */
     static Snapshot merge(Snapshot window, Snapshot whole, Snapshot synced, Snapshot overlay) {
         boolean noWhole = whole.isEmpty();
@@ -345,7 +345,10 @@ public final class MtrClientData {
                 lines.merge(line.id(), line, MtrClientData::better);
             }
             for (Track rail : source.tracks()) {
-                // First reading to name a rail wins it, which is the window whenever it has one: MTR's own copy carries the height and transport mode the overlay's flattened one does not. A rail whose id could not be read cannot be matched against another reading's, so it is kept and never deduplicated.
+                // First reading to name a rail wins it, which is the window whenever it has one: MTR's own copy
+                // carries the transport mode, and a snapshot's rail is always train data -- with a height only
+                // from 1.6.0 on, which is why a flat snapshot's copy at sea level must not win. A rail whose id
+                // could not be read cannot be matched against another reading's, so it is kept and never deduplicated.
                 if (rail.hexId() == null) {
                     unnamedRails.add(rail);
                 } else {

@@ -17,22 +17,34 @@ import java.util.Map;
  * The whole railway, read out of the copy MTR Map Overlay fetched from the server.
  *
  * MTR sends a client only the stations and lines within a couple hundred blocks (what MtrClientData reads), and on a remote server this process simulates nothing, so the overlay's server-fetched snapshot of every line, station and rail is the only whole-railway source. Only the fetched snapshot is read, never its radius-limited fallback, which MtrClientData already covers.
- * Chain, all read reflectively: MapDataCache.hasServerData(dimension)/get(dimension), then .dimensionId ("minecraft/overworld"), .version (content hash), .routes (id, name, color, circular, stops: x, z, stationName, destination, trackIds), .tracks (id, points), .landmarks (record: id(), type(), x(), y(), z(), name()).
+ * Chain, all read reflectively: MapDataCache.hasServerData(dimension)/get(dimension), then .dimensionId ("minecraft/overworld"), .version (content hash), .routes (id, name, color, circular, stops: x, z, stationName, destination, trackIds), .tracks (id, points), .landmarks (record: id(), type(), x(), y(), z(), name(), symbol()).
+ * The overlay moved its own classes once: 1.5.1 and earlier are com.lx862.mtrmap, 1.5.2 and later are io.github.teamcreating.mtrmap. The move renamed the package and nothing else -- no field, method or id spelling changed with it -- so this reads whichever is installed, newest name first, and a session stays on the one its handshake bound to.
  * The conversion runs once per snapshot, keyed by its version hash, because every rail arrives as a list of points that has to be copied.
  * Rails are taken whole, with no player radius: the snapshot says which rails each route runs along, so a line's track is a lookup (MtrLineTracks.stated) rather than a plan, and a radius only stripped geometry and left straight hops between stations.
- * The snapshot carries no transport mode -- the overlay samples only TRAIN rails, so this is the train network -- and no rail height: a rail takes the height of the nearest landmark within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y, and MtrClientData#merge lets MTR's own copy win wherever MTR sent it.
+ * The snapshot carries no transport mode -- the overlay samples only TRAIN rails, so this is the train network. A rail's height is the measured world Y its points carry (1.6.0 samples X, Z and Y); a rail whose points are flat, as an older snapshot's were when it stored only X and Z, takes the height of the nearest landmark within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y. MtrClientData#merge lets MTR's own copy win wherever MTR sent it.
  * Reflective like MtrClientData and MtrWholeMap: no overlay type appears in a signature, every handle is looked up by name and guarded, and a version whose shapes moved reports itself unavailable.
  */
 final class MtrMapOverlay {
 
     private static final String MOD_ID = "mtrmap";
 
-    private static final String CACHE = "com.lx862.mtrmap.mapdata.MapDataCache";
-    private static final String DIMENSION_DATA = CACHE + "$DimensionData";
-    private static final String ROUTE = "com.lx862.mtrmap.mapdata.MapRoute";
-    private static final String ROUTE_STOP = ROUTE + "$Stop";
-    private static final String TRACK = "com.lx862.mtrmap.mapdata.MapTrack";
-    private static final String LANDMARK = "com.lx862.mtrmap.mapdata.MapLandmark";
+    /**
+     * The overlay's package, in the order to try.
+     *
+     * <p>1.5.2 renamed its classes from {@code com.lx862.mtrmap} to {@code io.github.teamcreating.mtrmap}; the data model, the field names and the id spellings came across unchanged, so one handshake that tries both covers every release and neither needs its own reader.
+     */
+    private static final String[] PACKAGES = {
+            "io.github.teamcreating.mtrmap",
+            "com.lx862.mtrmap",
+    };
+
+    /** The suffix of every name this reads, so the package prefix is the only version-dependent part. */
+    private static final String CACHE_CLASS = ".mapdata.MapDataCache";
+    private static final String DIMENSION_DATA_CLASS = CACHE_CLASS + "$DimensionData";
+    private static final String ROUTE_CLASS = ".mapdata.MapRoute";
+    private static final String ROUTE_STOP_CLASS = ROUTE_CLASS + "$Stop";
+    private static final String TRACK_CLASS = ".mapdata.MapTrack";
+    private static final String LANDMARK_CLASS = ".mapdata.MapLandmark";
 
     /**
      * The kind of a line or rail read out of the snapshot: it only carries train data, and naming that lets the reading go through the same conversion as MTR's own.
@@ -40,7 +52,7 @@ final class MtrMapOverlay {
     private static final String TRAIN = "TRAIN";
 
     /**
-     * The height a rail of the snapshot stands at when no landmark is near. The snapshot's geometry is flat, and sea level beats nothing for a line across open country.
+     * The height a rail of the snapshot stands at when its points carry none and no landmark is near. A flat snapshot states no height, and sea level beats nothing for a line across open country.
      */
     private static final int FALLBACK_TRACK_Y = 64;
 
@@ -53,6 +65,10 @@ final class MtrMapOverlay {
     private static boolean resolved;
     private static boolean available;
     private static boolean warned;
+    /** The package the handshake bound to, or null while none has; named in the log and used by the harness. */
+    private static String boundTo;
+    /** What the newest candidate failed with, kept so an unreadable overlay is reported by its own error. */
+    private static Throwable failure;
 
     private static Method hasServerDataMethod;
     private static Method getMethod;
@@ -167,8 +183,9 @@ final class MtrMapOverlay {
      * One snapshot as this mod's own reading.
      *
      * Everything is placed from the landmarks, as MTR's own reading does: a stop stands at the middle of its station's platforms, and a station built a platform at a time arrives as several stations that MtrTransit then groups. Links the snapshot does not carry are rebuilt by name then nearest distance: a landmark's id says station or platform but not which station, and a route's stop names its station without identifying it.
+     * Package-private because the harness builds one of the overlay's own {@code DimensionData}s and checks this conversion without a game -- see {@code MtrImportCheck}; the shapes are read reflectively there too, so the check is against the jar that is installed.
      */
-    private static MtrClientData.Snapshot convert(Object data) throws ReflectiveOperationException {
+    static MtrClientData.Snapshot convert(Object data) throws ReflectiveOperationException {
         List<Object> stationsRaw = new ArrayList<>();
         List<Object> platformsRaw = new ArrayList<>();
         for (Object landmark : MtrClientData.elements(landmarksField.get(data))) {
@@ -345,7 +362,9 @@ final class MtrMapOverlay {
     }
 
     /**
-     * The rails of the snapshot as this mod's own track. Height is the one thing not carried: nearest station or platform within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y.
+     * The rails of the snapshot as this mod's own track.
+     *
+     * A rail takes the measured world Y its own points carry when the snapshot samples one (1.6.0 stores X, Z and Y per point); a flat snapshot's rail is placed by the nearest station or platform within HEIGHT_HINT_RADIUS, else FALLBACK_TRACK_Y. The value is one per rail because that is what a Track is: a height, not a height per vertex.
      */
     private static List<MtrClientData.Track> tracks(Object data, Map<Long, List<Hint>> hints)
             throws ReflectiveOperationException {
@@ -359,6 +378,8 @@ final class MtrMapOverlay {
                 }
                 double[] xs = new double[list.size()];
                 double[] zs = new double[list.size()];
+                int middle = list.size() / 2;
+                double measuredY = Double.NaN;
                 boolean usable = true;
                 for (int i = 0; i < list.size(); i++) {
                     if (!(list.get(i) instanceof double[] point) || point.length < 2
@@ -368,6 +389,12 @@ final class MtrMapOverlay {
                     }
                     xs[i] = point[0];
                     zs[i] = point[1];
+                    // The third component is the sampled world Y, and only the rail's own middle point is taken:
+                    // the track layer holds one height for the whole polyline. An older snapshot's flat points
+                    // have no third component (or a NaN one), which is what the landmark hint is still for.
+                    if (i == middle && point.length >= 3 && Double.isFinite(point[2])) {
+                        measuredY = point[2];
+                    }
                 }
                 if (!usable) {
                     // The overlay's own codec refuses a non-finite point on the way in, so this is a shape this mod has
@@ -375,9 +402,9 @@ final class MtrMapOverlay {
                     noteUnreadable("rail", null);
                     continue;
                 }
-                int middle = list.size() / 2;
-                tracks.add(new MtrClientData.Track(hexId, TRAIN,
-                        heightNear(hints, xs[middle], zs[middle]), xs, zs));
+                int y = Double.isNaN(measuredY)
+                        ? heightNear(hints, xs[middle], zs[middle]) : (int) Math.round(measuredY);
+                tracks.add(new MtrClientData.Track(hexId, TRAIN, y, xs, zs));
             } catch (RuntimeException e) {
                 noteUnreadable("rail", e);
             }
@@ -561,62 +588,77 @@ final class MtrMapOverlay {
      * Looks every class, field and method this reads up, and remembers whether it worked.
      *
      * Every one is public API of the overlay, so no privileged access is asked for; a version that moved any of them reports itself unavailable. Classes are loaded without being initialised -- this needs their shapes, not their state.
+     *
+     * <p>The package is the one part of the chain that has moved: the overlay renamed its own classes in 1.5.2 and renamed nothing else, so each package it is known by is tried in turn, newest first, and the first one that binds the whole chain is what this session reads. A trial that fails leaves nothing behind but its error, since every handle is looked up again from the next name.
      */
     static boolean bind() {
-        try {
-            Class<?> cache = load(CACHE);
-            Class<?> dimensionData = load(DIMENSION_DATA);
-            Class<?> route = load(ROUTE);
-            Class<?> routeStop = load(ROUTE_STOP);
-            Class<?> track = load(TRACK);
-            Class<?> landmark = load(LANDMARK);
-
-            hasServerDataMethod = cache.getMethod("hasServerData", String.class);
-            getMethod = cache.getMethod("get", String.class);
-            routesField = dimensionData.getField("routes");
-            tracksField = dimensionData.getField("tracks");
-            landmarksField = dimensionData.getField("landmarks");
-            dimensionIdField = dimensionData.getField("dimensionId");
-            // Not required: it says whether the snapshot changed at all; without it the reading converts again
-            // every tick, slower but not wrong.
-            versionField = optionalField(dimensionData, "version");
-
-            routeIdField = route.getField("id");
-            routeNameField = route.getField("name");
-            routeColorField = route.getField("color");
-            // The route's loop state, as the overlay's own public boolean. Not required: without it every line
-            // reads two-way and the lines themselves are unaffected.
-            routeCircularField = optionalField(route, "circular");
-            routeStopsField = route.getField("stops");
-            // The rails the route runs along, in order -- the one thing MTR's own data never says about a line,
-            // and why a line is drawn along its railway. Not required: without it the track is worked out, as
-            // before.
-            routeTrackIdsField = optionalField(route, "trackIds");
-            stopXField = routeStop.getField("x");
-            stopZField = routeStop.getField("z");
-            stopStationNameField = routeStop.getField("stationName");
-            stopDestinationField = routeStop.getField("destination");
-
-            trackIdField = track.getField("id");
-            trackPointsField = track.getField("points");
-
-            // A landmark is a record, so its accessors are named after its components.
-            landmarkIdMethod = landmark.getMethod("id");
-            landmarkTypeMethod = landmark.getMethod("type");
-            landmarkXMethod = landmark.getMethod("x");
-            landmarkYMethod = landmark.getMethod("y");
-            landmarkZMethod = landmark.getMethod("z");
-            landmarkNameMethod = landmark.getMethod("name");
-            landmarkSymbolMethod = landmark.getMethod("symbol");
-
-            available = true;
-            HowToGo.logInfo("[HowToGo] MTR Map Overlay's fetched railway is readable ({})", CACHE);
-            return true;
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
-            available = false;
-            warnUnavailable(e);
-            return false;
+        for (String packageName : PACKAGES) {
+            try {
+                bind(packageName);
+                boundTo = packageName;
+                available = true;
+                HowToGo.logInfo("[HowToGo] MTR Map Overlay's fetched railway is readable ({})",
+                        packageName + CACHE_CLASS);
+                return true;
+            } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+                // Not this name. Keep the newest name's error for the report: it is the one an up-to-date
+                // overlay was expected to answer to, and the old name's "class not found" says nothing.
+                if (packageName.equals(PACKAGES[0])) {
+                    failure = e;
+                }
+            }
         }
+        available = false;
+        warnUnavailable(failure);
+        return false;
+    }
+
+    /** The whole chain, looked up under one of the packages the overlay has used. */
+    private static void bind(String packageName) throws ReflectiveOperationException {
+        Class<?> cache = load(packageName + CACHE_CLASS);
+        Class<?> dimensionData = load(packageName + DIMENSION_DATA_CLASS);
+        Class<?> route = load(packageName + ROUTE_CLASS);
+        Class<?> routeStop = load(packageName + ROUTE_STOP_CLASS);
+        Class<?> track = load(packageName + TRACK_CLASS);
+        Class<?> landmark = load(packageName + LANDMARK_CLASS);
+
+        hasServerDataMethod = cache.getMethod("hasServerData", String.class);
+        getMethod = cache.getMethod("get", String.class);
+        routesField = dimensionData.getField("routes");
+        tracksField = dimensionData.getField("tracks");
+        landmarksField = dimensionData.getField("landmarks");
+        dimensionIdField = dimensionData.getField("dimensionId");
+        // Not required: it says whether the snapshot changed at all; without it the reading converts again
+        // every tick, slower but not wrong.
+        versionField = optionalField(dimensionData, "version");
+
+        routeIdField = route.getField("id");
+        routeNameField = route.getField("name");
+        routeColorField = route.getField("color");
+        // The route's loop state, as the overlay's own public boolean. Not required: without it every line
+        // reads two-way and the lines themselves are unaffected.
+        routeCircularField = optionalField(route, "circular");
+        routeStopsField = route.getField("stops");
+        // The rails the route runs along, in order -- the one thing MTR's own data never says about a line,
+        // and why a line is drawn along its railway. Not required: without it the track is worked out, as
+        // before.
+        routeTrackIdsField = optionalField(route, "trackIds");
+        stopXField = routeStop.getField("x");
+        stopZField = routeStop.getField("z");
+        stopStationNameField = routeStop.getField("stationName");
+        stopDestinationField = routeStop.getField("destination");
+
+        trackIdField = track.getField("id");
+        trackPointsField = track.getField("points");
+
+        // A landmark is a record, so its accessors are named after its components.
+        landmarkIdMethod = landmark.getMethod("id");
+        landmarkTypeMethod = landmark.getMethod("type");
+        landmarkXMethod = landmark.getMethod("x");
+        landmarkYMethod = landmark.getMethod("y");
+        landmarkZMethod = landmark.getMethod("z");
+        landmarkNameMethod = landmark.getMethod("name");
+        landmarkSymbolMethod = landmark.getMethod("symbol");
     }
 
     /** A class by name, loaded but not initialised. */
@@ -633,17 +675,29 @@ final class MtrMapOverlay {
     }
 
     /**
-     * Whether the overlay's classes are on the classpath at all.
+     * Whether the overlay's classes are on the classpath at all, under either of the names it has had.
      *
      * Asked by the harness so a machine that has never seen the mod skips the handshake check; answered by loading the one class, never by overlayLoaded(), which needs a loader that has been started.
      */
     static boolean classesPresent() {
-        try {
-            load(CACHE);
-            return true;
-        } catch (ClassNotFoundException | LinkageError absent) {
-            return false;
+        for (String packageName : PACKAGES) {
+            try {
+                load(packageName + CACHE_CLASS);
+                return true;
+            } catch (ClassNotFoundException | LinkageError absent) {
+                // The older name, if this build predates the move.
+            }
         }
+        return false;
+    }
+
+    /**
+     * The package the handshake bound to, or null while none has.
+     *
+     * Package-private for the harness: with the jar on its classpath it builds one of the overlay's own snapshots and checks the conversion, which means naming the classes the same way this reader does.
+     */
+    static String boundPackage() {
+        return boundTo;
     }
 
     /**
@@ -668,8 +722,8 @@ final class MtrMapOverlay {
             return;
         }
         warned = true;
-        HowToGo.LOGGER.warn("[HowToGo] MTR Map Overlay's fetched railway is unavailable ({}); its "
-                        + "stations and lines will not be offered, and nothing else changes",
-                cause.toString());
+        HowToGo.LOGGER.warn("[HowToGo] MTR Map Overlay's fetched railway is unavailable ({} under {}); "
+                        + "its stations and lines will not be offered, and nothing else changes",
+                cause == null ? "no readable class" : cause.toString(), String.join(" or ", PACKAGES));
     }
 }

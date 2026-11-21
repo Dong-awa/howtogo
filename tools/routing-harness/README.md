@@ -412,7 +412,17 @@ the short version.
 
 The same is done for **MTR Map Overlay** (`run/mods/*mtrmap*.jar`), whose client cache is the third
 reading: the whole railway, fetched from the server, for a player on somebody else's server where
-there is no local simulation to read. Its reader is checked the same way and skipped the same way.
+there is no local simulation to read. Its reader is checked the same way, and the check is not
+skipped when a jar is present: the script passes `-Dhowtogo.mtrmap.present=1` when it hands one over,
+so "the mod is not installed" and "the mod is installed under a name the reader does not know" cannot
+pass as the same thing. That distinction is not academic -- Overlay 1.5.2 renamed its classes from
+`com.lx862.mtrmap` to `io.github.teamcreating.mtrmap`, and before this the check printed its skip
+line and stayed green while the whole fetched railway disappeared from the game. The reader now tries
+both package names, newest first, and `checkOverlayConversion` goes further than the handshake: it
+builds the overlay jar's own `DimensionData`, `MapRoute`, `MapTrack` and `MapLandmark`, converts it,
+and pins the station/platform links, the line's colour, loop state and `trackIds` order, a rail's
+sampled Y as its height (`1.6.0` samples X, Z and Y) and a flat two-component rail's height taken
+from the landmarks around it.
 
 ### The three readings, and the ids they meet on
 
@@ -420,11 +430,12 @@ there is no local simulation to read. Its reader is checked the same way and ski
 this process is simulating, and the whole railway the overlay fetched. Which of the three wins is
 decided per kind and is invisible from outside -- a station kept from the wrong reading looks exactly
 like a station. So the checks pin it: the fullest reading's stations, platforms and longest line;
-the window's rails wherever the window has them, because only the window's copy carries a real height
-and a transport mode (the overlay's geometry is flattened into X and Z, so keeping its copy would put
-a mark at sea level and draw a boat line's rail as a train's); the overlay's rails wherever the window
-has none, which is how a line the player has never been near gets drawn along its track at all; and a
-rail that arrived with no readable id kept rather than dropped, since it cannot be matched to anything.
+the window's rails wherever the window has them, because the window's copy is MTR's own and says what
+kind of vehicle runs there, and carries a height a snapshot before 1.6.0 does not (a flat snapshot's
+copy would put a mark at sea level and draw a boat line's rail as a train's); the overlay's rails
+wherever the window has none, which is how a line the player has never been near gets drawn along its
+track at all; and a rail that arrived with no readable id kept rather than dropped, since it cannot be
+matched to anything.
 
 It also pins that the two-reading form -- every session without the overlay -- is unchanged, that an
 empty window takes nothing away from readings that are not empty, and that a line whose *rails* only

@@ -15,6 +15,7 @@ import bili.dongsz.howtogo.transit.LineStop;
 import bili.dongsz.howtogo.transit.TransitLine;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -1348,12 +1349,12 @@ public final class MtrImportCheck {
      * reading looks exactly like a station.
      *
      * <p>The rails are the part with two rules rather than one, and both are checked here. A rail both
-     * a window and a snapshot carry is the window's, because the window's copy is the one with a real
-     * height and a transport mode on it -- a snapshot's geometry is flattened into X and Z, so keeping
-     * its copy would put a mark at sea level and draw a boat line's rail as a train's. A rail only the
-     * snapshot carries is the snapshot's, which is how a line the player has never been near gets drawn
-     * along its track at all. And a rail whose id could not be read cannot be matched against anything,
-     * so it is kept rather than dropped on the floor.
+     * a window and a snapshot carry is the window's, because the window's copy is MTR's own and says
+     * what kind of vehicle runs there -- and carries a height, which a snapshot before 1.6.0 does not;
+     * keeping a snapshot's copy would put a mark at sea level and draw a boat line's rail as a train's.
+     * A rail only the snapshot carries is the snapshot's, which is how a line the player has never been
+     * near gets drawn along its track at all. And a rail whose id could not be read cannot be matched
+     * against anything, so it is kept rather than dropped on the floor.
      */
     private static void checkThreeWayMerge() {
         System.out.println("   the three readings side by side");
@@ -1491,35 +1492,43 @@ public final class MtrImportCheck {
     }
 
     /**
-     * The join every merge across the readings rests on: MTR's own id, out of the string MTR Map
-     * Overlay carries it in.
+     * The ids the overlay carries, the handshake of the reader that reads them, and the conversion.
      *
-     * <p>The overlay writes every id it has as {@code Long.toHexString} of MTR's own, behind the kind
-     * of thing it is, because MTR's ids are longs and it hands out half of them with the top bit set.
-     * Reading that hex back is what makes a station the overlay fetched and a station MTR sent the
-     * same station rather than two -- and a mis-parse would not look like a bug: it would look like a
-     * railway with every station listed twice.
+     * <p>Whether another mod still calls its data what it called it is a question only its own jar can
+     * answer, so a jar handed to the harness is checked rather than skipped: "the mod is not installed"
+     * and "the mod is installed under a name this reader does not know" used to look the same from here,
+     * which is how an overlay that renamed its classes made the whole fetched railway disappear from the
+     * game with every check still green.
      */
     private static void checkOverlayIds() {
         System.out.println("   the ids the overlay carries");
 
-        // The overlay's two world-map toggles are remembered by this mod, because the overlay only
-        // sets them at runtime and never writes them back. Its shape is checked here when its jar is
-        // on the classpath; without one there is nothing to check and the memory stays inert.
-        if (MtrOverlayToggles.classesPresent()) {
-            expect("the overlay's two map toggles are the shapes the memory reads",
-                    MtrOverlayToggles.shapeReadable());
-        } else {
-            System.out.println("   no MTR Map Overlay jar on the classpath: the map toggles' "
-                    + "handshake is skipped");
-        }
-
-        // Reading another mod's internals reflectively is only defensible if a session without that mod
-        // is untouched by it, so that comes first here as it does for MTR: nothing bound, nothing read,
-        // and no exception on the way out.
+        // The no-loader session first: that is what a machine without the overlay behaves like, and it is
+        // also the state in which the handshake has bound nothing yet.
         expect("with no MTR Map Overlay installed it reports itself unavailable",
                 !MtrMapOverlay.available());
         expect("and a reading comes back empty rather than throwing", MtrMapOverlay.read().isEmpty());
+
+        // Whether an overlay jar was put on the classpath for this run, reported by the script: "classes
+        // absent" is only an honest skip when none was.
+        boolean jarGiven = "1".equals(System.getProperty("howtogo.mtrmap.present"));
+        if (!MtrMapOverlay.classesPresent()) {
+            expect("an MTR Map Overlay jar the harness was given has a package this reader knows",
+                    !jarGiven);
+            if (!jarGiven) {
+                System.out.println("   no MTR Map Overlay jar on the classpath: the map toggles' handshake, "
+                        + "the snapshot's handshake and its conversion are skipped");
+            }
+        } else {
+            // The overlay's two world-map toggles are remembered by this mod, because older overlays only
+            // set them at runtime and never write them back. Its shape is checked here when its jar is on
+            // the classpath; without one there is nothing to check and the memory stays inert.
+            expect("the overlay's two map toggles are the shapes the memory reads",
+                    MtrOverlayToggles.shapeReadable());
+            expect("every class, field and method the overlay reader looks up is the one it has",
+                    MtrMapOverlay.bind());
+            checkOverlayConversion();
+        }
 
         expect("a station's id is read back out of the kind it is written behind",
                 Long.valueOf(0x1a2bL).equals(MtrMapOverlay.idOf("station:1a2b")));
@@ -1535,28 +1544,141 @@ public final class MtrImportCheck {
                         .equals(MtrMapOverlay.idOf("depot:not-hex")));
         expect("while nothing at all has no id", MtrMapOverlay.idOf(null) == null
                 && MtrMapOverlay.idOf("") == null && MtrMapOverlay.idOf("station:") == null);
-
-        checkOverlayHandshake();
     }
 
     /**
-     * Whether the shapes this mod reads are the ones MTR Map Overlay on the classpath actually has.
+     * The conversion itself, against a snapshot built out of the overlay's own classes.
      *
-     * <p>The same check the MTR handshake makes, for the same reason: whether another mod still calls
-     * its data what it called it is a question only its own jar can answer, and a lookup that has moved
-     * otherwise shows up as one log line saying the data was unavailable, with no name in it.
-     *
-     * <p>Skipped when there is no jar to read, because then there is nothing to check and a failure
-     * would be a failure of the machine rather than of the mod.
+     * <p>The handshake proves the names still exist; this proves they still mean the same thing. It builds
+     * the overlay's own {@code DimensionData} -- its {@code MapRoute}, {@code MapRoute.Stop},
+     * {@code MapTrack} and {@code MapLandmark} -- out of the jar on the classpath, so a field that kept its
+     * name and changed meaning fails here rather than in a player's session. Two things a newer overlay
+     * changed are checked through it: a rail's sampled Y is its height, and a flat two-component rail
+     * still takes one from the landmarks around it.
      */
-    private static void checkOverlayHandshake() {
-        if (!MtrMapOverlay.classesPresent()) {
-            System.out.println("  --   no MTR Map Overlay jar on the classpath: its handshake is not "
-                    + "checked here");
+    private static void checkOverlayConversion() {
+        System.out.println("   the overlay snapshot's conversion");
+
+        String packageName = MtrMapOverlay.boundPackage();
+        expect("the handshake remembered which of the overlay's packages bound", packageName != null);
+        if (packageName == null) {
             return;
         }
-        expect("every class, field and method the overlay reader looks up is the one it has",
-                MtrMapOverlay.bind());
+        ClassLoader loader = MtrImportCheck.class.getClassLoader();
+        try {
+            Class<?> landmarkClass = Class.forName(packageName + ".mapdata.MapLandmark", false, loader);
+            Class<?> routeClass = Class.forName(packageName + ".mapdata.MapRoute", false, loader);
+            Class<?> stopClass = Class.forName(packageName + ".mapdata.MapRoute$Stop", false, loader);
+            Class<?> trackClass = Class.forName(packageName + ".mapdata.MapTrack", false, loader);
+            Class<?> dataClass =
+                    Class.forName(packageName + ".mapdata.MapDataCache$DimensionData", false, loader);
+
+            Constructor<?> landmark = landmarkClass.getDeclaredConstructors()[0];
+            Object station = overlayLandmark(landmark, "station:1a2b", "STATION", 100, 70, 200,
+                    "Alpha", "Alpha");
+            Object platform = overlayLandmark(landmark, "platform:7", "PLATFORM", 104, 66, 202,
+                    "Alpha", "1");
+            Object depot = overlayLandmark(landmark, "depot:2f", "DEPOT", 500, 65, 500, "Yard", "D");
+
+            Object stop = stopClass.getConstructor(double.class, double.class, String.class, String.class)
+                    .newInstance(104.5, 202.5, "Alpha", "Beta");
+            Object route = routeClass
+                    .getConstructor(String.class, String.class, int.class, boolean.class, List.class,
+                            List.class)
+                    .newInstance("1f", "Line A", 0x1A73E8, true, List.of(stop), List.of("aa", "bb"));
+
+            // One rail the way 1.6.0 samples it -- X, Z and the measured Y per point -- and one the way an
+            // older snapshot stored it, flat. Both are the same list of double[].
+            Object measured = trackClass.getConstructor(String.class, List.class)
+                    .newInstance("aa", List.of(new double[]{100, 200, 70}, new double[]{105, 200, 73},
+                            new double[]{110, 200, 76}));
+            Object flat = trackClass.getConstructor(String.class, List.class)
+                    .newInstance("bb", List.of(new double[]{110, 202}, new double[]{120, 202}));
+
+            Object data = dataClass
+                    .getConstructor(String.class, List.class, List.class, List.class, long.class)
+                    .newInstance("minecraft/overworld", List.of(route), List.of(measured, flat),
+                            List.of(station, platform, depot), 42L);
+
+            MtrClientData.Snapshot reading = MtrMapOverlay.convert(data);
+
+            expect("the snapshot's station is a station, with MTR's own id",
+                    reading.stations().size() == 1 && reading.stations().get(0).id() == 0x1a2bL);
+            expect("the station stands where the overlay puts it",
+                    reading.stations().get(0).centerX() == 100
+                            && reading.stations().get(0).centerY() == 70
+                            && reading.stations().get(0).centerZ() == 200);
+            expect("its platform is hung on it, named by the overlay's symbol",
+                    reading.platforms().size() == 1
+                            && reading.platforms().get(0).stationId() == 0x1a2bL
+                            && "1".equals(reading.platforms().get(0).name()));
+            expect("a depot is neither a station nor a platform", reading.stations().size() == 1
+                    && reading.platforms().size() == 1);
+
+            expect("the line keeps the overlay's id, name, colour and loop state",
+                    reading.lines().size() == 1 && reading.lines().get(0).id() == 0x1fL
+                            && "Line A".equals(reading.lines().get(0).name())
+                            && reading.lines().get(0).color() == 0x1A73E8
+                            && reading.lines().get(0).circular());
+            expect("its stop is placed on the station its name names",
+                    reading.lines().get(0).stops().size() == 1
+                            && reading.lines().get(0).stops().get(0).stationId() == 0x1a2bL
+                            && "Beta".equals(reading.lines().get(0).stops().get(0).destination()));
+            expect("and it runs along the rails the overlay says, in order",
+                    reading.lines().get(0).rails().equals(List.of("aa", "bb")));
+
+            expect("a rail's sampled Y is its height",
+                    railAt(reading, "aa") != null && railAt(reading, "aa").y() == 73);
+            expect("a flat rail takes the nearest landmark's height",
+                    railAt(reading, "bb") != null && railAt(reading, "bb").y() == 66);
+
+            // The two cache calls read() makes before it converts anything: the snapshot is only offered
+            // for the dimension it was filed under, and reading it back must not fall through to the
+            // radius-limited client view -- that view is what MtrClientData already reads.
+            Class<?> cacheClass = Class.forName(packageName + ".mapdata.MapDataCache", false, loader);
+            cacheClass.getMethod("putServerData", String.class, dataClass)
+                    .invoke(null, "minecraft/overworld", data);
+            expect("the overlay's cache answers with the snapshot filed under a dimension",
+                    Boolean.TRUE.equals(cacheClass.getMethod("hasServerData", String.class)
+                            .invoke(null, "minecraft/overworld"))
+                            && !Boolean.TRUE.equals(cacheClass.getMethod("hasServerData", String.class)
+                            .invoke(null, "minecraft/the_nether")));
+            expect("and hands that snapshot back rather than a fallback",
+                    cacheClass.getMethod("get", String.class).invoke(null, "minecraft/overworld") == data);
+            cacheClass.getMethod("clearServerData").invoke(null);
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+            expect("the overlay's own snapshot can be built and converted (" + e + ")", false);
+        }
+    }
+
+    /**
+     * One of the overlay's landmarks, built through whichever canonical record constructor the jar has.
+     *
+     * <p>Both releases declare the components in the same order -- id, type, x, y, z, name, symbol, and
+     * then whatever the newest added -- so the ones this reader uses are filled by position and the rest
+     * with values it never reads.
+     */
+    private static Object overlayLandmark(Constructor<?> constructor, String id, String type, int x,
+                                          int y, int z, String name, String symbol)
+            throws ReflectiveOperationException {
+        Class<?>[] types = constructor.getParameterTypes();
+        Object[] args = new Object[types.length];
+        Object[] known = {id, overlayEnum(types[1], type), x, y, z, name, symbol};
+        System.arraycopy(known, 0, args, 0, known.length);
+        for (int i = known.length; i < args.length; i++) {
+            args[i] = types[i] == boolean.class ? Boolean.TRUE : types[i] == int.class ? 0 : "";
+        }
+        return constructor.newInstance(args);
+    }
+
+    /** One constant of the overlay's own landmark-type enum, by name. */
+    private static Object overlayEnum(Class<?> type, String name) {
+        for (Object constant : type.getEnumConstants()) {
+            if (constant instanceof Enum<?> named && named.name().equals(name)) {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException(type.getName() + " has no " + name);
     }
 
     /** What one station of a reading is called, or an empty string when it holds no such station. */

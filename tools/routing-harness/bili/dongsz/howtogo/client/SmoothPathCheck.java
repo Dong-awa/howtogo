@@ -35,6 +35,7 @@ public final class SmoothPathCheck {
         failures = 0;
         System.out.println("== smooth display geometry ==");
         curves();
+        rasterisedCurves();
         storage();
         mtrStitching();
         roadWeaverCurve();
@@ -97,8 +98,11 @@ public final class SmoothPathCheck {
             for (double[] point : corner) {
                 worstCorner = Math.max(worstCorner, distanceToCurve(point, bend));
             }
+            // One and a quarter blocks is the grid tolerance, written out rather than read from the
+            // constant: a staircase corner stands up to a block off its chord, so the drawn line may
+            // pass a block's own vertex by that much. Well under the width of any road.
             expect("while every block of the road stays under the drawn line (" + round(worstCorner)
-                    + ")", worstCorner <= 1.0);
+                    + ")", worstCorner <= 1.3);
         }
 
         // A switchback: at a turn this sharp a 1.25-block fillet would cut over a block off the
@@ -154,6 +158,79 @@ public final class SmoothPathCheck {
         RoadSegment single = new RoadSegment(2, RoadClass.ROAD, 64, 2);
         single.addVertex(5, 5);
         expect("and a one-point segment has none", RoadCurve.of(single) == null);
+    }
+
+    /**
+     * The shape that showed the grid tolerance was too tight: a curved road, rasterised to whole blocks.
+     *
+     * <p>A diagonal is the easy staircase -- each of its corners is within 0.71 blocks of the chord its run
+     * stands for. A curve sampled in blocks is not like that: its step corners stand up to a block off a
+     * local chord, so at 0.9 tolerance the simplifier kept them, the corner rounding made each kept step an
+     * arc of its own, and the drawn line zigzagged left and right along a road that is really a smooth arc.
+     * Measured on a rasterised quarter circle of radius 300 before the fix: 333 points, 62 changes of bend
+     * direction and 3527 degrees of turning for a 90 degree arc. The property checked is therefore that a
+     * rasterised arc comes out bending one way, not a point count or a shape.
+     */
+    private static void rasterisedCurves() {
+        for (double radius : new double[]{40, 120, 300}) {
+            List<double[]> raster = rasterisedArc(radius, 90);
+            RoadCurve curve = RoadCurve.smooth(raster, RoadCurve.GRID_TOLERANCE);
+            expect("a rasterised arc of radius " + (int) radius + " can be smoothed", curve != null);
+            if (curve == null) {
+                continue;
+            }
+            int reversals = reversals(curve);
+            double turning = turning(curvePoints(curve));
+            expect("and comes out bending one way (" + reversals + " reversals, " + round(turning)
+                            + " degrees of turning for a 90 degree arc over " + curve.size()
+                            + " points)",
+                    reversals == 0 && turning < 135.0);
+            double worst = 0;
+            for (double[] point : raster) {
+                worst = Math.max(worst, distanceToCurve(point, curve));
+            }
+            expect("with every block of it under the drawn line (" + round(worst) + ")",
+                    worst <= RoadCurve.GRID_TOLERANCE + 0.05);
+        }
+    }
+
+    /** The block positions a block-by-block rasterisation of a circular arc gives. */
+    private static List<double[]> rasterisedArc(double radius, int degrees) {
+        List<double[]> points = new ArrayList<>();
+        int lastX = Integer.MIN_VALUE;
+        int lastZ = Integer.MIN_VALUE;
+        int samples = (int) Math.ceil(radius * Math.toRadians(degrees) * 4);
+        for (int i = 0; i <= samples; i++) {
+            double angle = Math.toRadians(degrees) * i / samples;
+            int x = (int) Math.round(radius * Math.sin(angle));
+            int z = (int) Math.round(radius * (1.0 - Math.cos(angle)));
+            if (x == lastX && z == lastZ) {
+                continue;
+            }
+            points.add(new double[]{x, z});
+            lastX = x;
+            lastZ = z;
+        }
+        return points;
+    }
+
+    /** How often the drawn line changes which way it is bending; a zigzag shows many. */
+    private static int reversals(RoadCurve curve) {
+        int reversals = 0;
+        int previous = 0;
+        for (int i = 1; i < curve.size() - 1; i++) {
+            double cross = (curve.x(i) - curve.x(i - 1)) * (curve.z(i + 1) - curve.z(i))
+                    - (curve.z(i) - curve.z(i - 1)) * (curve.x(i + 1) - curve.x(i));
+            if (Math.abs(cross) < 1.0E-9) {
+                continue;
+            }
+            int sign = cross > 0 ? 1 : -1;
+            if (previous != 0 && sign != previous) {
+                reversals++;
+            }
+            previous = sign;
+        }
+        return reversals;
     }
 
     /** The record survives a save, and a file without one still loads. */

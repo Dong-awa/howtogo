@@ -141,7 +141,11 @@ Write-Host ''
 # logs/ folder into the working directory, and it belongs next to the harness's other output rather
 # than at the root of the project.
 Push-Location $work
-& java -cp "$harnessClasses;$modClasses;$harnessPath" Harness
+# Whether an overlay jar was handed over, reported to the harness so that "the mod is not installed"
+# and "the mod is installed under a name the reader does not know" cannot pass as the same thing: the
+# second is the regression the check exists for.
+$overlayGiven = if ($overlay) { 1 } else { 0 }
+& java "-Dhowtogo.mtrmap.present=$overlayGiven" -cp "$harnessClasses;$modClasses;$harnessPath" Harness
 $harnessCode = $LASTEXITCODE
 Pop-Location
 exit $harnessCode
