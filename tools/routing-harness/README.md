@@ -374,6 +374,14 @@ That last one is the newest: it needs a corner in the marks and a walk that happ
 in the other order, and neither is visible from the outside -- what a player sees is a straight line
 where the mod's own rail layer says there is nothing.
 
+What a stretch is drawn *from* is the same rule the roads use: each piece's display line (RoadCurve) when
+it has one, its block vertices otherwise. The marks store whole blocks beside MTR's own samples, so a
+line drawn from the blocks stepped along a track whose own curve was already smooth; a player's planned
+route has no curve of its own and is passed through the block tolerance's display line before it is drawn.
+`SmoothPathCheck` holds the geometry of both: an imported line's arc comes out bending one way with every
+drawn point on the track, and a block-rasterised planned route keeps every one of its blocks within the
+grid tolerance of the line drawn instead.
+
 `PathThinningCheck.java` covers what a drawn line is put through so that a whole railway's worth of
 them can be drawn at all. Every line read out of another mod is sampled along its own curve, so what the
 map is asked to stroke grows with the railway and not with the window: the answer is that each stretch

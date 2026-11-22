@@ -237,9 +237,13 @@ public final class TrackRunsCheck {
                 line(200, 0, 300, 0)));
         expect("routes meeting at a stop are one stretch", meeting.size() == 1);
         if (meeting.size() == 1) {
-            expect("with the stop written once", meeting.get(0).size() == 4);
-            expect("and the stretch running through the stops in order",
-                    xs(meeting.get(0)).equals("0,100,200,300"));
+            List<double[]> run = meeting.get(0);
+            // Each route is drawn along its own display line (TrackRuns.ofPlanned), so a straight route
+            // simplifies to its two ends; what must survive is the stop the two are joined at, once, and
+            // the order along the line.
+            expect("with the stop they meet at written once", countAt(run, 200, 0) == 1);
+            expect("and the stretch running from the first stop to the last in order",
+                    holds(run, 0, 0) && holds(run, 300, 0) && increasing(run));
         }
 
         // Two routes that do not meet: concatenating them would draw a straight line between them,
@@ -292,6 +296,27 @@ public final class TrackRunsCheck {
             }
         }
         return false;
+    }
+
+    /** How many times a place appears in a stretch. */
+    private static int countAt(List<double[]> run, int x, int z) {
+        int count = 0;
+        for (double[] point : run) {
+            if (point[0] == x && point[1] == z) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Whether a stretch's x coordinates never go backwards, which is the order its stops were written in. */
+    private static boolean increasing(List<double[]> run) {
+        for (int i = 1; i < run.size(); i++) {
+            if (run.get(i)[0] < run.get(i - 1)[0]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** A stretch's x coordinates as a string, for the checks that are about order. */

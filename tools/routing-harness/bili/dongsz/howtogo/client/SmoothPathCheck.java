@@ -36,6 +36,7 @@ public final class SmoothPathCheck {
         System.out.println("== smooth display geometry ==");
         curves();
         rasterisedCurves();
+        transitLines();
         storage();
         mtrStitching();
         roadWeaverCurve();
@@ -194,6 +195,106 @@ public final class SmoothPathCheck {
         }
     }
 
+    /**
+     * The same display line, applied to the two geometries a public transport line is drawn from.
+     *
+     * <p>A road has always been stroked along its display curve (see RoadElementRenderer's displayPointCount);
+     * a line's track was not. The runs a line is drawn from were built from the marks' block vertices even
+     * where each mark carried the source's own samples as its curve, so an imported MTR line -- sampled
+     * every few blocks in world coordinates, stored as whole blocks -- came out stepping from block to
+     * block. Its own track has the curve and the map draws the line along it now.
+     *
+     * <p>A player's line has no marks: its route is planned by the router in whole blocks, so the route
+     * itself is passed through the block tolerance's display line before it is drawn.
+     */
+    private static void transitLines() {
+        double radius = 120.0;
+        // An imported line's track as MTR hands it over: world-coordinate samples, so the display line keeps
+        // them precisely. MtrLineTracks stores both, and TrackRuns must draw the one the map can show.
+        RoadNetwork marks = MtrLineTracks.stated(List.of(arcTrack(radius)), RoadClass.RAIL, new int[]{1});
+        List<List<double[]>> imported = TrackRuns.of(marks);
+        expect("an imported line's track is one stretch", imported.size() == 1);
+        if (imported.size() == 1) {
+            List<double[]> drawn = imported.get(0);
+            expect("and it is drawn along MTR's own samples, not the marks' whole blocks ("
+                            + round(offBlocks(drawn)) + " blocks off the grid)",
+                    offBlocks(drawn) > 0.05);
+            expect("so the arc bends one way (" + reversals(drawn) + " reversals, "
+                            + round(turning(drawn)) + " degrees over " + drawn.size() + " points)",
+                    reversals(drawn) == 0 && turning(drawn) < 100.0);
+            double worst = 0;
+            for (double[] point : drawn) {
+                // Distance from the ideal circle the samples lie on: same centre (0, radius).
+                worst = Math.max(worst, Math.abs(Math.hypot(point[0], point[1] - radius) - radius));
+            }
+            expect("with every drawn point on the track itself (" + round(worst) + " blocks off)",
+                    worst <= 0.05);
+            expect("and both ends where the reading said they are",
+                    close(drawn.get(0)[0], 0) && close(drawn.get(0)[1], 0)
+                            && close(drawn.get(drawn.size() - 1)[0], radius)
+                            && close(drawn.get(drawn.size() - 1)[1], radius));
+        }
+
+        // A line of the player's own: the router's geometry is whole blocks, so it is smoothed at the block
+        // tolerance -- the same rule every machine-read layer follows -- and keeps the route's two ends.
+        List<double[]> raster = rasterisedArc(radius, 90);
+        List<List<double[]>> planned = TrackRuns.ofPlanned(List.of(raster));
+        expect("a planned route is one stretch", planned.size() == 1);
+        if (planned.size() == 1) {
+            List<double[]> drawn = planned.get(0);
+            expect("a route planned as block steps is drawn as one arc (" + reversals(drawn)
+                            + " reversals, " + round(turning(drawn)) + " degrees over "
+                            + drawn.size() + " points)",
+                    reversals(drawn) == 0 && turning(drawn) < 135.0);
+            expect("and no longer steps block by block", drawn.size() < raster.size() / 2);
+            expect("with the stops at the route's two ends still on it",
+                    close(drawn.get(0)[0], raster.get(0)[0]) && close(drawn.get(0)[1], raster.get(0)[1])
+                            && close(drawn.get(drawn.size() - 1)[0],
+                            raster.get(raster.size() - 1)[0])
+                            && close(drawn.get(drawn.size() - 1)[1],
+                            raster.get(raster.size() - 1)[1]));
+            double worst = 0;
+            for (double[] point : raster) {
+                worst = Math.max(worst, distanceToPolyline(point, drawn));
+            }
+            expect("while every block of the route stays under the drawn line (" + round(worst) + ")",
+                    worst <= RoadCurve.GRID_TOLERANCE + 0.05);
+        }
+    }
+
+    /** An imported line's track: a quarter circle sampled in world coordinates, the shape MTR's rails have. */
+    private static MtrClientData.Track arcTrack(double radius) {
+        int samples = 40;
+        double[] xs = new double[samples + 1];
+        double[] zs = new double[samples + 1];
+        for (int i = 0; i <= samples; i++) {
+            double angle = (Math.PI / 2.0) * i / samples;
+            xs[i] = radius * Math.sin(angle);
+            zs[i] = radius * (1.0 - Math.cos(angle));
+        }
+        return new MtrClientData.Track("arc", "TRAIN", 64, xs, zs);
+    }
+
+    /** How far the drawn points are from the nearest whole block, at their worst. */
+    private static double offBlocks(List<double[]> points) {
+        double off = 0;
+        for (double[] point : points) {
+            off = Math.max(off, Math.abs(point[0] - Math.rint(point[0])));
+            off = Math.max(off, Math.abs(point[1] - Math.rint(point[1])));
+        }
+        return off;
+    }
+
+    /** How close a point stands to a drawn polyline. */
+    private static double distanceToPolyline(double[] point, List<double[]> points) {
+        double best = Double.MAX_VALUE;
+        for (int i = 1; i < points.size(); i++) {
+            best = Math.min(best, distanceToSegment(point, points.get(i - 1)[0], points.get(i - 1)[1],
+                    points.get(i)[0], points.get(i)[1]));
+        }
+        return best;
+    }
+
     /** The block positions a block-by-block rasterisation of a circular arc gives. */
     private static List<double[]> rasterisedArc(double radius, int degrees) {
         List<double[]> points = new ArrayList<>();
@@ -216,11 +317,18 @@ public final class SmoothPathCheck {
 
     /** How often the drawn line changes which way it is bending; a zigzag shows many. */
     private static int reversals(RoadCurve curve) {
+        return reversals(curvePoints(curve));
+    }
+
+    /** The same for a polyline that is not a RoadCurve, which is what the drawn runs are. */
+    private static int reversals(List<double[]> points) {
         int reversals = 0;
         int previous = 0;
-        for (int i = 1; i < curve.size() - 1; i++) {
-            double cross = (curve.x(i) - curve.x(i - 1)) * (curve.z(i + 1) - curve.z(i))
-                    - (curve.z(i) - curve.z(i - 1)) * (curve.x(i + 1) - curve.x(i));
+        for (int i = 1; i < points.size() - 1; i++) {
+            double cross = (points.get(i)[0] - points.get(i - 1)[0])
+                    * (points.get(i + 1)[1] - points.get(i)[1])
+                    - (points.get(i)[1] - points.get(i - 1)[1])
+                    * (points.get(i + 1)[0] - points.get(i)[0]);
             if (Math.abs(cross) < 1.0E-9) {
                 continue;
             }

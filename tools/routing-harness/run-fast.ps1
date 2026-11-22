@@ -20,6 +20,8 @@ param(
     # An MTR build to check the reflection handshake against, instead of whatever is in run/mods. Kept
     # as a parameter because the answer to "does this mod work with MTR x.y.z" is per build: one jar at
     # a time on the classpath, one run each, and the check reads that jar's own shapes.
+    # Paths given here are resolved literally: downloaded mod jars commonly have [ ] in their names,
+    # which Resolve-Path would take for wildcards and fail to find.
     [string]$MtrJar,
     [string]$MtrMapJar,
     # A RoadWeaver build to check the same thing for: which of its map-data and road-store classes this
@@ -112,7 +114,12 @@ function Convert-ToArgFileLine([string]$value) {
 }
 
 function New-ArgumentFile([string]$path, [string[]]$lines) {
-    Set-Content -LiteralPath $path -Value $lines -Encoding ASCII
+    # UTF-8 without a BOM: javac and java read @argfiles with the default charset, which is UTF-8 on
+    # the JDKs this project runs on, and a BOM in front of the first option would be read as part of
+    # the option. A jar handed in from outside the project is copied to a plain name first (see
+    # Copy-ToWorkJar): the launcher does not reliably read non-ASCII paths out of an @argfile, and a
+    # pack under a Chinese-named folder or a "[SC][自修改]..." mod jar is a real case here.
+    [System.IO.File]::WriteAllLines($path, $lines, [System.Text.UTF8Encoding]::new($false))
     return $path
 }
 
@@ -151,15 +158,28 @@ if ($LASTEXITCODE -ne 0) { throw "javac failed on the mod with $LASTEXITCODE" }
 # MTR Map Overlay is added the same way, for the same check of its own reader: neither is a dependency
 # of the mod itself -- both readers are reflective -- so both are for the harness only, and a machine
 # that has never seen either simply skips the check.
-$mtr = if ($MtrJar) { (Resolve-Path $MtrJar).Path } else {
+#
+# A jar given with -MtrJar, -MtrMapJar or -RoadWeaverJar is copied to the work directory under a plain
+# name before it goes on the classpath. Such a jar is usually a downloaded file, and a pack under a
+# Chinese-named folder or a "[SC][自修改]MTR-...jar" is a real case here: the classpath travels to javac
+# and java through @argfiles, and a non-ASCII path arriving mangled makes every class in that jar report
+# as missing -- a failure about the path, reported as if it were about the mod.
+function Copy-ToWorkJar([string]$source, [string]$name) {
+    $dest = Join-Path $work $name
+    Copy-Item -LiteralPath $source -Destination $dest -Force
+    return $dest
+}
+$mtr = if ($MtrJar) { Copy-ToWorkJar (Resolve-Path -LiteralPath $MtrJar).Path 'check-mtr.jar' } else {
     (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'MTR-*.jar' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName }) -join ';'
 }
-$overlay = if ($MtrMapJar) { (Resolve-Path $MtrMapJar).Path } else {
+$overlay = if ($MtrMapJar) { Copy-ToWorkJar (Resolve-Path -LiteralPath $MtrMapJar).Path 'check-mtrmap.jar' } else {
     (Get-ChildItem (Join-Path $project 'run\mods') -Filter '*mtrmap*.jar' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName }) -join ';'
 }
-$roadWeaver = if ($RoadWeaverJar) { (Resolve-Path $RoadWeaverJar).Path } else {
+$roadWeaver = if ($RoadWeaverJar) {
+    Copy-ToWorkJar (Resolve-Path -LiteralPath $RoadWeaverJar).Path 'check-roadweaver.jar'
+} else {
     (Get-ChildItem (Join-Path $project 'run\mods') -Filter 'roadweaver-*.jar' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName }) -join ';'
 }
